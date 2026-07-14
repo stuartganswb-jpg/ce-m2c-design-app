@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { doc, getDoc, setDoc, updateDoc, getDocs, query, collection, where, deleteField } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { SIZE_FAMILIES } from '../Shared/sizeMatrix';
+import { SIZE_FAMILIES, buildSizeIndex, sizeVariantOf } from '../Shared/sizeMatrix';
 import { loadGLBScene } from '../Shared/componentExport';
 import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
 import {
@@ -118,6 +118,19 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // Everything below runs against the SOURCE for the selected cell (base cell = the opened assembly).
   const assembly = srcState.assembly || baseAssembly;
   const pins = srcState.pins || basePins;
+  // SIZED CODES: printed codes always resolve through the size matrix to the SELECTED cell — the
+  // geometry source's pins may carry another cell's codes (the retired 3.625" assembly predates
+  // the S/E rename: its pins say …ILE/BE/DE while its geometry IS the 3-5/8" set; at 75|S the
+  // sheet must print …ILS/BS/DS). Same resolver the CPQ quotes with; unknown parts pass through.
+  const specSizeIndex = React.useMemo(() => (sizeFam ? buildSizeIndex(libraryParts || []) : null), [sizeFam, libraryParts]);
+  const sizedCode = useCallback((partName) => {
+    if (!sizeFam || !sizeSel || !specSizeIndex || !partName) return partName;
+    const part = (libraryParts || []).find(p => p.legacyErpId === partName || p.itemId === partName || p.id === partName);
+    if (!part) return partName;
+    const res = sizeVariantOf(part, { family: sizeFamilyKey, dia: sizeSel.dia, proj: sizeSel.proj }, specSizeIndex);
+    const target = res?.part || part;
+    return (target.legacyErpId && target.legacyErpId !== 'PENDING' ? target.legacyErpId : target.itemId) || partName;
+  }, [sizeFam, sizeSel, specSizeIndex, libraryParts, sizeFamilyKey]);
   const cellBlocked = !!(sizeFam && !isBaseCell && (srcState.loading || srcState.missing));
   const loadSrcPickerList = async () => {
     if (srcPickerList) return;
@@ -220,9 +233,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [libraryParts]);
 
   const rowCode = useCallback((partName) => {
-    if (edition === 'FAB') return fabCodeFor(partName) || `${partName} (no Fabricut code)`;
-    return partName;
-  }, [edition, fabCodeFor]);
+    const sized = sizedCode(partName);
+    if (edition === 'FAB') return fabCodeFor(sized) || fabCodeFor(partName) || `${sized} (no Fabricut code)`;
+    return sized;
+  }, [edition, fabCodeFor, sizedCode]);
 
   // ---- load GLB + wall-plate config once ----
   useEffect(() => {
@@ -237,6 +251,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         ]);
         if (dead) return;
         sceneRef.current = scene;
+        // Row/wall-mount/finial caches are keyed by RAW pin names, which collide across size
+        // sources (the 3.625" source pins the same …ILE names as the master) — flush on every
+        // source load so a cell switch can never reuse the other source's geometry.
+        rowCacheRef.current = {};
+        wallMountsRef.current = null;
+        finialsRef.current = null;
         if (cfgSnap?.exists()) { setWallCfg(cfgSnap.data()?.wallPlates || {}); setSizeSources(cfgSnap.data()?.sizeSources || {}); }
         const brackets = choicesFor('BRACKET');
         if (!brackets.length) throw new Error('No bracket choices found (need BRACKET-category cluster pins with choiceNode).');
@@ -312,7 +332,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // isBasic = bracket takes NO backplate (canonical flag) — its page draws the
       // bracket/pole/ring alone, no plate rows, no wall-mount detail.
       if (b.isBasic) {
-        pageList.push({ key: `${b.partName}__BASIC`, title: `${b.partName} (basic — no backplate)`, bracketPin: b, familyPins: [], family: 'basic, no backplate' });
+        pageList.push({ key: `${b.partName}__BASIC`, title: `${sizedCode(b.partName)} (basic — no backplate)`, bracketPin: b, familyPins: [], family: 'basic, no backplate' });
         continue;
       }
       const bracketIsReturn = !!(retSuffix || b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
@@ -331,7 +351,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           const part = famPins.length > maxRows ? ` (${i / maxRows + 1})` : '';
           pageList.push({
             key: `${b.partName}__${fam}__${i}_${maxRows}`,
-            title: `${b.partName}${retSuffix} + ${fam}${part}`,
+            title: `${sizedCode(b.partName)}${retSuffix} + ${chunk.length ? familyOf(sizedCode(chunk[0].partName)) : fam}${part}`,
             bracketPin: b,
             familyPins: chunk,
             family: fam,
@@ -340,14 +360,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }
     for (const im of insideMounts) {
-      pageList.push({ key: `${im.partName}__IM`, title: `${im.partName} (inside mount)`, bracketPin: im, familyPins: [], family: 'inside mount', isIM: true });
+      pageList.push({ key: `${im.partName}__IM`, title: `${sizedCode(im.partName)} (inside mount)`, bracketPin: im, familyPins: [], family: 'inside mount', isIM: true });
     }
     if (!pageList.length) { setError('No bracket × backplate-family pages could be derived.'); return; }
     if (finials.length) pageList.push({ key: '__FINIALS__', title: '❖ Finials (1:1)', family: '' });
     pageList.push({ key: '__WM__', title: '⊞ Wall mounts (1:1)', family: '' });
     setPages(pageList);
     setPageIndex(0);
-  }, [choiceData, scaleMode, clusterById, sizeFam, sizeSel]);
+  }, [choiceData, scaleMode, clusterById, sizeFam, sizeSel, sizedCode]);
 
   // ---- build rows for a page (cached per bracket × family) ----
   const buildRows = useCallback((bracketPin, familyPins, opts = {}) => {
@@ -643,7 +663,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [choiceData, nodesFor]);
 
   const composeFinialsPage = useCallback(() => buildItemsGridPage({
-    title: `${assembly.itemName || assembly.itemId} — Finials`,
+    title: `${baseAssembly?.itemName || baseAssembly?.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — Finials`,
     subtitle: 'All finial choices at actual size. Socket depth is hidden geometry — add it with the manual dim tool.',
     items: buildFinials().map(f => ({ code: rowCode(f.partName), view: f.view, wIn: f.wIn, hIn: f.hIn })),
     paper: layoutPaper,
@@ -652,7 +672,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }), [assembly, buildFinials, rowCode, layoutPaper, reducedNote]);
 
   const composeWallMountsPage = useCallback(() => buildWallMountsPage({
-    title: `${assembly.itemName || assembly.itemId} — Wall mounts`,
+    title: `${baseAssembly?.itemName || baseAssembly?.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — Wall mounts`,
     items: buildWallMounts(),
     noteLines: ['Top-hole offsets come from the Wall mounts panel and drive the as-mounted dims.'],
     paper: layoutPaper,
@@ -675,10 +695,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         }
         const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
         const anyAsMounted = rows.some(r => r.hasAsMounted);
-        const titleCode = edition === 'FAB' ? (fabCodeFor(page.bracketPin.partName) || page.bracketPin.partName) : page.bracketPin.partName;
+        const bSized = sizedCode(page.bracketPin.partName);
+        const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
+        const famLabel = (page.familyPins && page.familyPins.length) ? familyOf(sizedCode(page.familyPins[0].partName)) : page.family;
         const result = buildPageSvg({
-          title: `${assembly.itemName || assembly.itemId} — ${titleCode}`,
-          subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${page.family} backplates · generated from 3D model`,
+          title: `${baseAssembly.itemName || baseAssembly.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — ${titleCode}`,
+          subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel} backplates · generated from 3D model`,
           rows,
           manualDims: manualDims.filter(d => d.pageKey === page.key),
           noteLines: [
@@ -702,7 +724,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage, composeFinialsPage]);
+  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage, composeFinialsPage, sizedCode, baseAssembly, cellLabel]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
@@ -764,10 +786,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     let built = rowCacheRef.current[page.key];
     if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM }); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
-    const titleCode = edition === 'FAB' ? (fabCodeFor(page.bracketPin.partName) || page.bracketPin.partName) : page.bracketPin.partName;
+    const bSized = sizedCode(page.bracketPin.partName);
+    const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
+    const famLabel = (page.familyPins && page.familyPins.length) ? familyOf(sizedCode(page.familyPins[0].partName)) : page.family;
     return buildPageSvg({
-      title: `${assembly.itemName || assembly.itemId} — ${titleCode}`,
-      subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${page.family} backplates · generated from 3D model`,
+      title: `${baseAssembly.itemName || baseAssembly.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — ${titleCode}`,
+      subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel} backplates · generated from 3D model`,
       rows,
       manualDims: manualDims.filter(d => d.pageKey === page.key),
       noteLines: [
