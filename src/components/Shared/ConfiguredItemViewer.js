@@ -14,6 +14,7 @@ import { DynamicModel, EngineeringSpecsStrip } from '../HQ/CPQTab';
 const ConfiguredItemViewer = ({ quoteId, onClose }) => {
     const [job, setJob] = useState(null);
     const [parts, setParts] = useState([]);
+    const [flowsById, setFlowsById] = useState({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [lineIdx, setLineIdx] = useState(0);
@@ -27,12 +28,24 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                 const snap = await getDoc(doc(db, 'jobs', quoteId));
                 if (!alive) return;
                 if (!snap.exists()) { setError(`No saved job found for "${quoteId}".`); setLoading(false); return; }
-                setJob({ id: snap.id, ...snap.data() });
+                const jobData = { id: snap.id, ...snap.data() };
+                setJob(jobData);
                 // Parts let the spec strip resolve Vision-pick ids -> names; non-fatal if it fails.
                 try {
                     const ps = await getDocs(collection(db, 'Approved_Designs'));
                     if (alive) setParts(ps.docs.map(d => ({ id: d.id, ...d.data() })));
                 } catch (e) { /* names fall back to ids */ }
+                // Each line's flow: needed to surface the HIDDEN includedParts accessories (bushings
+                // etc.) the floor must pull — they never appear as priced breakdown lines.
+                try {
+                    const ids = [...new Set((jobData.cpqData?.cartItems || []).map(it => it.flowId).filter(Boolean))];
+                    const fetched = {};
+                    for (const fid of ids) {
+                        const fs = await getDoc(doc(db, 'cpq_flows', fid));
+                        if (fs.exists()) fetched[fid] = { id: fs.id, ...fs.data() };
+                    }
+                    if (alive) setFlowsById(fetched);
+                } catch (e) { /* accessories section just stays empty */ }
             } catch (e) {
                 if (alive) setError(e.message || 'Failed to load configuration.');
             }
@@ -68,6 +81,30 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
             note: b.note || ''
         }));
     const general = Array.isArray(item?.generalNotes) ? item.generalNotes : [];
+    // HIDDEN / ACCESSORY items (bushings & co): flow steps carry them as includedParts — auto-added
+    // to the BOM whenever the step is taken, never priced lines. Mirror the push's "taken" rule
+    // (blank qty = 1; explicit 0 = not taken; selection-only steps heal to 1) so the floor sees
+    // exactly what the NetSuite push consumes.
+    const partFor = (pid) => parts.find(x => x.id === pid || x.itemId === pid || x.legacyErpId === pid);
+    const accessories = (() => {
+        const flow = item?.flowId ? flowsById[item.flowId] : null;
+        if (!flow) return [];
+        const out = [];
+        (flow.steps || []).forEach(s => {
+            if (!Array.isArray(s.includedParts) || !s.includedParts.length) return;
+            const sel = item?.dynamicConfigParams?.[s.id];
+            const rawQty = item?.stepQuantities?.[s.id];
+            let q = (rawQty === undefined || rawQty === null || rawQty === '') ? 1 : (parseInt(rawQty) || 0);
+            if (q <= 0 && s.hideQty && sel) q = 1;
+            const dimensional = s.type === 'DIMENSIONS' || s.type === 'VISUAL_DIMENSIONS' || !!s.calculatorTemplate;
+            if (q <= 0 || !(sel || dimensional || s.linkedItemId || s.linkedPinId)) return;
+            s.includedParts.forEach(ip => {
+                const p = partFor(ip.partId);
+                out.push({ code: (p?.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p?.itemId) || ip.partId, name: p?.itemName || ip.partName || '', qty: parseInt(ip.qty) || 1, via: s.title });
+            });
+        });
+        return out;
+    })();
     const pseudoDraft = job ? {
         jobName: job.jobName,
         sidemark: item?.sidemark || job.sidemark,
@@ -164,15 +201,34 @@ const ConfiguredItemViewer = ({ quoteId, onClose }) => {
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Bill of Materials · Router</span>
                                 {breakdown.length === 0
                                     ? <div style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>No line items recorded.</div>
-                                    : breakdown.map((l, i) => (
+                                    : breakdown.map((l, i) => {
+                                        // Part # for the floor: the line's baked ERP id, else resolve via its partId.
+                                        const code = l.legacyErpId || (l.partId ? ((partFor(l.partId)?.legacyErpId !== 'PENDING' && partFor(l.partId)?.legacyErpId) || partFor(l.partId)?.itemId) : null);
+                                        return (
                                         <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '5px 0', borderBottom: '1px dashed var(--line)' }}>
                                             <div style={{ flex: 1, minWidth: 0 }}>
-                                                <div style={{ color: 'var(--ink)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</div>
+                                                {code && <div style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{code}</div>}
+                                                <div style={{ color: code ? 'var(--ink-soft)' : 'var(--ink)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</div>
                                                 {(l.partHandling || l.cutLength) && <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '2px' }}>{l.partHandling ? `→ ${l.partHandling}` : ''}{l.cutLength ? ` · cut ${l.cutLength}"` : ''}</div>}
                                             </div>
                                             <div style={{ color: 'var(--ink-soft)', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>×{l.qty}</div>
                                         </div>
-                                    ))}
+                                        );
+                                    })}
+                                {accessories.length > 0 && (
+                                    <>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--brass)', margin: '10px 0 2px', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>Hidden / Accessory Items — pull these too (per unit)</div>
+                                        {accessories.map((a, i) => (
+                                            <div key={`acc-${i}`} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '5px 0', borderBottom: '1px dashed var(--line)' }}>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.code}</div>
+                                                    <div style={{ color: 'var(--ink-soft)', fontSize: '0.76rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.name}{a.via ? ` · rides "${a.via}"` : ''}</div>
+                                                </div>
+                                                <div style={{ color: 'var(--ink-soft)', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>×{a.qty}</div>
+                                            </div>
+                                        ))}
+                                    </>
+                                )}
                             </div>
 
                             {/* Vision shop drawing (cut lengths / miter angles / O2O-C2C) */}

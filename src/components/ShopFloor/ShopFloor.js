@@ -993,10 +993,8 @@ const ShopFloor = () => {
                         </div>
                     )}
 
-                    {order.imageUrl && (
-                        <a href={order.imageUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginBottom: '16px', padding: '10px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textDecoration: 'none' }}>📐 View Vision Drawing</a>
-                    )}
-
+                    {/* "View Vision Drawing" removed (Stuart 2026-07-14): stale imageUrl link that
+                        duplicated View Item — the viewer shows the live model + shop drawing. */}
                     <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
                         {!isRunning ? (
                             <button onClick={handleStartProcess} style={{ flex: 1.5, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Start Process</button>
