@@ -138,6 +138,22 @@ export function fabricutCodesOfDoc(doc) {
     return [...out];
 }
 
+// FABRICUT'S OWN color name for a finish — the clientMapping row tab 4.5's Master Finish editor
+// stores for the CRM customer "Fabricut" ({ customerId, clientFinishName }). AUTHORITATIVE over
+// render filenames (those carry typos); returns '' until the names are loaded in 4.5.
+export function fabricutColorNameOf(finishId, finishLists) {
+    const c = U(finishId).replace(/^EP0+(\d+)$/, 'EP$1');
+    if (!c) return '';
+    for (const list of finishLists || []) {
+        for (const f of (Array.isArray(list) ? list : [])) {
+            if (U(f?.code) !== c && U(f?.id) !== c) continue;
+            const hit = (Array.isArray(f?.clientMapping) ? f.clientMapping : []).find(m => U(m?.customerId).includes('FABRICUT'));
+            if (hit?.clientFinishName) return U(hit.clientFinishName);
+        }
+    }
+    return '';
+}
+
 // Our color name for a finish id, scanned across whatever finish lists the caller has loaded
 // (master_finishes doc's finishes[], hq_global/outsource/inhouse collections).
 export function ourFinishNameOf(finishId, finishLists) {
@@ -183,6 +199,8 @@ export function buildComboMeta({ plateCode, pairedDoc, finishId, fabCode, fabCol
 
     const fin = U(finishId);
     const ourFinishName = ourFinishNameOf(fin, finishLists);
+    // 4.5's Fabricut clientMapping name beats whatever the (typo-prone) filename said
+    const authColorName = fabricutColorNameOf(fin, finishLists) || U(fabColorName) || '';
     const dia = plate?.dia || paired?.dia || '';
     const projLetter = paired?.projLetter || '';
     const fabCodes = [...new Set([...fabricutCodesOfDoc(plateDoc), ...fabricutCodesOfDoc(pairedDoc)])];
@@ -202,7 +220,7 @@ export function buildComboMeta({ plateCode, pairedDoc, finishId, fabCode, fabCol
         pairedCode: paired?.code || '', pairedName: paired?.name || '',
         pairedRole: paired?.role || '', pairedDocId: paired?.docId || '',
         endTreatment: paired?.endTreatment || '',
-        finishId: fin, ourFinishName, fabColorName: U(fabColorName) || '',
+        finishId: fin, ourFinishName, fabColorName: authColorName,
         fabCode: U(fabCode) || '', fabCodes: [...new Set(fabCodes)],
     };
 
@@ -259,14 +277,14 @@ export function buildSingleMeta({ patternId, finishId, partIndex, finishLists })
         species: species || '', speciesLabel: SPECIES_LABELS[species] || '',
         // an arm's product image IS arm + standard backplate; CP is the upgrade
         includesBackplate: cat === 'BRACKET' ? true : null,
-        finishId: fin, ourFinishName, fabColorName: '', fabCode: '',
+        finishId: fin, ourFinishName, fabColorName: fabricutColorNameOf(fin, finishLists), fabCode: '',
         fabCodes: fabricutCodesOfDoc(doc), siblingCodes: siblings,
     };
     const tags = [];
     pushTag(tags, partCodeOf(doc), doc.itemName, cat, END_TREATMENT_LABELS[et]);
     if (cat === 'BRACKET') pushTag(tags, 'BRACKET ARM', 'INCLUDES BACKPLATE');
     pushTag(tags, fab.diaLabel, fab.projLabel, PROJECTION_BY_LETTER[sk?.projLetter], fab.speciesLabel);
-    pushTag(tags, fin, ourFinishName);
+    pushTag(tags, fin, ourFinishName, fab.fabColorName);
     fab.fabCodes.forEach(c => pushTag(tags, c));
     siblings.forEach(c => pushTag(tags, c));
 
@@ -315,6 +333,8 @@ export function assetSearchBlob(asset, partIndex, finishLists) {
     if (asset?.fab) bits.push(JSON.stringify(asset.fab));
     const fin = ourFinishNameOf(asset?.finishId, finishLists);
     if (fin) bits.push(fin);
+    const fabName = fabricutColorNameOf(asset?.finishId, finishLists);
+    if (fabName) bits.push(fabName);
     (Array.isArray(asset?.associatedParts) ? asset.associatedParts : []).forEach(pid => {
         const p = findPartByCode(pid, partIndex) || partIndex?.list?.find(x => x.id === pid);
         if (p) bits.push(partCodeOf(p), p.itemName, JSON.stringify(p.manufacturingSpecs?.fabricut || ''));

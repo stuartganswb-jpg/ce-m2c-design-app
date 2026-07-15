@@ -6,7 +6,7 @@ import ProgramPrintUploader from './ProgramPrintUploader';
 import {
     buildPartIndex, resolveBaseDoc, plateInfoOf, parseRenderFilename,
     buildComboMeta, buildSingleMeta, pairedCandidatesFor, pairedInfoOf, partCodeOf,
-    fabricutCodesOfDoc, fabricutCodeForFinish, ourFinishNameOf,
+    fabricutCodesOfDoc, fabricutCodeForFinish, ourFinishNameOf, fabricutColorNameOf,
     END_TREATMENT_LABELS, DIA_LABELS, PROJ_LABELS,
 } from './fabricutAssetTags';
 
@@ -288,13 +288,15 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         if (r) r(result);
     };
 
-    // Fabricut color name: filename first; blanks fill from the 4.5 Master Finishes name once the
-    // color names are loaded there (P02–P19 renders carry no name in the filename).
+    // FABRICUT COLOR NAME — authoritative source is the Master Finishes library (tab 4.5): the
+    // clientMapping name loaded for the CRM customer "Fabricut" on this finish. Filenames carry
+    // typos, so once 4.5 has the name it OVERRIDES the parse; until then blanks fill from our own
+    // finish name. Manual edits stick (this only fires on image/finish change).
     useEffect(() => {
-        if (fabColorName) return;
-        const libName = ourFinishNameOf(finishId, finishLists);
-        if (libName) setFabColorName(libName);
-    }, [fabColorName, finishId, finishLists]);
+        const authName = fabricutColorNameOf(finishId, finishLists);
+        if (authName) { setFabColorName(authName); return; }
+        setFabColorName(prev => prev || ourFinishNameOf(finishId, finishLists));
+    }, [currentIndex, finishId, finishLists]);
 
     // ----- CROP TOOL -----
     const fracPoint = (e) => {
@@ -520,7 +522,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     const parsed = parseRenderFilename(entry.file.name);
                     const fin = parsed?.finishId || '';
                     const perFab = stickyFab || fabricutCodeForFinish(pairedDoc, fin) || fabricutCodeForFinish(plateDocForRun, fin) || baseMeta.fabCode || '';
-                    const color = parsed?.fabColorName || ourFinishNameOf(fin, finishLists) || '';
+                    const color = fabricutColorNameOf(fin, finishLists) || parsed?.fabColorName || ourFinishNameOf(fin, finishLists) || '';
                     meta = { ...baseMeta, finishId: fin, fabCode: perFab, fabColorName: color };
                     if (!fin || !perFab) {
                         const fix = await requestFix({
