@@ -423,21 +423,18 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
             await signInWithCustomToken(auth, token);
 
-            if (pinInput === "1032") {
-                setOperator(userData);
-                setPerms({ admin: TABS });
-            } else {
-                const pSnap = await getDoc(doc(db, "pick_config", "permissions"));
-                const pData = pSnap.exists() ? pSnap.data() : {};
-                setPerms(pData);
-                setOperator(userData);
-                const r = userData.role ? userData.role.toLowerCase() : 'operator';
-                // Return the operator to the screen they were on — it survives the per-transaction
-                // logout (the component stays mounted). Only fall back to a default if their current
-                // tab isn't permitted (e.g. the very first login).
-                const allowed = pData[r] || pData['operator'] || TABS;
-                setActiveTab(prev => allowed.includes(prev) ? prev : (allowed.includes('QUEUE') ? 'QUEUE' : (allowed[0] || 'QUEUE')));
-            }
+            // All-tabs access is granted at render time to the admin/superadmin role claim (see
+            // myTabs); there is no client-side master PIN. Everyone loads configured permissions here.
+            const pSnap = await getDoc(doc(db, "pick_config", "permissions"));
+            const pData = pSnap.exists() ? pSnap.data() : {};
+            setPerms(pData);
+            setOperator(userData);
+            const r = userData.role ? userData.role.toLowerCase() : 'operator';
+            // Return the operator to the screen they were on — it survives the per-transaction
+            // logout (the component stays mounted). Only fall back to a default if their current
+            // tab isn't permitted (e.g. the very first login).
+            const allowed = pData[r] || pData['operator'] || TABS;
+            setActiveTab(prev => allowed.includes(prev) ? prev : (allowed.includes('QUEUE') ? 'QUEUE' : (allowed[0] || 'QUEUE')));
             setPinInput("");
         } catch (error) {
             console.error("Authentication failed:", error);

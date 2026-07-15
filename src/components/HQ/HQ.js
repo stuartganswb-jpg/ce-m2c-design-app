@@ -211,14 +211,11 @@ function HQ() {
 
       await signInWithCustomToken(auth, token);
 
-      if (pinInput === "1032") {
-        setUser(userData);
-        setPerms({ admin: TABS });
-      } else {
-        const pSnap = await getDoc(doc(db, "hq_config", "permissions"));
-        setPerms(pSnap.exists() ? pSnap.data() : {});
-        setUser(userData);
-      }
+      // All-tabs access is granted at render time to the admin/superadmin role claim (see myTabs
+      // below); there is no client-side master PIN. Everyone loads their configured permissions here.
+      const pSnap = await getDoc(doc(db, "hq_config", "permissions"));
+      setPerms(pSnap.exists() ? pSnap.data() : {});
+      setUser(userData);
 
       // 🚀 Auto-log the login event
       logHqAction(userData.name, "Authentication", "User authenticated into HQ Portal");

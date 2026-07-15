@@ -88,21 +88,18 @@ const FinishingFloor = () => {
 
       await signInWithCustomToken(auth, token);
 
-      if (pinInput === "1032") {
-        setUser(userData);
-        setPerms({ admin: TABS });
-      } else {
-        const pSnap = await getDoc(doc(db, "fin_config", "permissions"));
-        const pData = pSnap.exists() ? pSnap.data() : {};
-        setPerms(pData);
-        setUser(userData);
+      // All-tabs access is granted at render time to the admin/superadmin role claim (see myTabs);
+      // there is no client-side master PIN. Everyone loads their configured permissions here.
+      const pSnap = await getDoc(doc(db, "fin_config", "permissions"));
+      const pData = pSnap.exists() ? pSnap.data() : {};
+      setPerms(pData);
+      setUser(userData);
 
-        const r = userData.role ? userData.role.toLowerCase() : 'operator';
-        // Return the operator to the screen they were on — it survives the per-transaction logout
-        // (component stays mounted). Only default if their current tab isn't permitted.
-        const allowed = pData[r];
-        setActiveTab(prev => (!allowed || allowed.includes(prev)) ? prev : (allowed.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (allowed[0] || 'ACTIVE FLOOR')));
-      }
+      const r = userData.role ? userData.role.toLowerCase() : 'operator';
+      // Return the operator to the screen they were on — it survives the per-transaction logout
+      // (component stays mounted). Only default if their current tab isn't permitted.
+      const allowed = pData[r];
+      setActiveTab(prev => (!allowed || allowed.includes(prev)) ? prev : (allowed.includes('ACTIVE FLOOR') ? 'ACTIVE FLOOR' : (allowed[0] || 'ACTIVE FLOOR')));
     } catch (err) {
       console.error(err);
       alert("Authentication failed: " + (err.message || "Invalid PIN"));
