@@ -50,6 +50,11 @@ const ShopFloor = () => {
     const schedule = floorBrand === 'all' ? scheduleRaw : scheduleRaw.filter(inBrand);
     const milling = floorBrand === 'all' ? millingRaw : millingRaw.filter(inBrand);
     const customOrders = floorBrand === 'all' ? customOrdersRaw : customOrdersRaw.filter(inBrand);
+    // Per-configuration checklist (Stuart 2026-07-14): a custom order can cover several cart
+    // lines ("Formal Living 1", "Formal Living 2", …). Labels come from the job's cart items,
+    // fetched once per quote and cached; the check states persist on the shop order doc
+    // (configChecks.cfg<i> = {done, by, at, label}).
+    const [orderConfigs, setOrderConfigs] = useState({}); // quoteId -> [{key,label,qty}]
     const [matHistory, setMatHistory] = useState([]);
     const [failures, setFailures] = useState([]);
     const [livio, setLivio] = useState([]);
@@ -164,6 +169,24 @@ const ShopFloor = () => {
     };
     // Nuke all the TEST job data across the shop tabs. Leaves setup/master data (routings, programs,
     // machines, categories, setup codes, tools, materials) intact.
+    useEffect(() => {
+        const ids = [...new Set(customOrdersRaw.map(o => o.quoteId).filter(Boolean))].filter(q => orderConfigs[q] === undefined);
+        if (!ids.length) return;
+        let dead = false;
+        (async () => {
+            const updates = {};
+            for (const q of ids.slice(0, 25)) {
+                try {
+                    const snap = await getDoc(doc(db, 'jobs', q));
+                    const items = snap.exists() ? (snap.data().cpqData?.cartItems || []) : [];
+                    updates[q] = items.map((it, i) => ({ key: `cfg${i}`, label: it.sidemark || it.assemblyName || `Line ${i + 1}`, qty: it.qty || 1 }));
+                } catch (e) { updates[q] = []; }
+            }
+            if (!dead && Object.keys(updates).length) setOrderConfigs(prev => ({ ...prev, ...updates }));
+        })();
+        return () => { dead = true; };
+    }, [customOrdersRaw]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const nukeTestJobs = async () => {
         if (!window.confirm("⚠️ NUKE all test jobs across the shop floor?\n\nDeletes every record in: floor schedule, milling/tracker queue, custom orders, QC failures, material-usage history, and handyman tickets.\n\nKEEPS routings, programs, machines, tools and materials. Cannot be undone.")) return;
         if (!window.confirm("Final confirmation — permanently delete all those job records now?")) return;
@@ -910,6 +933,39 @@ const ShopFloor = () => {
                         <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
                     </div>
+
+                    {/* Per-configuration completion checklist — one box per cart line/sidemark */}
+                    {(() => {
+                        const cfgs = order.quoteId ? (orderConfigs[order.quoteId] || []) : [];
+                        if (cfgs.length < 2) return null; // single-config orders: Start/Complete covers it
+                        const checks = order.configChecks || {};
+                        const doneCount = cfgs.filter(c => checks[c.key]?.done).length;
+                        const toggle = async (c) => {
+                            const cur = checks[c.key]?.done;
+                            try {
+                                await updateDoc(doc(db, 'shop_custom_orders', order.id), {
+                                    [`configChecks.${c.key}`]: cur ? { done: false } : { done: true, by: user.name, at: Date.now(), label: c.label }
+                                });
+                            } catch (e) { alert('Failed to save the check: ' + (e.message || e)); }
+                        };
+                        return (
+                            <div style={{ marginBottom: '20px', border: '1px solid var(--line)' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: doneCount === cfgs.length ? '#3a7d44' : 'var(--ink)', padding: '6px 12px', display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>Configurations</span><span>{doneCount}/{cfgs.length} done</span>
+                                </div>
+                                {cfgs.map((c, i) => {
+                                    const done = !!checks[c.key]?.done;
+                                    return (
+                                        <label key={c.key} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderTop: i ? '1px solid var(--line)' : 'none', cursor: 'pointer', background: done ? '#f0f7f1' : '#fff' }}>
+                                            <input type="checkbox" checked={done} onChange={() => toggle(c)} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
+                                            <span style={{ flex: 1, fontFamily: 'var(--sans)', fontSize: '0.95rem', color: done ? 'var(--ink-soft)' : 'var(--ink)', textDecoration: done ? 'line-through' : 'none' }}>{c.label}{c.qty > 1 ? ` × ${c.qty}` : ''}</span>
+                                            {done && checks[c.key]?.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#3a7d44', whiteSpace: 'nowrap' }}>✓ {checks[c.key].by}</span>}
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        );
+                    })()}
 
                     {(order.fabMethod || order.fabNotes) && (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '20px', padding: '12px 16px', background: 'var(--ink)', color: '#fff' }}>
