@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch } from "firebase/firestore";
 import { parseFabricutWorkbook, buildFabricutPlan } from '../Shared/fabricutImport';
+import { nsProxyFetch } from "../Shared/nsProxy";
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -14,8 +15,6 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3");
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncLog, setSyncLog] = useState([]);
-
-    const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
     useEffect(() => {
         if (BRAND_NETSUITE_MAP[activeBrand]) {
@@ -30,14 +29,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
     const executeSuiteQL = async (queryStr) => {
         const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`;
-        const response = await fetch(FIREBASE_FUNCTION_URL, {
+        const response = await nsProxyFetch({
+            targetUrl: targetUrl,
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                targetUrl: targetUrl,
-                method: 'POST',
-                payload: { q: queryStr }
-            })
+            payload: { q: queryStr }
         });
 
         const data = await response.json();
@@ -604,27 +599,18 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     // --- APP → NETSUITE WRITE-BACK (v1: App is master for the core curated fields) ---
     const restPatch = async (recordType, nsId, payload) => {
         const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}/${nsId}`;
-        const response = await fetch(FIREBASE_FUNCTION_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetUrl, method: 'PATCH', payload })
-        });
+        const response = await nsProxyFetch({ targetUrl, method: 'PATCH', payload });
         const result = await response.json().catch(() => ({}));
         return { ok: response.ok, result };
     };
     const restPost = async (recordType, payload) => {
         const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}`;
-        const response = await fetch(FIREBASE_FUNCTION_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetUrl, method: 'POST', payload })
-        });
+        const response = await nsProxyFetch({ targetUrl, method: 'POST', payload });
         const result = await response.json().catch(() => ({}));
         return { ok: response.ok, result };
     };
     const suiteqlQuery = async (q) => {
-        const response = await fetch(FIREBASE_FUNCTION_URL, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q } })
-        });
+        const response = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q } });
         const result = await response.json().catch(() => ({}));
         return response.ok ? (result.items || []) : null;
     };

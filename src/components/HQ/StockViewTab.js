@@ -4,8 +4,7 @@ import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc } fr
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
-
-const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
+import { nsProxyFetch } from "../Shared/nsProxy";
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -200,14 +199,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     
                     addLog(`Executing Quantity Query Batch ${i + 1} of ${chunks.length}...`, "info");
 
-                    const response = await fetch(FIREBASE_FUNCTION_URL, {
+                    const response = await nsProxyFetch({
+                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                            method: 'POST',
-                            payload: { q }
-                        })
+                        payload: { q }
                     });
                     
                     const result = await response.json();
@@ -284,14 +279,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     ORDER BY item.id ASC
                 `;
                 
-                const response = await fetch(FIREBASE_FUNCTION_URL, {
+                const response = await nsProxyFetch({
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                        method: 'POST',
-                        payload: { q }
-                    })
+                    payload: { q }
                 });
                 
                 const result = await response.json();
@@ -646,10 +637,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                   AND NVL(tl.quantity, 0) <> NVL(tl.quantityshiprecv, 0)
                 ORDER BY t.trandate DESC
             `;
-            const r = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } })
-            });
+            const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
             const b = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
             setPoModal(m => (m && m.erpId === erp) ? { ...m, loading: false, lines: b.items || [] } : m);
@@ -675,10 +663,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const retiredIds = (retiredDoc.internalIds || []).map(x => parseInt(x)).filter(n => !isNaN(n));
             const flagWhere = `(i.custitem27 = 'T' OR i.custitem28 = 'T'${retiredIds.length ? ` OR i.id IN (${retiredIds.join(',')})` : ''})`;
             const runSql = async (q) => {
-                const r = await fetch(FIREBASE_FUNCTION_URL, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } })
-                });
+                const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
                 const b = await r.json().catch(() => ({}));
                 if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
                 return b.items || [];

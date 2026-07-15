@@ -143,15 +143,57 @@ const generateNetSuiteHeader = (method, url, creds) => {
     return `OAuth realm="${creds.account}", oauth_consumer_key="${oauthEncode(creds.consumerKey)}", oauth_token="${oauthEncode(creds.tokenId)}", oauth_nonce="${oauthEncode(oauth_nonce)}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${oauthEncode(oauth_signature)}", oauth_version="1.0"`;
 };
 
+// Only our own NetSuite account host may ever be proxied. Without this, an authenticated
+// caller could point the OAuth-signed relay at an arbitrary URL. SuiteTalk REST + RESTlet
+// traffic all lives under this one host.
+const NS_ALLOWED_HOSTS = ['3728153.suitetalk.api.netsuite.com'];
+
 exports.netsuiteProxy = onRequest({
     cors: true,
     secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET]
 }, async (req, res) => {
     try {
+        // 🛡️ AuthN/AuthZ — this proxy OAuth-signs with server-held NetSuite secrets, so it must
+        // never be an open relay. Require BOTH:
+        //   1. A valid App Check token (proves the call originates from our registered app, not curl).
+        //   2. A valid Firebase ID token (proves a signed-in user — any PIN-minted token qualifies).
+        // Both are attached by the shared client helper (src/components/Shared/nsProxy.js).
+        const appCheckToken = req.header('X-Firebase-AppCheck');
+        if (!appCheckToken) {
+            return res.status(401).send({ error: 'Missing App Check token.' });
+        }
+        try {
+            await admin.appCheck().verifyToken(appCheckToken);
+        } catch (e) {
+            return res.status(401).send({ error: 'Invalid App Check token.' });
+        }
+
+        const clientAuthHeader = req.header('Authorization') || '';
+        const idToken = clientAuthHeader.startsWith('Bearer ') ? clientAuthHeader.slice(7) : '';
+        if (!idToken) {
+            return res.status(401).send({ error: 'Missing authentication token.' });
+        }
+        try {
+            await admin.auth().verifyIdToken(idToken);
+        } catch (e) {
+            return res.status(401).send({ error: 'Invalid authentication token.' });
+        }
+
         const { targetUrl, method, payload } = req.body;
 
         if (!targetUrl || !method) {
             return res.status(400).send({ error: "Missing targetUrl or method in request." });
+        }
+
+        // 🔒 Allow-list the target host — reject anything not on our NetSuite account.
+        let targetHost;
+        try {
+            targetHost = new URL(targetUrl).host;
+        } catch (e) {
+            return res.status(400).send({ error: "Invalid targetUrl." });
+        }
+        if (!NS_ALLOWED_HOSTS.includes(targetHost)) {
+            return res.status(403).send({ error: "targetUrl host is not allowed." });
         }
 
         const creds = {

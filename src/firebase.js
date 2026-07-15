@@ -35,7 +35,7 @@ if (acIsLocal || acIsPreview) {
 }
 
 // 3. Initialize App Check immediately after the main app initializes
-const appCheck = initializeAppCheck(app, {
+export const appCheck = initializeAppCheck(app, {
   provider: new ReCaptchaV3Provider('6LcbVRItAAAAAFixIoDhVAI5UJda7HbnTbrwV0Om'),
   isTokenAutoRefreshEnabled: true
 });
@@ -44,7 +44,7 @@ const appCheck = initializeAppCheck(app, {
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const auth = getAuth(app);
-export const functions = getFunctions(app); 
+export const functions = getFunctions(app);
 
 // 5. Aliases (So your Finishing Floor code keeps working)
 export const finishingDb = db; 

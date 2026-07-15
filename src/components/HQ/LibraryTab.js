@@ -6,6 +6,7 @@ import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, 
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 import { fabricutCodeOf } from '../Shared/priceLevels';
+import { nsProxyFetch } from "../Shared/nsProxy";
 
 
 const AVAILABLE_BRANDS = [
@@ -73,9 +74,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   const [userPerms, setUserPerms] = useState([]);
   const [isPushingErp, setIsPushingErp] = useState(false);
-  const [woTargetQty, setWoTargetQty] = useState(1); 
-
-  const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
+  const [woTargetQty, setWoTargetQty] = useState(1);
 
   useEffect(() => {
       if (!currentUser) return;
@@ -587,11 +586,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
           const pushWith = async (recordType) => {
               const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${recordType}/${nsId}`;
-              const response = await fetch(FIREBASE_FUNCTION_URL, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ targetUrl, method: 'PATCH', payload })
-              });
+              const response = await nsProxyFetch({ targetUrl, method: 'PATCH', payload });
               const result = await response.json();
               return { ok: response.ok, result };
           };
@@ -714,7 +709,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           try {
               const locationId = BRAND_NS_LOCATION[activeBrand] || "17";
               const q = `SELECT SUM(AggregateItemLocation.quantityonhand) AS onhand FROM Item LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id WHERE UPPER(Item.itemid) = '${baseErp.toUpperCase().replace(/'/g, "''")}' AND AggregateItemLocation.location = ${locationId} GROUP BY Item.itemid`;
-              const resp = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } }) });
+              const resp = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
               const data = await resp.json().catch(() => ({}));
               if (!resp.ok) throw new Error(JSON.stringify(data));
               onHand = (data.items && data.items[0]) ? (parseInt(data.items[0].onhand) || 0) : 0;

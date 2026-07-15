@@ -6,6 +6,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE } from '../Shared/sizeMatrix';
+import { nsProxyFetch } from "../Shared/nsProxy";
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -41,7 +42,6 @@ const BRAND_NETSUITE_MAP = {
     'ce': { subsidiary: "2", location: "17" },
     'leyla': { subsidiary: "5", location: "18" }
 };
-const NS_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 const NS_REST_BASE = "https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1";
 const NS_SUITEQL_URL = "https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql";
 // Income account every rollup (non-inventory sale) item posts to: 4001 SALES-HOUSE, acctid 249.
@@ -1069,7 +1069,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   const nsFetchWithRetry = async (body, tries = 4) => {
       let resp, text;
       for (let attempt = 1; attempt <= tries; attempt++) {
-          resp = await fetch(NS_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          resp = await nsProxyFetch(body);
           text = await resp.text();
           const busy = resp.status === 429 || /CONCURRENCY_LIMIT_EXCEEDED/i.test(text);
           if (!busy || attempt === tries) break;

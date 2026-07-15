@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
+import { nsProxyFetch } from "../Shared/nsProxy";
 
 // Stocked / pre-finished items are sold flat — each line goes to NetSuite as its own sales-order
 // line (NO assembly/BOM rollup like the CPQ does). Quick Ship is the fast counter for that stock.
@@ -10,7 +11,6 @@ const BRAND_NETSUITE_MAP = {
     'ce': { subsidiary: "2", location: "17" },
     'leyla': { subsidiary: "5", location: "18" }
 };
-const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 const KITS_DOC = { col: "system", id: "quick_ship_kits" };
 
 // Map a part's productType/name to one of our slot categories.
@@ -247,10 +247,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             };
 
             addLog(`Transmitting Sales Order (${lines.length} lines) to NetSuite…`, 'info');
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder`, method: 'POST', payload })
-            });
+            const response = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder`, method: 'POST', payload });
             const result = await response.json();
             if (!response.ok) throw new Error(`API Rejected [${response.status}]: ${JSON.stringify(result)}`);
             const returnedId = result.id || result.recordId || `QS-${Date.now()}`;

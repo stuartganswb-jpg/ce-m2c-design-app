@@ -9,6 +9,7 @@ import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { printItemLabel, printBinLabel } from '../Shared/labelPrint';
 import { useRetiredSet } from '../Shared/retiredItems';
+import { nsProxyFetch } from "../Shared/nsProxy";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -31,7 +32,6 @@ const CHIP_STEPS = [
   { key: 'engraving', label: 'Engraving' },
 ];
 const CHIP_STATUS_NEXT = { pending: 'doing', doing: 'done', done: 'pending' };
-const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
 // NetSuite Mapping Dictionary
 const BRAND_NETSUITE_MAP = {
@@ -146,7 +146,7 @@ const convertRestletConfigured = () => !!NS_CONVERT_RESTLET.scriptId;
 const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, toBin, memo }) => {
     if (!convertRestletConfigured()) throw new Error("The Convert RESTlet isn't configured yet. Deploy netsuite/ce_convert_build_restlet.js in NetSuite and give me its Script + Deploy ids.");
     const url = `${NS_RESTLET_HOST}/app/site/hosting/restlet.nl?script=${NS_CONVERT_RESTLET.scriptId}&deploy=${NS_CONVERT_RESTLET.deployId}`;
-    const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo } }) });
+    const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo } });
     const b = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
     if (b && b.success === false) {
@@ -507,14 +507,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 let allBinResults = [];   // per-bin on-hand rows (one per item+bin) for the COUNT tab
 
                 const runQuery = async (q) => {
-                    const response = await fetch(FIREBASE_FUNCTION_URL, {
+                    const response = await nsProxyFetch({
+                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                            method: 'POST',
-                            payload: { q }
-                        })
+                        payload: { q }
                     });
                     const result = await response.json();
                     if (!response.ok) throw new Error(JSON.stringify(result));
@@ -593,14 +589,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const name = (itemNumber || '').trim();
         if (!name) return null;
         const run = async (cols) => {
-            const r = await fetch(FIREBASE_FUNCTION_URL, {
+            const r = await nsProxyFetch({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                    method: 'POST',
-                    payload: { q: `SELECT ${cols} FROM item WHERE UPPER(itemid) = '${name.toUpperCase().replace(/'/g, "''")}'` }
-                })
+                payload: { q: `SELECT ${cols} FROM item WHERE UPPER(itemid) = '${name.toUpperCase().replace(/'/g, "''")}'` }
             });
             const b = await r.json().catch(() => ({}));
             return (r.ok && b.items && b.items.length) ? b.items[0] : null;
@@ -610,14 +602,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
 
     const ensureBinExists = async (binNumber, locationId) => {
-        const response = await fetch(FIREBASE_FUNCTION_URL, {
+        const response = await nsProxyFetch({
+            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bin`,
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/bin`,
-                method: 'POST',
-                payload: { binNumber: (binNumber || '').toUpperCase(), location: { id: locationId } }
-            })
+            payload: { binNumber: (binNumber || '').toUpperCase(), location: { id: locationId } }
         });
         if (response.ok) return true;
         const body = await response.json().catch(() => ({}));
@@ -695,7 +683,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
 
         const postNs = async (url, body) => {
-            const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ targetUrl: url, method: 'POST', payload: body }) });
+            const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: body });
             const rb = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(typeof rb === 'object' ? JSON.stringify(rb) : String(rb));
             return rb;
@@ -848,11 +836,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 }
             };
 
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            const response = await nsProxyFetch(payload);
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
 
@@ -884,19 +868,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         try {
             setIsSyncing(true);
             await ensureBinExists(destBin, nsConfig.location);
-            const r = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
-                    method: 'POST',
-                    payload: {
-                        account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
-                        inventory: { items: [
-                            { item: { id: String(o.sourceInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: -o.qtySource, inventoryDetail: { quantity: -o.qtySource, inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: -o.qtySource }] } } },
-                            { item: { id: String(o.targetInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: o.qtyTarget, inventoryDetail: { quantity: o.qtyTarget, inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: o.qtyTarget }] } } }
-                        ] }
-                    }
-                })
+            const r = await nsProxyFetch({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
+                method: 'POST',
+                payload: {
+                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
+                    inventory: { items: [
+                        { item: { id: String(o.sourceInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: -o.qtySource, inventoryDetail: { quantity: -o.qtySource, inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: -o.qtySource }] } } },
+                        { item: { id: String(o.targetInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: o.qtyTarget, inventoryDetail: { quantity: o.qtyTarget, inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: o.qtyTarget }] } } }
+                    ] }
+                }
             });
             const body = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(typeof body === 'object' ? JSON.stringify(body) : String(body));
@@ -936,7 +917,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 inventory: { items: [{ item: { id: item.netSuiteInternalId }, quantity: qty,
                     inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: fromBin }, toBinNumber: { refName: toBin }, quantity: qty }] } } }] } }
         };
-        const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const r = await nsProxyFetch(payload);
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
         return b;
@@ -1101,11 +1082,7 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
                 }
             };
 
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            const response = await nsProxyFetch(payload);
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
 
@@ -1222,9 +1199,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), description: lineDescription }] }
                 }
             };
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-            });
+            const response = await nsProxyFetch(payload);
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
             // NetSuite record POSTs return 204 with the new internal id ONLY in the Location header (which the proxy
@@ -1234,13 +1209,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             let nsPoTran = result.tranId || null; // human-readable PO number, e.g. "PO2179"
             if (!nsPoId || !nsPoTran) {
                 try {
-                    const lookup = await fetch(FIREBASE_FUNCTION_URL, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                            method: 'POST',
-                            payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${shipId.toUpperCase()}%'` }
-                        })
+                    const lookup = await nsProxyFetch({
+                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                        method: 'POST',
+                        payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${shipId.toUpperCase()}%'` }
                     });
                     const lr = await lookup.json().catch(() => ({}));
                     if (lr.items && lr.items[0]) {
@@ -1303,9 +1275,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 method: 'POST',
                 payload: { memo: `Plating return received — ${shipmentId}` }
             };
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-            });
+            const response = await nsProxyFetch(payload);
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
             const receiptId = result.id ? String(result.id) : null;
@@ -1367,7 +1337,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 ] }
             }
         };
-        const r = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const r = await nsProxyFetch(payload);
         const b = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error("Status reversal (WIP-Plating → Good) failed: " + (typeof b === 'object' ? JSON.stringify(b) : String(b)));
     };
@@ -1438,7 +1408,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     ...(targetBin && targetBin !== 'UNASSIGNED' ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: targetBin }, quantity: qty }] } } } : {})
                 }
             };
-            const br = await fetch(FIREBASE_FUNCTION_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildPayload) });
+            const br = await nsProxyFetch(buildPayload);
             const bb = await br.json().catch(() => ({}));
             if (!br.ok) throw new Error("Assembly build failed: " + (typeof bb === 'object' ? JSON.stringify(bb) : String(bb)));
             await updateDoc(doc(db, "plating_shipments", line.id), { status: 'built', builtAt: serverTimestamp(), builtAssemblyId: bb.id ? String(bb.id) : null }).catch(() => {});

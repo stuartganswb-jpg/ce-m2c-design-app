@@ -6,6 +6,7 @@ import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
+import { nsProxyFetch } from "../Shared/nsProxy";
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
 // the trade-discount / net-total display rows).
@@ -31,7 +32,6 @@ const BRAND_NETSUITE_MAP = {
     'ce': { subsidiary: "2" },
     'leyla': { subsidiary: "5" }
 };
-const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
 
 const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const [salesOrders, setSalesOrders] = useState([]);
@@ -70,18 +70,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Push PO ${po.poId || po.id} → NetSuite?\n\nVendor: ${po.vendor} (internal id ${po.nsVendorId})\n${(po.items || []).length} line(s), req ${po.reqDate || 'n/a'}.`)) return;
         try {
             const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
-            const r = await fetch(FIREBASE_FUNCTION_URL, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
-                    method: 'POST',
-                    payload: {
-                        entity: { id: String(po.nsVendorId) },
-                        location: { id: nsConfig.location },
-                        memo: `Stock replenishment ${po.poId || po.id} (Sales Snapshot)`,
-                        item: { items: (po.items || []).map(l => ({ item: { id: String(l.nsItemId) }, quantity: parseInt(l.quantity) || 1, ...(parseFloat(l.rate) > 0 ? { rate: parseFloat(l.rate) } : {}), description: l.description || l.itemId })) }
-                    }
-                })
+            const r = await nsProxyFetch({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
+                method: 'POST',
+                payload: {
+                    entity: { id: String(po.nsVendorId) },
+                    location: { id: nsConfig.location },
+                    memo: `Stock replenishment ${po.poId || po.id} (Sales Snapshot)`,
+                    item: { items: (po.items || []).map(l => ({ item: { id: String(l.nsItemId) }, quantity: parseInt(l.quantity) || 1, ...(parseFloat(l.rate) > 0 ? { rate: parseFloat(l.rate) } : {}), description: l.description || l.itemId })) }
+                }
             });
             const body = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(typeof body === 'object' ? JSON.stringify(body) : String(body));
@@ -90,10 +87,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             let nsPoId = body.id ? String(body.id) : null, nsPoTran = body.tranId || null;
             if (!nsPoId || !nsPoTran) {
                 try {
-                    const lu = await fetch(FIREBASE_FUNCTION_URL, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${String(po.poId || po.id).toUpperCase()}%'` } })
-                    });
+                    const lu = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${String(po.poId || po.id).toUpperCase()}%'` } });
                     const lb = await lu.json().catch(() => ({}));
                     if (lb.items && lb.items[0]) { nsPoId = nsPoId || String(lb.items[0].id || ''); nsPoTran = nsPoTran || lb.items[0].tranid || null; }
                 } catch (luErr) { /* PO created; ids sync later */ }
@@ -231,14 +225,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             
             addLog("Executing SuiteQL: Pulling Sales Orders to evaluate locally...", "info");
 
-            const response = await fetch(FIREBASE_FUNCTION_URL, {
+            const response = await nsProxyFetch({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
-                    method: 'POST',
-                    payload: { q }
-                })
+                payload: { q }
             });
             
             const result = await response.json();

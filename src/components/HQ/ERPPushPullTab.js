@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, doc, updateDoc, deleteDoc, getDocs, query, where } from "firebase/firestore";
 import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from '../Shared/sizeMatrix';
 import { reopenQuoteInCpq } from '../Shared/reopenQuote';
+import { nsProxyFetch } from "../Shared/nsProxy";
 
 // DYNAMIC BRAND MAPPING DICTIONARY
 const BRAND_NETSUITE_MAP = {
@@ -28,9 +29,6 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const [isPushing, setIsPushing] = useState(false);
   const [syncLog, setSyncLog] = useState([]);
 
-  // --- REPLACE WITH YOUR ACTUAL FIREBASE FUNCTION URL ---
-  const FIREBASE_FUNCTION_URL = "https://netsuiteproxy-f3h3jadzaq-uc.a.run.app";
-
   // NetSuite refuses an estimate header shipping cost without a ship method (400: "Please choose
   // a shipping method to account for the shipping cost"). Resolve one ONCE per session: prefer a
   // Ship Item named like shipping/freight/delivery, else the first active one.
@@ -38,10 +36,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
   const resolveShipMethod = async () => {
       if (shipMethodRef.current !== undefined) return shipMethodRef.current;
       const runQ = async (q) => {
-          const r = await fetch(FIREBASE_FUNCTION_URL, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } })
-          });
+          const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
           const b = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
           return b.items || [];
@@ -493,14 +488,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           const targetUrl = `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`;
           addLog(`Transmitting to NetSuite via Google Cloud...`, 'info');
 
-          const response = await fetch(FIREBASE_FUNCTION_URL, {
+          const response = await nsProxyFetch({
+              targetUrl: targetUrl,
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  targetUrl: targetUrl,
-                  method: 'POST',
-                  payload: payload
-              })
+              payload: payload
           });
 
           const result = await response.json();
