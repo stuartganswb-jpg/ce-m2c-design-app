@@ -463,6 +463,22 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return () => unsub();
     }, []);
 
+    // Sales-order join for the pick cards: customer name + sidemark/memo + customer PO.
+    const [soIndex, setSoIndex] = useState({});
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, "hq_sales_orders"), (snap) => {
+            const m = {};
+            snap.docs.forEach(d => { const so = { id: d.id, ...d.data() }; if (so.soId) m[String(so.soId)] = so; m[String(d.id)] = so; });
+            setSoIndex(m);
+        });
+        return () => unsub();
+    }, []);
+    // Returns/fees leaked into some already-dispatched partsLists — never pickable (no item #,
+    // no bin; the bend rides the shop's custom order). New splits exclude them at the source
+    // (lineClassification rule 0); this filter heals orders dispatched before that.
+    const RETURN_LINE_RE = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b/i;
+    const pickableLines = (job) => (job.partsList || []).filter(l => !RETURN_LINE_RE.test(String(l.name || '')));
+
     // --- ROD CUTS (cut stocked 8 ft rods down to 6 ft / 4 ft; issued from the HQ Sales Snapshot) ---
     const [rodCutOrders, setRodCutOrders] = useState([]);
     const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
@@ -1801,17 +1817,30 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>Awaiting Pick (Small Parts)</div>
                             <div style={{ padding: '20px', overflowY: 'auto' }}>
-                                {jobs.filter(j => j.pickStatus === 'Pending').map(job => (
-                                    <div key={job.id} style={{ border: `1px solid ${theme.line}`, padding: '20px', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <div>
+                                {jobs.filter(j => j.pickStatus === 'Pending').map(job => {
+                                    const so = soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null;
+                                    const customer = job.customerName || job.clientName || so?.customer || '';
+                                    const sidemark = so?.memo || job.note || '';
+                                    const poNum = so?.poNum || so?.po || so?.otherrefnum || '';
+                                    const pickable = pickableLines(job);
+                                    return (
+                                    <div key={job.id} style={{ border: `1px solid ${theme.line}`, padding: '20px', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+                                        <div style={{ minWidth: 0 }}>
                                             <h3 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.2rem', fontWeight: 500 }}>{job.id}</h3>
-                                            <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{job.partsList?.length || 0} Line Items</div>
+                                            {customer && <div style={{ color: theme.ink, fontFamily: theme.sans, fontSize: '0.95rem', fontWeight: 500, marginTop: '5px' }}>{customer}</div>}
+                                            {(sidemark || poNum) && (
+                                                <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', marginTop: '3px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                                    {sidemark ? `REF: ${sidemark}` : ''}{sidemark && poNum ? '  ·  ' : ''}{poNum ? `PO: ${poNum}` : ''}
+                                                </div>
+                                            )}
+                                            <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Items{pickable.length !== (job.partsList?.length || 0) ? ` (${(job.partsList?.length || 0) - pickable.length} return/fee line(s) ride the shop order)` : ''}</div>
                                         </div>
-                                        <button onClick={() => { setActivePickJob(job); setCurrentPickLine(0); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
+                                        <button onClick={() => { setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                                             START PICKING
                                         </button>
                                     </div>
-                                ))}
+                                    );
+                                })}
                                 {jobs.filter(j => j.pickStatus === 'Pending').length === 0 && (
                                     <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No orders currently require picking.</div>
                                 )}

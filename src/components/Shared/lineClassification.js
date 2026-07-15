@@ -33,6 +33,16 @@ function normalizeHandling(value) {
  * @returns {'small'|'custom'}
  */
 export function classifyLine(line, part) {
+  // 0. FEES & RETURNS are never small-part picks (Stuart 2026-07-14 — the pick queue was
+  //    asking operators to pick "FRENCH RETURN" with no item # and no bin): a french/miter/
+  //    bent return is pole FABRICATION (it already rides the custom order's fab notes), and
+  //    fee entities have no physical item at all. Route them to the CUSTOM side, overriding
+  //    the end-treatment step's 'Small Parts' handling flag.
+  const lineFee = !!(line && (line.isFee || line.lineIsFee));
+  const partFee = !!(part && (part.partClass === 'Fee' || String((part.manufacturingSpecs && part.manufacturingSpecs.productType) || '').toUpperCase() === 'FEE'));
+  const nameFeeish = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b/i.test(String((line && line.name) || ''));
+  if (lineFee || partFee || nameFeeish) return DIVISION_CUSTOM;
+
   // 1. Explicit per-line flag (propagated from step.partHandling) — authoritative.
   const explicit = normalizeHandling(line && line.partHandling);
   if (explicit) return explicit;
