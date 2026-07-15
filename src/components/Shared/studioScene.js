@@ -31,6 +31,17 @@ const AMBIENT_FLOOR = 0.15;   // tiny — stops undersides clipping to black; en
 // Default material response for a finish applied as a texture map.
 const DEFAULT_ENVMAP_INTENSITY = 1.25;
 
+// In-house master finishes are PAINTS (that's why they phosphate first): even the
+// gold/brass metallic tones are a coating over steel, not bare plate — cap the metal
+// response and cut reflection energy vs. plated so they don't render "hot".
+// (Stuart 2026-07-15 after first look: EP plated = good, P painted = a touch hot.)
+const PAINTED_TRIM = { metalnessMax: 0.8, roughnessMin: 0.36, envMapIntensity: 0.95 };
+const trimPainted = (p) => ({
+    metalness: Math.min(p.metalness, PAINTED_TRIM.metalnessMax),
+    roughness: Math.max(p.roughness, PAINTED_TRIM.roughnessMin),
+    envMapIntensity: PAINTED_TRIM.envMapIntensity,
+});
+
 // --- Per-finish-CODE PBR (from the catalog brief — actual chip statistics) ---
 // metalness 1.0 = bare metal (the map itself becomes the reflectance tint);
 // Matte Black is a COATING, not bare metal → dielectric, no mirror hotspot.
@@ -81,7 +92,11 @@ export const ensureFinishPbr = () => {
             try {
                 const snap = await getDoc(doc(db, 'system', 'master_finishes'));
                 (snap.exists() ? (snap.data().finishes || []) : []).forEach(f => {
-                    if (f && f.textureUrl) map[f.textureUrl] = resolvePbr(f, DEFAULT_PBR);
+                    if (!(f && f.textureUrl)) return;
+                    // Explicit per-finish pbr{} skips the painted trim (the escape hatch).
+                    const explicit = f.pbr && typeof f.pbr.metalness === 'number' && typeof f.pbr.roughness === 'number';
+                    const base = resolvePbr(f, DEFAULT_PBR);
+                    map[f.textureUrl] = explicit ? base : trimPainted(base);
                 });
             } catch (e) { /* keep defaults */ }
             try {
@@ -101,7 +116,8 @@ export const ensureFinishPbr = () => {
 // — customer-supplied assets etc. — get the generic metal default).
 export const pbrForTexture = (url) => {
     const pbr = (pbrByUrl && pbrByUrl[url]) || DEFAULT_PBR;
-    return { ...pbr, envMapIntensity: DEFAULT_ENVMAP_INTENSITY };
+    // Entry-level envMapIntensity (painted trim) wins over the plated/unknown default.
+    return { envMapIntensity: DEFAULT_ENVMAP_INTENSITY, ...pbr };
 };
 
 // --- The rig -----------------------------------------------------------------
