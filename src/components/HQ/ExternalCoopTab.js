@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { db, storage } from '../../firebase';
+import { db, storage, functions } from '../../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
@@ -20,6 +21,112 @@ const printStyles = `
 `;
 
 const INITIAL_CRM_DATA = {};
+
+// ---- PORTAL ACCESS (customer logins for portal.classicalelements.com) --------------------------
+// People at this customer who can sign into the client portal. Creation/disable/removal go through
+// admin-gated Cloud Functions (createPortalUser & co.) — the panel never writes portal_users
+// directly (rules: server-write-only). Reading portal_users requires an admin role claim, so
+// non-admin staff see a quiet "admins only" note instead of the list.
+const PortalAccessPanel = ({ customerId }) => {
+  const [users, setUsers] = useState(null);      // null = loading/denied, [] = none
+  const [denied, setDenied] = useState(false);
+  const [form, setForm] = useState({ name: '', email: '' });
+  const [busy, setBusy] = useState(false);
+  const [inviteLink, setInviteLink] = useState(null); // { email, link } of the latest created user
+
+  useEffect(() => {
+    setUsers(null); setDenied(false); setInviteLink(null);
+    if (!customerId) return;
+    const q = query(collection(db, 'portal_users'), where('customerId', '==', customerId));
+    const unsub = onSnapshot(q,
+      (snap) => setUsers(snap.docs.map(d => ({ uid: d.id, ...d.data() }))),
+      () => { setDenied(true); setUsers([]); });
+    return unsub;
+  }, [customerId]);
+
+  const call = async (fn, args, okMsg) => {
+    setBusy(true);
+    try {
+      const res = await httpsCallable(functions, fn)(args);
+      if (okMsg) alert(okMsg);
+      return res.data;
+    } catch (e) {
+      alert('Portal action failed: ' + (e.message || e));
+      return null;
+    } finally { setBusy(false); }
+  };
+
+  const handleAdd = async () => {
+    if (!form.email) return alert('Email is required.');
+    const data = await call('createPortalUser', { customerId, email: form.email, name: form.name });
+    if (data?.setupLink) {
+      setInviteLink({ email: form.email.trim().toLowerCase(), link: data.setupLink });
+      setForm({ name: '', email: '' });
+    }
+  };
+
+  const copyLink = async (link) => {
+    try { await navigator.clipboard.writeText(link); alert('Setup link copied — email it to the client. It lets them set their password.'); }
+    catch (e) { window.prompt('Copy the setup link:', link); }
+  };
+
+  const handleReinvite = async (u) => {
+    const data = await call('getPortalUserSetupLink', { uid: u.uid });
+    if (data?.setupLink) { setInviteLink({ email: u.email, link: data.setupLink }); copyLink(data.setupLink); }
+  };
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '16px' }}>
+        <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Portal Access</h4>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>portal.classicalelements.com</span>
+      </div>
+
+      {denied && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Managing portal logins requires an admin role.</div>}
+
+      {!denied && (
+        <>
+          {users === null ? (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Loading…</div>
+          ) : users.length === 0 ? (
+            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginBottom: '14px' }}>No portal logins yet — add the first person below.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+              {users.map(u => (
+                <div key={u.uid} style={{ display: 'flex', alignItems: 'center', gap: '10px', border: '1px solid var(--line)', padding: '10px 12px', background: u.active ? 'var(--paper)' : 'rgba(217,83,79,0.06)' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}>{u.name || u.email}</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{u.email}</span>
+                    {!u.active && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginLeft: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Disabled</span>}
+                  </div>
+                  <button disabled={busy} onClick={() => handleReinvite(u)} title="Generate a fresh set-password link (re-invite / forgot password)" style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Setup Link</button>
+                  <button disabled={busy} onClick={() => call('setPortalUserStatus', { uid: u.uid, active: !u.active })} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: u.active ? '#a05a2c' : 'var(--brass)' }}>{u.active ? 'Disable' : 'Enable'}</button>
+                  <button disabled={busy} onClick={() => { if (window.confirm(`Remove portal access for ${u.email}? They can no longer sign in.`)) call('deletePortalUser', { uid: u.uid }); }} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f' }}>Remove</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {inviteLink && (
+            <div style={{ border: '1px solid var(--brass)', background: 'var(--paper)', padding: '12px', marginBottom: '14px' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--brass)', marginBottom: '6px' }}>Setup link for {inviteLink.email} — email it to them (lets them set their password)</div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input readOnly value={inviteLink.link} onFocus={e => e.target.select()} style={{ flex: 1, padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', background: '#fff', outline: 'none' }} />
+                <button onClick={() => copyLink(inviteLink.link)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Copy</button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Name" style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
+            <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="email@company.com" type="email" style={{ flex: 1.4, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
+            <button disabled={busy || !form.email} onClick={handleAdd} style={{ padding: '10px 18px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: !form.email ? 0.5 : 1 }}>{busy ? 'Working…' : '+ Add Login'}</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [activeSubTab, setActiveSubTab] = useState('CUSTOMERS'); 
@@ -822,6 +929,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                               </div>
                                           </div>
                                       </div>
+
+                                      {/* Portal logins — customers only (vendors share this detail panel) */}
+                                      {activeSubTab === 'CUSTOMERS' && <PortalAccessPanel customerId={activeCrmRecord.id} />}
 
                                       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', flex: 1, display: 'flex', flexDirection: 'column' }}>
                                           <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Relationship Notes</h4>
