@@ -36,11 +36,11 @@ service cloud.firestore {
     match /shop_config/{document=**}            { allow read, write: if isAuth(); }
     match /fin_config/{document=**}             { allow read, write: if isAuth(); }
     match /pick_config/{document=**}            { allow read, write: if isAuth(); }
-    // hq_users holds PINs (the doc id IS the PIN). Kept on isAuth for now so the floor apps that
-    // still join it directly don't break; the read-side is being migrated to `directory` (below),
-    // after which this line locks to isAdmin(). authenticatePin reads this via the Admin SDK, which
-    // bypasses these rules, so PIN login is unaffected by the eventual lock.
-    match /hq_users/{document=**}               { allow read, write: if isAuth(); }
+    // 🔒 hq_users holds PINs (the doc id IS the PIN). Locked to admins: floor/library apps now read
+    // the sanitized `directory` projection (below) for name/role joins, so only the HQ Admin UI still
+    // touches hq_users. authenticatePin reads this via the Admin SDK, which bypasses these rules, so
+    // PIN login is unaffected.
+    match /hq_users/{document=**}               { allow read, write: if isAdmin(); }
 
     // 🔒 Sanitized projection of hq_users — { name, role, superAdmin } only, NO PIN. Written
     // server-side (Admin SDK bypasses rules) by mirrorUserToDirectory / backfillUserDirectory.
