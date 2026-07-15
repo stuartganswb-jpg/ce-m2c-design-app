@@ -61,6 +61,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' });
   const [isBulkFab, setIsBulkFab] = useState(false); // bulk Fabricut → clientPricing writer running
+  const [aliasForm, setAliasForm] = useState({ code: '', name: '', price: '', collection: '' }); // alias creator
   const [orphanMode, setOrphanMode] = useState(false);     // show only unreferenced, NS-less items
   const [orphanUsedSet, setOrphanUsedSet] = useState(null); // every part id/code referenced by a BOM or flow
   const [orphanBusy, setOrphanBusy] = useState(false);
@@ -400,6 +401,61 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   const handleRemoveClientPricing = (idx) => {
       setEditSpecs(prev => ({ ...prev, clientPricing: prev.clientPricing.filter((_, i) => i !== idx) }));
+  };
+
+  // ---- ALIASES (Stuart 2026-07-14) ---------------------------------------------------------
+  // An ALIAS is a separate library record with its OWN item id, description and price that
+  // points back to a MAIN item via manufacturingSpecs.aliasOf. CPQ quotes price/name from the
+  // alias (it's just the selected part); the ERP push resolves aliasOf → the MAIN item before
+  // building NetSuite lines (existing behavior in ERPPushPullTab), so the BOM, NetSuite and all
+  // demand (Sales Snapshot reads NetSuite) land on the main item automatically. Aliases carry
+  // no NetSuite id and are never pushed as items.
+  const codeOfPart = (p) => (p?.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p?.itemId) || p?.id || '';
+  const aliasesOf = (main) => {
+      if (!main) return [];
+      const keys = [main.id, main.itemId, main.legacyErpId].filter(Boolean).map(x => String(x).toUpperCase());
+      return inventory.filter(p => {
+          const a = p.manufacturingSpecs?.aliasOf || p.aliasOf;
+          return a && keys.includes(String(a).toUpperCase());
+      });
+  };
+  const createAlias = async () => {
+      if (!activePart) return;
+      const code = aliasForm.code.trim().toUpperCase();
+      if (!code) return alert('Enter the alias item id (e.g. H2-1BE).');
+      if (inventory.some(p => [p.itemId, p.legacyErpId].filter(Boolean).map(x => String(x).toUpperCase()).includes(code))) {
+          return alert(`"${code}" already exists in the library — pick a unique alias id.`);
+      }
+      const mainCode = codeOfPart(activePart);
+      const specs = activePart.manufacturingSpecs || {};
+      const id = `ALIAS-${code.replace(/[^A-Za-z0-9-]/g, '_')}-${Date.now().toString().slice(-6)}`;
+      try {
+          await setDoc(doc(db, 'Approved_Designs', id), {
+              id, itemId: code, legacyErpId: code,
+              itemName: aliasForm.name.trim() || activePart.itemName || code,
+              brandId: activePart.brandId || activeBrand,
+              sharedBrands: activePart.sharedBrands || [activePart.brandId || activeBrand],
+              partClass: activePart.partClass || 'Inventory',
+              productType: activePart.productType || specs.productType || '',
+              routingType: activePart.routingType || '',
+              clientPricing: [],
+              manufacturingSpecs: {
+                  aliasOf: mainCode,
+                  basePrice: aliasForm.price === '' ? '' : (parseFloat(aliasForm.price) || 0),
+                  productType: specs.productType || '', partHandling: specs.partHandling || '',
+                  uom: specs.uom || 'EA', paintSize: specs.paintSize || '',
+                  collections: aliasForm.collection ? [aliasForm.collection] : [],
+                  customData: { ...(specs.customData?.bpOrientation ? { bpOrientation: specs.customData.bpOrientation } : {}) },
+              },
+              createdAt: new Date().toISOString(), createdBy: currentUser || 'ALIAS_TOOL'
+          });
+          setAliasForm({ code: '', name: '', price: '', collection: '' });
+          alert(`✅ Alias ${code} created → points to ${mainCode}.\n\nCPQ quotes use the alias's name & price; the BOM, NetSuite push and all demand land on ${mainCode}. Pin ${code} in an assembly / flow to offer it.`);
+      } catch (e) { alert('Failed to create the alias: ' + (e.message || e)); }
+  };
+  const deleteAlias = async (a) => {
+      if (!window.confirm(`Delete alias ${codeOfPart(a)} ("${a.itemName}")?\n\nThe main item is untouched. Any flow options pinned to this alias will stop resolving.`)) return;
+      try { await deleteDoc(doc(db, 'Approved_Designs', a.id)); } catch (e) { alert('Delete failed: ' + (e.message || e)); }
   };
 
   // ---- FABRICUT ⇄ CLIENT PRICING ----------------------------------------------------------
@@ -879,6 +935,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
                 <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column' }}>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: classColor, marginBottom: '8px' }}>{displayId} <span style={{opacity: 0.6}}>({part.partClass})</span></div>
+                  {specs.aliasOf && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', marginBottom: '6px' }}>🔗 alias → {specs.aliasOf}</div>}
                   
                   {part.clientPricing && part.clientPricing.length > 0 && (
                       <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink)', marginBottom: '4px' }}>
@@ -1155,6 +1212,59 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                                  }} style={{ padding: '10px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>↑ Add to Client Pricing (this item)</button>
                                  <button onClick={bulkFabricutClientPricing} disabled={isBulkFab} style={{ padding: '10px 16px', background: isBulkFab ? 'var(--paper-2)' : 'var(--brass)', color: isBulkFab ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isBulkFab ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{isBulkFab ? 'Writing…' : '⇄ Populate Client Pricing — ALL Fabricut items'}</button>
                                  <span style={{ alignSelf: 'center', fontSize: '0.75rem', color: 'var(--ink-soft)' }}>SKU = pattern # · Client Cost = CE → Fabricut · Sales = wholesale. Save the record to keep field edits.</span>
+                             </div>
+                         </div>
+                     );
+                 })()}
+
+                 {/* ALIASES — alternate item ids that point back to this item (or, on an alias
+                     record, the link home). CPQ prices/names from the alias; BOM, NetSuite push and
+                     demand always resolve to the MAIN item. */}
+                 {(() => {
+                     const myAliasOf = activePart?.manufacturingSpecs?.aliasOf || activePart?.aliasOf || '';
+                     if (myAliasOf) {
+                         const mainPart = inventory.find(p => [p.id, p.itemId, p.legacyErpId].filter(Boolean).map(x => String(x).toUpperCase()).includes(String(myAliasOf).toUpperCase()));
+                         return (
+                             <div style={{ marginTop: '30px', background: '#fff8ec', padding: '20px 24px', border: '1px solid var(--brass)' }}>
+                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', marginBottom: '6px' }}>🔗 This record is an ALIAS</div>
+                                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>
+                                     Points to <b>{myAliasOf}</b>{mainPart ? ` — ${mainPart.itemName}` : ' (main item not found in this brand!)'}. Name & Base Price on THIS record drive CPQ quotes; the BOM, NetSuite push and all demand land on the main item.
+                                     {mainPart && <button onClick={() => openPartDetails(mainPart)} style={{ marginLeft: '12px', padding: '6px 12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Open main item</button>}
+                                 </div>
+                             </div>
+                         );
+                     }
+                     const myAliases = aliasesOf(activePart);
+                     return (
+                         <div style={{ marginTop: '30px', background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)' }}>
+                             <h4 style={{ margin: '0 0 6px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Aliases — alternate item ids</h4>
+                             <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>
+                                 Sell this exact item under a different id, description and price (e.g. {codeOfPart(activePart) || 'H1-1BE'} → H2-1BE "Standard Bracket" for a new collection). CPQ uses the alias's name & price; the BOM, NetSuite push and stock demand always roll back to <b>{codeOfPart(activePart)}</b>. Pin the alias code in an assembly / flow to offer it.
+                             </div>
+                             {myAliases.length > 0 && (
+                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '16px' }}>
+                                     {myAliases.map(a => (
+                                         <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', background: '#fff', border: '1px solid var(--line)', padding: '10px 14px' }}>
+                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }}>{codeOfPart(a)}</span>
+                                             <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink-soft)' }}>{a.itemName}{(a.manufacturingSpecs?.collections || []).length ? ` · ${(a.manufacturingSpecs.collections).join(', ')}` : ''}</span>
+                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{a.manufacturingSpecs?.basePrice !== '' && a.manufacturingSpecs?.basePrice != null ? `$${parseFloat(a.manufacturingSpecs.basePrice || 0).toFixed(2)}` : 'no price'}</span>
+                                             <button onClick={() => openPartDetails(a)} style={{ padding: '6px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Open</button>
+                                             <button onClick={() => deleteAlias(a)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.1rem', cursor: 'pointer' }}>×</button>
+                                         </div>
+                                     ))}
+                                 </div>
+                             )}
+                             <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                 <div style={{ width: '160px' }}><label style={labelStyle}>Alias item id</label><input value={aliasForm.code} onChange={e => setAliasForm({ ...aliasForm, code: e.target.value.toUpperCase() })} placeholder="e.g. H2-1BE" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                 <div style={{ flex: 2, minWidth: '200px' }}><label style={labelStyle}>Description</label><input value={aliasForm.name} onChange={e => setAliasForm({ ...aliasForm, name: e.target.value })} placeholder={`e.g. Standard Bracket (defaults to "${activePart?.itemName || ''}")`} style={fieldStyle} /></div>
+                                 <div style={{ width: '120px' }}><label style={labelStyle}>Base price ($)</label><input type="number" step="0.01" value={aliasForm.price} onChange={e => setAliasForm({ ...aliasForm, price: e.target.value })} placeholder="own price" style={fieldStyle} /></div>
+                                 <div style={{ width: '180px' }}><label style={labelStyle}>Collection</label>
+                                     <select value={aliasForm.collection} onChange={e => setAliasForm({ ...aliasForm, collection: e.target.value })} style={fieldStyle}>
+                                         <option value="">— none —</option>
+                                         {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                                     </select>
+                                 </div>
+                                 <button onClick={createAlias} disabled={!aliasForm.code.trim()} style={{ padding: '12px 20px', background: aliasForm.code.trim() ? 'var(--ink)' : 'var(--paper-2)', color: aliasForm.code.trim() ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: aliasForm.code.trim() ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>＋ Create Alias</button>
                              </div>
                          </div>
                      );

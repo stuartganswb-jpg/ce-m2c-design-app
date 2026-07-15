@@ -622,7 +622,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         try {
             const snap = await getDocs(collection(db, "Approved_Designs"));
             const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-                .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand)) && p.netSuiteInternalId);
+                // Aliases are app-only pointers (alternate id/name/price over a main item) — they
+                // must NEVER write back to NetSuite even if someone stamps an internal id on one.
+                .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand)) && p.netSuiteInternalId && !(p.manufacturingSpecs?.aliasOf || p.aliasOf));
             if (items.length === 0) { addLog("No mapped items (with a NetSuite Internal ID) for this brand. Sync from ERP / set the ID first.", 'warn'); setIsSyncing(false); return; }
             addLog(`Found ${items.length} mapped item(s). Writing back...`, 'info');
 
