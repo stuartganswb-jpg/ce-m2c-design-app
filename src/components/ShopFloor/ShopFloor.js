@@ -862,6 +862,23 @@ const ShopFloor = () => {
         const activeOrders = customOrders.filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating').sort((a,b) => a.priority - b.priority);
         const rods = activeOrders.filter(o => o.category === 'Cut to Size Rods');
         const fabs = activeOrders.filter(o => o.category === 'Custom Fabrication');
+        // UNDO (Stuart 2026-07-15 — an accidental Complete pushed a whole job to finishing):
+        // recently completed orders stay visible below with one button that puts the order back
+        // into production AND tells the finishing/staging side the customs are NOT complete
+        // (the staging handshake re-blocks until it's completed again).
+        const recentDone = customOrders
+            .filter(o => (o.status === 'Completed' || o.status === 'Sent to Plating') && (o.completedAt?.toMillis ? o.completedAt.toMillis() : o.completedAt || 0))
+            .sort((a, b) => (b.completedAt?.toMillis ? b.completedAt.toMillis() : b.completedAt || 0) - (a.completedAt?.toMillis ? a.completedAt.toMillis() : a.completedAt || 0))
+            .slice(0, 10);
+        const undoComplete = async (order) => {
+            if (!window.confirm(`↩ Put ${order.woNum} BACK INTO PRODUCTION?\n\n• Shop status returns to "In Process"\n• Finishing/staging is told the custom parts are NOT complete (the staging handshake blocks again until re-completed)\n\nUse this when Complete was hit by mistake.`)) return;
+            try {
+                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process', completedAt: null, completedBy: null, reopenedAt: serverTimestamp(), reopenedBy: user.name });
+                await mirrorCustomStatusToSibling(order, 'In Process');
+                await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `↩ UNDO: custom order ${order.woNum} returned to production by ${user.name} — custom parts are NOT complete.`, t: serverTimestamp(), isSystem: true });
+                writeLog(`Custom order ${order.woNum} completion UNDONE → back to In Process`, 'shop');
+            } catch (e) { alert('Undo failed: ' + (e.message || e)); }
+        };
 
         const CustomCard = ({ order }) => {
             const printZebraLabel = (order) => {
@@ -1085,6 +1102,22 @@ const ShopFloor = () => {
                         {fabs.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending custom fab orders.</div> : fabs.map(o => <CustomCard key={o.id} order={o} />)}
                     </div>
                 </div>
+
+                {recentDone.length > 0 && (
+                    <div style={{ marginTop: '30px', background: '#fff', padding: '24px 30px', border: '1px solid var(--line)', borderRadius: '2px' }}>
+                        <h3 style={{ margin: '0 0 6px 0', fontFamily: 'var(--serif)', fontSize: '1.3rem', fontWeight: 500, color: 'var(--ink)' }}>Recently Completed</h3>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: '14px' }}>Hit Complete by mistake? Undo puts the order back into production and re-blocks staging/finishing until it's completed again.</div>
+                        {recentDone.map(o => (
+                            <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '10px 0', borderTop: '1px solid var(--paper-2)' }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)' }}>{o.woNum}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{o.clientName || ''} · {o.item || o.partNum || ''} · {o.status}{o.completedBy ? ` by ${o.completedBy}` : ''}{o.completedAt ? ` · ${new Date(o.completedAt?.toMillis ? o.completedAt.toMillis() : o.completedAt).toLocaleString()}` : ''}</span>
+                                </div>
+                                <button onClick={() => undoComplete(o)} style={{ padding: '9px 16px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>↩ Undo — back to production</button>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
         );
     };
