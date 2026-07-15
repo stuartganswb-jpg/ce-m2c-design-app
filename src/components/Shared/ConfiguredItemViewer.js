@@ -10,14 +10,15 @@ import { DynamicModel, EngineeringSpecsStrip } from '../HQ/CPQTab';
 // snapshot LIVE (spin/zoom only — no editing, since by the time the floor sees it the order is
 // confirmed), and shows the engineering-spec roll-up beside it. Tablet-friendly: the body wraps to
 // a single column on narrow screens. Self-contained modal — each host just renders
-// <ConfiguredItemViewer quoteId={...} onClose={fn} />.
-const ConfiguredItemViewer = ({ quoteId, onClose }) => {
+// <ConfiguredItemViewer quoteId={...} onClose={fn} />. Optional initialLine opens directly on
+// that cart line (shop-floor per-configuration View buttons); the dropdown still switches.
+const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
     const [job, setJob] = useState(null);
     const [parts, setParts] = useState([]);
     const [flowsById, setFlowsById] = useState({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [lineIdx, setLineIdx] = useState(0);
+    const [lineIdx, setLineIdx] = useState(Number(initialLine) > 0 ? Number(initialLine) : 0);
 
     useEffect(() => {
         let alive = true;

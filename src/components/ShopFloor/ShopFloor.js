@@ -26,6 +26,7 @@ const ShopFloor = () => {
     const [pinInput, setPinInput] = useState("");
     const [activeTab, setActiveTab] = useState('floor');
     const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
+    const [cfgLine, setCfgLine] = useState(0); // which cart line/configuration the viewer opens on
     const [perms, setPerms] = useState({});
 
     // STATE
@@ -972,6 +973,8 @@ const ShopFloor = () => {
                                             <input type="checkbox" checked={done} onChange={() => toggle(c)} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
                                             <span style={{ flex: 1, fontFamily: 'var(--sans)', fontSize: '0.95rem', color: done ? 'var(--ink-soft)' : 'var(--ink)', textDecoration: done ? 'line-through' : 'none' }}>{c.label}{c.qty > 1 ? ` × ${c.qty}` : ''}</span>
                                             {done && checks[c.key]?.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#3a7d44', whiteSpace: 'nowrap' }}>✓ {checks[c.key].by}</span>}
+                                            {/* preventDefault: the row is a <label> — without it this click would also toggle the checkbox */}
+                                            <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setCfgLine(i); setCfgQuote(order.quoteId); }} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>🔍 View Item</button>
                                         </label>
                                     );
                                 })}
@@ -1082,7 +1085,7 @@ const ShopFloor = () => {
                             </button>
                         )}
                         {order.quoteId && (
-                            <button onClick={() => setCfgQuote(order.quoteId)} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🔍 View Item</button>
+                            <button onClick={() => { setCfgLine(0); setCfgQuote(order.quoteId); }} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🔍 View Item</button>
                         )}
                     </div>
                 </div>
@@ -1200,7 +1203,7 @@ const ShopFloor = () => {
             </main>
 
             {renderModal()}
-            {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
+            {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} initialLine={cfgLine} onClose={() => setCfgQuote(null)} />}
         </div>
     );
 };
