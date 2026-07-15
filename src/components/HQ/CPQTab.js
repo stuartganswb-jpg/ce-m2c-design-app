@@ -3,7 +3,8 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
-import { useGLTF, OrbitControls, Bounds, Html, Environment, ContactShadows } from '@react-three/drei';
+import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
+import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
 
@@ -197,8 +198,17 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
                         const newMat = child.userData.originalMaterial.clone();
                         newMat.map = texMap[matchedTexUrl];
-                        newMat.color = new THREE.Color(0xffffff); 
-                        newMat.envMapIntensity = 1.0; 
+                        newMat.color = new THREE.Color(0xffffff);
+                        // Studio-render upgrade: the swatch map carries the TONE, but how the
+                        // surface answers light (bare metal vs paint coat vs wood vs acrylic)
+                        // comes from the finish's PBR entry — metal at rough 0.3 shows the
+                        // softbox streak, matte black correctly loses the mirror hotspot.
+                        const pbr = pbrForTexture(matchedTexUrl);
+                        if (newMat.isMeshStandardMaterial) {
+                            newMat.metalness = pbr.metalness;
+                            newMat.roughness = pbr.roughness;
+                        }
+                        newMat.envMapIntensity = pbr.envMapIntensity;
                         newMat.needsUpdate = true;
                         child.material = newMat;
                     } else {
@@ -300,30 +310,34 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
             return;
         }
 
+        // Finish materials need the PBR registry (metal vs paint vs wood response) —
+        // load it alongside the swatch textures; never rejects, defaults on failure.
+        const applyWithPbr = () => { ensureFinishPbr().then(applyAllOverrides); };
+
         uniqueUrls.forEach(url => {
             if (globalTextureCache[url]) {
                 texMap[url] = globalTextureCache[url];
                 loadedCount++;
-                if (loadedCount === uniqueUrls.length) applyAllOverrides();
+                if (loadedCount === uniqueUrls.length) applyWithPbr();
             } else {
                 const loader = new THREE.TextureLoader();
                 loader.setCrossOrigin('anonymous');
                 loader.load(
-                    url, 
+                    url,
                     (tex) => {
                         tex.wrapS = THREE.RepeatWrapping;
                         tex.wrapT = THREE.RepeatWrapping;
                         tex.colorSpace = THREE.SRGBColorSpace;
-                        globalTextureCache[url] = tex; 
+                        globalTextureCache[url] = tex;
                         texMap[url] = tex;
                         loadedCount++;
-                        if (loadedCount === uniqueUrls.length) applyAllOverrides();
+                        if (loadedCount === uniqueUrls.length) applyWithPbr();
                     },
                     undefined,
                     (err) => {
                         console.error("Failed to load texture:", url, err);
-                        loadedCount++; 
-                        if (loadedCount === uniqueUrls.length) applyAllOverrides();
+                        loadedCount++;
+                        if (loadedCount === uniqueUrls.length) applyWithPbr();
                     }
                 );
             }
@@ -2842,12 +2856,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           </div>
                       ) : viewMode === '3D' ? (
                          <>
-                         <Canvas camera={{ position: [5, 5, 5], fov: 50 }} gl={{ preserveDrawingBuffer: true }} style={{ width: '100%', height: '100%' }}>
+                         <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}>
                               <ViewCapturer onReady={registerCapture} />
-                              <ambientLight intensity={0.9} />
-                              <directionalLight position={[5, 10, 5]} intensity={0.7} />
-                              <Environment preset="warehouse" />
-                              <ContactShadows position={[0, -0.5, 0]} opacity={0.5} scale={10} blur={2} far={4} />
+                              <StudioRig />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
                                   {/* Size-matrix visual: scale the whole model by the chosen rod

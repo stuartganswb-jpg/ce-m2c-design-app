@@ -2,8 +2,9 @@ import React, { useState, useEffect, Suspense } from 'react';
 import { db } from '../../firebase';
 import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Bounds, Environment, ContactShadows } from '@react-three/drei';
+import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel, EngineeringSpecsStrip } from '../HQ/CPQTab';
+import { StudioRig } from './studioScene';
 
 // Read-only viewer for a CONFIRMED configured item, opened from the shop floor / finishing floor /
 // HQ work-order windows. Loads the saved job by quoteId, re-renders the frozen `renderState`
@@ -145,12 +146,9 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                             {/* Live 3D */}
                             <div style={{ flex: '1 1 440px', minWidth: '320px', minHeight: '440px', background: 'var(--paper-2, #efeae0)', border: '1px solid var(--line)', borderRadius: '2px', position: 'relative' }}>
                                 {rs?.cadUrl ? (
-                                    <Canvas camera={{ position: [5, 5, 5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
-                                        <ambientLight intensity={0.9} />
-                                        <directionalLight position={[5, 10, 5]} intensity={0.7} />
+                                    <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ antialias: true }} style={{ width: '100%', height: '100%' }}>
                                         <Suspense fallback={null}>
-                                            <Environment preset="warehouse" />
-                                            <ContactShadows position={[0, -0.5, 0]} opacity={0.5} scale={10} blur={2} far={4} />
+                                            <StudioRig />
                                             <Bounds fit clip margin={1.2}>
                                                 <DynamicModel
                                                     url={rs.cadUrl}
