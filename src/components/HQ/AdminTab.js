@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { db, storage } from '../../firebase';
+import { db, storage, functions } from '../../firebase';
+import { httpsCallable } from "firebase/functions";
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit, writeBatch } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
@@ -464,6 +465,23 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   };
   // Terminate removes the person from BOTH directories, so a deleted duplicate can't linger as a chip PIN.
   const handleDeleteUser = async (u) => { if(!window.confirm(`Terminate ${u.name}? This removes them from HQ and the finishing (chip PIN) directory.`)) return; const key = String(u.pin || u.id); await deleteDoc(doc(db, "hq_users", u.id)); await deleteDoc(doc(db, "fin_users", key)).catch(() => { }); };
+
+  // Rebuild the sanitized `directory` projection (name/role/superAdmin, no PIN) that the floor apps
+  // read instead of hq_users. Ongoing edits sync automatically via the mirrorUserToDirectory trigger;
+  // this button seeds/repairs existing users. Safe to re-run.
+  const [syncingDir, setSyncingDir] = useState(false);
+  const syncDirectory = async () => {
+    setSyncingDir(true);
+    try {
+      const res = await httpsCallable(functions, 'backfillUserDirectory')();
+      alert(`✓ Directory synced — ${res.data?.synced ?? 0} user(s) projected (names/roles only, no PINs).`);
+    } catch (err) {
+      console.error(err);
+      alert('Directory sync failed: ' + (err.message || err));
+    } finally {
+      setSyncingDir(false);
+    }
+  };
 
   // Legacy Finishing-floor employees live in fin_users (chip-PIN checks + finishing dropdowns still use
   // it). HQ login / permissions read hq_users, so those users were invisible here and couldn't get into
@@ -2555,6 +2573,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       ? <button onClick={importFinishingUsers} style={{ marginLeft: '12px', padding: '9px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⇩ Import {finToImport.length} missing into HQ</button>
                       : <span style={{ marginLeft: '12px', color: '#3a7d44' }}>✓ all present in HQ directory</span>}
                     {finOfficeUsers.length > 0 && <button onClick={purgeOfficeFromFin} title="Remove office users from the finishing (chip PIN) directory" style={{ marginLeft: '12px', padding: '9px 16px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>✖ Remove {finOfficeUsers.length} office from floor list</button>}
+                    <button onClick={syncDirectory} disabled={syncingDir} title="Rebuild the sanitized name/role directory the floor apps read (no PINs exposed). Safe to re-run." style={{ marginLeft: '12px', padding: '9px 16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: syncingDir ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{syncingDir ? 'Syncing…' : '⟳ Sync Directory'}</button>
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '15px', marginBottom: '20px' }}>

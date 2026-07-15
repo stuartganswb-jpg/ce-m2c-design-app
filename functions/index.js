@@ -1,7 +1,9 @@
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const CryptoJS = require("crypto-js");
+const crypto = require("crypto");
 
 // 🔐 NetSuite credentials — stored as Firebase secrets, never in source.
 // Set each once:  firebase functions:secrets:set NS_CONSUMER_KEY   (and the rest)
@@ -36,7 +38,6 @@ exports.authenticatePin = onCall({
     // lock out the whole warehouse (every device shares one public IP). A much higher IP-level counter
     // still backstops a brute-force enumeration flood. Only FAILED attempts count; any success clears
     // the counters. The PIN is hashed so raw PINs never land in security_logs doc ids.
-    const crypto = require('crypto');
     const lockoutWindow = 10 * 60 * 1000; // 10 minutes
     const PIN_MAX = 5;   // lock a specific PIN after 5 wrong tries (targeted-guess protection)
     const IP_MAX = 40;   // lock an IP after 40 wrong tries (flood backstop — high so a shared warehouse IP isn't tripped by normal typos)
@@ -233,4 +234,56 @@ exports.netsuiteProxy = onRequest({
         console.error("Cloud Proxy Error:", error);
         return res.status(500).send({ error: error.message });
     }
+});
+
+
+// ============================================================================
+// 3. USER DIRECTORY PROJECTION (SANITIZED, NON-PIN)
+// ============================================================================
+//
+// hq_users doc id IS the PIN and each doc stores the PIN field, so exposing it to every authed
+// operator lets anyone enumerate every PIN (incl. super admin) and impersonate them. Client apps
+// only need name/role (+ the superAdmin flag) for display joins and the finishing floor roster —
+// never the PIN. So we mirror hq_users into a sanitized `directory` collection that carries ONLY
+// { name, role, superAdmin }, keyed by a hash of the PIN (never the PIN itself). Clients read
+// `directory`; `hq_users` can then be locked to admins. Both functions use the Admin SDK, which
+// bypasses Firestore rules — so `directory` is server-write-only (rules: allow write: if false).
+
+// Deterministic opaque id — hash of the hq_users doc id (the PIN). Never reversible to the PIN,
+// but stable so updates/deletes map 1:1.
+const directoryId = (hqUserId) => crypto.createHash('sha256').update(String(hqUserId)).digest('hex').slice(0, 24);
+
+const projectUser = (data) => ({
+    name: (data && data.name) || 'Unknown',
+    role: (data && data.role) || 'operator',
+    superAdmin: !!(data && data.superAdmin === true),
+});
+
+// Keep `directory` in lock-step with every hq_users create/update/delete.
+exports.mirrorUserToDirectory = onDocumentWritten('hq_users/{userId}', async (event) => {
+    const db = admin.firestore();
+    const id = directoryId(event.params.userId);
+    const after = event.data && event.data.after;
+    if (!after || !after.exists) {
+        await db.collection('directory').doc(id).delete().catch(() => {});
+        return;
+    }
+    await db.collection('directory').doc(id).set(projectUser(after.data()));
+});
+
+// One-time / idempotent backfill of the projection for all EXISTING users. Admin-gated; invoked
+// from the HQ Admin tab ("Sync Directory" button). Safe to re-run.
+exports.backfillUserDirectory = onCall({ enforceAppCheck: true }, async (request) => {
+    const role = String((request.auth && request.auth.token && request.auth.token.role) || '').toLowerCase();
+    if (!['admin', 'superadmin'].includes(role)) {
+        throw new HttpsError('permission-denied', 'Admins only.');
+    }
+    const db = admin.firestore();
+    const snap = await db.collection('hq_users').get();
+    const writes = [];
+    snap.forEach((doc) => {
+        writes.push(db.collection('directory').doc(directoryId(doc.id)).set(projectUser(doc.data())));
+    });
+    await Promise.all(writes);
+    return { synced: writes.length };
 });

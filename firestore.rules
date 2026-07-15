@@ -10,6 +10,11 @@ service cloud.firestore {
       // role claim is set by the authenticatePin Cloud Function at login.
       return request.auth != null && request.auth.token.role == 'superadmin';
     }
+    function isAdmin() {
+      // admin or super admin, per the role claim minted at login.
+      return request.auth != null &&
+        (request.auth.token.role == 'admin' || request.auth.token.role == 'superadmin');
+    }
 
     // 🔒 SUPERADMIN-ONLY VAULT
     // Confidential data lives here. This is the ONLY rule that matches this path,
@@ -31,7 +36,16 @@ service cloud.firestore {
     match /shop_config/{document=**}            { allow read, write: if isAuth(); }
     match /fin_config/{document=**}             { allow read, write: if isAuth(); }
     match /pick_config/{document=**}            { allow read, write: if isAuth(); }
+    // hq_users holds PINs (the doc id IS the PIN). Kept on isAuth for now so the floor apps that
+    // still join it directly don't break; the read-side is being migrated to `directory` (below),
+    // after which this line locks to isAdmin(). authenticatePin reads this via the Admin SDK, which
+    // bypasses these rules, so PIN login is unaffected by the eventual lock.
     match /hq_users/{document=**}               { allow read, write: if isAuth(); }
+
+    // 🔒 Sanitized projection of hq_users — { name, role, superAdmin } only, NO PIN. Written
+    // server-side (Admin SDK bypasses rules) by mirrorUserToDirectory / backfillUserDirectory.
+    // Clients read this for name/role joins so hq_users can be locked down.
+    match /directory/{document=**}              { allow read: if isAuth(); allow write: if false; }
 
     // ---- Core PLM / CPQ ----
     match /Approved_Designs/{document=**}       { allow read, write: if isAuth(); }
