@@ -255,7 +255,9 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     useEffect(() => {
         if (!fabCode && autoFabCode) setFabCode(autoFabCode);
     }, [fabCode, autoFabCode]);
-    const fabCodeStatus = !fabCode ? (queue[currentIndex]?.folder ? { ok: false, txt: '⚠ REQUIRED — no Fabricut code on the CrossReference import for this item; enter it (sticks for the whole folder)' } : null)
+    const fabCodeStatus = !fabCode ? (queue[currentIndex]?.folder ? { ok: false, txt: pairedInfo?.role === 'FEE'
+            ? '⚠ REQUIRED — returns are FEE items: the CrossReference sheet has no Fabricut code for them (plate rows only carry bracket codes). Enter the catalog code once — it sticks for the whole folder.'
+            : '⚠ REQUIRED — no Fabricut code on the CrossReference import for this item; enter it (sticks for the whole folder)' } : null)
         : !libFabCodes.length ? null
         : libFabCodes.includes(String(fabCode).trim().toUpperCase())
             ? { ok: true, txt: '✓ matches CrossReference import' }

@@ -1533,7 +1533,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                 <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
                                                     <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
                                                         <option value="">Select Customer...</option>
-                                                        {(globalLists.customers || []).map(c => <option key={c} value={c}>{c}</option>)}
+                                                        {liveCustomers.map(c => <option key={c.id} value={c.companyName || c.name}>{c.companyName || c.name}</option>)}
                                                     </select>
                                                     <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
                                                     <button onClick={() => {
