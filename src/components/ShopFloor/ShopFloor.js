@@ -882,6 +882,17 @@ const ShopFloor = () => {
         };
 
         const CustomCard = ({ order }) => {
+            // "Parts Require Phosphate" (Stuart 2026-07-15): any IN-HOUSE finish → phosphate at
+            // the adjacent station before finishing. Stamped at dispatch (needsPhosphating);
+            // orders already in the queue derive it live from the recipe so the rule covers them.
+            const needsPhos = order.needsPhosphating === true ||
+                (!order.isOutsourced && !!order.finishRecipe && order.finishRecipe !== 'PENDING-RECIPE' && !/\b(MILL|RAW|UNFINISHED)\b/i.test(order.finishRecipe));
+            const phosCfgs = order.quoteId ? (orderConfigs[order.quoteId] || []) : [];
+            const phosMulti = phosCfgs.length >= 2; // multi-config: per-row checks; single: one order-level box
+            const phosMap = order.phosChecks || {};
+            const phosDoneCount = phosCfgs.filter(c => phosMap[c.key]?.done).length;
+            const allPhosDone = !needsPhos || (phosMulti ? (phosDoneCount === phosCfgs.length && phosCfgs.length > 0) : !!order.phosDone);
+
             const printZebraLabel = (order) => {
                 const zpl = `
                     ^XA
@@ -915,7 +926,10 @@ const ShopFloor = () => {
             const handleCompleteWithLabel = async () => {
                 const actionText = order.isOutsourced ? 'complete and send to PLATING DISPATCH' : 'complete and print Zebra label';
                 if (!window.confirm(`Mark ${order.woNum} ${actionText}?`)) return;
-                
+                // Reminder only (doesn't block): in-house finish parts should be phosphated
+                // at the adjacent station and checked off before Complete.
+                if (!allPhosDone && !window.confirm(`⚠ ${order.woNum} — parts are NOT marked PHOSPHATED.\n\nThis order has an in-house finish (${order.finishRecipe || 'recipe pending'}). Parts require phosphate at the adjacent station before finishing.\n\nComplete anyway?`)) return;
+
                 printZebraLabel(order);
                 const finalStatus = order.isOutsourced ? 'Sent to Plating' : 'Completed';
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name });
@@ -961,10 +975,19 @@ const ShopFloor = () => {
                                 });
                             } catch (e) { alert('Failed to save the check: ' + (e.message || e)); }
                         };
+                        // Separate map from configChecks so the completion toggle never clobbers it.
+                        const togglePhos = async (c) => {
+                            const cur = phosMap[c.key]?.done;
+                            try {
+                                await updateDoc(doc(db, 'shop_custom_orders', order.id), {
+                                    [`phosChecks.${c.key}`]: cur ? { done: false } : { done: true, by: user.name, at: Date.now(), label: c.label }
+                                });
+                            } catch (e) { alert('Failed to save the phosphate check: ' + (e.message || e)); }
+                        };
                         return (
                             <div style={{ marginBottom: '20px', border: '1px solid var(--line)' }}>
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: doneCount === cfgs.length ? '#3a7d44' : 'var(--ink)', padding: '6px 12px', display: 'flex', justifyContent: 'space-between' }}>
-                                    <span>Configurations</span><span>{doneCount}/{cfgs.length} done</span>
+                                    <span>Configurations</span><span>{doneCount}/{cfgs.length} done{needsPhos ? ` · ${phosDoneCount}/${cfgs.length} phos` : ''}</span>
                                 </div>
                                 {cfgs.map((c, i) => {
                                     const done = !!checks[c.key]?.done;
@@ -973,6 +996,15 @@ const ShopFloor = () => {
                                             <input type="checkbox" checked={done} onChange={() => toggle(c)} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
                                             <span style={{ flex: 1, fontFamily: 'var(--sans)', fontSize: '0.95rem', color: done ? 'var(--ink-soft)' : 'var(--ink)', textDecoration: done ? 'line-through' : 'none' }}>{c.label}{c.qty > 1 ? ` × ${c.qty}` : ''}</span>
                                             {done && checks[c.key]?.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#3a7d44', whiteSpace: 'nowrap' }}>✓ {checks[c.key].by}</span>}
+                                            {needsPhos && (() => {
+                                                const pDone = !!phosMap[c.key]?.done;
+                                                return (
+                                                    <span onClick={(e) => { e.preventDefault(); e.stopPropagation(); togglePhos(c); }} title={pDone ? `Phosphated by ${phosMap[c.key]?.by || ''}` : "Mark this configuration's parts as phosphated"} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', padding: '4px 8px', border: pDone ? '1px solid #3a7d44' : '1px dashed var(--ink-soft)', background: pDone ? '#f0f7f1' : 'transparent', whiteSpace: 'nowrap' }}>
+                                                        <input type="checkbox" checked={pDone} readOnly style={{ width: '15px', height: '15px', pointerEvents: 'none' }} />
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: pDone ? '#3a7d44' : 'var(--ink-soft)' }}>Phos</span>
+                                                    </span>
+                                                );
+                                            })()}
                                             {/* preventDefault: the row is a <label> — without it this click would also toggle the checkbox */}
                                             <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setCfgLine(i); setCfgQuote(order.quoteId); }} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>🔍 View Item</button>
                                         </label>
@@ -1071,6 +1103,33 @@ const ShopFloor = () => {
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{String(v)}</span>
                                 </div>
                             ))}
+                        </div>
+                    )}
+
+                    {/* LAST ROUTER STEP: in-house finish → phosphate reminder. Multi-config orders
+                        check off per row above; single-config orders get the one box here. */}
+                    {needsPhos && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 16px', background: allPhosDone ? '#f0f7f1' : '#fff8e6', border: allPhosDone ? '1px solid #3a7d44' : '1px solid var(--brass)' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600, color: allPhosDone ? '#3a7d44' : 'var(--ink)' }}>
+                                    {allPhosDone ? '✓ Parts Phosphated' : '⚠ Last Step — Parts Require Phosphate'}
+                                </div>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '3px' }}>In-house finish: {order.finishRecipe || '—'} · phosphate at the adjacent station, then check off</div>
+                            </div>
+                            {phosMulti ? (
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: allPhosDone ? '#3a7d44' : 'var(--ink)', whiteSpace: 'nowrap' }}>{phosDoneCount}/{phosCfgs.length} phosphated</span>
+                            ) : (
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <input type="checkbox" checked={!!order.phosDone} onChange={async () => {
+                                        try {
+                                            await updateDoc(doc(db, 'shop_custom_orders', order.id), order.phosDone
+                                                ? { phosDone: false, phosBy: null, phosAt: null }
+                                                : { phosDone: true, phosBy: user.name, phosAt: Date.now() });
+                                        } catch (e) { alert('Failed to save the phosphate check: ' + (e.message || e)); }
+                                    }} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: order.phosDone ? '#3a7d44' : 'var(--ink)' }}>Phosphated{order.phosDone && order.phosBy ? ` · ${order.phosBy}` : ''}</span>
+                                </label>
+                            )}
                         </div>
                     )}
 

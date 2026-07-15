@@ -553,6 +553,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const outsourceFinishes = outSnap.docs.map(d => d.data());
                 const matchedOutsource = outsourceFinishes.find(f => finishRecipe.toUpperCase().includes(String(f.name).toUpperCase()));
                 const isOutsourced = !!matchedOutsource;
+                // Fundamental rule (Stuart 2026-07-15): ANY in-house finish (a real recipe that
+                // isn't an outsourced-plating match and isn't mill/raw) → the custom parts get
+                // phosphated at the station adjacent to custom fab. The shop card renders
+                // "Parts Require Phosphate" as the last router step (checkbox reminder only —
+                // no NetSuite /P conversion like small parts).
+                const needsPhosphating = !isOutsourced && finishRecipe !== 'PENDING-RECIPE' && !/\b(MILL|RAW|UNFINISHED)\b/i.test(finishRecipe);
                 const cutLine = customLines.find(l => l.cutLength);
                 const cpqSpecs = {};
                 customLines.forEach(l => { cpqSpecs[cleanLineName(l.name)] = `Qty: ${l.qty}`; });
@@ -577,7 +583,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     cutLength: cutLine?.cutLength || null,
                     cutList,
                     clientName: customerName, customerId,
-                    isOutsourced, finishRecipe,
+                    isOutsourced, finishRecipe, needsPhosphating,
                     outsourcePrice: isOutsourced ? (matchedOutsource.multiplier || 0) : 0,
                     category: 'Custom Fabrication',
                     priority: 999,
@@ -825,7 +831,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 note: hqOrder.memo || originalJob?.sidemark || "",
                 cpqSpecs: cpqSpecs,
                 imageUrl: svgUri || originalJob?.finalImageUrl || null,
-                needsPhosphating: hqOrder.needsPhosphating || false,
+                // Explicit flag from the stock order wins; otherwise the in-house-finish rule
+                // applies (real recipe, not outsourced, not mill/raw → phosphate last step).
+                needsPhosphating: hqOrder.needsPhosphating || (!isOutsourced && finishRecipe !== 'PENDING-RECIPE' && !/\b(MILL|RAW|UNFINISHED)\b/i.test(finishRecipe)),
                 isPlatingDemand: hqOrder.isPlatingDemand || false,
                 rootItem: hqOrder.rootItem || '',
                 createdAt: Date.now(),
