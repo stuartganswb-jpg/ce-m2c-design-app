@@ -63,7 +63,8 @@ const FinishingFloor = () => {
       onSnapshot(collection(db, "fin_paint_profiles"), (snap) => { let p = {}; snap.docs.forEach(d => p[d.id] = d.data()); setPaintProfiles(p); }),
       onSnapshot(collection(db, "fin_pots"), (snap) => { let pts = {}; snap.docs.forEach(d => pts[d.id] = d.data().mixedAt); setActivePots(pts); }),
       onSnapshot(collection(db, "fin_supplies"), (snap) => setSupplies(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
+      // Sanitized name/role/superAdmin projection (no PINs) — hq_users is admin-locked.
+      onSnapshot(collection(db, "directory"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(50)), (snap) => setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(doc(db, "fin_config", "settings"), (docSnap) => { if (docSnap.exists()) setSysConfig(prev => ({ ...prev, ...docSnap.data() })); }),
       onSnapshot(doc(db, "fin_config", "capacityMatrix"), (docSnap) => setCapacityMatrix(docSnap.exists() ? docSnap.data() : {})),

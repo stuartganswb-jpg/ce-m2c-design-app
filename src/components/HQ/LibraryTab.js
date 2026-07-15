@@ -78,7 +78,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   useEffect(() => {
       if (!currentUser) return;
-      const unsubUser = onSnapshot(collection(db, "hq_users"), (snap) => {
+      // Sanitized name/role projection (no PINs) — hq_users is admin-locked.
+      const unsubUser = onSnapshot(collection(db, "directory"), (snap) => {
           const users = snap.docs.map(d => d.data());
           const me = users.find(u => u.name === currentUser);
           

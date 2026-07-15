@@ -58,7 +58,6 @@ const ShopFloor = () => {
     const [matHistory, setMatHistory] = useState([]);
     const [failures, setFailures] = useState([]);
     const [livio, setLivio] = useState([]);
-    const [users, setUsers] = useState([]);
     const [logs, setLogs] = useState([]);
 
     const [machineCategoryMap, setMachineCategoryMap] = useState({});
@@ -134,7 +133,6 @@ const ShopFloor = () => {
             onSnapshot(query(shopDb.collection("material_history"), orderBy("t", "desc"), limit(50)), s => setMatHistory(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(query(shopDb.collection("shop_failures"), orderBy("timestamp", "desc")), s => setFailures(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("livio"), s => setLivio(s.docs.map(d=>({id: d.id, ...d.data()})))),
-            onSnapshot(collection(db, "hq_users"), s => setUsers(s.docs.map(d=>({id: d.id, ...d.data()})))),
             subscribeProgramPrints(db, setPrintMap)
         ];
         return () => unsubs.forEach(u => u());
