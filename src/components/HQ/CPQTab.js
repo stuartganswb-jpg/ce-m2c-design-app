@@ -328,6 +328,9 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         tex.wrapS = THREE.RepeatWrapping;
                         tex.wrapT = THREE.RepeatWrapping;
                         tex.colorSpace = THREE.SRGBColorSpace;
+                        // Grazing angles (a pole receding from camera) mip-smear the swatch into
+                        // lengthwise streaks without this; three clamps to the GPU max internally.
+                        tex.anisotropy = 8;
                         globalTextureCache[url] = tex;
                         texMap[url] = tex;
                         loadedCount++;
