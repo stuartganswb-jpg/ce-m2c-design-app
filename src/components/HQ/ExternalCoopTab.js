@@ -27,12 +27,20 @@ const INITIAL_CRM_DATA = {};
 // admin-gated Cloud Functions (createPortalUser & co.) — the panel never writes portal_users
 // directly (rules: server-write-only). Reading portal_users requires an admin role claim, so
 // non-admin staff see a quiet "admins only" note instead of the list.
-const PortalAccessPanel = ({ customerId }) => {
+const PortalAccessPanel = ({ customer, activeBrand }) => {
+  const customerId = customer?.id;
   const [users, setUsers] = useState(null);      // null = loading/denied, [] = none
   const [denied, setDenied] = useState(false);
   const [form, setForm] = useState({ name: '', email: '' });
   const [busy, setBusy] = useState(false);
   const [inviteLink, setInviteLink] = useState(null); // { email, link } of the latest created user
+
+  // The CPQ flow is the customer-entitlement unit: an assigned flow's assembly (and its BOM)
+  // defines everything the customer may see in the portal — showroom, and later gallery/stock/CPQ.
+  // Local mirror of crm_records.portalFlowIds (the parent's selected-record state doesn't live-update).
+  const [brandFlows, setBrandFlows] = useState([]);
+  const [assignedFlowIds, setAssignedFlowIds] = useState([]);
+  useEffect(() => { setAssignedFlowIds(customer?.portalFlowIds || []); }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setUsers(null); setDenied(false); setInviteLink(null);
@@ -43,6 +51,26 @@ const PortalAccessPanel = ({ customerId }) => {
       () => { setDenied(true); setUsers([]); });
     return unsub;
   }, [customerId]);
+
+  useEffect(() => {
+    const brand = customer?.brandId || activeBrand;
+    if (!brand) { setBrandFlows([]); return; }
+    const q = query(collection(db, 'cpq_flows'), where('brandId', '==', brand));
+    const unsub = onSnapshot(q, (snap) => setBrandFlows(
+      snap.docs.map(d => ({ id: d.id, name: d.data().name || d.id, linkedAssemblyId: d.data().linkedAssemblyId || null }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    ), () => setBrandFlows([]));
+    return unsub;
+  }, [customerId, customer?.brandId, activeBrand]);
+
+  const toggleFlow = async (flowId) => {
+    const next = assignedFlowIds.includes(flowId)
+      ? assignedFlowIds.filter(f => f !== flowId)
+      : [...assignedFlowIds, flowId];
+    setAssignedFlowIds(next);
+    try { await updateDoc(doc(db, 'crm_records', customerId), { portalFlowIds: next }); }
+    catch (e) { setAssignedFlowIds(assignedFlowIds); alert('Could not update flow access: ' + (e.message || e)); }
+  };
 
   const call = async (fn, args, okMsg) => {
     setBusy(true);
@@ -121,6 +149,28 @@ const PortalAccessPanel = ({ customerId }) => {
             <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Name" style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
             <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="email@company.com" type="email" style={{ flex: 1.4, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
             <button disabled={busy || !form.email} onClick={handleAdd} style={{ padding: '10px 18px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: !form.email ? 0.5 : 1 }}>{busy ? 'Working…' : '+ Add Login'}</button>
+          </div>
+
+          {/* Which CPQ flows this customer's portal may use. A flow's assembly + BOM defines
+              everything they can see: showroom models, and later gallery/stock/configurator. */}
+          <div style={{ marginTop: '22px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: 'var(--ink-soft)' }}>Available CPQ Flows</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: assignedFlowIds.length ? 'var(--brass)' : 'var(--ink-soft)' }}>{assignedFlowIds.length ? `${assignedFlowIds.length} assigned` : 'none — portal shows nothing'}</span>
+            </div>
+            {brandFlows.length === 0 ? (
+              <div style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No CPQ flows exist for this brand yet.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+                {brandFlows.map(f => (
+                  <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', padding: '6px 8px', border: '1px solid var(--line-soft, rgba(28,26,22,.07))', background: assignedFlowIds.includes(f.id) ? 'var(--paper)' : 'transparent' }}>
+                    <input type="checkbox" checked={assignedFlowIds.includes(f.id)} onChange={() => toggleFlow(f.id)} style={{ accentColor: 'var(--brass)' }} />
+                    <span style={{ flex: 1 }}>{f.name}</span>
+                    {!f.linkedAssemblyId && <span title="This flow has no linked assembly — nothing will render in the portal showroom" style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: '#a05a2c', textTransform: 'uppercase', letterSpacing: '.08em' }}>no assembly</span>}
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
         </>
       )}
@@ -930,8 +980,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           </div>
                                       </div>
 
-                                      {/* Portal logins — customers only (vendors share this detail panel) */}
-                                      {activeSubTab === 'CUSTOMERS' && <PortalAccessPanel customerId={activeCrmRecord.id} />}
+                                      {/* Portal logins + flow entitlements — customers only (vendors share this detail panel) */}
+                                      {activeSubTab === 'CUSTOMERS' && <PortalAccessPanel customer={activeCrmRecord} activeBrand={activeBrand} />}
 
                                       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', flex: 1, display: 'flex', flexDirection: 'column' }}>
                                           <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Relationship Notes</h4>

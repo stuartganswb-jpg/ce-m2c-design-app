@@ -87,7 +87,7 @@ export default function Showroom() {
 
   const { items = [], finishes = [] } = data;
   if (items.length === 0) {
-    return <div className="empty" style={{ marginTop: 24 }}>No 3D products are available on your account yet. Contact your representative to have items added.</div>;
+    return <div className="empty" style={{ marginTop: 24 }}>Your showroom hasn't been set up yet — contact your Classical Elements representative to have your product lines enabled.</div>;
   }
 
   const active = items.find((i) => i.id === activeId) || items[0];

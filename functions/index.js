@@ -519,16 +519,19 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     };
 });
 
-// The customer's showroom: their priced products (with a GLB) plus a sanitized finish palette for
-// the read-only 3D viewer. Products = mainline Approved_Designs that carry a clientPricing row for
-// this customer AND have a working GLB. NEVER returns cost/vendor data — price shown is the
-// customer's own sell price (clientSalesPrice), falling back to the item's base price.
+// The customer's showroom, driven by their ASSIGNED CPQ FLOWS (crm_records.portalFlowIds — set in
+// the CRM Portal Access panel). The flow is the entitlement unit: its linked assembly (and later,
+// that assembly's BOM) defines everything the customer may see. Each assigned flow with a linked
+// assembly + GLB becomes one showroom item. NEVER returns cost/vendor data — price shown is the
+// customer's clientSalesPrice on the assembly (fallback: item base price, else no price).
 exports.portalCatalog = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const db = admin.firestore();
 
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
-    const crmName = crmSnap.exists ? String(crmSnap.data().name || '').toLowerCase() : '';
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const crmName = String(crm.name || '').toLowerCase();
+    const flowIds = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds.filter(Boolean) : [];
     const matchesCustomer = (row) => {
         const rid = String((row && row.customerId) || '');
         return rid === customerId || (!!crmName && rid.toLowerCase() === crmName);
@@ -540,27 +543,33 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
         .filter((f) => f && f.textureUrl)
         .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', code: f.code || '', textureUrl: f.textureUrl }));
 
-    const snap = await db.collection('Approved_Designs').get();
+    if (flowIds.length === 0) return { items: [], finishes, reason: 'NO_FLOWS' };
+
+    const flowSnaps = await db.getAll(...flowIds.map((id) => db.collection('cpq_flows').doc(id)));
+    const flows = flowSnaps.filter((s) => s.exists).map((s) => ({ id: s.id, ...s.data() }));
+
+    const assemblyIds = [...new Set(flows.map((f) => f.linkedAssemblyId).filter(Boolean))];
+    const asmSnaps = assemblyIds.length ? await db.getAll(...assemblyIds.map((id) => db.collection('Approved_Designs').doc(id))) : [];
+    const assemblies = new Map(asmSnaps.filter((s) => s.exists).map((s) => [s.id, s.data()]));
+
     const items = [];
-    snap.forEach((doc) => {
-        const d = doc.data() || {};
-        const isMain = String(d.routingType || '').toUpperCase() === 'MAIN' || String(d.recordType || '').toUpperCase() === 'PRODUCT';
-        if (!isMain) return;
-        const cadUrl = d.manufacturingSpecs && d.manufacturingSpecs.cadUrl;
-        if (!cadUrl) return;
-        const cp = Array.isArray(d.clientPricing) ? d.clientPricing.find(matchesCustomer) : null;
-        if (!cp) return; // only items priced for this customer appear in their showroom
-        const base = d.manufacturingSpecs && d.manufacturingSpecs.basePrice;
-        const priceRaw = (cp.clientSalesPrice ?? cp.price ?? base);
+    for (const flow of flows) {
+        const asm = flow.linkedAssemblyId ? assemblies.get(flow.linkedAssemblyId) : null;
+        const cadUrl = asm && asm.manufacturingSpecs && asm.manufacturingSpecs.cadUrl;
+        if (!cadUrl) continue; // a flow without a renderable assembly has nothing to show (yet)
+        const cp = Array.isArray(asm.clientPricing) ? asm.clientPricing.find(matchesCustomer) : null;
+        const base = asm.manufacturingSpecs && asm.manufacturingSpecs.basePrice;
+        const priceRaw = cp ? (cp.clientSalesPrice ?? cp.price ?? base) : base;
         const price = (priceRaw === undefined || priceRaw === null || priceRaw === '') ? null : Number(priceRaw);
         items.push({
-            id: doc.id,
-            name: d.itemName || cp.clientSku || d.itemId || 'Item',
-            sku: cp.clientSku || d.legacyErpId || d.itemId || '',
+            id: flow.linkedAssemblyId,
+            flowId: flow.id,
+            name: flow.name || asm.itemName || 'Product',
+            sku: (cp && cp.clientSku) || asm.legacyErpId || asm.itemId || '',
             cadUrl,
             price: Number.isFinite(price) ? price : null,
         });
-    });
+    }
     items.sort((a, b) => a.name.localeCompare(b.name));
 
     return { items, finishes };
