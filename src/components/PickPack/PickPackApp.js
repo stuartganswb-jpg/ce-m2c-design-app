@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth, functions } from '../../firebase';
+import { db, auth, functions, getOuterIdToken } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
@@ -418,7 +418,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         try {
             // 🔐 Same secure flow as HQ: mint a custom token server-side, then sign in.
             const authenticatePin = httpsCallable(functions, 'authenticatePin');
-            const result = await authenticatePin({ pin: pinInput });
+            const result = await authenticatePin({ pin: pinInput, outerToken: await getOuterIdToken() });
             const { token, user: userData } = result.data;
 
             await signInWithCustomToken(auth, token);

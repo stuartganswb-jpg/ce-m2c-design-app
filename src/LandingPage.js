@@ -1,8 +1,11 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { signOut } from 'firebase/auth';
+import { outerAuth } from './firebase';
 
 const LandingPage = () => {
   const navigate = useNavigate();
+  const gateEmail = outerAuth.currentUser?.email || '';
 
   // CSS variables mapped directly from the new Classical Elements prototype
   const theme = {
@@ -71,9 +74,9 @@ const LandingPage = () => {
 
         </div>
 
-        {/* FOOTER METADATA */}
+        {/* FOOTER — signed-in identity + daily sign-out */}
         <div style={{ marginTop: '40px', paddingTop: '20px', borderTop: `1px solid ${theme.line}`, textAlign: 'center', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.18em', color: theme.inkSoft, textTransform: 'uppercase' }}>
-          Local Node: Administrator
+          {gateEmail ? <>Signed in: {gateEmail}<button onClick={() => signOut(outerAuth)} style={{ marginLeft: '14px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.15em', textTransform: 'uppercase', color: theme.inkSoft, padding: '4px 10px' }}>Sign Out</button></> : 'Local Node'}
         </div>
 
       </div>

@@ -20,16 +20,49 @@ admin.initializeApp();
 // 1. SECURE AUTHENTICATION FUNCTION (MINTING PRESS & GATEKEEPER)
 // ============================================================================
 
+// OUTER GATE — the 4-digit PIN alone is too weak as an internet-facing credential (10k space;
+// per-PIN lockout doesn't slow a sweep of DIFFERENT pins). Staff sign in once per day with a
+// company email (the client's OuterGate screen); this function refuses to mint a PIN token
+// without a fresh, domain-allowed outer session, making the PIN a user-switcher BEHIND a real
+// credential rather than a standalone one. Floor tablets share a station email account.
+const ALLOWED_EMAIL_DOMAINS = [
+    'classicalelements.com',
+    'm2cstudio.com',
+    'uniquitystyle.com',
+    'leylagans.com',
+    'thelab-hp.com',
+];
+// Server-side daily window, slightly longer than the client's 14h so a tablet signed in at 6am
+// never hits the server wall mid-shift; the client re-prompts first.
+const OUTER_MAX_AGE_HOURS = 16;
+
 exports.authenticatePin = onCall({
     enforceAppCheck: true, // 🛡️ Requires a valid App Check (reCAPTCHA) token
     cors: true
 }, async (request) => {
 
-    const { pin } = request.data;
+    const { pin, outerToken } = request.data;
     const clientIp = request.rawRequest.ip;
-    
+
     if (!pin) {
         throw new HttpsError('invalid-argument', 'PIN is required.');
+    }
+
+    // 1. Verify the daily email session before touching the PIN at all.
+    let outer;
+    try {
+        outer = await admin.auth().verifyIdToken(String(outerToken || ''));
+    } catch (e) {
+        throw new HttpsError('unauthenticated', 'Daily sign-in required. Return to the portal home and sign in with your company email.');
+    }
+    const outerEmail = String(outer.email || '').toLowerCase();
+    const outerDomain = outerEmail.split('@')[1] || '';
+    if (!ALLOWED_EMAIL_DOMAINS.includes(outerDomain)) {
+        // Also rejects PIN-minted custom tokens replayed as outerToken (they carry no email).
+        throw new HttpsError('permission-denied', 'This account is not authorized for the portal.');
+    }
+    if ((Date.now() / 1000) - (outer.auth_time || 0) > OUTER_MAX_AGE_HOURS * 3600) {
+        throw new HttpsError('unauthenticated', 'Daily sign-in expired. Return to the portal home and sign in again.');
     }
 
     const db = admin.firestore();

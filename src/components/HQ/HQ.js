@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db, auth, functions } from '../../firebase'; 
+import { db, auth, functions, getOuterIdToken } from '../../firebase'; 
 import { collection, query, where, getDocs, doc, getDoc, addDoc, serverTimestamp, onSnapshot, orderBy, limit, updateDoc } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth'; 
 import { httpsCallable } from 'firebase/functions'; 
@@ -205,7 +205,7 @@ function HQ() {
     
     try {
       const authenticatePin = httpsCallable(functions, 'authenticatePin');
-      const result = await authenticatePin({ pin: pinInput });
+      const result = await authenticatePin({ pin: pinInput, outerToken: await getOuterIdToken() });
       
       const { token, user: userData } = result.data;
 

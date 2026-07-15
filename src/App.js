@@ -7,10 +7,13 @@ import HQ from './components/HQ/HQ';
 import ShopFloor from './components/ShopFloor/ShopFloor';
 import FinishingFloor from './components/FinishingFloor/FinishingFloor';
 import PickPackApp from './components/PickPack/PickPackApp'; // 🚀 NEW: Import Pick & Pack App
+import OuterGate from './components/Shared/OuterGate';
 
 const App = () => {
   return (
     <Router>
+      {/* Daily email sign-in fronts every route; PINs switch users behind it. */}
+      <OuterGate>
       <Routes>
         {/* The Master Hub */}
         <Route path="/" element={<LandingPage />} />
@@ -25,6 +28,7 @@ const App = () => {
         {/* 🚀 NEW: The Warehouse Routing */}
         <Route path="/pick-pack" element={<PickPackApp />} />
       </Routes>
+      </OuterGate>
     </Router>
   );
 };

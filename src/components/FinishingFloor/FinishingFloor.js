@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { finishingDb as db, auth, functions } from '../../firebase';
+import { finishingDb as db, auth, functions, getOuterIdToken } from '../../firebase';
 import { collection, onSnapshot, query, doc, getDoc, addDoc, serverTimestamp, orderBy, limit } from "firebase/firestore";
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
@@ -84,7 +84,7 @@ const FinishingFloor = () => {
     try {
       // 🔐 Same secure flow as HQ: mint a custom token server-side, then sign in.
       const authenticatePin = httpsCallable(functions, 'authenticatePin');
-      const result = await authenticatePin({ pin: pinInput });
+      const result = await authenticatePin({ pin: pinInput, outerToken: await getOuterIdToken() });
       const { token, user: userData } = result.data;
 
       await signInWithCustomToken(auth, token);
