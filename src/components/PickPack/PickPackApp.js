@@ -186,6 +186,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [activeTab, setActiveTab] = useState('QUEUE');
     // Sample-chip production control
     const [chipOrders, setChipOrders] = useState([]);
+    const [showChipStats, setShowChipStats] = useState(false); // 📊 chip production statistics modal
     const [finUsers, setFinUsers] = useState([]);     // employees, for per-step assignment
     const [finRecipes, setFinRecipes] = useState([]); // paint recipes (P01, P02…) for the painting step
     const [chipForm, setChipForm] = useState({ customer: '', qty: 1, recipe: '', notes: '' });
@@ -3044,9 +3045,159 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <h2 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.6rem', fontWeight: 500, color: theme.ink }}>Sample Chips — Production Control</h2>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                                     <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', color: theme.inkSoft }}>{openOrders.length} open · {inFinishingCount} in finishing</span>
+                                    {canSeeChipReport && <button onClick={() => setShowChipStats(true)} style={{ padding: '9px 14px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>📊 Stats</button>}
                                     <button onClick={seedHdscRun} style={{ padding: '9px 14px', background: theme.paper, border: `1px dashed ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', color: theme.ink }}>🌱 Seed HDSC Run</button>
                                 </div>
                             </div>
+
+                            {/* 📊 CHIP PRODUCTION STATISTICS — weekly throughput, people, steps. Computed
+                                live from every chip order/batch since the first record: run batches carry
+                                PIN-clocked start/stop per step (real labor time); small orders count on
+                                their completion week with per-step employee credit. */}
+                            {showChipStats && (() => {
+                                const weekStart = (ts) => { const d = new Date(ts); const day = (d.getDay() + 6) % 7; d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - day); return d.getTime(); };
+                                const wkLabel = (ts) => `Wk of ${new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+                                const weeks = {}; const people = {}; const stepAgg = {};
+                                CHIP_STEPS.forEach(s => { stepAgg[s.key] = { label: s.label, done: 0, ms: 0, pcs: 0 }; });
+                                let totalDoneChips = 0, wipChips = 0, runTarget = 0, runDone = 0, firstTs = null;
+                                const wkOf = (ts) => { const k = weekStart(ts); return weeks[k] = weeks[k] || { k, chips: 0, batches: 0, orders: 0, ms: 0, people: new Set() }; };
+                                chipOrders.forEach(o => {
+                                    if (o.createdAt && (!firstTs || o.createdAt < firstTs)) firstTs = o.createdAt;
+                                    if (o.type === 'run') {
+                                        (o.lines || []).forEach(l => { runTarget += l.qty || 0; runDone += l.completed || 0; });
+                                        (o.batches || []).forEach(b => {
+                                            if (b.status === 'working') wipChips += b.qty || 0;
+                                            if (b.status === 'done' && b.completedAt) { const w = wkOf(b.completedAt); w.chips += b.qty || 0; w.batches += 1; totalDoneChips += b.qty || 0; }
+                                            CHIP_STEPS.forEach(s => {
+                                                const st = b.steps?.[s.key];
+                                                if (!st?.startedAt) return;
+                                                const ms = (st.stoppedAt || Date.now()) - st.startedAt;
+                                                const who = st.startedBy || st.employee || '';
+                                                if (who) {
+                                                    const p = people[who] = people[who] || { steps: 0, ms: 0, pieces: 0, running: 0 };
+                                                    if (st.stoppedAt) { p.steps += 1; p.pieces += b.qty || 0; } else p.running += 1;
+                                                    p.ms += ms;
+                                                    const w = wkOf(st.startedAt); w.people.add(who); w.ms += ms;
+                                                }
+                                                if (st.stoppedAt) { stepAgg[s.key].done += 1; stepAgg[s.key].ms += ms; stepAgg[s.key].pcs += b.qty || 0; }
+                                            });
+                                        });
+                                    } else {
+                                        if (o.status === 'done') {
+                                            const doneTs = o.updatedAt || o.createdAt || Date.now();
+                                            const w = wkOf(doneTs); w.chips += o.qty || 0; w.orders += 1; totalDoneChips += o.qty || 0;
+                                            CHIP_STEPS.forEach(s => { const who = o.steps?.[s.key]?.employee; if (who) { w.people.add(who); const p = people[who] = people[who] || { steps: 0, ms: 0, pieces: 0, running: 0 }; p.steps += 1; p.pieces += o.qty || 0; } });
+                                        } else { wipChips += o.qty || 0; }
+                                    }
+                                });
+                                const weekRows = Object.values(weeks).sort((a, b) => b.k - a.k);
+                                const activeWeeks = Math.max(1, weekRows.filter(w => w.chips > 0 || w.ms > 0).length);
+                                const best = weekRows.reduce((m, w) => (w.chips > (m?.chips || 0) ? w : m), null);
+                                const peopleRows = Object.entries(people).sort((a, b) => b[1].ms - a[1].ms || b[1].pieces - a[1].pieces);
+                                const hrs = (ms) => (ms / 3600000).toFixed(1);
+                                const downloadCsv = () => {
+                                    const esc = (c) => `"${String(c).replace(/"/g, '""')}"`;
+                                    const out = [['Week of', 'Chips completed', 'Run batches', 'Small orders', 'People active', 'Clocked hours'].map(esc).join(',')];
+                                    [...weekRows].reverse().forEach(w => out.push([new Date(w.k).toLocaleDateString(), w.chips, w.batches, w.orders, w.people.size, hrs(w.ms)].map(esc).join(',')));
+                                    out.push('');
+                                    out.push(['Employee', 'Steps done', 'Pieces credited', 'Clocked hours', 'Running now'].map(esc).join(','));
+                                    peopleRows.forEach(([who, p]) => out.push([who, p.steps, p.pieces, hrs(p.ms), p.running].map(esc).join(',')));
+                                    out.push('');
+                                    out.push(['Step', 'Times completed', 'Total hours', 'Avg min / 100 pcs'].map(esc).join(','));
+                                    CHIP_STEPS.forEach(s => { const a = stepAgg[s.key]; out.push([a.label, a.done, hrs(a.ms), a.pcs ? ((a.ms / 60000) / (a.pcs / 100)).toFixed(1) : ''].map(esc).join(',')); });
+                                    const url = URL.createObjectURL(new Blob([out.join('\n')], { type: 'text/csv' }));
+                                    const a = document.createElement('a'); a.href = url; a.download = `chip_stats_${activeBrand}.csv`; a.click(); URL.revokeObjectURL(url);
+                                };
+                                const card = (label, value, sub) => (
+                                    <div key={label} style={{ flex: '1 1 130px', background: theme.paper, border: `1px solid ${theme.line}`, padding: '14px 16px' }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>{label}</div>
+                                        <div style={{ fontFamily: theme.serif, fontSize: '1.6rem', color: theme.ink, marginTop: '4px' }}>{value}</div>
+                                        {sub && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '2px' }}>{sub}</div>}
+                                    </div>
+                                );
+                                const thS = { textAlign: 'left', padding: '6px 10px', fontFamily: theme.mono, fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft, borderBottom: `2px solid ${theme.ink}` };
+                                const tdS = { padding: '6px 10px', fontFamily: theme.mono, fontSize: '11px', color: theme.ink, borderBottom: `1px solid ${theme.line}` };
+                                return (
+                                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowChipStats(false)}>
+                                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: 'min(980px, 95vw)', maxHeight: '92vh', overflowY: 'auto', padding: '28px 32px', border: `1px solid ${theme.line}`, boxShadow: '0 8px 40px rgba(0,0,0,0.25)' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
+                                                <h2 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.6rem', color: theme.ink }}>Chip Production — Statistics</h2>
+                                                <div style={{ display: 'flex', gap: '10px' }}>
+                                                    <button onClick={downloadCsv} style={{ padding: '8px 14px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer' }}>⬇ CSV</button>
+                                                    <button onClick={() => setShowChipStats(false)} style={{ background: 'transparent', border: 'none', fontSize: '1.3rem', cursor: 'pointer', color: theme.inkSoft }}>×</button>
+                                                </div>
+                                            </div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: '18px' }}>
+                                                Since {firstTs ? new Date(firstTs).toLocaleDateString() : '—'} · live from every chip order & batch · {String(activeBrand).toUpperCase()}
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '22px' }}>
+                                                {card('Chips completed', totalDoneChips.toLocaleString(), 'batches + small orders')}
+                                                {card('Avg / active week', Math.round(totalDoneChips / activeWeeks).toLocaleString(), `${activeWeeks} active week(s)`)}
+                                                {card('Best week', best ? best.chips.toLocaleString() : '—', best ? wkLabel(best.k) : '')}
+                                                {card('Operators', String(peopleRows.length), 'all-time, clocked')}
+                                                {card('Clocked hours', hrs(peopleRows.reduce((s, [, p]) => s + p.ms, 0)), 'PIN start→stop')}
+                                                {card('In progress now', wipChips.toLocaleString(), 'working batches + open orders')}
+                                                {runTarget > 0 && card('HDSC run', `${Math.round((runDone / runTarget) * 100)}%`, `${runDone.toLocaleString()} / ${runTarget.toLocaleString()} pcs`)}
+                                            </div>
+
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, margin: '0 0 6px' }}>Week by week</div>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '22px' }}>
+                                                <thead><tr>{['Week', 'Chips completed', 'Run batches', 'Small orders', 'People', 'Clocked hrs'].map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
+                                                <tbody>
+                                                    {weekRows.length === 0 && <tr><td colSpan={6} style={{ ...tdS, fontStyle: 'italic', color: theme.inkSoft }}>No activity recorded yet.</td></tr>}
+                                                    {weekRows.map(w => (
+                                                        <tr key={w.k}>
+                                                            <td style={tdS}>{wkLabel(w.k)}</td>
+                                                            <td style={{ ...tdS, fontWeight: 700 }}>{w.chips.toLocaleString()}</td>
+                                                            <td style={tdS}>{w.batches || '·'}</td>
+                                                            <td style={tdS}>{w.orders || '·'}</td>
+                                                            <td style={tdS}>{w.people.size || '·'}</td>
+                                                            <td style={tdS}>{w.ms ? hrs(w.ms) : '·'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, margin: '0 0 6px' }}>People</div>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '22px' }}>
+                                                <thead><tr>{['Employee', 'Steps done', 'Pieces credited', 'Clocked hrs', 'Avg min / step', 'Running now'].map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
+                                                <tbody>
+                                                    {peopleRows.length === 0 && <tr><td colSpan={6} style={{ ...tdS, fontStyle: 'italic', color: theme.inkSoft }}>No clocked work yet — stats build as operators PIN in/out of batch steps.</td></tr>}
+                                                    {peopleRows.map(([who, p]) => (
+                                                        <tr key={who}>
+                                                            <td style={{ ...tdS, fontFamily: theme.sans, fontWeight: 500 }}>{who}</td>
+                                                            <td style={tdS}>{p.steps}</td>
+                                                            <td style={tdS}>{p.pieces.toLocaleString()}</td>
+                                                            <td style={tdS}>{hrs(p.ms)}</td>
+                                                            <td style={tdS}>{p.steps ? ((p.ms / 60000) / p.steps).toFixed(1) : '·'}</td>
+                                                            <td style={{ ...tdS, color: p.running ? theme.brass : theme.inkSoft }}>{p.running || '·'}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, margin: '0 0 6px' }}>Steps</div>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '10px' }}>
+                                                <thead><tr>{['Step', 'Times completed', 'Total hrs', 'Avg min / batch', 'Avg min / 100 pcs'].map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
+                                                <tbody>
+                                                    {CHIP_STEPS.map(s => { const a = stepAgg[s.key]; return (
+                                                        <tr key={s.key}>
+                                                            <td style={{ ...tdS, fontFamily: theme.sans, fontWeight: 500 }}>{a.label}</td>
+                                                            <td style={tdS}>{a.done || '·'}</td>
+                                                            <td style={tdS}>{a.ms ? hrs(a.ms) : '·'}</td>
+                                                            <td style={tdS}>{a.done ? ((a.ms / 60000) / a.done).toFixed(1) : '·'}</td>
+                                                            <td style={tdS}>{a.pcs ? ((a.ms / 60000) / (a.pcs / 100)).toFixed(1) : '·'}</td>
+                                                        </tr>
+                                                    ); })}
+                                                </tbody>
+                                            </table>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft }}>
+                                                Pieces credited = the batch quantity passes through each step a person completed. Clocked time = PIN start → stop on run batches; small chip orders count on their completion week (no timers on those). A week runs Monday–Sunday.
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                             {runOrders.map(renderRun)}
                             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end', background: theme.paper, border: `1px solid ${theme.line}`, padding: '16px', marginBottom: '24px' }}>
                                 <div style={{ flex: 2, minWidth: '150px' }}><label style={lbl}>Customer</label><input value={chipForm.customer} onChange={e => setChipForm({ ...chipForm, customer: e.target.value })} placeholder="e.g. Brimar" style={inp} /></div>
