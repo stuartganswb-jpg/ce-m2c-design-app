@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from './firebase';
+
+const Showroom = lazy(() => import('./Showroom.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' :
   Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -125,7 +127,7 @@ const SignIn = () => {
   );
 };
 
-const Dashboard = ({ user }) => {
+const Orders = () => {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -142,22 +144,12 @@ const Dashboard = ({ user }) => {
     return () => { alive = false; };
   }, []);
 
-  if (err) {
-    return (
-      <div className="shell">
-        <Header user={user} />
-        <div className="empty" style={{ marginTop: 40 }}>{err}</div>
-        <PortalFooter />
-      </div>
-    );
-  }
-  if (!data) return <div className="loading">Loading your orders…</div>;
+  if (err) return <div className="empty" style={{ marginTop: 24 }}>{err}</div>;
+  if (!data) return <div className="empty" style={{ marginTop: 24 }}>Loading your orders…</div>;
 
   const { quotes = [], orders = [] } = data;
   return (
-    <div className="shell">
-      <Header user={user} />
-
+    <>
       <h2 className="sec">Orders in progress<span className="count">{orders.length}</span></h2>
       {orders.length === 0
         ? <div className="empty">No orders in progress. Your quotes appear below — contact us to place an order.</div>
@@ -167,7 +159,31 @@ const Dashboard = ({ user }) => {
       {quotes.length === 0
         ? <div className="empty">No open quotes. Reach out to your representative to start one.</div>
         : quotes.map((q) => <OrderCard key={q.id} o={q} badge={QUOTE_LABELS[q.status] || 'In review'} badgeClass="s-received" />)}
+    </>
+  );
+};
 
+const TABS = [
+  { id: 'orders', label: 'Orders & Quotes' },
+  { id: 'showroom', label: 'Showroom' },
+];
+
+const Dashboard = ({ user }) => {
+  const [tab, setTab] = useState('orders');
+  return (
+    <div className="shell">
+      <Header user={user} />
+      <nav className="tabs">
+        {TABS.map((t) => (
+          <button key={t.id} className={`tab${tab === t.id ? ' active' : ''}`} onClick={() => setTab(t.id)}>{t.label}</button>
+        ))}
+      </nav>
+      {tab === 'orders' && <Orders />}
+      {tab === 'showroom' && (
+        <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading the 3D showroom…</div>}>
+          <Showroom />
+        </Suspense>
+      )}
       <PortalFooter />
     </div>
   );

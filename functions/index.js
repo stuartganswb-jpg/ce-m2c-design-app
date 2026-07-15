@@ -518,3 +518,50 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
         }),
     };
 });
+
+// The customer's showroom: their priced products (with a GLB) plus a sanitized finish palette for
+// the read-only 3D viewer. Products = mainline Approved_Designs that carry a clientPricing row for
+// this customer AND have a working GLB. NEVER returns cost/vendor data — price shown is the
+// customer's own sell price (clientSalesPrice), falling back to the item's base price.
+exports.portalCatalog = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crmName = crmSnap.exists ? String(crmSnap.data().name || '').toLowerCase() : '';
+    const matchesCustomer = (row) => {
+        const rid = String((row && row.customerId) || '');
+        return rid === customerId || (!!crmName && rid.toLowerCase() === crmName);
+    };
+
+    // Sanitized finish palette — name/code/texture only; no vendor, multiplier, or cost.
+    const mf = await db.collection('system').doc('master_finishes').get();
+    const finishes = ((mf.exists && mf.data().finishes) || [])
+        .filter((f) => f && f.textureUrl)
+        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', code: f.code || '', textureUrl: f.textureUrl }));
+
+    const snap = await db.collection('Approved_Designs').get();
+    const items = [];
+    snap.forEach((doc) => {
+        const d = doc.data() || {};
+        const isMain = String(d.routingType || '').toUpperCase() === 'MAIN' || String(d.recordType || '').toUpperCase() === 'PRODUCT';
+        if (!isMain) return;
+        const cadUrl = d.manufacturingSpecs && d.manufacturingSpecs.cadUrl;
+        if (!cadUrl) return;
+        const cp = Array.isArray(d.clientPricing) ? d.clientPricing.find(matchesCustomer) : null;
+        if (!cp) return; // only items priced for this customer appear in their showroom
+        const base = d.manufacturingSpecs && d.manufacturingSpecs.basePrice;
+        const priceRaw = (cp.clientSalesPrice ?? cp.price ?? base);
+        const price = (priceRaw === undefined || priceRaw === null || priceRaw === '') ? null : Number(priceRaw);
+        items.push({
+            id: doc.id,
+            name: d.itemName || cp.clientSku || d.itemId || 'Item',
+            sku: cp.clientSku || d.legacyErpId || d.itemId || '',
+            cadUrl,
+            price: Number.isFinite(price) ? price : null,
+        });
+    });
+    items.sort((a, b) => a.name.localeCompare(b.name));
+
+    return { items, finishes };
+});
