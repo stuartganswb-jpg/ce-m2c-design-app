@@ -7,7 +7,8 @@
 // dims in system/spec_sheet_config. Editions: H1 (internal) or Fabricut customer codes.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { doc, getDoc, setDoc, updateDoc, getDocs, query, collection, where, deleteField } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { db, storage } from '../../firebase';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { SIZE_FAMILIES, buildSizeIndex, sizeVariantOf } from '../Shared/sizeMatrix';
 import { loadGLBScene } from '../Shared/componentExport';
 import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
@@ -98,6 +99,20 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     (async () => {
       if (!sizeFam || !sizeSel || isBaseCell) { setSrcState({ assembly: null, pins: null, loading: false, missing: false }); return; }
       const entry = sizeSources?.[sizeFamilyKey]?.[cellKey];
+      // DIRECT SPEC GLB (preferred, Stuart 2026-07-14): a purpose-built flat GLB uploaded for this
+      // cell — one of each item, correctly positioned, code-named nodes (the 1.6 Fusion Import
+      // "Spec · true m" export). No assembly/pins/clusters; choices derive from the scene itself.
+      if (entry?.glbUrl && !entry.assemblyId) {
+        setSrcState({
+          assembly: {
+            id: `SPECGLB_${sizeFamilyKey}_${cellKey}`, itemName: entry.name || `Spec GLB ${cellKey}`,
+            manufacturingSpecs: { cadUrl: entry.glbUrl }, nodeClusters: [],
+            specSheetOverrides: { manualDims: entry.manualDims || [] },
+          },
+          pins: [], loading: false, missing: false,
+        });
+        return;
+      }
       if (!entry?.assemblyId) { setSrcState({ assembly: null, pins: null, loading: false, missing: true }); return; }
       setSrcState(s => ({ ...s, loading: true, missing: false }));
       try {
@@ -143,6 +158,25 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   };
   // Undo a mis-registered cell (e.g. the wrong assembly picked from the list): removes the
   // mapping so the cell goes back to "no spec geometry registered".
+  // Upload a purpose-built spec GLB for the selected cell (flat, code-named nodes — use the 1.6
+  // Fusion Import's "Spec · true m" download). Stored in Storage; the cell maps straight to it.
+  const [srcUploadBusy, setSrcUploadBusy] = useState(false);
+  const uploadCellGlb = async (file) => {
+    if (!file || !sizeSel) return;
+    setSrcUploadBusy(true);
+    try {
+      const path = `spec_glbs/${sizeFamilyKey}/${cellKey.replace('|', '_')}_${Date.now()}.glb`;
+      const r = storageRef(storage, path);
+      await uploadBytes(r, file);
+      const url = await getDownloadURL(r);
+      const next = { ...(sizeSources || {}) };
+      next[sizeFamilyKey] = { ...(next[sizeFamilyKey] || {}), [cellKey]: { glbUrl: url, name: file.name, kind: 'GLB', savedAt: Date.now() } };
+      await setDoc(doc(db, 'system', 'spec_sheet_config'), { sizeSources: next }, { merge: true });
+      setSizeSources(next);
+      setShowSrcPicker(false);
+    } catch (e) { alert('Spec GLB upload failed: ' + (e.message || e)); }
+    setSrcUploadBusy(false);
+  };
   const clearCellSource = async () => {
     if (!sizeSel || !sizeSources?.[sizeFamilyKey]?.[cellKey]) { setShowSrcPicker(false); return; }
     try {
@@ -187,6 +221,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const [pages, setPages] = useState([]); // [{ key, title, bracketPin }]
   const [pageData, setPageData] = useState(null); // { svg, viewMaps }
   const sceneRef = useRef(null);
+  const sceneChoicesRef = useRef(null); // spec-GLB sources: choices derived from scene node names
   const rowCacheRef = useRef({}); // pageKey -> built rows
   const wallMountsRef = useRef(null); // unique wall-mount styles for the 1:1 reference page
   const finialsRef = useRef(null);    // finial catalog items for the 1:1 grid page
@@ -284,12 +319,37 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         finialsRef.current = null;
         setPageData(null); // never leave the previous source's drawing on screen during a swap
         if (cfgSnap?.exists()) { setWallCfg(cfgSnap.data()?.wallPlates || {}); setSizeSources(cfgSnap.data()?.sizeSources || {}); }
-        // Choice pins first; legacy sources (no choiceNode pins) derive choices from the GLB's
-        // code-named cluster nodes instead.
-        const brackets = choicesFor('BRACKET').length ? choicesFor('BRACKET') : legacyChoicesFor('BRACKET');
-        if (!brackets.length) throw new Error('No bracket choices found (need BRACKET-category cluster pins with choiceNode, or code-named bracket nodes).');
-        const plates = choicesFor('BACKPLATE').length ? choicesFor('BACKPLATE') : legacyChoicesFor('BACKPLATE');
-        if (!plates.length) throw new Error('No backplate choices found (need BACKPLATE-category cluster pins with choiceNode, or code-named backplate nodes).');
+        // DIRECT SPEC GLB sources have no pins/clusters at all — derive every choice from the
+        // scene's top-level code-named nodes, categorized by the LIBRARY (part.productType).
+        const clusterless = !(assembly?.nodeClusters || []).length && !(pins || []).length;
+        let sceneChoices = null;
+        if (clusterless) {
+          sceneChoices = { BRACKET: [], BACKPLATE: [], FINIAL: [], RING: [], POLE: [] };
+          const seen = new Set();
+          (scene.children || []).forEach(top => {
+            const nm = top.name || '';
+            const leaf = String(nm).split('__').pop().replace(/^\d+_?/, '').trim();
+            const code = leaf.replace(/\s+(LEFT|RIGHT|CENTER|CTR|L|R)$/i, '').replace(/[\s_]v\d+.*$/i, '').replace(/\.\d{3}$/, '').trim().toUpperCase();
+            if (!code || seen.has(code)) return;
+            const part = (libraryParts || []).find(p => String(p.legacyErpId || '').toUpperCase() === code || String(p.itemId || '').toUpperCase() === code);
+            if (!part) return;
+            seen.add(code);
+            const cat = normalizeCategory(part.manufacturingSpecs?.productType || part.productType || '');
+            if (sceneChoices[cat]) sceneChoices[cat].push({ partName: code, choiceNode: nm, clusterId: '', endTreatment: '' });
+          });
+        }
+        sceneChoicesRef.current = sceneChoices;
+        const pick = (cat) => {
+          const pinned = choicesFor(cat);
+          if (pinned.length) return pinned;
+          const legacy = legacyChoicesFor(cat);
+          if (legacy.length) return legacy;
+          return sceneChoices ? (sceneChoices[cat] || []) : [];
+        };
+        const brackets = pick('BRACKET');
+        if (!brackets.length) throw new Error('No bracket choices found (need BRACKET pins/clusters, or a spec GLB with library-code-named bracket nodes).');
+        const plates = pick('BACKPLATE');
+        if (!plates.length) throw new Error('No backplate choices found (need BACKPLATE pins/clusters, or a spec GLB with library-code-named backplate nodes).');
         // A plate is a RETURN plate if its pin OR its cluster carries the return flag —
         // the same part code (e.g. H1-75RCP-S) exists in both the L/R bracket-backplate
         // cluster and the french/miter return-backplate cluster, so the CLUSTER chip is
@@ -322,7 +382,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // the FINIAL cluster holds ALL end-treatment choices (canonical tag spec):
         // plain finials → catalog grid page; french/miter returns → bracket-style pages;
         // inside mounts → single-row page (their threaded plate is nested in the geometry)
-        const endChoices = choicesFor('FINIAL').length ? choicesFor('FINIAL') : legacyChoicesFor('FINIAL');
+        const endChoices = pick('FINIAL');
         // Explicit tag first; legacy (untagged) choices classify by NAME grammar — the miter/bend
         // node names carry it ("34X14 MTR LEFT", "…RND BEND LEFT").
         const et = (p) => {
@@ -415,6 +475,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const poleNodes = nodesFor('POLE');
     const ringNodes = nodesFor('RING');
     let pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
+    if (!pole.length && sceneChoicesRef.current?.POLE?.length) {
+      pole = extractWorldMeshes(scene, sceneChoicesRef.current.POLE.map(c => c.choiceNode));
+    }
     if (!pole.length) {
       // Legacy source assemblies (pre-canonical tags) may have no resolvable POLE cluster —
       // find the rod by NODE NAME so the drawing still gets its axes and break marks.
@@ -425,7 +488,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
-    const ringPins = choicesFor('RING').length ? choicesFor('RING') : legacyChoicesFor('RING');
+    const ringPins = choicesFor('RING').length ? choicesFor('RING')
+      : legacyChoicesFor('RING').length ? legacyChoicesFor('RING')
+      : (sceneChoicesRef.current?.RING || []);
     let ringChoices = ringPins
       .map(p => ({ partName: p.partName, meshes: extractWorldMeshes(scene, [p.choiceNode]) }))
       .filter(r => r.meshes.length);
@@ -803,7 +868,15 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
 
   const saveOverrides = async () => {
     try {
-      await updateDoc(doc(db, 'Approved_Designs', assembly.id), { specSheetOverrides: { manualDims } });
+      if (String(assembly?.id || '').startsWith('SPECGLB_')) {
+        // Direct spec-GLB source: the dims live on the cell's config entry, not an assembly doc.
+        const next = { ...(sizeSources || {}) };
+        next[sizeFamilyKey] = { ...(next[sizeFamilyKey] || {}), [cellKey]: { ...(next[sizeFamilyKey]?.[cellKey] || {}), manualDims } };
+        await setDoc(doc(db, 'system', 'spec_sheet_config'), { sizeSources: next }, { merge: true });
+        setSizeSources(next);
+      } else {
+        await updateDoc(doc(db, 'Approved_Designs', assembly.id), { specSheetOverrides: { manualDims } });
+      }
       setDirty(false);
       setStatus('Overrides saved.');
     } catch (e) { alert('Save failed: ' + (e?.message || e)); }
@@ -942,19 +1015,24 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         {(showSrcPicker || (srcState.missing && !isBaseCell)) && sizeFam && (
           <div style={{ padding: '12px 16px', borderBottom: '1px solid #d5d8dd', background: '#fff8ec' }}>
             <div style={{ fontSize: '0.85rem', marginBottom: '8px' }}>
-              <b>{cellLabel}</b> — {srcState.missing ? 'no spec geometry registered for this size yet.' : 'change this size\'s geometry source.'} Pick the assembly whose GLB carries this cell's TRUE parts (e.g. the retired 3.625" assembly for ¾" × 3-5/8", or the designer's spec master once it's built in 1.6):
+              <b>{cellLabel}</b> — {srcState.missing ? 'no spec geometry registered for this size yet.' : 'change this size\'s geometry source.'}
             </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <select value={srcPickId} onFocus={loadSrcPickerList} onChange={e => setSrcPickId(e.target.value)} style={{ padding: '6px', fontSize: '0.8rem', minWidth: '360px' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ ...btnOn, background: '#2e7d4f', display: 'inline-block', cursor: srcUploadBusy ? 'wait' : 'pointer' }}>
+                {srcUploadBusy ? 'Uploading…' : `⬆ Upload spec GLB for ${cellLabel}`}
+                <input type="file" accept=".glb" disabled={srcUploadBusy} style={{ display: 'none' }} onChange={e => { uploadCellGlb(e.target.files[0]); e.target.value = ''; }} />
+              </label>
+              <span style={{ fontSize: '0.78rem', color: '#555' }}>preferred — a flat GLB with ONE of each item, correctly positioned, nodes named by item code (1.6 Fusion Import → "Spec · true m" → Download)</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+              <span style={{ fontSize: '0.78rem', color: '#555' }}>…or map an existing assembly:</span>
+              <select value={srcPickId} onFocus={loadSrcPickerList} onChange={e => setSrcPickId(e.target.value)} style={{ padding: '6px', fontSize: '0.8rem', minWidth: '320px' }}>
                 <option value="">{srcPickerList === null ? 'Click to load assemblies…' : '-- Select the source assembly --'}</option>
                 {(srcPickerList || []).map(a => <option key={a.id} value={a.id}>{a.itemName || a.itemId}</option>)}
               </select>
-              <button style={btnOn} disabled={!srcPickId} onClick={saveCellSource}>Save as {cellLabel} source</button>
+              <button style={btnOn} disabled={!srcPickId} onClick={saveCellSource}>Save assembly as source</button>
               {!!sizeSources?.[sizeFamilyKey]?.[cellKey] && <button style={{ ...btn, color: '#b00020', borderColor: '#b00020' }} title="Undo — remove this cell's mapping entirely" onClick={clearCellSource}>✕ Remove mapping</button>}
               {showSrcPicker && <button style={btn} onClick={() => setShowSrcPicker(false)}>Cancel</button>}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: '#7a6a45', marginTop: '6px' }}>
-              Keep the source assembly's record in the library — its GLB and pins ARE this size's spec archive (the CPQ flow linked to it can be deleted; the assembly doc must stay).
             </div>
           </div>
         )}
