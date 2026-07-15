@@ -124,6 +124,36 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [syncBusy, setSyncBusy] = useState(false);
     const [starterBusy, setStarterBusy] = useState(false); // Item Starter Kit upload in flight
     const [extendId, setExtendId] = useState('');          // '' = build NEW; else append slots to this assembly
+    // Picking an extend target POPULATES context (Stuart 2026-07-14 — selecting one previously
+    // changed nothing visible): the existing merged .glb loads into the Live Preview as a base
+    // layer, and its current clusters list as a read-only panel so you can see what's already
+    // there before appending new slots.
+    const [extendInfo, setExtendInfo] = useState(null);     // { scene, clusters, name, loading, error }
+    useEffect(() => {
+        let dead = false;
+        (async () => {
+            if (!extendId) { setExtendInfo(null); return; }
+            setExtendInfo({ scene: null, clusters: [], name: '', loading: true, error: '' });
+            try {
+                const exSnap = await getDoc(doc(db, 'Approved_Designs', extendId));
+                const ex = exSnap.exists() ? exSnap.data() : null;
+                if (!ex) throw new Error('Assembly not found.');
+                const url = ex.manufacturingSpecs?.cadUrl;
+                let scene = null;
+                if (url) {
+                    const buf = await (await fetch(url)).arrayBuffer();
+                    const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
+                    scene = gltf.scene;
+                }
+                if (dead) return;
+                setExtendInfo({ scene, clusters: ex.nodeClusters || [], name: ex.itemName || extendId, loading: false, error: url ? '' : 'No .glb on this assembly — extending will fail until one exists.' });
+            } catch (e) {
+                console.error('Extend preview load failed', e);
+                if (!dead) setExtendInfo({ scene: null, clusters: [], name: '', loading: false, error: e.message || String(e) });
+            }
+        })();
+        return () => { dead = true; };
+    }, [extendId]); // eslint-disable-line react-hooks/exhaustive-deps
     const loaderRef = useRef(null);
     if (!loaderRef.current) loaderRef.current = makeLoader();
     // Master-Library ERP-code index for auto-matching item #s from node names (designer's convention:
@@ -1204,12 +1234,36 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
 
                 {/* RIGHT: live preview */}
                 <div style={{ ...card, position: 'sticky', top: '16px', height: '78vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', background: 'var(--paper)', fontFamily: 'var(--serif)', fontSize: '1.1rem', color: 'var(--ink)' }}>Live Preview — {filledSlots.length} layer(s)</div>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', background: 'var(--paper)', fontFamily: 'var(--serif)', fontSize: '1.1rem', color: 'var(--ink)' }}>
+                        Live Preview — {filledSlots.length} layer(s){extendId ? (extendInfo?.loading ? ' · loading existing…' : extendInfo?.scene ? ' · + existing assembly' : '') : ''}
+                    </div>
+                    {extendId && (
+                        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--line)', background: '#fff8ec', maxHeight: '150px', overflowY: 'auto' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', marginBottom: '6px' }}>
+                                Extending: {extendInfo?.name || '…'} — existing content (untouched; new slots are APPENDED)
+                            </div>
+                            {extendInfo?.loading && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Loading the existing assembly…</div>}
+                            {extendInfo?.error && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}>⚠ {extendInfo.error}</div>}
+                            {!extendInfo?.loading && (extendInfo?.clusters || []).length > 0 && (
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                    {extendInfo.clusters.map(c => (
+                                        <span key={c.id} style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: '#fff', border: '1px solid var(--line)', padding: '3px 8px', color: 'var(--ink)' }}>
+                                            {c.name || c.id}{c.category ? ` · ${c.category}` : ''}{c.position ? ` · ${c.position}` : ''}{(c.nodes || []).length ? ` · ${(c.nodes || []).length}n` : ''}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
+                            {!extendInfo?.loading && !(extendInfo?.clusters || []).length && !extendInfo?.error && (
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>No clusters recorded on this assembly.</div>
+                            )}
+                        </div>
+                    )}
                     <div style={{ flex: 1, background: '#f2efe8' }}>
                         <Canvas camera={{ position: [5, 5, 5], fov: 45 }}>
                             <ambientLight intensity={0.8} />
                             <directionalLight position={[10, 10, 5]} intensity={1} />
                             <directionalLight position={[-8, 4, -6]} intensity={0.5} />
+                            {extendInfo?.scene && <primitive object={extendInfo.scene} />}
                             {filledSlots.map(slot => (
                                 <primitive key={slot.id} object={layers[slot.id].scene} position={[layers[slot.id].offset.x, layers[slot.id].offset.y, layers[slot.id].offset.z]} />
                             ))}
