@@ -213,7 +213,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         
         const unsubCustomers = onSnapshot(query(collection(db, "crm_records"), where("type", "==", "CUSTOMER")), snap => {
             const allCusts = snap.docs.map(d => ({id: d.id, ...d.data()}));
-            setLiveCustomers(allCusts.filter(c => c.brandId === activeBrand || (c.sharedBrands && c.sharedBrands.includes(activeBrand))));
+            // Feeds ONLY the Master Finish clientMapping dropdown — finishes are GLOBAL, so no
+            // brand filter: NetSuite-synced customers carry the brandId of the subsidiary they
+            // synced under, and the old filter emptied the list on any other active brand.
+            allCusts.sort((a, b) => String(a.companyName || a.name || '').localeCompare(String(b.companyName || b.name || '')));
+            setLiveCustomers(allCusts);
         });
         
         const unsubRecipes = onSnapshot(collection(db, "fin_recipes"), (snap) => { setActiveRecipes(snap.docs.map(d => d.id)); setFloorRecipeData(snap.docs.map(d => ({ id: d.id, ...d.data() }))); });
@@ -1441,7 +1445,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                 <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
                                                     <select value={newFinishClientMapping.customerId} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, customerId: e.target.value})} style={fieldStyle}>
                                                         <option value="">Select Customer...</option>
-                                                        {liveCustomers.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                                        {liveCustomers.map(c => <option key={c.id} value={c.companyName || c.name}>{c.companyName || c.name}</option>)}
                                                     </select>
                                                     <input value={newFinishClientMapping.clientFinishName} onChange={e => setNewFinishClientMapping({...newFinishClientMapping, clientFinishName: e.target.value})} placeholder="e.g. Antique Brass" style={fieldStyle} />
                                                     <button onClick={() => {
