@@ -320,3 +320,201 @@ exports.backfillUserDirectory = onCall({ enforceAppCheck: true }, async (request
     await Promise.all(writes);
     return { synced: writes.length };
 });
+
+
+// ============================================================================
+// 4. CUSTOMER PORTAL (BFF)
+// ============================================================================
+//
+// portal.classicalelements.com is a separate slim frontend; customers authenticate with Firebase
+// email/password and carry { customer: true, customerId: 'CUST-…' } custom claims. They NEVER read
+// Firestore directly — firestore.rules deny any token carrying the 'customer' claim, and every
+// portal read goes through these functions, which shape sanitized payloads server-side (no costs,
+// no vendor data, no other customers, no internal notes). Staff manage portal users from the CRM
+// (External Co-Op tab → Portal Access panel).
+
+const assertStaffAdmin = (request) => {
+    const role = String((request.auth && request.auth.token && request.auth.token.role) || '').toLowerCase();
+    if (!['admin', 'superadmin'].includes(role)) {
+        throw new HttpsError('permission-denied', 'Admins only.');
+    }
+};
+
+const assertPortalCustomer = (request) => {
+    const t = (request.auth && request.auth.token) || {};
+    if (t.customer !== true || !t.customerId) {
+        throw new HttpsError('permission-denied', 'Portal customers only.');
+    }
+    return String(t.customerId);
+};
+
+// Create a portal login for a person at a customer account. Returns a one-time password-setup
+// link the admin hands to the client (Firebase's password-reset flow doubles as set-first-password).
+exports.createPortalUser = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const { customerId, email, name } = request.data || {};
+    const custId = String(customerId || '').trim();
+    const mail = String(email || '').trim().toLowerCase();
+    if (!custId.startsWith('CUST-')) throw new HttpsError('invalid-argument', 'customerId must be a CUST- record id.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) throw new HttpsError('invalid-argument', 'A valid email is required.');
+
+    const db = admin.firestore();
+    const crm = await db.collection('crm_records').doc(custId).get();
+    if (!crm.exists) throw new HttpsError('not-found', `CRM record ${custId} not found.`);
+
+    let userRec;
+    try {
+        userRec = await admin.auth().createUser({
+            email: mail,
+            displayName: String(name || '').trim() || mail,
+            // Unguessable placeholder; the client sets their real password via the setup link.
+            password: crypto.randomBytes(24).toString('base64url'),
+        });
+    } catch (e) {
+        if (e.code === 'auth/email-already-exists') {
+            throw new HttpsError('already-exists', 'That email already has a login. Remove it first or use "Copy setup link" to re-invite.');
+        }
+        throw new HttpsError('internal', e.message || 'Could not create user.');
+    }
+
+    await admin.auth().setCustomUserClaims(userRec.uid, { customer: true, customerId: custId });
+    await db.collection('portal_users').doc(userRec.uid).set({
+        email: mail,
+        name: String(name || '').trim() || mail,
+        customerId: custId,
+        active: true,
+        createdAt: Date.now(),
+        createdBy: String((request.auth.token && request.auth.token.name) || 'admin'),
+    });
+
+    const setupLink = await admin.auth().generatePasswordResetLink(mail);
+    return { uid: userRec.uid, setupLink };
+});
+
+// Fresh password-setup / reset link for an existing portal user (re-invites, forgotten passwords).
+exports.getPortalUserSetupLink = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const uid = String((request.data || {}).uid || '');
+    const doc = await admin.firestore().collection('portal_users').doc(uid).get();
+    if (!doc.exists) throw new HttpsError('not-found', 'Portal user not found.');
+    const setupLink = await admin.auth().generatePasswordResetLink(doc.data().email);
+    return { setupLink };
+});
+
+// Enable/disable a portal login without deleting it (disabled users cannot sign in).
+exports.setPortalUserStatus = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const { uid, active } = request.data || {};
+    const id = String(uid || '');
+    const doc = await admin.firestore().collection('portal_users').doc(id).get();
+    if (!doc.exists) throw new HttpsError('not-found', 'Portal user not found.');
+    await admin.auth().updateUser(id, { disabled: active !== true });
+    await admin.firestore().collection('portal_users').doc(id).set({ active: active === true }, { merge: true });
+    return { ok: true };
+});
+
+// Permanently remove a portal login.
+exports.deletePortalUser = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const uid = String((request.data || {}).uid || '');
+    const doc = await admin.firestore().collection('portal_users').doc(uid).get();
+    if (!doc.exists) throw new HttpsError('not-found', 'Portal user not found.');
+    await admin.auth().deleteUser(uid).catch((e) => {
+        if (e.code !== 'auth/user-not-found') throw new HttpsError('internal', e.message);
+    });
+    await admin.firestore().collection('portal_users').doc(uid).delete();
+    return { ok: true };
+});
+
+// ---- Customer-facing reads ----
+
+// Firestore 'in' queries cap at 30 values.
+const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+
+// Quote lines safe to show the customer: their own quoted names/qty/prices, minus internal
+// bookkeeping rows. NEVER include costs, partHandling, or internal ids.
+const sanitizeBreakdown = (cpqData) => ((cpqData && cpqData.breakdown) || [])
+    .filter((l) => l && !l.isHeader && !l.isDiscount && !l.isNetLine)
+    .map((l) => ({ name: l.name || '', qty: l.qty || 0, price: l.price ?? null, total: l.total ?? null }));
+
+// Customer-friendly stage from the floor-doc join (mirrors RTG Dispatch's rollup precedence:
+// finishing/shop presence wins, else the SO's own status).
+const rollupStage = (so, shopDocs, finDocs) => {
+    const keys = new Set([so.soId, so.id, so.hqJobId].filter(Boolean).map(String));
+    const mine = (d) => [d.orderKey, d.salesOrderId, d.quoteId].filter(Boolean).map(String).some((k) => keys.has(k));
+    const shop = shopDocs.find(mine);
+    const fin = finDocs.find(mine);
+    const shopStatus = shop ? String(shop.status || 'Pending') : null;
+    const finStatus = fin ? String(fin.currentPhase || fin.stepStatus || 'Setup') : null;
+    const done = (s) => /complete|done|shipped/i.test(String(s || ''));
+    if (done(finStatus) || (fin && fin.sentToPickPack)) return 'Preparing to ship';
+    if (finStatus) return 'Finishing';
+    if (shopStatus && !done(shopStatus)) return 'In production';
+    if (done(shopStatus)) return 'Finishing';
+    if (String(so.status) === 'Dispatched' || so.autoSplit) return 'In production';
+    return 'Order received';
+};
+
+// Everything the signed-in customer may see about their quotes and orders — shaped here, filtered
+// by the customerId CLAIM (never by anything the browser sends).
+exports.portalMyOrders = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+
+    // Their quotes.
+    const jobsSnap = await db.collection('jobs').where('customer.id', '==', customerId).get();
+    const jobs = jobsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const jobIds = jobs.map((j) => j.jobId || j.id).filter(Boolean);
+
+    // Their sales orders: ERP-pulled SOs carry no customerId but link via hqJobId → their quote;
+    // QuickShip SOs carry customerId directly.
+    const soDocs = [];
+    for (const ids of chunk(jobIds, 30)) {
+        const s = await db.collection('hq_sales_orders').where('hqJobId', 'in', ids).get();
+        s.forEach((d) => soDocs.push({ id: d.id, ...d.data() }));
+    }
+    const qsSnap = await db.collection('hq_sales_orders').where('customerId', '==', customerId).get();
+    qsSnap.forEach((d) => { if (!soDocs.some((x) => x.id === d.id)) soDocs.push({ id: d.id, ...d.data() }); });
+
+    // Floor docs for the stage rollup, joined by the same keys RTG Dispatch uses.
+    const joinKeys = [...new Set(soDocs.flatMap((so) => [so.soId, so.id, so.hqJobId]).filter(Boolean).map(String))];
+    const shopDocs = []; const finDocs = [];
+    for (const keys of chunk(joinKeys, 30)) {
+        const [sh, fi] = await Promise.all([
+            db.collection('shop_custom_orders').where('orderKey', 'in', keys).get(),
+            db.collection('fin_workorders').where('orderKey', 'in', keys).get(),
+        ]);
+        sh.forEach((d) => shopDocs.push(d.data()));
+        fi.forEach((d) => finDocs.push(d.data()));
+    }
+
+    const orderedJobIds = new Set(soDocs.map((so) => String(so.hqJobId || '')).filter(Boolean));
+
+    return {
+        quotes: jobs
+            .filter((j) => !orderedJobIds.has(String(j.jobId || j.id)))
+            .map((j) => ({
+                id: j.jobId || j.id,
+                name: j.jobName || 'Quote',
+                sidemark: j.sidemark || '',
+                status: j.status || 'CONFIGURED',
+                date: j.dateSaved || null,
+                total: (j.cpqData && j.cpqData.totalPrice) ?? null,
+                shipping: j.shippingAmount ?? null,
+                lines: sanitizeBreakdown(j.cpqData),
+            })),
+        orders: soDocs.map((so) => {
+            const job = jobs.find((j) => String(j.jobId || j.id) === String(so.hqJobId || ''));
+            return {
+                id: so.soId || so.id,
+                name: (job && job.jobName) || so.jobName || 'Order',
+                sidemark: (job && job.sidemark) || '',
+                date: so.reqDate || so.createdDate || null,
+                total: (job && job.cpqData && job.cpqData.totalPrice) ?? null,
+                stage: rollupStage(so, shopDocs, finDocs),
+                lines: job ? sanitizeBreakdown(job.cpqData)
+                    : ((so.lines || []).map((l) => ({ name: l.name || l.erp || '', qty: l.qty || 0, price: null, total: null }))),
+            };
+        }),
+    };
+});
