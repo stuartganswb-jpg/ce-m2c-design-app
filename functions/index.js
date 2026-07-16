@@ -713,6 +713,17 @@ const nextQuoteNo = async (db, prefix) => {
     return `${prefix}-${String(seq).padStart(2, '0')}`;
 };
 
+// Mint a short quote number for a STAFF-created quote (the internal CPQ). Same format/counter as
+// the portal, so quote numbers are consistent across both. Returns the number; the caller stores it
+// as a display field (the jobs doc id is unchanged).
+exports.reserveQuoteNo = onCall({ enforceAppCheck: true }, async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
+    const db = admin.firestore();
+    const name = String((request.data && request.data.name) || (request.auth.token && request.auth.token.name) || '');
+    const quoteNo = await nextQuoteNo(db, `${initialsOf(name, '')}${mmddyy()}`);
+    return { quoteNo };
+});
+
 // A customer submits a configured product as a QUOTE REQUEST. It lands as a jobs doc flagged
 // 'PORTAL_REQUEST' for the team to price and confirm in CPQ — nothing is priced or pushed here.
 exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {

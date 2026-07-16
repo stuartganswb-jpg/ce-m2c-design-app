@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { db, storage } from '../../firebase';
+import { db, storage, functions } from '../../firebase';
+import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
@@ -1842,6 +1843,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       const targetJobId = cart[0].masterQuoteId || activeMasterQuoteId || `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
+
+      // Short human quote number (SG071626-01) for communication, shown instead of the long doc id.
+      // Minted once for a NEW quote; re-saves keep the existing one (merge preserves it). A failure
+      // never blocks the save — the doc id is still the durable key.
+      const isNewQuote = !(cart[0].masterQuoteId || activeMasterQuoteId);
+      let mintedQuoteNo = null;
+      if (isNewQuote) {
+          try { mintedQuoteNo = (await httpsCallable(functions, 'reserveQuoteNo')({ name: currentUser }))?.data?.quoteNo || null; }
+          catch (e) { console.warn('quote number reserve failed; using doc id', e); }
+      }
       
       let grandTotal = 0;
       let mergedBreakdown = [];
@@ -1905,6 +1916,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       const payload = {
           jobId: targetJobId, brandId: activeBrand, status: 'CONFIGURED',
+          ...(mintedQuoteNo ? { quoteNo: mintedQuoteNo } : {}),
           // Quote-display level this job was priced at (cart items each carry theirs too). The
           // push still rates physical lines at standard pricing; the rollup absorbs the balance.
           priceLevel: cart[0]?.priceLevel || priceLevel,
@@ -2074,7 +2086,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 
                 <div class="meta-grid">
                   <div><span class="label">Project</span><span class="val">${job.jobName || 'Multi-Room Order'}</span></div>
-                  <div><span class="label">Quote ID</span><span class="val">${job.jobId}</span></div>
+                  <div><span class="label">Quote ID</span><span class="val">${job.quoteNo || job.jobId}</span></div>
                   <div><span class="label">Prepared For</span><span class="val">${job.customer?.name}</span></div>
                   <div><span class="label">Date</span><span class="val">${job.dateSaved}</span></div>
                 </div>
@@ -2153,7 +2165,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 </div>
                 <div class="meta-grid">
                   <div><span class="label">Sidemark</span><span class="val">${draft.sidemark}</span></div>
-                  <div><span class="label">Quote ID</span><span class="val">${job.jobId}</span></div>
+                  <div><span class="label">Quote ID</span><span class="val">${job.quoteNo || job.jobId}</span></div>
                 </div>
                 <div style="width: 100%; border: 1px solid rgba(28,26,22,.14); background: #fff; padding: 20px; margin-top: 20px; box-sizing: border-box;">
                     ${draft.svg}
