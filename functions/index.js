@@ -767,11 +767,11 @@ exports.portalResolve = onCall({ cors: true }, async (request) => {
 
     const custKeys = new Set([customerId, crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
 
-    const { lines, total } = portalEngine.computePricing({
-        flow, assembly, params, quantities, allParts, finishes, outsourceFinishes, bomPins, custKeys, priceLevel,
-    });
+    const engineCtx = { flow, assembly, params, quantities, allParts, finishes, outsourceFinishes, bomPins, custKeys, priceLevel };
+    const { lines, total } = portalEngine.computePricing(engineCtx);
+    const stepOptions = portalEngine.resolveStepOptions(engineCtx);
 
     // Only customer-safe line fields leave the server.
     const safeLines = lines.map((l) => ({ name: l.name, qty: l.qty, price: l.price, total: l.total }));
-    return { price: { level: priceLevel, total, lines: safeLines } };
+    return { price: { level: priceLevel, total, lines: safeLines }, stepOptions };
 });

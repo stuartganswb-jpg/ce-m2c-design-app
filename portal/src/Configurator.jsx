@@ -248,7 +248,17 @@ function FinishPicker({ finishes, value, onChange }) {
   );
 }
 
-function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel, allSteps }) {
+// Prefer the server-resolved description; fall back to the raw flow label.
+const optLabelText = (info, o, kind) => {
+  const bag = info && info[kind];
+  const rec = bag && bag[o.optId || o.partId];
+  const desc = rec && (rec.desc || rec.name);
+  const base = desc || o.label || o.partName || (o.optId || o.partId);
+  const price = rec && rec.price;
+  return `${base}${(price !== undefined && price !== null && price > 0) ? ` — ${fmtMoney(price)}` : ''}`;
+};
+
+function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel, allSteps, info }) {
   const sel = params[step.id];
 
   // Return-pool gating (matches HQ): french/miter/bent returns drop out when the chosen projection
@@ -285,7 +295,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
       {(visStyleOptions.length > 0) && (
         <select className={`opt-select${armLocked ? ' locked' : ''}`} disabled={armLocked} value={armLocked ? '' : (sel || '')} onChange={(e) => { setParam(step.id, e.target.value); setParam(`${step.id}__finish`, ''); }}>
           <option value="">{returnLocksBracket(step, allSteps, params) ? 'Return selected — bracket replaced (choose the return backplate below)' : armLocksEnd(step, allSteps, params) ? 'End return arm selected — it is this end' : 'Select…'}</option>
-          {visStyleOptions.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
+          {visStyleOptions.map((o) => <option key={o.optId} value={o.optId}>{optLabelText(info, o, 'options')}</option>)}
         </select>
       )}
       {(step.subOptions && step.subOptions.length > 0) && (() => {
@@ -296,7 +306,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
             <label className="cfg-sublabel">Backplate</label>
             <select className={`opt-select${noPlate ? ' locked' : ''}`} disabled={noPlate} value={noPlate ? '' : (params[`${step.id}__sub`] || '')} onChange={(e) => setParam(`${step.id}__sub`, e.target.value)}>
               <option value="">{noPlate ? 'None (basic bracket — no backplate)' : 'None'}</option>
-              {subs.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
+              {subs.map((o) => <option key={o.optId} value={o.optId}>{optLabelText(info, o, 'subOptions')}</option>)}
             </select>
           </div>
         );
@@ -339,18 +349,20 @@ export default function Configurator({ flowId, flowName, onExit }) {
   }, [flowId]);
 
   const [price, setPrice] = useState(null); // { level, total, lines }
+  const [stepOptions, setStepOptions] = useState({}); // { [stepId]: { options, subOptions } }
   const [pricing, setPricing] = useState(false);
 
   const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
   const setQty = (k, v) => setQuantities((q) => ({ ...q, [k]: v }));
 
-  // Live configured pricing from the server engine (debounced), at the customer's assigned level.
+  // Live configured pricing + resolved option descriptions/prices from the server engine (debounced),
+  // at the customer's assigned level.
   useEffect(() => {
     if (!data) return;
     setPricing(true);
     const t = setTimeout(() => {
       httpsCallable(functions, 'portalResolve')({ flowId, selections: { params, quantities } })
-        .then((res) => setPrice(res.data.price))
+        .then((res) => { setPrice(res.data.price); if (res.data.stepOptions) setStepOptions(res.data.stepOptions); })
         .catch(() => {})
         .finally(() => setPricing(false));
     }, 450);
@@ -455,7 +467,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 </div>
                 <div className="cfg-step-title lg">{step.title}</div>
                 <div className="cfg-step-body">
-                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} allSteps={allSteps} />
+                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} allSteps={allSteps} info={stepOptions[step.id]} />
                 </div>
                 <div className="cfg-nav">
                   <button className="btn-ghost" disabled={safeIdx === 0} onClick={() => setStepIdx(safeIdx - 1)}>← Back</button>

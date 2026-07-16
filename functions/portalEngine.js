@@ -313,4 +313,75 @@ function computePricing(ctx) {
   return { lines: breakdown, total };
 }
 
-module.exports = { computePricing, sizeSelectionsOf, returnsAllowedFor, isReturnOption, partAllowedAtSize, buildSizeIndex, PRICE_LEVELS, SIZE_STEP_TYPE };
+// Per-step, per-option display + price (ported from CPQTab optionDisplayFor + renderOptionPrice).
+// Resolves each choice to its real (size-aware) part so the portal shows the correct description
+// (or the Fabricut code at wholesale/retail) and a per-option price at the customer's level.
+function resolveStepOptions(ctx) {
+  const { flow, params, allParts, custKeys, priceLevel } = ctx;
+  const out = {};
+  if (!flow) return out;
+
+  const byCode = new Map();
+  allParts.forEach((p) => { [p.legacyErpId, p.itemId].forEach((c) => { const k = String(c || '').trim().toUpperCase(); if (k && k !== 'PENDING' && !byCode.has(k)) byCode.set(k, p); }); });
+  const findByCode = (c) => byCode.get(c) || null;
+  const findLibPart = (key) => {
+    if (!key) return null;
+    const exact = allParts.find((p) => p.id === key || p.itemId === key || p.legacyErpId === key);
+    if (exact) return exact;
+    const nk = String(key).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (nk.length < 3) return null;
+    let best = null, bestLen = 0;
+    allParts.forEach((p) => [p.legacyErpId, p.itemId].forEach((code) => {
+      const nc = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (nc.length >= 3 && nk.startsWith(nc) && nc.length > bestLen) { best = p; bestLen = nc.length; }
+    }));
+    return best;
+  };
+  const sizeBundle = makeSizeSwap(flow, params, allParts);
+  const clientPriceFor = (part) => {
+    if (!custKeys || !custKeys.size || !part || !Array.isArray(part.clientPricing)) return null;
+    const cp = part.clientPricing.find((c) => custKeys.has(String((c.customerId) || '').trim().toUpperCase()));
+    const v = cp ? parseFloat(cp.price) : NaN;
+    return Number.isFinite(v) && v > 0 ? v : null;
+  };
+  const isFeePart = (p, opt) => !!((opt && opt.isFee) || (p && p.partClass === 'Fee') || String((p && p.manufacturingSpecs && p.manufacturingSpecs.productType) || '').toUpperCase() === 'FEE');
+  const baseFor = (o) => findLibPart(o.partId) || findLibPart(o.partName);
+
+  const displayFor = (o) => {
+    const base = baseFor(o);
+    const sized = base ? sizeBundle.swap(base) : null;
+    const doc = sized || allParts.find((x) => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
+      || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName))) || null;
+    const desc = (doc && doc.itemName) || o.partName || o.label || '';
+    if (isFeePart(doc, o)) return { name: desc, desc: '' };
+    if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') {
+      const fc = fabricutCodeOf(doc, findByCode);
+      return { name: fc || (doc && (doc.legacyErpId || doc.itemId)) || o.partName || '', desc };
+    }
+    return { name: (sized ? (sized.legacyErpId || sized.itemId) : (doc && (doc.legacyErpId || doc.itemId))) || o.partName || '', desc };
+  };
+  const priceFor = (o, step) => {
+    const base = baseFor(o);
+    const sized = base ? sizeBundle.swap(base) : null;
+    const doc = sized || base;
+    let p = 0;
+    if (doc) { if (doc.manufacturingSpecs && doc.manufacturingSpecs.basePrice) p = parseFloat(doc.manufacturingSpecs.basePrice); else if (doc.basePrice) p = parseFloat(doc.basePrice); }
+    const sizeSwapped = !!(sized && base && sized !== base);
+    if (step.type === 'STYLE_SWAP' && o.price !== undefined && o.price !== '' && parseFloat(o.price) > 0 && !sizeSwapped) p = parseFloat(o.price) || 0;
+    if (step.useClientPricing) { const v = clientPriceFor(doc); if (v != null) p = v; }
+    if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(doc, priceLevel); if (fp != null) p = fp; }
+    return Number.isFinite(p) ? p : 0;
+  };
+
+  (flow.steps || []).forEach((step) => {
+    if (step.type === SIZE_STEP_TYPE) return;
+    const options = {};
+    (step.styleOptions || []).forEach((o) => { const id = o.optId || o.partId; if (id) { const d = displayFor(o); options[id] = { name: d.name, desc: d.desc, price: priceFor(o, step) }; } });
+    const subOptions = {};
+    (step.subOptions || []).forEach((o) => { const id = o.optId || o.partId; if (id) { const d = displayFor(o); subOptions[id] = { name: d.name, desc: d.desc, price: priceFor(o, step) }; } });
+    out[step.id] = { options, subOptions };
+  });
+  return out;
+}
+
+module.exports = { computePricing, resolveStepOptions, sizeSelectionsOf, returnsAllowedFor, isReturnOption, partAllowedAtSize, buildSizeIndex, PRICE_LEVELS, SIZE_STEP_TYPE };
