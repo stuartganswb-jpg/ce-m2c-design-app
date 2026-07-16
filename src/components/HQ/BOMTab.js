@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
-import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, deleteDoc, getDocs, deleteField } from "firebase/firestore";
 import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
@@ -23,6 +23,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
   const [capturingThumb, setCapturingThumb] = useState(false);
   const [showSpecSheet, setShowSpecSheet] = useState(false);
+  const [uploadingDrawing, setUploadingDrawing] = useState(false); // static shop-drawing PDF attach
   const [bulkThumb, setBulkThumb] = useState({ running: false, done: 0, total: 0 });
   
   const [searchTerm, setSearchTerm] = useState("");
@@ -1171,6 +1172,47 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             </button>
                                         </div>
                                     )}
+                                </div>
+
+                                {/* Static shop drawing (Stuart 2026-07-15): ONE drawn PDF per mainline assembly —
+                                    standing rules/drawings/notes that apply to EVERY job under it (not generated
+                                    from CPQ jobs). The shop floor Custom tab shows a 📄 Drawing button next to
+                                    View Item whenever an order's cart lines point at an assembly that has one. */}
+                                <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: '2px', padding: '14px 20px', marginBottom: '30px', display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <div style={{ flex: 1, minWidth: '220px' }}>
+                                        <label style={labelStyle}>Static Shop Drawing (floor PDF)</label>
+                                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>
+                                            {selectedAssemblyData.staticShopDrawing?.url
+                                                ? <>Attached: <b>{selectedAssemblyData.staticShopDrawing.name || 'drawing.pdf'}</b> — every custom-floor job under this assembly gets a 📄 Drawing button.</>
+                                                : 'Attach a drawn PDF with the standing rules, drawings and notes for every job under this mainline assembly — the shop floor Custom tab gets a 📄 Drawing button next to View Item.'}
+                                        </span>
+                                    </div>
+                                    {selectedAssemblyData.staticShopDrawing?.url && (
+                                        <>
+                                            <a href={selectedAssemblyData.staticShopDrawing.url} target="_blank" rel="noreferrer" style={{ padding: '10px 18px', background: 'var(--ink)', color: '#fff', textDecoration: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>📄 View</a>
+                                            <button onClick={async () => {
+                                                if (!window.confirm('Remove the static shop drawing from this assembly?\n\nThe floor button disappears; the file itself stays in storage.')) return;
+                                                try { await updateDoc(doc(db, 'Approved_Designs', selectedAssemblyData.id), { staticShopDrawing: deleteField() }); } catch (err) { alert('Failed: ' + (err.message || err)); }
+                                            }} style={{ padding: '10px 14px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>× Remove</button>
+                                        </>
+                                    )}
+                                    <label style={{ padding: '10px 18px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: uploadingDrawing ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                        {uploadingDrawing ? 'Uploading…' : (selectedAssemblyData.staticShopDrawing?.url ? 'Replace PDF' : '⇪ Attach PDF')}
+                                        <input type="file" accept="application/pdf" style={{ display: 'none' }} disabled={uploadingDrawing} onChange={async (e) => {
+                                            const file = e.target.files && e.target.files[0]; e.target.value = '';
+                                            if (!file) return;
+                                            if (file.type !== 'application/pdf') { alert('PDF only.'); return; }
+                                            setUploadingDrawing(true);
+                                            try {
+                                                const sref = ref(storage, `shop_drawings/${activeBrand}_${selectedAssemblyData.itemId}_${Date.now()}.pdf`);
+                                                await uploadBytes(sref, file, { contentType: 'application/pdf' });
+                                                const url = await getDownloadURL(sref);
+                                                await updateDoc(doc(db, 'Approved_Designs', selectedAssemblyData.id), { staticShopDrawing: { url, name: file.name, uploadedAt: Date.now() } });
+                                                alert('✓ Shop drawing attached — live on the custom floor for every job under this assembly.');
+                                            } catch (err) { alert('Upload failed: ' + (err.message || err)); }
+                                            setUploadingDrawing(false);
+                                        }} />
+                                    </label>
                                 </div>
 
                                 {/* Customer onboarding / price-list export — one branded .xlsx for this assembly. */}

@@ -56,6 +56,7 @@ const ShopFloor = () => {
     // fetched once per quote and cached; the check states persist on the shop order doc
     // (configChecks.cfg<i> = {done, by, at, label}).
     const [orderConfigs, setOrderConfigs] = useState({}); // quoteId -> [{key,label,qty}]
+    const [orderDrawings, setOrderDrawings] = useState({}); // quoteId -> [{url,name}] static shop-drawing PDFs (from the order's mainline assemblies)
     const [matHistory, setMatHistory] = useState([]);
     const [failures, setFailures] = useState([]);
     const [livio, setLivio] = useState([]);
@@ -171,14 +172,34 @@ const ShopFloor = () => {
         let dead = false;
         (async () => {
             const updates = {};
+            const drawings = {};
+            const asmCache = new Map(); // assemblyId -> Approved_Designs data (shared across quotes)
             for (const q of ids.slice(0, 25)) {
                 try {
                     const snap = await getDoc(doc(db, 'jobs', q));
                     const items = snap.exists() ? (snap.data().cpqData?.cartItems || []) : [];
                     updates[q] = items.map((it, i) => ({ key: `cfg${i}`, label: it.sidemark || it.assemblyName || `Line ${i + 1}`, qty: it.qty || 1 }));
-                } catch (e) { updates[q] = []; }
+                    // Static shop drawings: each cart line's mainline assembly may carry ONE
+                    // drawn PDF (BOM Engine attach) with the standing rules for all its jobs.
+                    const asmIds = [...new Set(items.map(it => it.assemblyId).filter(Boolean))];
+                    const found = [];
+                    for (const aid of asmIds.slice(0, 6)) {
+                        try {
+                            if (!asmCache.has(aid)) {
+                                const asnap = await getDoc(doc(db, 'Approved_Designs', aid));
+                                asmCache.set(aid, asnap.exists() ? asnap.data() : null);
+                            }
+                            const a = asmCache.get(aid);
+                            if (a?.staticShopDrawing?.url) found.push({ url: a.staticShopDrawing.url, name: a.staticShopDrawing.name || a.itemName || 'Shop Drawing' });
+                        } catch (e) { /* no drawing for this assembly */ }
+                    }
+                    drawings[q] = found;
+                } catch (e) { updates[q] = []; drawings[q] = []; }
             }
-            if (!dead && Object.keys(updates).length) setOrderConfigs(prev => ({ ...prev, ...updates }));
+            if (!dead && Object.keys(updates).length) {
+                setOrderConfigs(prev => ({ ...prev, ...updates }));
+                setOrderDrawings(prev => ({ ...prev, ...drawings }));
+            }
         })();
         return () => { dead = true; };
     }, [customOrdersRaw]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -881,6 +902,25 @@ const ShopFloor = () => {
             } catch (e) { alert('Undo failed: ' + (e.message || e)); }
         };
 
+        // Tab-scope (not per-card) so the Recently Completed strip can REPRINT a label
+        // when the printer ate it on Complete (Stuart 2026-07-15).
+        const printZebraLabel = (order) => {
+            const zpl = `
+                ^XA
+                ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
+                ^FO50,100^A0N,30,30^FDSO: ${order.soNum}^FS
+                ${order.isOutsourced ? `^FO50,150^A0N,30,30^FDFinish: ${order.finishRecipe}^FS` : ''}
+                ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
+                ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
+                ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
+                ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
+                ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
+                ^XZ
+            `;
+            console.log("Sending ZPL to Zebra Printer:", zpl);
+            alert(`🖨️ Zebra Label Spooled for ${order.woNum}`);
+        };
+
         const CustomCard = ({ order }) => {
             // "Parts Require Phosphate" (Stuart 2026-07-15): any IN-HOUSE finish → phosphate at
             // the adjacent station before finishing. Stamped at dispatch (needsPhosphating);
@@ -892,23 +932,6 @@ const ShopFloor = () => {
             const phosMap = order.phosChecks || {};
             const phosDoneCount = phosCfgs.filter(c => phosMap[c.key]?.done).length;
             const allPhosDone = !needsPhos || (phosMulti ? (phosDoneCount === phosCfgs.length && phosCfgs.length > 0) : !!order.phosDone);
-
-            const printZebraLabel = (order) => {
-                const zpl = `
-                    ^XA
-                    ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
-                    ^FO50,100^A0N,30,30^FDSO: ${order.soNum}^FS
-                    ${order.isOutsourced ? `^FO50,150^A0N,30,30^FDFinish: ${order.finishRecipe}^FS` : ''}
-                    ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
-                    ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
-                    ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
-                    ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
-                    ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
-                    ^XZ
-                `;
-                console.log("Sending ZPL to Zebra Printer:", zpl);
-                alert(`🖨️ Zebra Label Spooled for ${order.woNum}`);
-            };
 
             const handleStartProcess = async () => {
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
@@ -1014,6 +1037,49 @@ const ShopFloor = () => {
                         );
                     })()}
 
+                    {/* Work area sits right under the line checkboxes (Stuart 2026-07-15): the
+                        operator works each line up here, then hits Complete with every box
+                        visually confirmed — no scrolling past the cut sheets. */}
+                    {needsPhos && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '12px', padding: '12px 16px', background: allPhosDone ? '#f0f7f1' : '#fff8e6', border: allPhosDone ? '1px solid #3a7d44' : '1px solid var(--brass)' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600, color: allPhosDone ? '#3a7d44' : 'var(--ink)' }}>
+                                    {allPhosDone ? '✓ Parts Phosphated' : '⚠ Last Step — Parts Require Phosphate'}
+                                </div>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '3px' }}>In-house finish: {order.finishRecipe || '—'} · phosphate at the adjacent station, then check off</div>
+                            </div>
+                            {phosMulti ? (
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: allPhosDone ? '#3a7d44' : 'var(--ink)', whiteSpace: 'nowrap' }}>{phosDoneCount}/{phosCfgs.length} phosphated</span>
+                            ) : (
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                    <input type="checkbox" checked={!!order.phosDone} onChange={async () => {
+                                        try {
+                                            await updateDoc(doc(db, 'shop_custom_orders', order.id), order.phosDone
+                                                ? { phosDone: false, phosBy: null, phosAt: null }
+                                                : { phosDone: true, phosBy: user.name, phosAt: Date.now() });
+                                        } catch (e) { alert('Failed to save the phosphate check: ' + (e.message || e)); }
+                                    }} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: order.phosDone ? '#3a7d44' : 'var(--ink)' }}>Phosphated{order.phosDone && order.phosBy ? ` · ${order.phosBy}` : ''}</span>
+                                </label>
+                            )}
+                        </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '12px', margin: '0 0 20px 0' }}>
+                        {!isRunning ? (
+                            <button onClick={handleStartProcess} style={{ flex: 1.5, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Start Process</button>
+                        ) : (
+                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
+                                {order.isOutsourced ? 'Send to Plating' : 'Complete & Label'}
+                            </button>
+                        )}
+                        {order.quoteId && (
+                            <button onClick={() => { setCfgLine(0); setCfgQuote(order.quoteId); }} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🔍 View Item</button>
+                        )}
+                        {(orderDrawings[order.quoteId] || []).map((d, i) => (
+                            <button key={i} title={d.name} onClick={() => window.open(d.url, '_blank', 'noopener')} style={{ flex: 1, background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📄 Drawing</button>
+                        ))}
+                    </div>
+
                     {(order.fabMethod || order.fabNotes) && (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '20px', padding: '12px 16px', background: 'var(--ink)', color: '#fff' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>
@@ -1106,47 +1172,6 @@ const ShopFloor = () => {
                         </div>
                     )}
 
-                    {/* LAST ROUTER STEP: in-house finish → phosphate reminder. Multi-config orders
-                        check off per row above; single-config orders get the one box here. */}
-                    {needsPhos && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 16px', background: allPhosDone ? '#f0f7f1' : '#fff8e6', border: allPhosDone ? '1px solid #3a7d44' : '1px solid var(--brass)' }}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600, color: allPhosDone ? '#3a7d44' : 'var(--ink)' }}>
-                                    {allPhosDone ? '✓ Parts Phosphated' : '⚠ Last Step — Parts Require Phosphate'}
-                                </div>
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '3px' }}>In-house finish: {order.finishRecipe || '—'} · phosphate at the adjacent station, then check off</div>
-                            </div>
-                            {phosMulti ? (
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: allPhosDone ? '#3a7d44' : 'var(--ink)', whiteSpace: 'nowrap' }}>{phosDoneCount}/{phosCfgs.length} phosphated</span>
-                            ) : (
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                    <input type="checkbox" checked={!!order.phosDone} onChange={async () => {
-                                        try {
-                                            await updateDoc(doc(db, 'shop_custom_orders', order.id), order.phosDone
-                                                ? { phosDone: false, phosBy: null, phosAt: null }
-                                                : { phosDone: true, phosBy: user.name, phosAt: Date.now() });
-                                        } catch (e) { alert('Failed to save the phosphate check: ' + (e.message || e)); }
-                                    }} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
-                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: order.phosDone ? '#3a7d44' : 'var(--ink)' }}>Phosphated{order.phosDone && order.phosBy ? ` · ${order.phosBy}` : ''}</span>
-                                </label>
-                            )}
-                        </div>
-                    )}
-
-                    {/* "View Vision Drawing" removed (Stuart 2026-07-14): stale imageUrl link that
-                        duplicated View Item — the viewer shows the live model + shop drawing. */}
-                    <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
-                        {!isRunning ? (
-                            <button onClick={handleStartProcess} style={{ flex: 1.5, background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Start Process</button>
-                        ) : (
-                            <button onClick={handleCompleteWithLabel} style={{ flex: 1.5, background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
-                                {order.isOutsourced ? 'Send to Plating' : 'Complete & Label'}
-                            </button>
-                        )}
-                        {order.quoteId && (
-                            <button onClick={() => { setCfgLine(0); setCfgQuote(order.quoteId); }} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🔍 View Item</button>
-                        )}
-                    </div>
                 </div>
             );
         };
@@ -1175,6 +1200,7 @@ const ShopFloor = () => {
                                     <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', fontWeight: 500, color: 'var(--ink)' }}>{o.woNum}</span>
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{o.clientName || ''} · {o.item || o.partNum || ''} · {o.status}{o.completedBy ? ` by ${o.completedBy}` : ''}{o.completedAt ? ` · ${new Date(o.completedAt?.toMillis ? o.completedAt.toMillis() : o.completedAt).toLocaleString()}` : ''}</span>
                                 </div>
+                                <button onClick={() => printZebraLabel(o)} style={{ padding: '9px 16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>🖨 Reprint Label</button>
                                 <button onClick={() => undoComplete(o)} style={{ padding: '9px 16px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>↩ Undo — back to production</button>
                             </div>
                         ))}
