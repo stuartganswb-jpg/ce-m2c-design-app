@@ -338,8 +338,24 @@ export default function Configurator({ flowId, flowName, onExit }) {
     return () => { alive = false; };
   }, [flowId]);
 
+  const [price, setPrice] = useState(null); // { level, total, lines }
+  const [pricing, setPricing] = useState(false);
+
   const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
   const setQty = (k, v) => setQuantities((q) => ({ ...q, [k]: v }));
+
+  // Live configured pricing from the server engine (debounced), at the customer's assigned level.
+  useEffect(() => {
+    if (!data) return;
+    setPricing(true);
+    const t = setTimeout(() => {
+      httpsCallable(functions, 'portalResolve')({ flowId, selections: { params, quantities } })
+        .then((res) => setPrice(res.data.price))
+        .catch(() => {})
+        .finally(() => setPricing(false));
+    }, 450);
+    return () => clearTimeout(t);
+  }, [flowId, params, quantities, data]);
 
   const allSteps = data?.flow?.steps || [];
   const finishes = data?.finishes || [];
@@ -397,7 +413,9 @@ export default function Configurator({ flowId, flowName, onExit }) {
       <div className="cfg-top">
         <button className="btn-ghost" onClick={onExit}>← All products</button>
         <h2 className="sec" style={{ margin: 0 }}>{data.flow.name}</h2>
-        {start !== null && start !== undefined ? <span className="cfg-price">Starting at {fmtMoney(start)}</span> : <span />}
+        {price ? (
+          <span className={`cfg-price${pricing ? ' stale' : ''}`}>{fmtMoney(price.total)}</span>
+        ) : (start !== null && start !== undefined ? <span className="cfg-price">Starting at {fmtMoney(start)}</span> : <span />)}
       </div>
 
       <div className="cfg-body">
@@ -460,6 +478,14 @@ export default function Configurator({ flowId, flowName, onExit }) {
                   </li>
                 ))}
               </ul>
+              {price && price.lines && price.lines.length > 0 && (
+                <div className="cfg-pricetable">
+                  {price.lines.filter((l) => (l.total || 0) !== 0).map((l, i) => (
+                    <div className="pl-row" key={i}><span>{l.name}{l.qty > 1 ? ` ×${l.qty}` : ''}</span><span className="pl-amt">{fmtMoney(l.total)}</span></div>
+                  ))}
+                  <div className="pl-row pl-total"><span>Total{pricing ? ' …' : ''}</span><span className="pl-amt">{fmtMoney(price.total)}</span></div>
+                </div>
+              )}
               {submitted ? (
                 <div className="msg ok" style={{ textAlign: 'left' }}>✓ Request sent. Your Classical Elements team will confirm pricing and follow up. You can see it under Orders &amp; Quotes.</div>
               ) : (

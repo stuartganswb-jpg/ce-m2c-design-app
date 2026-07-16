@@ -712,3 +712,66 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
     });
     return { ok: true, id: ref.id };
 });
+
+
+// ---- Configured pricing (server-side engine, matches HQ) -------------------------------------
+// Loads the SAME data CPQTab prices from (flow + brand's Approved_Designs parts + the assembly's
+// BOM + finishes + the customer's clientPricing) and runs the ported pricing engine at the
+// customer's assigned portalPriceLevel. Returns only the resulting line breakdown + total — never
+// cost tiers, vendor data, or the parts themselves. Called by the portal on each selection change.
+const portalEngine = require('./portalEngine');
+
+exports.portalResolve = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const { flowId, selections } = request.data || {};
+    const params = (selections && selections.params) || {};
+    const quantities = (selections && selections.quantities) || {};
+
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
+    if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'This product is not enabled on your account.');
+
+    const flowSnap = await db.collection('cpq_flows').doc(String(flowId)).get();
+    if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
+    const flow = flowSnap.data();
+    const brand = flow.brandId || crm.brandId || null;
+
+    // The customer NEVER sees cost: force any non-safe level back to STANDARD server-side.
+    let priceLevel = String(crm.portalPriceLevel || 'STANDARD');
+    if (!['STANDARD', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(priceLevel)) priceLevel = 'STANDARD';
+
+    let assembly = null;
+    if (flow.linkedAssemblyId) {
+        const asmSnap = await db.collection('Approved_Designs').doc(flow.linkedAssemblyId).get();
+        if (asmSnap.exists) assembly = { id: asmSnap.id, ...asmSnap.data() };
+    }
+
+    // Brand's parts library (matches CPQTab's libraryParts + liveAssemblies filter).
+    const adSnap = await db.collection('Approved_Designs').get();
+    const allParts = adSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        .filter((p) => !brand || p.brandId === brand || (Array.isArray(p.sharedBrands) && p.sharedBrands.includes(brand)));
+
+    // The assembly's BOM (quantities).
+    let bomPins = [];
+    if (assembly && assembly.itemId) {
+        const pinSnap = await db.collection('assembly_pins').where('assemblyId', '==', assembly.itemId).get();
+        bomPins = pinSnap.docs.map((d) => d.data());
+    }
+
+    const mf = await db.collection('system').doc('master_finishes').get();
+    const finishes = (mf.exists && mf.data().finishes) || [];
+    const outSnap = await db.collection('hq_outsource_finishes').get();
+    const outsourceFinishes = outSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    const custKeys = new Set([customerId, crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
+
+    const { lines, total } = portalEngine.computePricing({
+        flow, assembly, params, quantities, allParts, finishes, outsourceFinishes, bomPins, custKeys, priceLevel,
+    });
+
+    // Only customer-safe line fields leave the server.
+    const safeLines = lines.map((l) => ({ name: l.name, qty: l.qty, price: l.price, total: l.total }));
+    return { price: { level: priceLevel, total, lines: safeLines } };
+});

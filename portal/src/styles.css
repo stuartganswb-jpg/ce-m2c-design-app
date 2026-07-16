@@ -448,3 +448,10 @@ footer.portal a { color: var(--ink-soft); }
 
 .cfg-sublabel { display: block; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); margin-bottom: 6px; }
 .opt-select.locked { background: var(--line-soft); color: var(--ink-soft); cursor: not-allowed; opacity: 0.65; }
+
+.cfg-price.stale { opacity: 0.5; }
+.cfg-pricetable { margin: 4px 0 20px; border-top: 1px solid var(--line); padding-top: 12px; }
+.pl-row { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0; font-size: 0.88rem; color: var(--ink-soft); }
+.pl-row .pl-amt { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.pl-row.pl-total { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 12px; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--ink); }
+.pl-row.pl-total .pl-amt { font-size: 1.05rem; color: var(--brass); }
