@@ -16,6 +16,21 @@ const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocal
 // Finish lookup by id across the palette (in-house + outsourced).
 const findFinish = (finishes, id) => finishes.find((f) => f.id === id) || null;
 
+// A one-line human summary of a step's current selection, for the review list.
+const summaryLabel = (step, params, finishes) => {
+  const optLabel = (opts, id) => (opts || []).find((o) => (o.optId || o.partId) === id)?.label
+    || (opts || []).find((o) => (o.optId || o.partId) === id)?.partName || '';
+  if (step.type === SIZE_TYPE) return optLabel(step.styleOptions, params[step.id]);
+  const isCompound = !!step.finishDataSource;
+  const isSimpleFinish = !isCompound && step.targetNodes && (!step.styleOptions || step.styleOptions.length === 0);
+  if (isSimpleFinish) return findFinish(finishes, params[step.id])?.name || '';
+  const parts = [];
+  if (step.styleOptions && step.styleOptions.length) { const l = optLabel(step.styleOptions, params[step.id]); if (l) parts.push(l); }
+  if (step.subOptions && step.subOptions.length) { const l = optLabel(step.subOptions, params[`${step.id}__sub`]); if (l) parts.push(l); }
+  if (isCompound) { const f = findFinish(finishes, params[`${step.id}__finish`]); if (f) parts.push(f.name); }
+  return parts.join(' · ');
+};
+
 // ---- Override builders (ported from CPQTab.js textureOverrides / visibilityOverrides memos) ----
 function buildTextureOverrides(steps, params, finishes) {
   const overrides = {};
@@ -193,13 +208,14 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const [err, setErr] = useState(null);
   const [params, setParams] = useState({});
   const [quantities, setQuantities] = useState({});
+  const [stepIdx, setStepIdx] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [note, setNote] = useState('');
 
   useEffect(() => {
     let alive = true;
-    setData(null); setErr(null); setParams({}); setQuantities({}); setSubmitted(false);
+    setData(null); setErr(null); setParams({}); setQuantities({}); setStepIdx(0); setSubmitted(false);
     httpsCallable(functions, 'portalFlow')({ flowId })
       .then((res) => { if (alive) setData(res.data); })
       .catch((e) => { if (alive) setErr(/permission/i.test(e.message || '') ? 'This product is not enabled on your account.' : 'Could not load this product right now — please try again shortly.'); });
@@ -220,6 +236,9 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const sizeScale = useMemo(() => {
     try { return sizeSelectionsOf(data?.flow, params)?.scale || 1; } catch (e) { return 1; }
   }, [data, params]);
+
+  const safeIdx = Math.min(stepIdx, Math.max(0, steps.length - 1));
+  const onReview = steps.length > 0 && stepIdx >= steps.length;
 
   const submit = async () => {
     setSubmitting(true);
@@ -269,23 +288,53 @@ export default function Configurator({ flowId, flowName, onExit }) {
 
         <div className="cfg-panel">
           {steps.length === 0 && <div className="empty">This product has no options to configure.</div>}
-          {steps.map((step) => (
-            <div key={step.id} className="cfg-step">
-              <div className="cfg-step-title">{step.title}</div>
-              <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} />
-            </div>
-          ))}
 
-          {steps.length > 0 && (
-            <div className="cfg-submit">
+          {steps.length > 0 && !onReview && (() => {
+            const step = steps[safeIdx];
+            return (
+              <div className="cfg-wizard">
+                <div className="cfg-progress">
+                  <span>Step {safeIdx + 1} of {steps.length}</span>
+                  <div className="cfg-dots">
+                    {steps.map((s, i) => <span key={s.id} className={`dot${i === safeIdx ? ' on' : ''}${i < safeIdx ? ' done' : ''}`} onClick={() => setStepIdx(i)} title={s.title} />)}
+                  </div>
+                </div>
+                <div className="cfg-step-title lg">{step.title}</div>
+                <div className="cfg-step-body">
+                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} />
+                </div>
+                <div className="cfg-nav">
+                  <button className="btn-ghost" disabled={safeIdx === 0} onClick={() => setStepIdx(safeIdx - 1)}>← Back</button>
+                  {safeIdx < steps.length - 1
+                    ? <button className="btn" onClick={() => setStepIdx(safeIdx + 1)}>Next →</button>
+                    : <button className="btn" onClick={() => setStepIdx(steps.length)}>Review →</button>}
+                </div>
+              </div>
+            );
+          })()}
+
+          {steps.length > 0 && onReview && (
+            <div className="cfg-review">
+              <div className="cfg-progress"><span>Review &amp; request</span></div>
+              <ul className="cfg-summary">
+                {steps.map((s) => (
+                  <li key={s.id}>
+                    <button className="sum-edit" onClick={() => setStepIdx(steps.indexOf(s))}>{s.title}</button>
+                    <span>{summaryLabel(s, params, finishes) || '—'}</span>
+                  </li>
+                ))}
+              </ul>
               {submitted ? (
                 <div className="msg ok" style={{ textAlign: 'left' }}>✓ Request sent. Your Classical Elements team will confirm pricing and follow up. You can see it under Orders &amp; Quotes.</div>
               ) : (
-                <>
+                <div className="cfg-submit">
                   <textarea className="cfg-note" placeholder="Notes for your rep (quantity, project, timing…)" value={note} onChange={(e) => setNote(e.target.value)} />
-                  <button className="btn" disabled={submitting} onClick={submit}>{submitting ? 'Sending…' : 'Request a quote for this configuration'}</button>
+                  <div className="cfg-nav">
+                    <button className="btn-ghost" onClick={() => setStepIdx(steps.length - 1)}>← Back</button>
+                    <button className="btn" disabled={submitting} onClick={submit}>{submitting ? 'Sending…' : 'Request a quote'}</button>
+                  </div>
                   <div className="cfg-fineprint">Final pricing is confirmed by your rep. Nothing is ordered automatically.</div>
-                </>
+                </div>
               )}
             </div>
           )}
