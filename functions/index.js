@@ -657,14 +657,21 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
     }
 
     // Finish palette (in-house + outsourced), sanitized. code/name let the portal compute the same
-    // PBR response as studioScene; textureUrl drives the map swap. No cost/vendor fields.
+    // PBR response as studioScene; textureUrl drives the map swap. clientName = this customer's own
+    // finish name (from the finish's clientMapping, keyed by company name) so a Fabricut login sees
+    // Fabricut's finish names. No cost/vendor fields.
+    const custNames = new Set([crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
+    const clientNameOf = (f) => {
+        const m = Array.isArray(f.clientMapping) ? f.clientMapping.find((x) => custNames.has(String((x.customerId) || '').trim().toUpperCase())) : null;
+        return (m && m.clientFinishName) || null;
+    };
     const mf = await db.collection('system').doc('master_finishes').get();
     const inhouse = ((mf.exists && mf.data().finishes) || [])
         .filter((f) => f && f.textureUrl)
-        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', code: f.code || '', textureUrl: f.textureUrl, bomSuffix: f.bomSuffix || '', pbr: f.pbr || null, outsourced: false }));
+        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', clientName: clientNameOf(f), code: f.code || '', textureUrl: f.textureUrl, bomSuffix: f.bomSuffix || '', pbr: f.pbr || null, outsourced: false }));
     const outSnap = await db.collection('hq_outsource_finishes').get();
     const outsourced = outSnap.docs.map((d) => d.data()).filter((f) => f && f.textureUrl)
-        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', code: f.code || '', textureUrl: f.textureUrl, bomSuffix: f.bomSuffix || '', pbr: f.pbr || null, outsourced: true }));
+        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', clientName: clientNameOf(f), code: f.code || '', textureUrl: f.textureUrl, bomSuffix: f.bomSuffix || '', pbr: f.pbr || null, outsourced: true }));
     const finishes = [...inhouse, ...outsourced];
 
     return {

@@ -20,14 +20,15 @@ const findFinish = (finishes, id) => finishes.find((f) => f.id === id) || null;
 const summaryLabel = (step, params, finishes) => {
   const optLabel = (opts, id) => (opts || []).find((o) => (o.optId || o.partId) === id)?.label
     || (opts || []).find((o) => (o.optId || o.partId) === id)?.partName || '';
+  const finName = (id) => { const f = findFinish(finishes, id); return f ? (f.clientName || f.name) : ''; };
   if (step.type === SIZE_TYPE) return optLabel(step.styleOptions, params[step.id]);
   const isCompound = !!step.finishDataSource;
   const isSimpleFinish = !isCompound && step.targetNodes && (!step.styleOptions || step.styleOptions.length === 0);
-  if (isSimpleFinish) return findFinish(finishes, params[step.id])?.name || '';
+  if (isSimpleFinish) return finName(params[step.id]);
   const parts = [];
   if (step.styleOptions && step.styleOptions.length) { const l = optLabel(step.styleOptions, params[step.id]); if (l) parts.push(l); }
   if (step.subOptions && step.subOptions.length) { const l = optLabel(step.subOptions, params[`${step.id}__sub`]); if (l) parts.push(l); }
-  if (isCompound) { const f = findFinish(finishes, params[`${step.id}__finish`]); if (f) parts.push(f.name); }
+  if (isCompound) { const n = finName(params[`${step.id}__finish`]); if (n) parts.push(n); }
   return parts.join(' · ');
 };
 
@@ -238,9 +239,9 @@ function FinishPicker({ finishes, value, onChange }) {
       )}
       <div className="chips">
         {list.map((f) => (
-          <button key={f.id} type="button" className={`chip${value === f.id ? ' on' : ''}`} title={f.name} onClick={() => onChange(f.id)}>
+          <button key={f.id} type="button" className={`chip${value === f.id ? ' on' : ''}`} title={f.clientName || f.name} onClick={() => onChange(f.id)}>
             <span className="chip-img" style={{ backgroundImage: `url(${f.textureUrl})` }} />
-            <span className="chip-label">{f.name}</span>
+            <span className="chip-label">{f.clientName || f.name}</span>
           </button>
         ))}
       </div>
@@ -248,14 +249,14 @@ function FinishPicker({ finishes, value, onChange }) {
   );
 }
 
-// Prefer the server-resolved description; fall back to the raw flow label.
+// Match HQ's option label: "<item # / Fabricut code> — <description>", then the per-option price.
 const optLabelText = (info, o, kind) => {
-  const bag = info && info[kind];
-  const rec = bag && bag[o.optId || o.partId];
-  const desc = rec && (rec.desc || rec.name);
-  const base = desc || o.label || o.partName || (o.optId || o.partId);
+  const rec = info && info[kind] && info[kind][o.optId || o.partId];
+  const code = rec && rec.name;   // resolved item # (Fabricut code at wholesale/retail)
+  const desc = rec && rec.desc;   // description
+  const label = [code, desc].filter(Boolean).join(' — ') || o.label || o.partName || (o.optId || o.partId);
   const price = rec && rec.price;
-  return `${base}${(price !== undefined && price !== null && price > 0) ? ` — ${fmtMoney(price)}` : ''}`;
+  return `${label}${(price !== undefined && price !== null && price > 0) ? `  ·  ${fmtMoney(price)}` : ''}`;
 };
 
 function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel, allSteps, info }) {
