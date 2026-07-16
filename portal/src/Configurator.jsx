@@ -131,17 +131,50 @@ const finishOptionsFor = (step, finishes) => {
   return finishes;
 };
 
-function SwatchGrid({ finishes, value, onChange }) {
+// Group a finish for the picker tabs. EP / outsourced = plated; wood stains by name; P-series =
+// painted; everything else (satin S-codes, clear acrylic AC, aged steel, etc.) = other.
+function finishGroup(f) {
+  const code = String(f.code || '').toUpperCase();
+  const name = String(f.name || '').toUpperCase();
+  if (f.outsourced || /^EP\d/.test(code) || code === 'EP') return 'Plated';
+  if (/OAK|WALNUT|WOOD|EBONY|BLONDE|NATURAL|WASH|COFFEE|ALMOND|SHROOM|STAIN|DRIFT/.test(name)) return 'Wood';
+  if (/^P\d/.test(code) || code === 'CP') return 'Painted';
+  return 'Other';
+}
+const GROUP_ORDER = ['Painted', 'Plated', 'Wood', 'Other'];
+const GROUP_LABELS = { Painted: 'Painted (P)', Plated: 'Plated (EP)', Wood: 'Wood', Other: 'Other' };
+
+function FinishPicker({ finishes, value, onChange }) {
+  const groups = useMemo(() => {
+    const m = {};
+    finishes.forEach((f) => { const g = finishGroup(f); (m[g] = m[g] || []).push(f); });
+    return m;
+  }, [finishes]);
+  const present = GROUP_ORDER.filter((g) => (groups[g] || []).length);
+  const selectedGroup = value ? finishGroup(findFinish(finishes, value) || {}) : null;
+  const [tab, setTab] = useState(selectedGroup && present.includes(selectedGroup) ? selectedGroup : present[0]);
+  useEffect(() => { if (selectedGroup && present.includes(selectedGroup)) setTab(selectedGroup); }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const list = groups[tab] || [];
+
   return (
-    <div className="swatches">
-      {finishes.map((f) => (
-        <button key={f.id} type="button" title={f.name}
-          className={`swatch${value === f.id ? ' active' : ''}`}
-          style={{ backgroundImage: `url(${f.textureUrl})` }}
-          onClick={() => onChange(f.id)}>
-          <span className="swatch-name">{f.name}</span>
-        </button>
-      ))}
+    <div>
+      {present.length > 1 && (
+        <div className="finish-tabs">
+          {present.map((g) => (
+            <button key={g} type="button" className={`finish-tab${tab === g ? ' on' : ''}`} onClick={() => setTab(g)}>
+              {GROUP_LABELS[g]} <em>{groups[g].length}</em>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="chips">
+        {list.map((f) => (
+          <button key={f.id} type="button" className={`chip${value === f.id ? ' on' : ''}`} title={f.name} onClick={() => onChange(f.id)}>
+            <span className="chip-img" style={{ backgroundImage: `url(${f.textureUrl})` }} />
+            <span className="chip-label">{f.name}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -165,7 +198,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes }) {
   const isSimpleFinish = !isCompound && step.targetNodes && (!step.styleOptions || step.styleOptions.length === 0);
 
   if (isSimpleFinish) {
-    return <SwatchGrid finishes={finishOptionsFor(step, finishes)} value={sel} onChange={(v) => setParam(step.id, v)} />;
+    return <FinishPicker finishes={finishOptionsFor(step, finishes)} value={sel} onChange={(v) => setParam(step.id, v)} />;
   }
 
   return (
@@ -184,7 +217,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes }) {
       )}
       {isCompound && (
         <div style={{ marginTop: 10 }}>
-          <SwatchGrid
+          <FinishPicker
             finishes={finishOptionsFor(
               (step.styleOptions || []).find((o) => (o.optId || o.partId) === sel) || step,
               finishes,
