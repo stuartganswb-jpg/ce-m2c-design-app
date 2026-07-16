@@ -630,6 +630,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             return {
                 internalId: row.netSuiteInternalId,
                 docId: row.id,
+                itemName: row.itemName || row.erpId || row.id,
                 binNumber: effBin,
                 // Only a brand-new bin assignment (new/unbinned row) needs creating in NetSuite + writing back
                 // to the item's home bin. Counting an existing bin must never reassign the item's home bin.
@@ -637,6 +638,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 adjustQtyBy: delta
             };
         }).filter(Boolean);
+
+        // GUARD (Stuart 2026-07-16): a bin-managed location (e.g. loc 17) rejects any adjustment line
+        // with an empty bin — "Please enter value(s) for: Bin." This bites brand-new items (0 on hand,
+        // no home bin) counted without typing a destination bin. Catch it HERE with a clear, item-named
+        // message instead of letting NetSuite 400 with a cryptic payload.
+        const needBin = rowDeltas.filter(d => !d.binNumber);
+        if (needBin.length) {
+            return alert(`Type a destination bin before syncing.\n\n${needBin.length} counted item(s) have a variance but NO bin — a bin-managed location requires one on every adjustment. Enter a bin # in the BIN column for:\n\n${[...new Set(needBin.map(d => d.itemName))].slice(0, 12).join('\n')}${needBin.length > 12 ? `\n…+${needBin.length - 12} more` : ''}`);
+        }
 
         // Group bins of the same item, then split each item's bin moves. A single inventory-adjustment line
         // can only push ONE direction (NetSuite rejects a mix of +/- bins with "Invalid number (must be
