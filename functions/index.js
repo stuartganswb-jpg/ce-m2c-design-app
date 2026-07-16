@@ -494,7 +494,7 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
         quotes: jobs
             .filter((j) => !orderedJobIds.has(String(j.jobId || j.id)))
             .map((j) => ({
-                id: j.jobId || j.id,
+                id: j.quoteNo || j.jobId || j.id,
                 name: j.jobName || 'Quote',
                 sidemark: j.sidemark || '',
                 status: j.status || 'CONFIGURED',
@@ -687,6 +687,32 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
     };
 });
 
+// Short, human quote number: <initials><MMDDYY>-<NN>, e.g. SG071626-01. Initials from the given
+// name, date in US Eastern, and a per-(initials+date) atomic counter for the sequence.
+const initialsOf = (name, email) => {
+    const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+    if (words.length === 1 && words[0].length >= 2) return words[0].slice(0, 2).toUpperCase();
+    const e = String(email || '').split('@')[0] || 'XX';
+    return e.slice(0, 2).toUpperCase();
+};
+const mmddyy = () => {
+    const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit' }).formatToParts(new Date());
+    const g = (t) => (p.find((x) => x.type === t) || {}).value || '';
+    return `${g('month')}${g('day')}${g('year')}`;
+};
+// Reserve the next sequence for a quote-number prefix; returns the full quote number.
+const nextQuoteNo = async (db, prefix) => {
+    const ref = db.collection('quote_counters').doc(prefix);
+    const seq = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const n = (snap.exists ? (snap.data().seq || 0) : 0) + 1;
+        tx.set(ref, { seq: n }, { merge: true });
+        return n;
+    });
+    return `${prefix}-${String(seq).padStart(2, '0')}`;
+};
+
 // A customer submits a configured product as a QUOTE REQUEST. It lands as a jobs doc flagged
 // 'PORTAL_REQUEST' for the team to price and confirm in CPQ — nothing is priced or pushed here.
 exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
@@ -699,9 +725,14 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
     if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'Not enabled on your account.');
 
     const email = String((request.auth.token && request.auth.token.email) || '');
-    const ref = db.collection('jobs').doc();
+    const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
+    const submitterName = (puSnap.exists && puSnap.data().name) || email;
+    const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
+
+    const ref = db.collection('jobs').doc(quoteNo);
     await ref.set({
-        jobId: ref.id,
+        jobId: quoteNo,
+        quoteNo,
         brandId: crm.brandId || null,
         status: 'PORTAL_REQUEST',
         source: 'PORTAL',
@@ -717,7 +748,7 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         dateSaved: new Date().toISOString(),
     });
-    return { ok: true, id: ref.id };
+    return { ok: true, id: quoteNo, quoteNo };
 });
 
 

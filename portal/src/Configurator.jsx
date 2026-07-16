@@ -382,13 +382,21 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const [stepIdx, setStepIdx] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [submittedNo, setSubmittedNo] = useState(null);
   const [note, setNote] = useState('');
 
   useEffect(() => {
     let alive = true;
-    setData(null); setErr(null); setParams({}); setQuantities({}); setStepIdx(0); setSubmitted(false);
+    setData(null); setErr(null); setParams({}); setQuantities({}); setStepIdx(0); setSubmitted(false); setSubmittedNo(null);
     httpsCallable(functions, 'portalFlow')({ flowId })
-      .then((res) => { if (alive) setData(res.data); })
+      .then((res) => {
+        if (!alive) return;
+        setData(res.data);
+        // Splice / cut-splice steps are opt-in extras — default their quantity to 0.
+        const seed = {};
+        (res.data.flow?.steps || []).forEach((s) => { if (!s.hideQty && s.type !== SIZE_TYPE && /splice/i.test(s.title || '')) seed[s.id] = '0'; });
+        if (Object.keys(seed).length) setQuantities(seed);
+      })
       .catch((e) => { if (alive) setErr(/permission/i.test(e.message || '') ? 'This product is not enabled on your account.' : 'Could not load this product right now — please try again shortly.'); });
     return () => { alive = false; };
   }, [flowId]);
@@ -449,11 +457,25 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const safeIdx = Math.min(stepIdx, Math.max(0, steps.length - 1));
   const onReview = steps.length > 0 && stepIdx >= steps.length;
 
+  // Steps that require a finish before advancing (enforce finish selection).
+  const finishMissing = (step) => {
+    if (!step) return false;
+    const isCompound = !!step.finishDataSource;
+    const isSimpleFinish = !isCompound && step.targetNodes && (!step.styleOptions || step.styleOptions.length === 0);
+    if (isSimpleFinish) return !params[step.id];
+    if (isCompound) {
+      const engaged = !!params[step.id] || !!params[`${step.id}__sub`] || !(step.styleOptions && step.styleOptions.length);
+      return engaged && !params[`${step.id}__finish`];
+    }
+    return false;
+  };
+
   const submit = async () => {
     setSubmitting(true);
     try {
-      await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params, quantities }, note });
+      const res = await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params, quantities }, note });
       setSubmitted(true);
+      setSubmittedNo(res.data?.quoteNo || null);
     } catch (e) {
       alert('Could not send your request: ' + (e.message || e));
     } finally { setSubmitting(false); }
@@ -515,11 +537,12 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 <div className="cfg-step-body">
                   <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} allSteps={allSteps} info={stepOptions[step.id]} />
                 </div>
+                {finishMissing(step) && <div className="cfg-require">Please select a finish to continue.</div>}
                 <div className="cfg-nav">
                   <button className="btn-ghost" disabled={safeIdx === 0} onClick={() => setStepIdx(safeIdx - 1)}>← Back</button>
                   {safeIdx < steps.length - 1
-                    ? <button className="btn" onClick={() => setStepIdx(safeIdx + 1)}>Next →</button>
-                    : <button className="btn" onClick={() => setStepIdx(steps.length)}>Review →</button>}
+                    ? <button className="btn" disabled={finishMissing(step)} onClick={() => setStepIdx(safeIdx + 1)}>Next →</button>
+                    : <button className="btn" disabled={finishMissing(step)} onClick={() => setStepIdx(steps.length)}>Review →</button>}
                 </div>
               </div>
             );
@@ -545,7 +568,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 </div>
               )}
               {submitted ? (
-                <div className="msg ok" style={{ textAlign: 'left' }}>✓ Request sent. Your Classical Elements team will confirm pricing and follow up. You can see it under Orders &amp; Quotes.</div>
+                <div className="msg ok" style={{ textAlign: 'left' }}>✓ Request sent{submittedNo ? <> — <strong>Quote #{submittedNo}</strong></> : ''}. Your Classical Elements team will confirm pricing and follow up. You can see it under Orders &amp; Quotes.</div>
               ) : (
                 <div className="cfg-submit">
                   <textarea className="cfg-note" placeholder="Notes for your rep (quantity, project, timing…)" value={note} onChange={(e) => setNote(e.target.value)} />
