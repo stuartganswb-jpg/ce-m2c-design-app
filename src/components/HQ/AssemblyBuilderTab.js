@@ -38,6 +38,13 @@ const LOCATIONS = ['', ...TAG_LOCATIONS];
 // finial/return choices stack in that end's FINIAL slot; naming a choice with "return"/"french"/etc.
 // makes the generator hide that side's long half so the return renders short. (See System Admin →
 // Generate; this is the mixed-end fix.)
+// SHOP FLOOR SOP MODEL (Stuart 2026-07-15): a DEDICATED slot at the bottom of both templates.
+// The designer loads ONLY the pieces needed for the instruction/SOP sheets (positioned, one of
+// each) — it is exported as its OWN .glb (manufacturingSpecs.sopCadUrl), NEVER merged into the
+// working model, and generates no clusters/pins. Tab .6 (Interactive 3D Instructions) builds the
+// SOP pages on this model; the BOM Engine + shop floor open them in the SOP viewer.
+const SOP_SLOT_DEF = { id: 'sop', label: 'Shop Floor SOPs & Instructions', category: 'SOP', position: 'SHARED', location: '', desc: 'NOT part of the sellable model: load only the pieces needed for the shop-floor instruction sheets. Saved as its own .glb on the assembly; build the annotated pages in Tab .6, view from BOM Engine + Custom floor.' };
+
 const STANDARD_SLOTS = [
     { id: 'short_rod', label: 'Short Rod — center (always shown)', category: 'POLE', position: 'CENTER', location: '', desc: 'The short french-return-length rod. Always visible — it carries the return ends. Tag position CENTER.' },
     { id: 'long_left', label: 'Long Rod — LEFT half', category: 'POLE', position: 'LEFT', location: '', desc: 'Left half of the full-length rod (split at center). Auto-hidden when the LEFT end is a return, shown for a finial.' },
@@ -53,6 +60,7 @@ const STANDARD_SLOTS = [
     { id: 'right_return_backplate', label: 'Right RETURN Backplate', category: 'BACKPLATE', position: 'RIGHT', location: 'WALL', desc: 'Backplates offered ONLY when the RIGHT end is a return. Keep RETURN in the label — that is what scopes them.' },
     { id: 'left_end', label: 'Left End — finials + returns', category: 'FINIAL', position: 'LEFT', location: '', desc: 'Stack ALL left-end choices in one file: finials + french/bent/mitered returns. Name the return choices with "return"/"french" so they hide the left long half.' },
     { id: 'right_end', label: 'Right End — finials + returns', category: 'FINIAL', position: 'RIGHT', location: '', desc: 'Stack ALL right-end choices: finials + returns. Name returns with "return"/"french" so they hide the right long half.' },
+    SOP_SLOT_DEF,
 ];
 
 // DOUBLE BRACKET — same idea, but the bracket carries TWO rows: a FRONT pole+finials and a BACK
@@ -67,6 +75,7 @@ const DOUBLE_SLOTS = [
     { id: 'back_pole', label: 'Back Pole', category: 'POLE', position: 'BACK', location: '', desc: 'The back-row rod. Always shown. Stack material/length choices inside.' },
     { id: 'back_finials', label: 'Back Finials', category: 'FINIAL', position: 'BACK', location: '', desc: 'Back-row finial choices (both ends). Stack all options in one file.' },
     { id: 'dbl_rings', label: 'Rings', category: 'RING', position: 'SHARED', location: '', desc: 'Optional decorative rings (either row).' },
+    SOP_SLOT_DEF,
 ];
 
 const TEMPLATES = {
@@ -369,17 +378,46 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
 
     const filledSlots = slots.filter(s => layers[s.id]);
 
+    // Export + upload the SOP slot's scene as its OWN .glb — never merged into the working model,
+    // no renaming (Fusion names ARE the codes, useful on the instruction sheets), no clusters/pins.
+    const exportAndUploadSop = async (layer, asmName) => {
+        const g = layer.scene.clone(true);
+        g.position.set(layer.offset.x, layer.offset.y, layer.offset.z);
+        const buf = await new Promise((res, rej) => new GLTFExporter().parse(g, r => res(r), e => rej(e), { binary: true }));
+        const blob = new Blob([buf], { type: 'model/gltf-binary' });
+        const path = `sop_models/${activeBrand}_${String(asmName).replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.glb`;
+        const task = uploadBytesResumable(sRef(storage, path), blob);
+        return new Promise((res, rej) => task.on('state_changed', null, rej, async () => res(await getDownloadURL(task.snapshot.ref))));
+    };
+
     const build = async () => {
         const extendTarget = extendId ? repairList.find(a => a.id === extendId) : null;
         if (!extendTarget && !assemblyName.trim()) return alert('Name the assembly first.');
-        if (!filledSlots.length) return alert('Upload at least one slot .glb first.');
+        // The SOP slot never merges into the sellable model — it exports as its own .glb.
+        const sopLayer = layers['sop'];
+        const mergeSlots = filledSlots.filter(s => s.id !== 'sop');
+        if (!mergeSlots.length && !(extendTarget && sopLayer)) return alert('Upload at least one slot .glb first.\n\n(The SOP slot on its own can only be ATTACHED to an existing assembly — pick one under Extend.)');
+        // SOP-only attach: geometry, clusters and pins untouched — upload + point sopCadUrl.
+        if (!mergeSlots.length && extendTarget && sopLayer) {
+            if (!window.confirm(`Attach the SOP/instructions model to "${extendTarget.itemName}"?\n\nThe working model, clusters and pins are untouched. Tab .6 (Interactive 3D Instructions) will build its pages on THIS model.`)) return;
+            setBusy('build');
+            try {
+                const sopUrl = await exportAndUploadSop(sopLayer, extendTarget.itemName || extendTarget.id);
+                await updateDoc(doc(db, 'Approved_Designs', extendTarget.id), { 'manufacturingSpecs.sopCadUrl': sopUrl, 'manufacturingSpecs.sopCadFile': sopLayer.fileName || '', updatedAt: Date.now() });
+                addLog(`✅ SOP model attached to "${extendTarget.itemName}".`, 'success');
+                alert(`✅ SOP/instructions model attached to "${extendTarget.itemName}".\n\nBuild the annotated pages in Tab .6 (Interactive 3D Instructions) — it now loads this model for that assembly.`);
+                setExtendId('');
+            } catch (e) { console.error(e); addLog(`SOP attach failed: ${e.message || e}`, 'error'); alert('SOP attach failed:\n\n' + (e.message || e)); }
+            setBusy('');
+            return;
+        }
         // ── PREFLIGHT ── catch the whole "built with 0 pins / mis-tagged slots / typo'd item #s"
         // class of failure BEFORE anything is written. Warnings don't block — you confirm through them.
         const index = codeIndexRef.current?.brand === activeBrand ? codeIndexRef.current.index : await ensureCodeIndex().catch(() => null);
         const knownNorms = new Set((index || []).map(e => e.norm));
         const HARDWARE_RE = /screw|standoff|stand-off|washer|\bnut\b|bolt|rivet|spring|grommet/i;
         const warnings = [];
-        filledSlots.forEach(slot => {
+        mergeSlots.forEach(slot => {
             const ch = layers[slot.id].choices || [];
             const suspicious = ch.filter(c => !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && !HARDWARE_RE.test(c.label) && /\d/.test(c.label) && c.label.replace(/[^A-Za-z0-9]/g, '').length >= 6);
             if (suspicious.length) warnings.push(`• ${slot.label}: ${suspicious.length} BLANK choice(s) that look like real parts (${suspicious.slice(0, 3).map(c => c.label).join(', ')}${suspicious.length > 3 ? ', …' : ''})`);
@@ -388,12 +426,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             if (!slot.category || slot.category === 'OTHER') warnings.push(`• ${slot.label}: category is OTHER — the flow generator will misfile this cluster. Tag it.`);
             if (/RETURN/i.test(slot.label) && /PLATE/i.test(slot.label) && slot.category !== 'BACKPLATE') warnings.push(`• ${slot.label}: labeled a return backplate but category is ${slot.category || '—'} — should be BACKPLATE.`);
         });
-        const summary = filledSlots.map(s => {
+        const summary = mergeSlots.map(s => {
             const ch = layers[s.id].choices || [];
             const pinned = ch.filter(c => (c.itemNo && c.itemNo.trim()) || c.isFee || c.isHidden).length;
             return `• ${s.label}: ${ch.length} choice(s) — ${pinned} pinned (item/fee/hide), ${ch.length - pinned} blank`;
         }).join('\n');
-        if (!window.confirm(`${extendTarget ? `ADD ${filledSlots.length} slot(s) to "${extendTarget.itemName}" (existing slots/pins untouched)` : `Build "${assemblyName}" from ${filledSlots.length} slot file(s)`}?\n\nPREFLIGHT\n${summary}\n${warnings.length ? `\n⚠ CHECK FIRST\n${warnings.join('\n')}\n` : '\n✓ No issues detected.\n'}\nBlank choices stay as always-visible shared geometry. Continue?`)) return;
+        if (!window.confirm(`${extendTarget ? `ADD ${mergeSlots.length} slot(s) to "${extendTarget.itemName}" (existing slots/pins untouched)` : `Build "${assemblyName}" from ${mergeSlots.length} slot file(s)`}?\n\nPREFLIGHT\n${summary}\n${warnings.length ? `\n⚠ CHECK FIRST\n${warnings.join('\n')}\n` : '\n✓ No issues detected.\n'}${sopLayer ? '\n+ SOP/instructions model attached as its OWN .glb (not merged).\n' : ''}\nBlank choices stay as always-visible shared geometry. Continue?`)) return;
         setBusy('build');
         try {
             // 1) Base scene: a fresh Group for a NEW assembly, or the EXISTING merged .glb when
@@ -424,7 +462,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const clusters = [], pins = [];
             // Slot prefixes continue AFTER the existing clusters so namespaces can never collide.
             const slotOffset = existingClusters.length;
-            filledSlots.forEach((slot, slotIdx) => {
+            mergeSlots.forEach((slot, slotIdx) => {
                 const layer = layers[slot.id];
                 const g = layer.scene.clone(true);
                 g.position.set(layer.offset.x, layer.offset.y, layer.offset.z);
@@ -498,6 +536,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const cadUrl = await new Promise((res, rej) => task.on('state_changed', null, rej, async () => res(await getDownloadURL(task.snapshot.ref))));
             addLog(`Uploaded combined model (${(blob.size / 1e6).toFixed(1)} MB).`, 'success');
 
+            // SOP model (if loaded): its OWN .glb alongside the working model — Tab .6 builds on it.
+            let sopUrl = '';
+            if (sopLayer) {
+                addLog('Exporting + uploading SOP/instructions model…', 'info');
+                sopUrl = await exportAndUploadSop(sopLayer, asmName);
+            }
+
             // 4) Write the assembly doc. EXTEND = append clusters + swap cadUrl on the SAME doc (old
             // .glb kept as backup; nothing existing is rewritten). NEW = create the mainline PRODUCT.
             if (extendTarget) {
@@ -505,7 +550,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     nodeClusters: [...existingClusters, ...clusters],
                     'manufacturingSpecs.cadUrl': cadUrl,
                     'manufacturingSpecs.cadUrlBackup': oldCadUrl,
-                    builtFromLayers: [...existingBuiltFrom, ...filledSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName }))],
+                    ...(sopUrl ? { 'manufacturingSpecs.sopCadUrl': sopUrl, 'manufacturingSpecs.sopCadFile': sopLayer.fileName || '' } : {}),
+                    builtFromLayers: [...existingBuiltFrom, ...mergeSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName }))],
                     updatedAt: Date.now()
                 });
             } else {
@@ -517,8 +563,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // everywhere that gates on approvals (e.g. Visual Assembly) without an Inception pass.
                     approvals: { designer: currentUser || 'BUILDER', technical: currentUser || 'BUILDER', machinist: currentUser || 'BUILDER' },
                     nodeClusters: clusters,
-                    manufacturingSpecs: { cadUrl, status: 'BUILT_FROM_LAYERS' },
-                    builtFromLayers: filledSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName })),
+                    manufacturingSpecs: { cadUrl, status: 'BUILT_FROM_LAYERS', ...(sopUrl ? { sopCadUrl: sopUrl, sopCadFile: sopLayer.fileName || '' } : {}) },
+                    builtFromLayers: mergeSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName })),
                     createdAt: Date.now(), updatedAt: Date.now(), author: currentUser || ''
                 }, { merge: true });
             }

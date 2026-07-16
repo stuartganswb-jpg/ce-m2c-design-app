@@ -11,6 +11,7 @@ import './shopStyles.css';
 import ShopEngineering from './ShopEngineering';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
+import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack } from '../Shared/workOrderContract';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
@@ -27,6 +28,7 @@ const ShopFloor = () => {
     const [activeTab, setActiveTab] = useState('floor');
     const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
     const [cfgLine, setCfgLine] = useState(0); // which cart line/configuration the viewer opens on
+    const [sopView, setSopView] = useState(null); // assembly doc id -> SOP viewer modal
     const [perms, setPerms] = useState({});
 
     // STATE
@@ -190,7 +192,10 @@ const ShopFloor = () => {
                                 asmCache.set(aid, asnap.exists() ? asnap.data() : null);
                             }
                             const a = asmCache.get(aid);
-                            if (a?.staticShopDrawing?.url) found.push({ url: a.staticShopDrawing.url, name: a.staticShopDrawing.name || a.itemName || 'Shop Drawing' });
+                            // Interactive SOP pages (Tab .6 builder) — the native-3D popup.
+                            if ((a?.instructionSteps || []).length > 0 || a?.manufacturingSpecs?.sopCadUrl) found.push({ kind: 'SOP', docId: aid, name: a.itemName || 'Shop SOPs' });
+                            // Legacy/simple: a hand-attached static PDF.
+                            if (a?.staticShopDrawing?.url) found.push({ kind: 'PDF', url: a.staticShopDrawing.url, name: a.staticShopDrawing.name || a.itemName || 'Shop Drawing' });
                         } catch (e) { /* no drawing for this assembly */ }
                     }
                     drawings[q] = found;
@@ -1076,7 +1081,9 @@ const ShopFloor = () => {
                             <button onClick={() => { setCfgLine(0); setCfgQuote(order.quoteId); }} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🔍 View Item</button>
                         )}
                         {(orderDrawings[order.quoteId] || []).map((d, i) => (
-                            <button key={i} title={d.name} onClick={() => window.open(d.url, '_blank', 'noopener')} style={{ flex: 1, background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📄 Drawing</button>
+                            d.kind === 'SOP'
+                                ? <button key={i} title={`${d.name} — standing SOP pages (3D popup)`} onClick={() => setSopView(d.docId)} style={{ flex: 1, background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📋 SOP</button>
+                                : <button key={i} title={d.name} onClick={() => window.open(d.url, '_blank', 'noopener')} style={{ flex: 1, background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>📄 Drawing</button>
                         ))}
                     </div>
 
@@ -1289,6 +1296,7 @@ const ShopFloor = () => {
 
             {renderModal()}
             {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} initialLine={cfgLine} onClose={() => setCfgQuote(null)} />}
+            {sopView && <SopViewer assemblyId={sopView} onClose={() => setSopView(null)} />}
         </div>
     );
 };

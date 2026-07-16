@@ -104,12 +104,55 @@ const ExplodableModel = ({ url, explodeFactor, explodeMode, nodeClusters, onMesh
             ref={modelRef} object={clonedScene} 
             onPointerOver={(e) => { 
                 e.stopPropagation(); 
-                if (!isFrozen && activeTool === 'BOM') document.body.style.cursor = 'crosshair'; 
-                if (isFrozen && activeTool === 'CALLOUT') document.body.style.cursor = 'crosshair';
+                if (!isFrozen && activeTool === 'BOM') document.body.style.cursor = 'crosshair';
+                if (activeTool === 'CALLOUT') document.body.style.cursor = 'crosshair';
             }}
             onPointerOut={(e) => { e.stopPropagation(); document.body.style.cursor = 'auto'; }}
             onClick={(e) => { e.stopPropagation(); onMeshClick(e.point); }}
         />
+    );
+};
+
+// Inception-style draggable note box (Stuart 2026-07-15): 3D-anchored brass dot, the box floats
+// at a per-callout px offset (ox/oy, persisted) with a leader line — drag the header to place it
+// clear of the geometry. Works while orbiting; no freeze required.
+const CalloutBox = ({ c, onText, onRemove, onMove }) => {
+    const [live, setLive] = useState(null); // {x,y} while dragging
+    const ox = live ? live.x : (c.ox ?? 30);
+    const oy = live ? live.y : (c.oy ?? -40);
+    const startDrag = (e) => {
+        e.stopPropagation(); e.preventDefault();
+        const sx = e.clientX, sy = e.clientY, bx = c.ox ?? 30, by = c.oy ?? -40;
+        const move = (ev) => setLive({ x: bx + (ev.clientX - sx), y: by + (ev.clientY - sy) });
+        const up = (ev) => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            setLive(null);
+            onMove(c.id, Math.round(bx + (ev.clientX - sx)), Math.round(by + (ev.clientY - sy)));
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        setLive({ x: bx, y: by });
+    };
+    return (
+        <div style={{ position: 'relative' }}>
+            <svg style={{ position: 'absolute', top: 0, left: 0, width: '1px', height: '1px', overflow: 'visible', pointerEvents: 'none' }}>
+                <line x1="0" y1="0" x2={ox} y2={oy + 14} stroke="var(--brass)" strokeWidth="1.5" />
+            </svg>
+            <div style={{ width: '8px', height: '8px', background: 'var(--brass)', borderRadius: '50%', transform: 'translate(-50%, -50%)' }}></div>
+            <div style={{ position: 'absolute', top: `${oy}px`, left: `${ox}px`, width: '220px', background: 'rgba(255,255,255,0.96)', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
+                <div onPointerDown={startDrag} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)', cursor: 'grab', userSelect: 'none' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Note · drag</span>
+                    <button onClick={(e) => { e.stopPropagation(); onRemove(c.id); }} onPointerDown={(e) => e.stopPropagation()} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1rem', padding: 0 }}>×</button>
+                </div>
+                <textarea
+                    value={c.text}
+                    onChange={(e) => onText(c.id, e.target.value)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    style={{ width: '100%', minHeight: '60px', border: 'none', background: 'transparent', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem', resize: 'vertical', color: 'var(--ink)', padding: '8px 10px', boxSizing: 'border-box' }}
+                />
+            </div>
+        </div>
     );
 };
 
@@ -235,7 +278,7 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
           setActiveTool('ORBIT'); 
           try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { instructionSteps: updatedSteps }); } catch (err) {}
       } 
-      else if (isFrozen && activeTool === 'CALLOUT') {
+      else if (activeTool === 'CALLOUT') {
           const newCallout = { id: Date.now().toString(), x: point3D.x, y: point3D.y, z: point3D.z, text: "New Note..." };
           const updatedSteps = currentSteps.map(s => s.id === activeStepId ? { ...s, callouts: [...(s.callouts||[]), newCallout] } : s);
           setActiveAssembly(prev => ({ ...prev, instructionSteps: updatedSteps }));
@@ -247,6 +290,15 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
       const updatedSteps = activeAssembly.instructionSteps.map(s => {
           if (s.id !== activeStepId) return s;
           return { ...s, callouts: s.callouts.map(c => c.id === calloutId ? { ...c, text } : c) };
+      });
+      setActiveAssembly(prev => ({ ...prev, instructionSteps: updatedSteps }));
+      try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { instructionSteps: updatedSteps }); } catch (e) {}
+  };
+
+  const updateCalloutOffset = async (calloutId, ox, oy) => {
+      const updatedSteps = activeAssembly.instructionSteps.map(s => {
+          if (s.id !== activeStepId) return s;
+          return { ...s, callouts: s.callouts.map(c => c.id === calloutId ? { ...c, ox, oy } : c) };
       });
       setActiveAssembly(prev => ({ ...prev, instructionSteps: updatedSteps }));
       try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { instructionSteps: updatedSteps }); } catch (e) {}
@@ -386,6 +438,10 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
   const activeCallouts = activeStepObj?.callouts || [];
   const activeDrawings = activeStepObj?.drawings || [];
   const nodeClusters = activeAssembly?.nodeClusters || [];
+  // The dedicated SOP model (1.6 "Shop Floor SOPs & Instructions" slot) wins over the working
+  // GLB — the designer loads only the pieces the sheets need, so pages stay clean.
+  const sopUrl = activeAssembly?.manufacturingSpecs?.sopCadUrl || '';
+  const modelUrl = sopUrl || activeAssembly?.manufacturingSpecs?.cadUrl || '';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '30px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
@@ -406,7 +462,7 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
               </div>
           )}
           {masterAssemblies.map(asm => {
-             const hasCAD = !!asm.manufacturingSpecs?.cadUrl;
+             const hasCAD = !!(asm.manufacturingSpecs?.cadUrl || asm.manufacturingSpecs?.sopCadUrl);
              return (
               <div key={asm.id} onClick={() => { setActiveAssembly(asm); setExplodeFactor(0); setMeshCount(0); setIsFrozen(false); setActiveTool('ORBIT'); }} style={{ background: activeAssembly?.id === asm.id ? 'var(--paper-2)' : '#fff', border: activeAssembly?.id === asm.id ? '1px solid var(--brass)' : '1px solid var(--line)', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', boxShadow: activeAssembly?.id === asm.id ? '0 4px 12px rgba(0,0,0,0.05)' : 'none' }}>
                 <div style={{ padding: '6px 12px', background: hasCAD ? 'var(--paper)' : 'var(--paper-2)', color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', borderBottom: '1px solid var(--line)' }}>
@@ -425,7 +481,10 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
           <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', borderRadius: '2px', overflow: 'hidden' }}>
             
             <div style={{ padding: '24px 30px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
-              <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>{activeAssembly.itemName} - Builder</h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>{activeAssembly.itemName} - Builder</h3>
+                <span title={sopUrl ? 'Building on the dedicated SOP model from the 1.6 slot.' : 'No SOP model yet — building on the working GLB. Attach one via 1.6 → Shop Floor SOPs & Instructions slot (Extend).'} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 10px', border: '1px solid var(--line)', background: sopUrl ? 'var(--ink)' : 'transparent', color: sopUrl ? '#fff' : 'var(--ink-soft)' }}>{sopUrl ? 'SOP Model' : 'Working GLB'}</span>
+              </div>
               <button onClick={() => setActiveAssembly(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
             </div>
 
@@ -441,8 +500,9 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
                              <>
                                  <button onClick={() => setActiveTool('ORBIT')} style={getToolStyle('ORBIT')}>Orbit</button>
                                  <button onClick={() => setActiveTool('BOM')} style={getToolStyle('BOM')}>BOM Tag</button>
+                                 <button onClick={() => setActiveTool('CALLOUT')} style={getToolStyle('CALLOUT')}>Text Note</button>
                                  <button onClick={() => { setIsFrozen(true); setActiveTool('CALLOUT'); }} style={{ ...getToolStyle('FREEZE'), marginLeft: 'auto', background: 'var(--ink)', color: '#fff', border: 'none' }}>
-                                     Freeze for Markup
+                                     Freeze for Fineliner
                                  </button>
                              </>
                          ) : (
@@ -475,13 +535,13 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
 
                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: isFrozen ? 'var(--ink-soft)' : 'var(--ink)' }}>Explode Amount:</label>
-                        <input type="range" min="0" max="100" value={explodeFactor} onChange={(e) => setExplodeFactor(e.target.value)} disabled={!activeAssembly.manufacturingSpecs?.cadUrl || meshCount <= 1 || isFrozen} style={{ flex: 1, cursor: isFrozen ? 'not-allowed' : 'pointer' }} />
+                        <input type="range" min="0" max="100" value={explodeFactor} onChange={(e) => setExplodeFactor(e.target.value)} disabled={!modelUrl || meshCount <= 1 || isFrozen} style={{ flex: 1, cursor: isFrozen ? 'not-allowed' : 'pointer' }} />
                      </div>
                  </div>
                  
                  <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-                    {!activeAssembly.manufacturingSpecs?.cadUrl ? (
-                        <div style={{ color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '1.2rem', padding: '60px', textAlign: 'center' }}>A 3D CAD model (.glb) is required. Upload one in Tab 3.</div>
+                    {!modelUrl ? (
+                        <div style={{ color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '1.2rem', padding: '60px', textAlign: 'center' }}>A 3D model is required — upload the working .glb in Tab 3, or attach a dedicated SOP model via 1.6 → "Shop Floor SOPs & Instructions" slot.</div>
                     ) : (
                         <>
                             {/* SVG FINELINER OVERLAY */}
@@ -511,8 +571,8 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
                                 <CameraController zoomTrigger={zoomTrigger} />
                                 
                                 <Bounds fit clip margin={1.2}>
-                                    <ExplodableModel 
-                                        url={activeAssembly.manufacturingSpecs.cadUrl} 
+                                    <ExplodableModel
+                                        url={modelUrl}
                                         explodeFactor={explodeFactor} 
                                         explodeMode={explodeMode}
                                         nodeClusters={nodeClusters}
@@ -543,28 +603,10 @@ const InstructionsTab = ({ currentUser, activeBrand }) => {
                                     )
                                 })}
 
-                                {/* RENDER TEXT CALLOUTS */}
+                                {/* RENDER TEXT CALLOUTS — draggable Inception-style boxes */}
                                 {activeCallouts.map(c => (
                                     <Html key={c.id} position={[c.x, c.y, c.z]} zIndexRange={[100, 0]}>
-                                        <div style={{ position: 'relative' }}>
-                                            <div style={{ width: '8px', height: '8px', background: 'var(--brass)', borderRadius: '50%', transform: 'translate(-50%, -50%)' }}></div>
-                                            
-                                            <div style={{ position: 'absolute', top: '-40px', left: '30px', width: '220px', background: 'rgba(255, 255, 255, 0.95)', border: '1px solid var(--line)', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
-                                                <div style={{ position: 'absolute', top: '40px', left: '-30px', width: '30px', height: '1px', background: 'var(--line)' }}></div>
-                                                
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '6px' }}>
-                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Note</span>
-                                                    <button onClick={(e) => { e.stopPropagation(); removeCallout(c.id); }} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1rem', padding: 0 }}>×</button>
-                                                </div>
-                                                
-                                                <textarea 
-                                                    value={c.text} 
-                                                    onChange={(e) => updateCalloutText(c.id, e.target.value)} 
-                                                    onPointerDown={(e) => e.stopPropagation()} 
-                                                    style={{ width: '100%', minHeight: '60px', border: 'none', background: 'transparent', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem', resize: 'vertical', color: 'var(--ink)' }}
-                                                />
-                                            </div>
-                                        </div>
+                                        <CalloutBox c={c} onText={updateCalloutText} onRemove={removeCallout} onMove={updateCalloutOffset} />
                                     </Html>
                                 ))}
                             </Canvas>

@@ -10,6 +10,7 @@ import { validateAssemblyAlignment } from '../Shared/assemblyTags';
 // Fabricut-style spec-sheet generator (hidden-line drawings from the working GLB) — lazy so
 // the drawing engine only loads when opened.
 const SpecSheetModal = React.lazy(() => import('../SpecSheet/SpecSheetModal'));
+const SopViewer = React.lazy(() => import('../Shared/SopViewer'));
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -24,6 +25,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [capturingThumb, setCapturingThumb] = useState(false);
   const [showSpecSheet, setShowSpecSheet] = useState(false);
   const [uploadingDrawing, setUploadingDrawing] = useState(false); // static shop-drawing PDF attach
+  const [showSops, setShowSops] = useState(false); // read-only viewer of the Tab .6 SOP pages
   const [bulkThumb, setBulkThumb] = useState({ running: false, done: 0, total: 0 });
   
   const [searchTerm, setSearchTerm] = useState("");
@@ -1170,6 +1172,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                             <button onClick={() => setShowSpecSheet(true)} style={{ padding: '10px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
                                                 📐 Spec Sheets
                                             </button>
+                                            {(selectedAssemblyData.instructionSteps?.length > 0 || selectedAssemblyData.manufacturingSpecs?.sopCadUrl) && (
+                                                <button onClick={() => setShowSops(true)} title="Shop-floor SOP pages built in Tab .6 (Interactive 3D Instructions)" style={{ padding: '10px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                    📋 Shop SOPs
+                                                </button>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -1947,6 +1954,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       {showSpecSheet && selectedAssemblyData && (
         <React.Suspense fallback={null}>
           <SpecSheetModal assembly={selectedAssemblyData} pins={bomPins} libraryParts={libraryParts} onClose={() => setShowSpecSheet(false)} />
+        </React.Suspense>
+      )}
+      {showSops && selectedAssemblyData && (
+        <React.Suspense fallback={null}>
+          <SopViewer assembly={selectedAssemblyData} onClose={() => setShowSops(false)} />
         </React.Suspense>
       )}
     </div>
