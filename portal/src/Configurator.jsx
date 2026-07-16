@@ -124,6 +124,67 @@ function buildCloneSpecs(steps, params, quantities) {
   return specs;
 }
 
+// ---- Return / bracket rules (ported from CPQTab.js:1174-1223) --------------------------------
+const RETURN_PICK_RE = /bend|return|miter|mitre|mtr|french/i;
+
+// Is the End Treatment at this position a return (french/miter/inside-mount)?
+function isReturnChosenForPos(pos, allSteps, params) {
+  if (!pos) return false;
+  const p = String(pos).toUpperCase();
+  return allSteps.some((s) => {
+    if (String(s.position || '').toUpperCase() !== p || !/end treatment/i.test(s.title || '')) return false;
+    const sel = params[s.id];
+    if (!sel) return false;
+    const o = (s.styleOptions || []).find((x) => (x.optId || x.partId) === sel);
+    const et = String((o && o.endTreatment) || '').toUpperCase();
+    if (et) return et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT';
+    if (/^OPT-(BEND|MITER)/i.test(sel)) return true;
+    const leaves = String((o && o.targetNode) || '').split(',').map((s2) => { const seg = String(s2).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
+    return !!(o && RETURN_PICK_RE.test(`${(o.partName) || ''} ${(o.optId) || ''} ${leaves}`));
+  });
+}
+// A return replaces the outer bracket → grey the bracket's arm dropdown (only the return backplate remains).
+function returnLocksBracket(step, allSteps, params) {
+  return !!(step && Array.isArray(step.subOptions) && step.subOptions.some((o) => o.returnOnly) && isReturnChosenForPos(step.position, allSteps, params));
+}
+// Inverse (Flat Iron): a selected end-return arm IS the end treatment → grey that side's End Treatment step.
+function isArmChosenForPos(pos, allSteps, params) {
+  if (!pos) return false;
+  const p = String(pos).toUpperCase();
+  return allSteps.some((s) => {
+    if (String(s.position || '').toUpperCase() !== p) return false;
+    if (!(s.stepRole === 'BRACKET' || /bracket/i.test(s.title || '')) || /end treatment/i.test(s.title || '')) return false;
+    const sel = params[s.id];
+    const o = sel && (s.styleOptions || []).find((x) => (x.optId || x.partId) === sel);
+    return !!(o && o.isReturnArm);
+  });
+}
+function armLocksEnd(step, allSteps, params) {
+  return !!(step && /end treatment/i.test(step.title || '') && isArmChosenForPos(step.position, allSteps, params));
+}
+// Basic brackets take no backplate.
+function basicNoBackplate(step, params) {
+  const sel = params[step && step.id];
+  const o = sel && (step.styleOptions || []).find((x) => (x.optId || x.partId) === sel);
+  return !!(o && (o.isBasic || /basic/i.test(o.partName || '')));
+}
+// The three backplate pools (return / inline / regular) occupy the same spot — show one at a time,
+// scoped to the selected bracket's location. (Size-native plate gating is deferred — no parts here.)
+function scopedBackplates(step, allSteps, params) {
+  const selMain = (step.styleOptions || []).find((o) => (o.optId || o.partId) === params[step.id]);
+  const selLoc = selMain && selMain.location;
+  let subs = (step.subOptions || []).filter((o) => !selLoc || !o.location || o.location === selLoc);
+  if (subs.some((o) => o.returnOnly || o.inlineOnly)) {
+    const returnChosen = isReturnChosenForPos(step.position, allSteps, params) || !!(selMain && selMain.isReturnArm);
+    const inlineBracket = !!(selMain && selMain.usesReturnPlates);
+    const hasInl = subs.some((o) => o.inlineOnly);
+    subs = subs.filter((o) => returnChosen ? o.returnOnly
+      : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
+      : (!o.returnOnly && !o.inlineOnly));
+  }
+  return subs;
+}
+
 // ---- Step controls -------------------------------------------------------------------------
 // Scope the finish list EXACTLY like HQ: a dedicated finish step uses step.allowedOptions (finish
 // ids); a compound style step uses the selected option's finishAllowedOptions, else the step's.
@@ -187,7 +248,7 @@ function FinishPicker({ finishes, value, onChange }) {
   );
 }
 
-function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel }) {
+function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel, allSteps }) {
   const sel = params[step.id];
 
   // Return-pool gating (matches HQ): french/miter/bent returns drop out when the chosen projection
@@ -195,6 +256,10 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
   const allowReturns = returnsAllowedFor(sizeSel);
   const optionAllowed = (o) => allowReturns || !(o.isReturn || isReturnOption(o));
   const visStyleOptions = (step.styleOptions || []).filter(optionAllowed);
+
+  // A return on this side replaces the bracket arm (grey it out); or a return-arm bracket replaces
+  // the end treatment. When locked, only the (scoped) backplate below remains.
+  const armLocked = returnLocksBracket(step, allSteps, params) || armLocksEnd(step, allSteps, params);
 
   if (step.type === SIZE_TYPE) {
     return (
@@ -218,17 +283,24 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
   return (
     <>
       {(visStyleOptions.length > 0) && (
-        <select className="opt-select" value={sel || ''} onChange={(e) => { setParam(step.id, e.target.value); setParam(`${step.id}__finish`, ''); }}>
-          <option value="">Select…</option>
+        <select className={`opt-select${armLocked ? ' locked' : ''}`} disabled={armLocked} value={armLocked ? '' : (sel || '')} onChange={(e) => { setParam(step.id, e.target.value); setParam(`${step.id}__finish`, ''); }}>
+          <option value="">{returnLocksBracket(step, allSteps, params) ? 'Return selected — bracket replaced (choose the return backplate below)' : armLocksEnd(step, allSteps, params) ? 'End return arm selected — it is this end' : 'Select…'}</option>
           {visStyleOptions.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
         </select>
       )}
-      {(step.subOptions && step.subOptions.length > 0) && (
-        <select className="opt-select" value={params[`${step.id}__sub`] || ''} onChange={(e) => setParam(`${step.id}__sub`, e.target.value)} style={{ marginTop: 8 }}>
-          <option value="">Select…</option>
-          {step.subOptions.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
-        </select>
-      )}
+      {(step.subOptions && step.subOptions.length > 0) && (() => {
+        const noPlate = basicNoBackplate(step, params);
+        const subs = scopedBackplates(step, allSteps, params);
+        return (
+          <div style={{ marginTop: 8 }}>
+            <label className="cfg-sublabel">Backplate</label>
+            <select className={`opt-select${noPlate ? ' locked' : ''}`} disabled={noPlate} value={noPlate ? '' : (params[`${step.id}__sub`] || '')} onChange={(e) => setParam(`${step.id}__sub`, e.target.value)}>
+              <option value="">{noPlate ? 'None (basic bracket — no backplate)' : 'None'}</option>
+              {subs.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
+            </select>
+          </div>
+        );
+      })()}
       {isCompound && (
         <div style={{ marginTop: 10 }}>
           <FinishPicker
@@ -365,7 +437,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 </div>
                 <div className="cfg-step-title lg">{step.title}</div>
                 <div className="cfg-step-body">
-                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} />
+                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} allSteps={allSteps} />
                 </div>
                 <div className="cfg-nav">
                   <button className="btn-ghost" disabled={safeIdx === 0} onClick={() => setStepIdx(safeIdx - 1)}>← Back</button>

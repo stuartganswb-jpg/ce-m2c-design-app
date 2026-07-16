@@ -445,3 +445,6 @@ footer.portal a { color: var(--ink-soft); }
   text-transform: uppercase; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .chip.on .chip-label { color: var(--ink); }
+
+.cfg-sublabel { display: block; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); margin-bottom: 6px; }
+.opt-select.locked { background: var(--line-soft); color: var(--ink-soft); cursor: not-allowed; opacity: 0.65; }

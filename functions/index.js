@@ -608,10 +608,15 @@ const sanitizeStep = (s) => ({
         finishAllowedOptions: o.finishAllowedOptions || null,
         hidesBracket: !!o.hidesBracket,
         isReturn: !!o.isReturn,
+        endTreatment: o.endTreatment || '',
+        isReturnArm: !!o.isReturnArm,
+        usesReturnPlates: !!o.usesReturnPlates,
+        isBasic: !!o.isBasic,
     })),
     subOptions: (s.subOptions || []).map((o) => ({
         optId: o.optId || o.partId || '', partId: o.partId || '', partName: o.partName || o.label || '',
         label: o.label || o.partName || '', targetNode: o.targetNode || '', location: o.location || '', position: o.position || '',
+        returnOnly: !!o.returnOnly, inlineOnly: !!o.inlineOnly,
     })),
 });
 
