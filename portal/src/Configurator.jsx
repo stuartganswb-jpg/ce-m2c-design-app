@@ -271,6 +271,15 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
   // the end treatment. When locked, only the (scoped) backplate below remains.
   const armLocked = returnLocksBracket(step, allSteps, params) || armLocksEnd(step, allSteps, params);
 
+  // Quantity input on every non-size step that isn't hideQty (matches HQ) — rods, rings, etc. need
+  // a count alongside their finish. Empty = the BOM default (1) is used by the pricing engine.
+  const showQty = !step.hideQty && step.type !== SIZE_TYPE;
+  const qtyEl = showQty ? (
+    <label className="qty-row">Quantity
+      <input type="number" min="1" step="1" placeholder="1" value={quantities[step.id] ?? ''} onChange={(e) => setQty(step.id, e.target.value)} />
+    </label>
+  ) : null;
+
   if (step.type === SIZE_TYPE) {
     return (
       <div className="opt-cards">
@@ -287,7 +296,10 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
   const isSimpleFinish = !isCompound && step.targetNodes && (!step.styleOptions || step.styleOptions.length === 0);
 
   if (isSimpleFinish) {
-    return <FinishPicker finishes={finishOptionsFor(step, finishes, null)} value={sel} onChange={(v) => setParam(step.id, v)} />;
+    return <>
+      <FinishPicker finishes={finishOptionsFor(step, finishes, null)} value={sel} onChange={(v) => setParam(step.id, v)} />
+      {qtyEl}
+    </>;
   }
 
   return (
@@ -320,11 +332,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
           />
         </div>
       )}
-      {!step.hideQty && step.type !== SIZE_TYPE && step.isCenterClone && (
-        <label className="qty-row">Qty
-          <input type="number" min="0" value={quantities[step.id] ?? ''} onChange={(e) => setQty(step.id, e.target.value)} />
-        </label>
-      )}
+      {qtyEl}
     </>
   );
 }
