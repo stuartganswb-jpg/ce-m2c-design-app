@@ -364,3 +364,46 @@ footer.portal {
   gap: 10px;
 }
 footer.portal a { color: var(--ink-soft); }
+
+/* ---- Catalog (product picker) ---- */
+.catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 24px; }
+.catalog-card {
+  text-align: left; background: var(--card); border: 1px solid var(--line);
+  padding: 20px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; transition: border-color 0.15s;
+}
+.catalog-card:hover { border-color: var(--brass); }
+.catalog-card .c-name { font-family: var(--serif); font-size: 1.15rem; font-weight: 500; color: var(--ink); }
+.catalog-card .c-sku { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); letter-spacing: 0.06em; }
+.catalog-card .c-cta { display: flex; justify-content: space-between; align-items: baseline; margin-top: 12px; gap: 10px; }
+.catalog-card .c-price { font-family: var(--mono); font-size: 0.85rem; color: var(--brass); font-variant-numeric: tabular-nums; }
+.catalog-card .c-open { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--ink-soft); }
+
+/* ---- Configurator ---- */
+.cfg { margin-top: 20px; }
+.cfg-top { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-bottom: 18px; }
+.cfg-top .btn-ghost { padding: 6px 0; }
+.cfg-price { margin-left: auto; font-family: var(--mono); font-size: 0.9rem; color: var(--brass); font-variant-numeric: tabular-nums; }
+.cfg-body { display: grid; grid-template-columns: 1fr 340px; gap: 22px; align-items: start; }
+@media (max-width: 780px) { .cfg-body { grid-template-columns: 1fr; } }
+.cfg-stage { min-height: 480px; display: flex; }
+.cfg-stage .viewer { flex: 1; min-height: 480px; }
+.cfg-panel { display: flex; flex-direction: column; gap: 4px; }
+.cfg-step { padding: 16px 0; border-bottom: 1px solid var(--line-soft); }
+.cfg-step-title { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--ink-soft); margin-bottom: 10px; }
+.opt-cards { display: flex; flex-wrap: wrap; gap: 8px; }
+.opt-card {
+  padding: 10px 14px; border: 1px solid var(--line); background: var(--card); cursor: pointer;
+  font-family: var(--sans); font-size: 0.9rem; color: var(--ink);
+}
+.opt-card.active { border-color: var(--brass); box-shadow: inset 0 -2px 0 var(--brass); }
+.opt-select {
+  width: 100%; padding: 11px; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  font-family: var(--sans); font-size: 0.9rem; outline: none;
+}
+.opt-select:focus { border-color: var(--brass); }
+.qty-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); }
+.qty-row input { width: 80px; padding: 8px; border: 1px solid var(--line); font-family: var(--mono); }
+.cfg-submit { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
+.cfg-note { padding: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-family: var(--sans); font-size: 0.9rem; resize: vertical; min-height: 72px; outline: none; }
+.cfg-note:focus { border-color: var(--brass); }
+.cfg-fineprint { font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-soft); }

@@ -1,0 +1,296 @@
+// Client-facing configurator — runs one assigned CPQ flow with the same render engine and the same
+// step→geometry logic as the internal HQ CPQ tab (ported in cpqRender + the builders below). The
+// customer steps through the flow; the 3D model updates live. Pricing shows the starting price and
+// is confirmed by the team on quote request (exact configured pricing is a later iteration).
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
+import { Canvas } from '@react-three/fiber';
+import { OrbitControls, Bounds } from '@react-three/drei';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from './firebase';
+import { DynamicModel, StudioRig, buildPbrRegistry } from './cpqRender.jsx';
+import { sizeSelectionsOf } from './shared/sizeMatrix';
+
+const SIZE_TYPE = 'SIZE_SELECT';
+const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+// Finish lookup by id across the palette (in-house + outsourced).
+const findFinish = (finishes, id) => finishes.find((f) => f.id === id) || null;
+
+// ---- Override builders (ported from CPQTab.js textureOverrides / visibilityOverrides memos) ----
+function buildTextureOverrides(steps, params, finishes) {
+  const overrides = {};
+  for (const step of steps) {
+    // Path A — simple finish step: params[step.id] is a finish id, applied to step.targetNodes.
+    const sel = params[step.id];
+    if (sel && step.targetNodes && !step.finishDataSource) {
+      const f = findFinish(finishes, sel);
+      if (f && f.textureUrl) overrides[step.targetNodes] = f.textureUrl;
+    }
+    // Path B — compound style+finish step.
+    if (step.finishDataSource) {
+      const finishId = params[`${step.id}__finish`];
+      const f = finishId && findFinish(finishes, finishId);
+      if (f && f.textureUrl) {
+        const selMain = params[step.id];
+        const selSub = params[`${step.id}__sub`];
+        const mainNode = (step.geometryMap && step.geometryMap[selMain])
+          || (step.styleOptions || []).find((o) => (o.optId || o.partId) === selMain)?.targetNode
+          || step.finishTargetNodes;
+        const subNode = (step.subGeometryMap && selSub) ? step.subGeometryMap[selSub] : '';
+        [mainNode, subNode].filter(Boolean).forEach((node) => { overrides[node] = f.textureUrl; });
+      }
+    }
+  }
+  return overrides;
+}
+
+function buildVisibilityOverrides(steps, params, assembly, hiddenClusters, hiddenNodes) {
+  const overrides = {};
+  const merge = (n, allowed) => { overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed; };
+  const clusters = (assembly && assembly.nodeClusters) || [];
+
+  for (const step of steps) {
+    // Mount selector: the chosen location gates which cluster's nodes show.
+    if (step.mountSelector) {
+      const selectedLoc = params[step.id];
+      clusters.forEach((cl) => {
+        const inScope = !step.mountPosition || String(cl.position || '') === String(step.mountPosition);
+        if (!inScope) return;
+        const allowed = String(cl.location || '') === String(selectedLoc || '');
+        (cl.nodes || []).forEach((n) => merge(String(n).toLowerCase(), allowed));
+      });
+    }
+    // geometryMap / subGeometryMap: nodes controlled by an option only show when it's selected.
+    const applyMap = (map, sel) => {
+      if (!map) return;
+      const controlled = new Set();
+      const inSelected = new Set();
+      Object.entries(map).forEach(([optId, csv]) => {
+        String(csv).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).forEach((n) => {
+          controlled.add(n);
+          if (optId === sel) inSelected.add(n);
+        });
+      });
+      controlled.forEach((n) => merge(n, inSelected.has(n)));
+    };
+    applyMap(step.geometryMap, params[step.id]);
+    applyMap(step.subGeometryMap, params[`${step.id}__sub`]);
+  }
+
+  // Flow-level force-hide always wins.
+  (hiddenClusters || []).forEach((cid) => {
+    const cl = clusters.find((c) => c.id === cid);
+    (cl ? (cl.nodes || []) : []).forEach((n) => { overrides[String(n).toLowerCase()] = false; });
+  });
+  (hiddenNodes || []).forEach((n) => { overrides[String(n).toLowerCase()] = false; });
+  return overrides;
+}
+
+function buildCloneSpecs(steps, params, quantities) {
+  const specs = [];
+  for (const step of steps) {
+    if (!step.isCenterClone) continue;
+    const selId = params[step.id];
+    const selSub = params[`${step.id}__sub`];
+    const main = (step.geometryMap && step.geometryMap[selId]) || '';
+    const sub = (step.subGeometryMap && selSub) ? step.subGeometryMap[selSub] : '';
+    const meshNames = [main, sub].filter(Boolean).join(',').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!meshNames.length) continue;
+    let count = parseInt(quantities[step.id]);
+    if (!Number.isFinite(count)) count = 1;
+    if (step.hideQty && count === 0) count = 1;
+    // Rail = a pole/rod style step's geometry, else the model box (handled in the renderer).
+    const railStep = steps.find((s) => /pole|rod/i.test(s.title || '') && (s.geometryMap || s.targetNodes));
+    const railNames = railStep
+      ? String((railStep.geometryMap && railStep.geometryMap[params[railStep.id]]) || railStep.targetNodes || '').split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+    specs.push({ stepId: step.id, meshNames, anchorNames: String(main).split(',').map((s) => s.trim()).filter(Boolean), railNames, count });
+  }
+  return specs;
+}
+
+// ---- Step controls -------------------------------------------------------------------------
+const finishOptionsFor = (step, finishes) => {
+  const allow = step.finishAllowedOptions;
+  if (Array.isArray(allow) && allow.length) return finishes.filter((f) => allow.includes(f.id));
+  return finishes;
+};
+
+function SwatchGrid({ finishes, value, onChange }) {
+  return (
+    <div className="swatches">
+      {finishes.map((f) => (
+        <button key={f.id} type="button" title={f.name}
+          className={`swatch${value === f.id ? ' active' : ''}`}
+          style={{ backgroundImage: `url(${f.textureUrl})` }}
+          onClick={() => onChange(f.id)}>
+          <span className="swatch-name">{f.name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function StepControl({ step, params, setParam, quantities, setQty, finishes }) {
+  const sel = params[step.id];
+
+  if (step.type === SIZE_TYPE) {
+    return (
+      <div className="opt-cards">
+        {(step.styleOptions || []).map((o) => (
+          <button key={o.optId} type="button" className={`opt-card${sel === o.optId ? ' active' : ''}`} onClick={() => setParam(step.id, o.optId)}>
+            {o.label || o.partName}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  const isCompound = !!step.finishDataSource;
+  const isSimpleFinish = !isCompound && step.targetNodes && (!step.styleOptions || step.styleOptions.length === 0);
+
+  if (isSimpleFinish) {
+    return <SwatchGrid finishes={finishOptionsFor(step, finishes)} value={sel} onChange={(v) => setParam(step.id, v)} />;
+  }
+
+  return (
+    <>
+      {(step.styleOptions && step.styleOptions.length > 0) && (
+        <select className="opt-select" value={sel || ''} onChange={(e) => { setParam(step.id, e.target.value); setParam(`${step.id}__finish`, ''); }}>
+          <option value="">Select…</option>
+          {step.styleOptions.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
+        </select>
+      )}
+      {(step.subOptions && step.subOptions.length > 0) && (
+        <select className="opt-select" value={params[`${step.id}__sub`] || ''} onChange={(e) => setParam(`${step.id}__sub`, e.target.value)} style={{ marginTop: 8 }}>
+          <option value="">Select…</option>
+          {step.subOptions.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
+        </select>
+      )}
+      {isCompound && (
+        <div style={{ marginTop: 10 }}>
+          <SwatchGrid
+            finishes={finishOptionsFor(
+              (step.styleOptions || []).find((o) => (o.optId || o.partId) === sel) || step,
+              finishes,
+            )}
+            value={params[`${step.id}__finish`]}
+            onChange={(v) => setParam(`${step.id}__finish`, v)}
+          />
+        </div>
+      )}
+      {!step.hideQty && step.type !== SIZE_TYPE && step.isCenterClone && (
+        <label className="qty-row">Qty
+          <input type="number" min="0" value={quantities[step.id] ?? ''} onChange={(e) => setQty(step.id, e.target.value)} />
+        </label>
+      )}
+    </>
+  );
+}
+
+export default function Configurator({ flowId, flowName, onExit }) {
+  const [data, setData] = useState(null); // { flow, assembly, finishes }
+  const [err, setErr] = useState(null);
+  const [params, setParams] = useState({});
+  const [quantities, setQuantities] = useState({});
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [note, setNote] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    setData(null); setErr(null); setParams({}); setQuantities({}); setSubmitted(false);
+    httpsCallable(functions, 'portalFlow')({ flowId })
+      .then((res) => { if (alive) setData(res.data); })
+      .catch((e) => { if (alive) setErr(/permission/i.test(e.message || '') ? 'This product is not enabled on your account.' : 'Could not load this product right now — please try again shortly.'); });
+    return () => { alive = false; };
+  }, [flowId]);
+
+  const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
+  const setQty = (k, v) => setQuantities((q) => ({ ...q, [k]: v }));
+
+  const steps = data?.flow?.steps || [];
+  const finishes = data?.finishes || [];
+  const assembly = data?.assembly || null;
+  const pbrRegistry = useMemo(() => buildPbrRegistry(finishes), [finishes]);
+
+  const textureOverrides = useMemo(() => buildTextureOverrides(steps, params, finishes), [steps, params, finishes]);
+  const visibilityOverrides = useMemo(() => buildVisibilityOverrides(steps, params, assembly, data?.flow?.hiddenClusters, data?.flow?.hiddenNodes), [steps, params, assembly, data]);
+  const cloneSpecs = useMemo(() => buildCloneSpecs(steps, params, quantities), [steps, params, quantities]);
+  const sizeScale = useMemo(() => {
+    try { return sizeSelectionsOf(data?.flow, params)?.scale || 1; } catch (e) { return 1; }
+  }, [data, params]);
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params, quantities }, note });
+      setSubmitted(true);
+    } catch (e) {
+      alert('Could not send your request: ' + (e.message || e));
+    } finally { setSubmitting(false); }
+  };
+
+  if (err) return <div className="cfg"><button className="btn-ghost" onClick={onExit}>← Back</button><div className="empty" style={{ marginTop: 20 }}>{err}</div></div>;
+  if (!data) return <div className="cfg"><button className="btn-ghost" onClick={onExit}>← Back</button><div className="empty" style={{ marginTop: 20 }}>Loading configurator…</div></div>;
+
+  const cadUrl = assembly?.cadUrl;
+  const start = assembly?.startingPrice;
+
+  return (
+    <div className="cfg">
+      <div className="cfg-top">
+        <button className="btn-ghost" onClick={onExit}>← All products</button>
+        <h2 className="sec" style={{ margin: 0 }}>{data.flow.name}</h2>
+        {start !== null && start !== undefined ? <span className="cfg-price">Starting at {fmtMoney(start)}</span> : <span />}
+      </div>
+
+      <div className="cfg-body">
+        <div className="cfg-stage">
+          {cadUrl ? (
+            <div className="viewer">
+              <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]}>
+                <Suspense fallback={null}>
+                  <StudioRig />
+                  <Bounds fit clip margin={1.2}>
+                    <group scale={sizeScale}>
+                      <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} />
+                    </group>
+                  </Bounds>
+                </Suspense>
+                <OrbitControls makeDefault />
+              </Canvas>
+              <span className="viewer-hint">Drag to rotate · scroll to zoom</span>
+            </div>
+          ) : (
+            <div className="empty">This product doesn't have a 3D model yet.</div>
+          )}
+        </div>
+
+        <div className="cfg-panel">
+          {steps.length === 0 && <div className="empty">This product has no options to configure.</div>}
+          {steps.map((step) => (
+            <div key={step.id} className="cfg-step">
+              <div className="cfg-step-title">{step.title}</div>
+              <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} />
+            </div>
+          ))}
+
+          {steps.length > 0 && (
+            <div className="cfg-submit">
+              {submitted ? (
+                <div className="msg ok" style={{ textAlign: 'left' }}>✓ Request sent. Your Classical Elements team will confirm pricing and follow up. You can see it under Orders &amp; Quotes.</div>
+              ) : (
+                <>
+                  <textarea className="cfg-note" placeholder="Notes for your rep (quantity, project, timing…)" value={note} onChange={(e) => setNote(e.target.value)} />
+                  <button className="btn" disabled={submitting} onClick={submit}>{submitting ? 'Sending…' : 'Request a quote for this configuration'}</button>
+                  <div className="cfg-fineprint">Final pricing is confirmed by your rep. Nothing is ordered automatically.</div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

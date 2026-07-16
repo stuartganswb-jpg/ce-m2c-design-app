@@ -1,0 +1,190 @@
+// H1 SIZE-MATRIX — one CPQ flow covers a whole size family (Rod Diameter × Bracket Projection)
+// instead of one near-identical flow per combination. The flow keeps the master geometry (built on
+// 3/4" × 4-5/8"); two injected top-level SIZE steps record the chosen diameter/projection; and every
+// consumer (CPQ pricing, ERP push, Vision math) resolves each configured part to the right size
+// variant through the sizeKey metadata the Fabricut importer stamps on library items
+// (manufacturingSpecs.customData.sizeKey = { family, dia, style, projLetter }).
+//
+// Resolution is sizeKey → sizeKey lookup (no code string surgery at runtime): the base part's key
+// gives (style, projLetter); swap in the selected dia/proj; find the library part carrying that key.
+// Special rules:
+//  - styles with no projection letter (plates, ceiling, inside mount, finials, poles, rings) ignore
+//    the Projection answer;
+//  - doubles (projLetter 'D') keep their fixed dual projection;
+//  - RBP-x/RCP-x (return plates) exist ONLY at 3/4" — at 1" and 1-3/8" returns pair with the
+//    STANDARD plates, so the style collapses RBP→BP / RCP→CP when the target diameter isn't 75
+//    (Stuart 2026-07-08). The glb still lights the return-position copies; only the ITEM differs.
+//  - a missing variant falls back to the base part (quote still works; `missing` reports the gap).
+
+export const SIZE_STEP_TYPE = 'SIZE_SELECT';
+
+export const SIZE_FAMILIES = {
+    'H1-RND': {
+        label: 'Fabricut H1 Round',
+        baseDia: '75',
+        baseProj: 'E',
+        dia: {
+            id: 'SIZE-DIA', title: 'Rod Diameter',
+            options: [
+                { optId: 'SIZE-DIA-75', value: '75', label: '3/4" Round Rod', scale: 1, inches: 0.75 },
+                { optId: 'SIZE-DIA-1', value: '1', label: '1" Round Rod', scale: 1.25, inches: 1 },
+                { optId: 'SIZE-DIA-138', value: '138', label: '1-3/8" Round Rod', scale: 1.5, inches: 1.375 },
+            ],
+        },
+        proj: {
+            id: 'SIZE-PROJ', title: 'Bracket Projection',
+            options: [
+                { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection' },
+                { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection' },
+                { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection' },
+            ],
+        },
+        // Fabricut's french/miter returns are built at the 4-5/8" standard (6" available); there is
+        // no 3-5/8" return — the 3.625 flow never offered them.
+        returnsMinProj: ['E', '6'],
+    },
+};
+
+const skOf = (p) => p?.manufacturingSpecs?.customData?.sizeKey || null;
+
+// First size family found among the given parts (array). Used by the generator to decide whether a
+// flow gets the SIZE steps at all.
+export function sizeFamilyOfParts(parts) {
+    for (const p of parts || []) {
+        const sk = skOf(p);
+        if (sk && SIZE_FAMILIES[sk.family]) return sk.family;
+    }
+    return null;
+}
+
+// The two flow steps, with FIXED ids (SIZE-DIA / SIZE-PROJ) so selections and saved quotes survive
+// regenerates. styleOptions carry partName for generic renderers (labels), no partId (not a part).
+export function buildSizeSteps(familyKey) {
+    const fam = SIZE_FAMILIES[familyKey];
+    if (!fam) return [];
+    const mk = (axisKey, axis) => ({
+        id: axis.id, title: axis.title, type: SIZE_STEP_TYPE, stepRole: 'SIZE',
+        sizeAxis: axisKey, sizeFamily: familyKey,
+        styleOptions: axis.options.map(o => ({ optId: o.optId, partName: o.label, sizeValue: o.value, sizeScale: o.scale })),
+    });
+    return [mk('DIA', fam.dia), mk('PROJ', fam.proj)];
+}
+
+// Read the flow's size selections out of a CPQ config map (dynamicConfigParams / cart config).
+// Returns null when the flow has no SIZE steps; otherwise { family, dia, proj, scale, diaInches,
+// isBase } with unanswered axes defaulting to the family base (= the geometry the flow was built on).
+export function sizeSelectionsOf(flow, config) {
+    const steps = (flow?.steps || []).filter(s => s?.type === SIZE_STEP_TYPE);
+    if (!steps.length) return null;
+    const familyKey = steps[0].sizeFamily || 'H1-RND';
+    const fam = SIZE_FAMILIES[familyKey];
+    if (!fam) return null;
+    const pick = (axis, axisDef, dflt) => {
+        const st = steps.find(s => s.sizeAxis === axis);
+        const sel = st ? (config || {})[st.id] : null;
+        const opt = sel ? axisDef.options.find(o => o.optId === sel) : null;
+        return opt || axisDef.options.find(o => o.value === dflt) || axisDef.options[0];
+    };
+    const d = pick('DIA', fam.dia, fam.baseDia);
+    const p = pick('PROJ', fam.proj, fam.baseProj);
+    return {
+        family: familyKey, dia: d.value, proj: p.value,
+        scale: d.scale || 1, diaInches: d.inches,
+        isBase: d.value === fam.baseDia && p.value === fam.baseProj,
+    };
+}
+
+// Whether french/miter return options are offered under the current size selections. True when the
+// flow has no size matrix (non-matrix flows keep today's behavior).
+export function returnsAllowedFor(sel) {
+    if (!sel) return true;
+    const fam = SIZE_FAMILIES[sel.family];
+    if (!fam || !fam.returnsMinProj) return true;
+    return fam.returnsMinProj.includes(sel.proj);
+}
+
+// An option banned when returns aren't available: modeled returns (endTreatment) and the built-in
+// OPT-BEND / OPT-MITER fee options. INSIDE_MOUNT and finials are always allowed.
+export function isReturnOption(o) {
+    const t = String(o?.endTreatment || '').toUpperCase();
+    if (t === 'FRENCH_RETURN' || t === 'MITER_RETURN') return true;
+    return /^OPT-(BEND|MITER)/i.test(String(o?.optId || ''));
+}
+
+// Library lookup index: sizeKey → base part. Variants (codes with '/') never carry sizeKey, but the
+// guard keeps a stray stamp from shadowing the base.
+export function buildSizeIndex(parts) {
+    const idx = new Map();
+    (parts || []).forEach(p => {
+        const sk = skOf(p);
+        if (!sk || !sk.family) return;
+        const code = String(p.legacyErpId || p.itemId || '');
+        if (code.includes('/')) return;
+        const key = `${sk.family}|${sk.dia}|${sk.style}|${sk.projLetter || ''}`;
+        if (!idx.has(key)) idx.set(key, p);
+    });
+    return idx;
+}
+
+// Resolve one part to the selected size. Non-family parts (no sizeKey) pass through untouched.
+export function sizeVariantOf(part, sel, sizeIndex) {
+    const sk = skOf(part);
+    if (!part || !sel || !sk || sk.family !== sel.family) return { part, swapped: false };
+    const targetDia = sel.dia || sk.dia;
+    // projection only applies to styles that come in projections; doubles keep their dual spread
+    const targetProj = !sk.projLetter ? '' : sk.projLetter === 'D' ? 'D' : (sel.proj || sk.projLetter);
+    let targetStyle = sk.style;
+    if (targetDia !== '75' && /^R[BC]P-/.test(targetStyle)) targetStyle = targetStyle.slice(1); // RBP→BP, RCP→CP
+    if (targetDia === sk.dia && targetProj === (sk.projLetter || '') && targetStyle === sk.style) return { part, swapped: false };
+    const hit = sizeIndex.get(`${sel.family}|${targetDia}|${targetStyle}|${targetProj}`);
+    if (!hit || hit === part) return { part, swapped: false, missing: `${sel.family} ${targetDia} ${targetStyle}${targetProj ? '-' + targetProj : ''}` };
+    return { part: hit, swapped: true };
+}
+
+// FINISH-DRIVEN SPECIES (Stuart 2026-07-09): to Fabricut a wood/acrylic item is ONE product at ONE
+// price (H1-138WBF), but the physical BOM item is per-species (H1-138WBF-O oak / -W walnut). The
+// selected FINISH decides which one is consumed: a finish carrying `bomSuffix` (e.g. "-O", set in
+// tab 4.5's Master Finish editor) resolves the base code to `${base}${bomSuffix}`; stem-different
+// items (wood pole H1-138WR → H1-138WHTOAK / H1-138WLNUT) resolve through the base part's
+// customData.speciesMap = { "-O": "H1-138WHTOAK", "-W": "H1-138WLNUT" }. Runs BETWEEN the size swap
+// and the /P //EPn finish-variant swap; identity when the finish has no bomSuffix.
+export function speciesVariantOf(part, finishObj, findByCode) {
+    let sfx = String(finishObj?.bomSuffix || '').trim().toUpperCase();
+    // Tolerant spellings (Stuart tags finishes "OAK" / "WALNUT" in 4.5): normalize to the dash
+    // suffix the item codes actually carry (-O oak / -W walnut); any other value gains the dash.
+    if (sfx === 'OAK' || sfx === 'O' || sfx === '-O') sfx = '-O';
+    else if (sfx === 'WALNUT' || sfx === 'WAL' || sfx === 'W' || sfx === '-W') sfx = '-W';
+    else if (sfx && !sfx.startsWith('-')) sfx = `-${sfx}`;
+    if (!part || !sfx || typeof findByCode !== 'function') return part;
+    const baseCode = String((part.legacyErpId && part.legacyErpId !== 'PENDING' ? part.legacyErpId : part.itemId) || '').trim().toUpperCase();
+    if (!baseCode || baseCode.includes('/')) return part;
+    const mapped = part.manufacturingSpecs?.customData?.speciesMap?.[sfx];
+    const hit = (mapped && findByCode(String(mapped).trim().toUpperCase())) || findByCode(`${baseCode}${sfx}`);
+    return hit || part;
+}
+
+// DIAMETER AVAILABILITY (Stuart 2026-07-11, for the 1-3/8" wood/acrylic extras): an option whose
+// part is NATIVE to a non-base diameter (sizeKey.dia ≠ the family base, e.g. H1-138WBF wood
+// finials, wood/acrylic poles) is offered ONLY at that diameter — unless a size variant exists at
+// the selected one. Master-native (base-dia) parts always show: a missing variant there is a data
+// gap that falls back to the base item rather than hiding a real choice.
+export function partAllowedAtSize(part, sel, sizeIndex) {
+    const sk = part?.manufacturingSpecs?.customData?.sizeKey;
+    if (!part || !sel || !sk || sk.family !== sel.family) return true;
+    const fam = SIZE_FAMILIES[sel.family];
+    if (!fam || sk.dia === sel.dia || sk.dia === fam.baseDia) return true;
+    return !sizeVariantOf(part, sel, sizeIndex).missing;
+}
+
+// Convenience bundle for consumers: selections + a lazy-indexed swap function. When the flow has no
+// size matrix everything degrades to identity, so callers can apply it unconditionally.
+export function makeSizeSwap(flow, config, parts) {
+    const sel = sizeSelectionsOf(flow, config);
+    let idx = null;
+    const swap = (part) => {
+        if (!sel || !part || !skOf(part)) return part;
+        if (!idx) idx = buildSizeIndex(parts);
+        return sizeVariantOf(part, sel, idx).part || part;
+    };
+    return { sel, swap, scale: sel?.scale || 1, returnsAllowed: returnsAllowedFor(sel) };
+}

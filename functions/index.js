@@ -574,3 +574,132 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
 
     return { items, finishes };
 });
+
+
+// ---- Client configurator (portal Vision/CPQ) ------------------------------------------------
+// Returns ONE assigned flow, sanitized for the portal's render engine: the flow steps (geometry/
+// node maps, finish targeting — no pricing), the linked assembly's GLB + node clusters, and the
+// finish palette. Entitlement is enforced: the flow must be in the customer's crm_records
+// .portalFlowIds. NEVER returns cost/vendor data or internal option prices.
+const sanitizeStep = (s) => ({
+    id: s.id,
+    title: s.title || '',
+    type: s.type || '',
+    stepRole: s.stepRole || '',
+    sizeAxis: s.sizeAxis || '',
+    sizeFamily: s.sizeFamily || '',
+    targetNodes: s.targetNodes || '',
+    finishTargetNodes: s.finishTargetNodes || '',
+    finishDataSource: s.finishDataSource || '',
+    finishAllowedOptions: s.finishAllowedOptions || null,
+    geometryMap: s.geometryMap || null,
+    subGeometryMap: s.subGeometryMap || null,
+    mountSelector: s.mountSelector || null,
+    mountPosition: s.mountPosition || '',
+    hideQty: !!s.hideQty,
+    isCenterClone: !!s.isCenterClone,
+    dataSource: s.dataSource || '',
+    styleOptions: (s.styleOptions || []).map((o) => ({
+        optId: o.optId || o.partId || '', partId: o.partId || '', partName: o.partName || o.label || '',
+        label: o.label || o.partName || '', targetNode: o.targetNode || '', finalImageUrl: o.finalImageUrl || o.imageUrl || '',
+        sizeValue: o.sizeValue ?? null, sizeScale: o.sizeScale ?? null, location: o.location || '', position: o.position || '',
+        finishAllowedOptions: o.finishAllowedOptions || null,
+    })),
+    subOptions: (s.subOptions || []).map((o) => ({
+        optId: o.optId || o.partId || '', partId: o.partId || '', partName: o.partName || o.label || '',
+        label: o.label || o.partName || '', targetNode: o.targetNode || '', location: o.location || '', position: o.position || '',
+    })),
+});
+
+exports.portalFlow = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const flowId = String((request.data || {}).flowId || '');
+    if (!flowId) throw new HttpsError('invalid-argument', 'flowId is required.');
+
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
+    if (!allowed.includes(flowId)) throw new HttpsError('permission-denied', 'This product is not enabled on your account.');
+
+    const flowSnap = await db.collection('cpq_flows').doc(flowId).get();
+    if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
+    const flow = flowSnap.data();
+
+    let assembly = null;
+    if (flow.linkedAssemblyId) {
+        const asmSnap = await db.collection('Approved_Designs').doc(flow.linkedAssemblyId).get();
+        if (asmSnap.exists) {
+            const a = asmSnap.data();
+            const ms = a.manufacturingSpecs || {};
+            const crmName = String(crm.name || '').toLowerCase();
+            const cp = Array.isArray(a.clientPricing) ? a.clientPricing.find((r) => {
+                const rid = String((r && r.customerId) || '');
+                return rid === customerId || (!!crmName && rid.toLowerCase() === crmName);
+            }) : null;
+            const startRaw = cp ? (cp.clientSalesPrice ?? cp.price ?? ms.basePrice) : ms.basePrice;
+            const startingPrice = (startRaw === undefined || startRaw === null || startRaw === '') ? null : Number(startRaw);
+            assembly = {
+                cadUrl: ms.cadUrl || null,
+                nodeClusters: (a.nodeClusters || []).map((c) => ({ id: c.id, location: c.location || '', position: c.position || '', category: c.category || '', nodes: c.nodes || c.meshes || [] })),
+                startingPrice: Number.isFinite(startingPrice) ? startingPrice : null,
+            };
+        }
+    }
+
+    // Finish palette (in-house + outsourced), sanitized. code/name let the portal compute the same
+    // PBR response as studioScene; textureUrl drives the map swap. No cost/vendor fields.
+    const mf = await db.collection('system').doc('master_finishes').get();
+    const inhouse = ((mf.exists && mf.data().finishes) || [])
+        .filter((f) => f && f.textureUrl)
+        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', code: f.code || '', textureUrl: f.textureUrl, bomSuffix: f.bomSuffix || '', pbr: f.pbr || null, outsourced: false }));
+    const outSnap = await db.collection('hq_outsource_finishes').get();
+    const outsourced = outSnap.docs.map((d) => d.data()).filter((f) => f && f.textureUrl)
+        .map((f) => ({ id: f.id, name: f.name || f.code || 'Finish', code: f.code || '', textureUrl: f.textureUrl, bomSuffix: f.bomSuffix || '', pbr: f.pbr || null, outsourced: true }));
+    const finishes = [...inhouse, ...outsourced];
+
+    return {
+        flow: {
+            id: flowId,
+            name: flow.name || 'Product',
+            steps: (flow.steps || []).map(sanitizeStep),
+            hiddenClusters: flow.hiddenClusters || [],
+            hiddenNodes: flow.hiddenNodes || [],
+        },
+        assembly,
+        finishes,
+    };
+});
+
+// A customer submits a configured product as a QUOTE REQUEST. It lands as a jobs doc flagged
+// 'PORTAL_REQUEST' for the team to price and confirm in CPQ — nothing is priced or pushed here.
+exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const { flowId, flowName, selections, note } = request.data || {};
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
+    if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'Not enabled on your account.');
+
+    const email = String((request.auth.token && request.auth.token.email) || '');
+    const ref = db.collection('jobs').doc();
+    await ref.set({
+        jobId: ref.id,
+        brandId: crm.brandId || null,
+        status: 'PORTAL_REQUEST',
+        source: 'PORTAL',
+        customer: { id: customerId, name: crm.name || '' },
+        jobName: `${flowName || 'Portal request'} — ${crm.name || ''}`.trim(),
+        portalRequest: {
+            flowId: String(flowId || ''),
+            flowName: flowName || '',
+            selections: selections || {},
+            note: String(note || '').slice(0, 2000),
+            byEmail: email,
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        dateSaved: new Date().toISOString(),
+    });
+    return { ok: true, id: ref.id };
+});
