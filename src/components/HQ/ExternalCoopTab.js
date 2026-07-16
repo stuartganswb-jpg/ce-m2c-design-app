@@ -72,6 +72,21 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
     catch (e) { setAssignedFlowIds(assignedFlowIds); alert('Could not update flow access: ' + (e.message || e)); }
   };
 
+  // The price level THIS customer sees in the portal. Customer-safe options only — FAB_COST
+  // (CE→Fabricut cost) is intentionally NOT offered, so a customer can never see cost.
+  const PORTAL_PRICE_LEVELS = [
+    { id: 'STANDARD', label: 'Your Price (client pricing)' },
+    { id: 'FAB_WHOLESALE', label: 'Fabricut Wholesale' },
+    { id: 'FAB_RETAIL', label: 'Fabricut Retail (MSRP)' },
+  ];
+  const [priceLevel, setPriceLevel] = useState('STANDARD');
+  useEffect(() => { setPriceLevel(customer?.portalPriceLevel || 'STANDARD'); }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const changePriceLevel = async (lvl) => {
+    setPriceLevel(lvl);
+    try { await updateDoc(doc(db, 'crm_records', customerId), { portalPriceLevel: lvl }); }
+    catch (e) { alert('Could not update price level: ' + (e.message || e)); }
+  };
+
   const call = async (fn, args, okMsg) => {
     setBusy(true);
     try {
@@ -171,6 +186,14 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
                 ))}
               </div>
             )}
+
+            <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)' }}>Portal price level</span>
+              <select value={priceLevel} onChange={e => changePriceLevel(e.target.value)} style={{ flex: 1, padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', background: '#fff', outline: 'none' }}>
+                {PORTAL_PRICE_LEVELS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em' }}>The customer only ever sees this level — CE→Fabricut cost is never available in the portal.</div>
           </div>
         </>
       )}

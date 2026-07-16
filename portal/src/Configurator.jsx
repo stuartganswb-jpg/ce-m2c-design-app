@@ -8,7 +8,7 @@ import { OrbitControls, Bounds } from '@react-three/drei';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
 import { DynamicModel, StudioRig, buildPbrRegistry } from './cpqRender.jsx';
-import { sizeSelectionsOf } from './shared/sizeMatrix';
+import { sizeSelectionsOf, isReturnOption, returnsAllowedFor } from './shared/sizeMatrix';
 
 const SIZE_TYPE = 'SIZE_SELECT';
 const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -125,10 +125,18 @@ function buildCloneSpecs(steps, params, quantities) {
 }
 
 // ---- Step controls -------------------------------------------------------------------------
-const finishOptionsFor = (step, finishes) => {
-  const allow = step.finishAllowedOptions;
-  if (Array.isArray(allow) && allow.length) return finishes.filter((f) => allow.includes(f.id));
-  return finishes;
+// Scope the finish list EXACTLY like HQ: a dedicated finish step uses step.allowedOptions (finish
+// ids); a compound style step uses the selected option's finishAllowedOptions, else the step's.
+// Empty/absent → the flow allows all (matches internal behavior).
+const finishOptionsFor = (step, finishes, selOpt) => {
+  if (step.finishDataSource) {
+    const scoped = (selOpt && Array.isArray(selOpt.finishAllowedOptions) && selOpt.finishAllowedOptions.length)
+      ? selOpt.finishAllowedOptions
+      : (Array.isArray(step.finishAllowedOptions) ? step.finishAllowedOptions : []);
+    return scoped.length ? finishes.filter((f) => scoped.includes(f.id)) : finishes;
+  }
+  const allow = step.allowedOptions;
+  return (Array.isArray(allow) && allow.length) ? finishes.filter((f) => allow.includes(f.id)) : finishes;
 };
 
 // Group a finish for the picker tabs. EP / outsourced = plated; wood stains by name; P-series =
@@ -179,13 +187,19 @@ function FinishPicker({ finishes, value, onChange }) {
   );
 }
 
-function StepControl({ step, params, setParam, quantities, setQty, finishes }) {
+function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel }) {
   const sel = params[step.id];
+
+  // Return-pool gating (matches HQ): french/miter/bent returns drop out when the chosen projection
+  // doesn't allow returns. isReturn is stamped by the flow; fall back to the sizeMatrix detector.
+  const allowReturns = returnsAllowedFor(sizeSel);
+  const optionAllowed = (o) => allowReturns || !(o.isReturn || isReturnOption(o));
+  const visStyleOptions = (step.styleOptions || []).filter(optionAllowed);
 
   if (step.type === SIZE_TYPE) {
     return (
       <div className="opt-cards">
-        {(step.styleOptions || []).map((o) => (
+        {visStyleOptions.map((o) => (
           <button key={o.optId} type="button" className={`opt-card${sel === o.optId ? ' active' : ''}`} onClick={() => setParam(step.id, o.optId)}>
             {o.label || o.partName}
           </button>
@@ -198,15 +212,15 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes }) {
   const isSimpleFinish = !isCompound && step.targetNodes && (!step.styleOptions || step.styleOptions.length === 0);
 
   if (isSimpleFinish) {
-    return <FinishPicker finishes={finishOptionsFor(step, finishes)} value={sel} onChange={(v) => setParam(step.id, v)} />;
+    return <FinishPicker finishes={finishOptionsFor(step, finishes, null)} value={sel} onChange={(v) => setParam(step.id, v)} />;
   }
 
   return (
     <>
-      {(step.styleOptions && step.styleOptions.length > 0) && (
+      {(visStyleOptions.length > 0) && (
         <select className="opt-select" value={sel || ''} onChange={(e) => { setParam(step.id, e.target.value); setParam(`${step.id}__finish`, ''); }}>
           <option value="">Select…</option>
-          {step.styleOptions.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
+          {visStyleOptions.map((o) => <option key={o.optId} value={o.optId}>{o.label || o.partName}</option>)}
         </select>
       )}
       {(step.subOptions && step.subOptions.length > 0) && (
@@ -218,10 +232,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes }) {
       {isCompound && (
         <div style={{ marginTop: 10 }}>
           <FinishPicker
-            finishes={finishOptionsFor(
-              (step.styleOptions || []).find((o) => (o.optId || o.partId) === sel) || step,
-              finishes,
-            )}
+            finishes={finishOptionsFor(step, finishes, (step.styleOptions || []).find((o) => (o.optId || o.partId) === sel))}
             value={params[`${step.id}__finish`]}
             onChange={(v) => setParam(`${step.id}__finish`, v)}
           />
@@ -258,17 +269,37 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
   const setQty = (k, v) => setQuantities((q) => ({ ...q, [k]: v }));
 
-  const steps = data?.flow?.steps || [];
+  const allSteps = data?.flow?.steps || [];
   const finishes = data?.finishes || [];
   const assembly = data?.assembly || null;
   const pbrRegistry = useMemo(() => buildPbrRegistry(finishes), [finishes]);
 
+  // Rule-driven step disabling (ported from CPQTab engineFlags): a selected option flagged
+  // hidesBracket disables BRACKET-role steps at the same position; disabled steps drop out of the
+  // wizard, render, and summary — matching the internal tool.
+  const disabledStepIds = useMemo(() => {
+    const dis = new Set();
+    allSteps.forEach((step) => {
+      const opt = (step.styleOptions || []).find((o) => (o.optId || o.partId) === params[step.id]);
+      if (!opt || !opt.hidesBracket) return;
+      const pos = String(step.position || '').toUpperCase();
+      allSteps.forEach((bs) => {
+        if (bs.stepRole !== 'BRACKET') return;
+        if (pos && String(bs.position || '').toUpperCase() !== pos) return;
+        dis.add(bs.id);
+      });
+    });
+    return dis;
+  }, [allSteps, params]);
+  const steps = useMemo(() => allSteps.filter((s) => !disabledStepIds.has(s.id)), [allSteps, disabledStepIds]);
+
   const textureOverrides = useMemo(() => buildTextureOverrides(steps, params, finishes), [steps, params, finishes]);
   const visibilityOverrides = useMemo(() => buildVisibilityOverrides(steps, params, assembly, data?.flow?.hiddenClusters, data?.flow?.hiddenNodes), [steps, params, assembly, data]);
   const cloneSpecs = useMemo(() => buildCloneSpecs(steps, params, quantities), [steps, params, quantities]);
-  const sizeScale = useMemo(() => {
-    try { return sizeSelectionsOf(data?.flow, params)?.scale || 1; } catch (e) { return 1; }
+  const sizeSel = useMemo(() => {
+    try { return sizeSelectionsOf(data?.flow, params); } catch (e) { return null; }
   }, [data, params]);
+  const sizeScale = sizeSel?.scale || 1;
 
   const safeIdx = Math.min(stepIdx, Math.max(0, steps.length - 1));
   const onReview = steps.length > 0 && stepIdx >= steps.length;
@@ -334,7 +365,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 </div>
                 <div className="cfg-step-title lg">{step.title}</div>
                 <div className="cfg-step-body">
-                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} />
+                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} />
                 </div>
                 <div className="cfg-nav">
                   <button className="btn-ghost" disabled={safeIdx === 0} onClick={() => setStepIdx(safeIdx - 1)}>← Back</button>
