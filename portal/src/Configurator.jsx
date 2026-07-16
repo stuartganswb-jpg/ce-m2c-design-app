@@ -16,10 +16,15 @@ const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocal
 // Finish lookup by id across the palette (in-house + outsourced).
 const findFinish = (finishes, id) => finishes.find((f) => f.id === id) || null;
 
-// A one-line human summary of a step's current selection, for the review list.
-const summaryLabel = (step, params, finishes) => {
-  const optLabel = (opts, id) => (opts || []).find((o) => (o.optId || o.partId) === id)?.label
-    || (opts || []).find((o) => (o.optId || o.partId) === id)?.partName || '';
+// A one-line human summary of a step's current selection, for the review list. Uses the server-
+// resolved name (item # for parts, description for fees) so fees read "Miter Return", not the fee id.
+const summaryLabel = (step, params, finishes, info) => {
+  const optLabel = (opts, id) => {
+    const rec = info && info.options && info.options[id];
+    if (rec && rec.name) return rec.name;
+    const o = (opts || []).find((x) => (x.optId || x.partId) === id);
+    return (o && (o.label || o.partName)) || '';
+  };
   const finName = (id) => { const f = findFinish(finishes, id); return f ? (f.clientName || f.name) : ''; };
   if (step.type === SIZE_TYPE) return optLabel(step.styleOptions, params[step.id]);
   const isCompound = !!step.finishDataSource;
@@ -171,15 +176,20 @@ function basicNoBackplate(step, params) {
 }
 // The three backplate pools (return / inline / regular) occupy the same spot — show one at a time,
 // scoped to the selected bracket's location. (Size-native plate gating is deferred — no parts here.)
-function scopedBackplates(step, allSteps, params) {
+function scopedBackplates(step, allSteps, params, info) {
+  // Merge the server-resolved pool flags (returnOnly derived from the plate's real RBP/RCP code +
+  // location) onto the flow subOptions, so scoping works even when the flow didn't stamp them.
+  const meta = (info && info.subOptions) || {};
+  const merged = (step.subOptions || []).map((o) => { const m = meta[o.optId || o.partId] || {}; return { ...o, returnOnly: o.returnOnly || m.returnOnly, inlineOnly: o.inlineOnly || m.inlineOnly, location: o.location || m.location }; });
   const selMain = (step.styleOptions || []).find((o) => (o.optId || o.partId) === params[step.id]);
   const selLoc = selMain && selMain.location;
-  let subs = (step.subOptions || []).filter((o) => !selLoc || !o.location || o.location === selLoc);
+  let subs = merged.filter((o) => !selLoc || !o.location || o.location === selLoc);
   if (subs.some((o) => o.returnOnly || o.inlineOnly)) {
     const returnChosen = isReturnChosenForPos(step.position, allSteps, params) || !!(selMain && selMain.isReturnArm);
     const inlineBracket = !!(selMain && selMain.usesReturnPlates);
     const hasInl = subs.some((o) => o.inlineOnly);
-    subs = subs.filter((o) => returnChosen ? o.returnOnly
+    const retPoolLive = subs.some((o) => o.returnOnly); // returns fall back to standard plates when none survive
+    subs = subs.filter((o) => returnChosen ? (retPoolLive ? o.returnOnly : (!o.returnOnly && !o.inlineOnly))
       : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
       : (!o.returnOnly && !o.inlineOnly));
   }
@@ -313,7 +323,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
       )}
       {(step.subOptions && step.subOptions.length > 0) && (() => {
         const noPlate = basicNoBackplate(step, params);
-        const subs = scopedBackplates(step, allSteps, params);
+        const subs = scopedBackplates(step, allSteps, params, info);
         return (
           <div style={{ marginTop: 8 }}>
             <label className="cfg-sublabel">Backplate</label>
@@ -335,6 +345,32 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
       )}
       {qtyEl}
     </>
+  );
+}
+
+// A copy-paste block of item # + qty for the customer to enter into their own ERP. Only lines that
+// carry an item # appear (fees are excluded). Order will be tuned later to match their entry order.
+function ErpCopyBox({ lines }) {
+  const [copied, setCopied] = useState(false);
+  const rows = (lines || []).filter((l) => l.itemNo && l.qty);
+  if (!rows.length) return null;
+  const text = rows.map((r) => `${r.itemNo}\t${r.qty}`).join('\n');
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch (e) { window.prompt('Copy the item list:', text); }
+  };
+  return (
+    <div className="erp-box">
+      <div className="erp-head">
+        <span>For your system — item # &amp; qty</span>
+        <button className="btn-ghost" onClick={copy}>{copied ? 'Copied ✓' : 'Copy'}</button>
+      </div>
+      <table className="erp-table"><tbody>
+        {rows.map((r, i) => (
+          <tr key={i}><td className="erp-no">{r.itemNo}</td><td className="erp-qty">{r.qty}</td></tr>
+        ))}
+      </tbody></table>
+    </div>
   );
 }
 
@@ -459,6 +495,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
           ) : (
             <div className="empty">This product doesn't have a 3D model yet.</div>
           )}
+          {onReview && price && <ErpCopyBox lines={price.lines} />}
         </div>
 
         <div className="cfg-panel">
@@ -495,7 +532,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 {steps.map((s) => (
                   <li key={s.id}>
                     <button className="sum-edit" onClick={() => setStepIdx(steps.indexOf(s))}>{s.title}</button>
-                    <span>{summaryLabel(s, params, finishes) || '—'}</span>
+                    <span>{summaryLabel(s, params, finishes, stepOptions[s.id]) || '—'}</span>
                   </li>
                 ))}
               </ul>
@@ -516,7 +553,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                     <button className="btn-ghost" onClick={() => setStepIdx(steps.length - 1)}>← Back</button>
                     <button className="btn" disabled={submitting} onClick={submit}>{submitting ? 'Sending…' : 'Request a quote'}</button>
                   </div>
-                  <div className="cfg-fineprint">Final pricing is confirmed by your rep. Nothing is ordered automatically.</div>
+                  <div className="cfg-fineprint">Final pricing is confirmed on your Sales Order Acknowledgement. Nothing is ordered automatically.</div>
                 </div>
               )}
             </div>

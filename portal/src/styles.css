@@ -386,9 +386,19 @@ footer.portal a { color: var(--ink-soft); }
 .cfg-body { display: grid; grid-template-columns: 1fr 440px; gap: 28px; align-items: start; }
 @media (max-width: 900px) { .cfg-body { grid-template-columns: 1fr; } }
 /* Viewer stays pinned in view while the single active step sits beside it. */
-.cfg-stage { position: sticky; top: 16px; display: flex; height: min(72vh, 620px); }
-@media (max-width: 820px) { .cfg-stage { position: static; height: 56vh; } }
-.cfg-stage .viewer { flex: 1; min-height: 0; }
+.cfg-stage { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 14px; }
+@media (max-width: 820px) { .cfg-stage { position: static; } }
+.cfg-stage .viewer { height: min(64vh, 520px); }
+
+/* ERP copy box below the image on the review screen */
+.erp-box { border: 1px solid var(--line); background: var(--card); }
+.erp-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); }
+.erp-head .btn-ghost { padding: 2px 4px; }
+.erp-table { width: 100%; border-collapse: collapse; }
+.erp-table td { padding: 7px 14px; border-bottom: 1px solid var(--line-soft); font-family: var(--mono); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.erp-table tr:last-child td { border-bottom: none; }
+.erp-table .erp-no { color: var(--ink); }
+.erp-table .erp-qty { text-align: right; color: var(--ink-soft); width: 60px; }
 .cfg-panel { display: flex; flex-direction: column; min-height: min(72vh, 620px); }
 .cfg-step-title { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--ink-soft); margin-bottom: 10px; }
 .cfg-step-title.lg { font-family: var(--serif); font-size: 1.5rem; text-transform: none; letter-spacing: 0.02em; color: var(--ink); margin: 4px 0 16px; }

@@ -209,6 +209,16 @@ function computePricing(ctx) {
     const v = cp ? parseFloat(cp.price) : NaN;
     return Number.isFinite(v) && v > 0 ? v : null;
   };
+  // The customer-facing item # for their ERP: Fabricut code at wholesale/retail, else their client
+  // SKU, else our resolved item code.
+  const custItemNo = (part) => {
+    if (!part) return '';
+    if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') { const fc = fabricutCodeOf(part, findByCode); if (fc) return fc; }
+    if (Array.isArray(part.clientPricing)) { const cp = part.clientPricing.find((c) => custKeys.has(String((c.customerId) || '').trim().toUpperCase())); if (cp && cp.clientSku) return cp.clientSku; }
+    return (part.legacyErpId && part.legacyErpId !== 'PENDING' ? part.legacyErpId : part.itemId) || '';
+  };
+
+  if (baseAssemblyPrice > 0 && breakdown[0]) breakdown[0].itemNo = custItemNo(assembly);
 
   (flow.steps || []).forEach((step) => {
     const selectedValue = params[step.id];
@@ -232,6 +242,7 @@ function computePricing(ctx) {
       let lineIsFee = step.type === 'STATIC_FEE';
       let resolvedPartId = selectedValue;
       let resolvedErpId = null;
+      let linePart = null;
 
       if (selectedValue) {
         const styleOpt = step.type === 'STYLE_SWAP' ? (step.styleOptions || []).find((o) => (o.optId || o.partId) === selectedValue) : null;
@@ -247,6 +258,7 @@ function computePricing(ctx) {
         const preVariantObj = partObj;
         if (partObj && (partObj.legacyErpId || partObj.itemId)) { const variant = finishVariantOf(partObj, finishCodeForStep(step.id)); if (variant !== partObj) { partObj = variant; resolvedPartId = variant.itemId || variant.id; } }
         resolvedErpId = (partObj && (partObj.legacyErpId || partObj.itemId)) || (styleOpt && styleOpt.legacyErpId) || null;
+        linePart = partObj;
         if (isFeePart(partObj, styleOpt)) lineIsFee = true;
         if (partObj) itemName = `${step.title} (${lineNameFor(partObj, styleOpt)})`;
         else if (styleOpt) itemName = `${step.title} (${styleOpt.partName})`;
@@ -273,6 +285,7 @@ function computePricing(ctx) {
             if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
             resolvedPartId = linkedPart.itemId || linkedPart.id;
             resolvedErpId = linkedPart.legacyErpId || linkedPart.itemId || resolvedErpId;
+            linePart = linkedPart;
             itemName = `${step.title} (${lineNameFor(linkedPart, null)})`;
           }
         }
@@ -286,7 +299,7 @@ function computePricing(ctx) {
       if (step.priceOverride !== undefined && step.priceOverride !== '') stepPrice = parseFloat(step.priceOverride);
       const lineTotal = stepPrice * multiplier * qty;
       if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE' || (selectedValue && step.partHandling)) {
-        breakdown.push({ name: itemName, qty, price: stepPrice * multiplier, total: lineTotal, isFee: lineIsFee });
+        breakdown.push({ name: itemName, qty, price: stepPrice * multiplier, total: lineTotal, isFee: lineIsFee, itemNo: lineIsFee ? '' : custItemNo(linePart) });
       }
       total += lineTotal;
     }
@@ -304,7 +317,7 @@ function computePricing(ctx) {
           : (subPart ? (parseFloat((subPart.manufacturingSpecs && subPart.manufacturingSpecs.basePrice) != null ? subPart.manufacturingSpecs.basePrice : subPart.basePrice) || 0) : 0);
         if (step.useClientPricing) { const v = clientPriceFor(subPart) != null ? clientPriceFor(subPart) : clientPriceFor(subBase); if (v != null) subPrice = v; }
         if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(subPart, priceLevel); if (fp != null) subPrice = fp; }
-        breakdown.push({ name: `${step.subLabel || 'Backplate'} (${subPart ? lineNameFor(subPart, subOpt) : subOpt.partName})`, qty, price: subPrice, total: subPrice * qty });
+        breakdown.push({ name: `${step.subLabel || 'Backplate'} (${subPart ? lineNameFor(subPart, subOpt) : subOpt.partName})`, qty, price: subPrice, total: subPrice * qty, itemNo: custItemNo(subPart) });
         total += subPrice * qty;
       }
     }
@@ -378,7 +391,18 @@ function resolveStepOptions(ctx) {
     const options = {};
     (step.styleOptions || []).forEach((o) => { const id = o.optId || o.partId; if (id) { const d = displayFor(o); options[id] = { name: d.name, desc: d.desc, price: priceFor(o, step) }; } });
     const subOptions = {};
-    (step.subOptions || []).forEach((o) => { const id = o.optId || o.partId; if (id) { const d = displayFor(o); subOptions[id] = { name: d.name, desc: d.desc, price: priceFor(o, step) }; } });
+    (step.subOptions || []).forEach((o) => {
+      const id = o.optId || o.partId;
+      if (!id) return;
+      const d = displayFor(o);
+      // Resolve the backplate's pool from its real part: RBP/RCP codes are the return plates.
+      const base = baseFor(o);
+      const baseCode = String((base && (base.legacyErpId || base.itemId)) || o.partName || '').toUpperCase();
+      const cd = base && base.manufacturingSpecs && base.manufacturingSpecs.customData;
+      const returnOnly = !!o.returnOnly || /^R[BC]P-/.test(baseCode) || !!(cd && cd.returnPosition);
+      const location = o.location || (cd && cd.location) || '';
+      subOptions[id] = { name: d.name, desc: d.desc, price: priceFor(o, step), returnOnly, inlineOnly: !!o.inlineOnly, location };
+    });
     out[step.id] = { options, subOptions };
   });
   return out;

@@ -779,6 +779,6 @@ exports.portalResolve = onCall({ cors: true }, async (request) => {
     const stepOptions = portalEngine.resolveStepOptions(engineCtx);
 
     // Only customer-safe line fields leave the server.
-    const safeLines = lines.map((l) => ({ name: l.name, qty: l.qty, price: l.price, total: l.total }));
+    const safeLines = lines.map((l) => ({ name: l.name, qty: l.qty, price: l.price, total: l.total, itemNo: l.itemNo || '', isFee: !!l.isFee }));
     return { price: { level: priceLevel, total, lines: safeLines }, stepOptions };
 });
