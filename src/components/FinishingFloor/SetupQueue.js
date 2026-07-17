@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from "firebase/firestore";
-import { btnStyle, inputStyle, labelStyle, sectionHeaderStyle, cardStyle } from './finishingStyles';
-import { makeFullTasks } from '../Shared/workOrderContract';
+import { doc, updateDoc } from "firebase/firestore";
+import { btnStyle, cardStyle } from './finishingStyles';
+import { enqueueNsWrite } from '../Shared/nsOutbox';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 
 const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} }) => {
@@ -13,102 +13,13 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
   const activeFloorLoad = workOrders
     .filter(w => w.currentPhase === 'Painting')
     .reduce((sum, w) => sum + (Number(w.totalParts) || 0), 0);
-  const getThreeWeeksOut = () => {
-      const d = new Date();
-      d.setDate(d.getDate() + 21);
-      return d.toISOString().split('T')[0];
-  };
-
-  const [orderType, setOrderType] = useState('sales'); 
-  const [woId, setWoId] = useState("");
-  const [soId, setSoId] = useState("");
-  const [customer, setCustomer] = useState("");
-  const [recipe, setRecipe] = useState("");
-  
-  const [qty, setQty] = useState(""); 
-  const [poles, setPoles] = useState("");
-  const [finials, setFinials] = useState("");
-  const [rings, setRings] = useState("");
-  const [brackets, setBrackets] = useState("");
-  
-  const [reqDate, setReqDate] = useState(getThreeWeeksOut());
-  const [aiOptimized, setAiOptimized] = useState(false);
-
   const [activeSpecs, setActiveSpecs] = useState(null);
   const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
 
-  useEffect(() => { setReqDate(getThreeWeeksOut()); }, [orderType]);
+  // (Stuart 2026-07-17: Direct Order Intake removed — every WO now arrives through the real
+  // pipelines: CPQ/RTG dispatch for sales, Sales Snapshot → RTG for stock builds.)
 
-  const handleCreateOrder = async () => {
-      if(!woId || !recipe) return alert("Work Order # and Recipe are strictly required.");
-      if(orderType === 'sales' && !soId) return alert("Sales Orders require an SO #.");
-      
-      let totalPartsCalc = 0;
-      let extraData = {};
-
-      if (orderType === 'sales') {
-          const p = parseInt(poles) || 0;
-          const f = parseInt(finials) || 0;
-          const r = parseInt(rings) || 0;
-          const b = parseInt(brackets) || 0;
-          totalPartsCalc = p + f + r + b;
-          
-          if (totalPartsCalc === 0) return alert("Please enter part quantities.");
-          
-          extraData = { poles: { qty: p }, smallParts: { fin: f, rng: r, brk: b } };
-      } else {
-          totalPartsCalc = parseInt(qty) || 0;
-          if (totalPartsCalc === 0) return alert("Please enter total parts for stock order.");
-          extraData = { stock: { qty: totalPartsCalc } };
-      }
-      
-      const orderKey = (orderType === 'sales' ? soId : null) || woId;
-      const newWO = {
-          id: woId,
-          woNum: woId,
-          displayId: woId,
-          orderKey,
-          quoteId: null,
-          salesOrderId: orderType === 'sales' ? soId : null,
-          orderType: orderType,
-          type: orderType, // kept for this card's existing reads
-          soId: orderType === 'sales' ? soId : 'N/A',
-          customer: orderType === 'sales' ? customer : 'Internal Stock',
-          customerName: orderType === 'sales' ? customer : 'Internal Stock',
-          clientName: orderType === 'sales' ? customer : 'Internal Stock',
-          reqDate: reqDate || getThreeWeeksOut(),
-          recipe: recipe,
-          totalParts: totalPartsCalc,
-          partsList: [],
-          currentPhase: 'Setup',
-          stepStatus: 'Pending',
-          currentStepIndex: 0,
-          tasks: makeFullTasks(),
-          machineAssigned: null,
-          redlineAlert: false,
-          sentToPickPack: false,
-          pickStatus: 'Pending',
-          shopSiblingId: null,
-          hasCustomSibling: false,
-          customFabStatus: 'Pending',
-          createdAt: serverTimestamp(),
-          ...extraData
-      };
-      
-      try {
-          await setDoc(doc(db, "fin_workorders", woId), newWO);
-          if (writeLog) writeLog(`Created new ${orderType} WO: ${woId}`, 'setup');
-          
-          setWoId(""); setSoId(""); setCustomer(""); setRecipe(""); 
-          setQty(""); setPoles(""); setFinials(""); setRings(""); setBrackets("");
-          setReqDate(getThreeWeeksOut());
-      } catch (err) {
-          console.error("Firebase Write Error:", err);
-          alert(`Creation Failed! Error: ${err.message}`);
-      }
-  };
-
-  let pendingOrders = workOrders.filter(w => w.currentPhase === "Setup" || w.currentPhase === "setup");
+  const pendingOrders = workOrders.filter(w => w.currentPhase === "Setup" || w.currentPhase === "setup");
   // Follow the committed run order (scheduleSeq, set by the Schedule's "Commit" button) when present;
   // fall back to required date for anything not yet committed.
   pendingOrders.sort((a, b) => {
@@ -117,18 +28,24 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
     return new Date(a.reqDate) - new Date(b.reqDate);
   });
 
-  if (aiOptimized) {
-      pendingOrders = pendingOrders.sort((a, b) => {
-          const dateA = new Date(a.reqDate);
-          const dateB = new Date(b.reqDate);
-          const diffDays = (dateA - dateB) / (1000 * 60 * 60 * 24);
-          if (Math.abs(diffDays) <= 7) {
-              if (a.recipe < b.recipe) return -1;
-              if (a.recipe > b.recipe) return 1;
-          }
-          return dateA - dateB;
+  // GROUPED BY FINISH (Stuart 2026-07-17): the floor finishes in batches per recipe, so the
+  // queue displays one section per finish — orders keep their committed/req-date order inside
+  // a section; sections order by their earliest member. (Replaces the AI Batching toggle —
+  // grouping is now always on.)
+  const finishGroups = (() => {
+      const m = new Map();
+      pendingOrders.forEach(wo => {
+          const key = String(wo.recipe || wo.color || '— NO RECIPE —').trim() || '— NO RECIPE —';
+          if (!m.has(key)) m.set(key, []);
+          m.get(key).push(wo);
       });
-  }
+      return [...m.entries()].map(([recipe, orders]) => ({
+          recipe, orders,
+          pieces: orders.reduce((s, w) => s + (Number(w.totalParts) || 0), 0),
+          firstSeq: Math.min(...orders.map(o => (o.scheduleSeq ?? Infinity))),
+          firstDate: Math.min(...orders.map(o => { const t = new Date(o.reqDate || '2999-12-31').getTime(); return Number.isFinite(t) ? t : Infinity; }))
+      })).sort((a, b) => (a.firstSeq !== b.firstSeq) ? a.firstSeq - b.firstSeq : a.firstDate - b.firstDate);
+  })();
 
   const startSetup = async (wo) => {
     try {
@@ -156,64 +73,37 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
     }
   };
 
-  const nukeQueue = async () => {
-      const confirm = window.confirm("☢️ WARNING: This will permanently delete ALL jobs currently visible in this queue from the database. Proceed?");
-      if (confirm) {
-          for (let wo of pendingOrders) {
-              try { await deleteDoc(doc(db, "fin_workorders", wo.id)); } 
-              catch(e) { console.error("Could not delete", wo.id, e); }
+  // SAFE CLOSE (Stuart 2026-07-17, replaces the all-or-nothing Nuke Queue — real orders live
+  // here now): one WO at a time, confirm first. Soft-close — the doc is KEPT for history,
+  // currentPhase 'Closed' drops it from every queue/planner. If a REAL NetSuite work order
+  // backs it (nsWoId, Route A stock builds), the NetSuite WO close is queued through the
+  // outbox too, so On-Ord stops counting it. Old pre-NetSuite WOs close app-side only.
+  const closeOrder = async (wo) => {
+      const nsNote = wo.nsWoId
+          ? `\n\nThis WO has a NetSuite work order (${wo.nsWoTran || wo.nsWoId}) — closing here ALSO queues the NetSuite WO close (watch 11.1 → NetSuite Sync Queue).`
+          : '\n\n(App-side only — no NetSuite work order attached.)';
+      if (!window.confirm(`✕ CLOSE work order ${wo.displayId || wo.id}?\n\n${wo.recipe || 'no recipe'} · ${wo.totalParts || 0} pcs · ${wo.customer || wo.clientName || ''}\n\nIt leaves every queue (the record is kept for history). This does not undo picking/staging already done.${nsNote}`)) return;
+      try {
+          await updateDoc(doc(db, "fin_workorders", wo.id), { currentPhase: 'Closed', stepStatus: 'Closed', closedAt: Date.now(), closedBy: 'Setup Queue' });
+          if (wo.nsWoId && !wo.nsWoClosed && !wo.nsCompletionQueued) {
+              try {
+                  await enqueueNsWrite({
+                      kind: 'workorderclose',
+                      label: `Close NS WO ${wo.nsWoTran || wo.nsWoId} — ${wo.stockErpId || wo.displayId || wo.id}`,
+                      sourceApp: 'FINISHING', createdBy: 'Setup Queue',
+                      targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${wo.nsWoId}/!transform/workorderclose`,
+                      method: 'POST',
+                      payload: { memo: `Closed from Setup Queue (app WO ${wo.id})` },
+                      writeBack: { collection: 'fin_workorders', docId: wo.id, patch: { nsWoClosed: true } }
+                  });
+              } catch (e) { alert('App WO closed, but queueing the NetSuite close failed: ' + (e.message || e)); }
           }
-          alert("Queue Nuked. You have a clean slate.");
-      }
+          if (writeLog) writeLog(`Closed WO ${wo.displayId || wo.id} from the Setup Queue`, 'setup');
+      } catch (err) { alert(`Close failed: ${err.message}`); }
   };
 
   return (
     <div style={{ padding: '30px', fontFamily: 'var(--sans)' }}>
-
-      <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', borderRadius: '2px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
-              <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Direct Order Intake</h3>
-              <div style={{ display: 'flex', gap: '12px' }}>
-                  <button onClick={() => setOrderType('sales')} style={{ ...btnStyle, background: orderType === 'sales' ? 'var(--ink)' : 'var(--paper-2)', color: orderType === 'sales' ? '#fff' : 'var(--ink)' }}>Sales Order</button>
-                  <button onClick={() => setOrderType('stock')} style={{ ...btnStyle, background: orderType === 'stock' ? 'var(--ink)' : 'var(--paper-2)', color: orderType === 'stock' ? '#fff' : 'var(--ink)' }}>Stock Order</button>
-              </div>
-          </div>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '20px', alignItems: 'end' }}>
-              <div><label style={labelStyle}>Work Order #</label><input value={woId} onChange={e=>setWoId(e.target.value)} style={inputStyle} /></div>
-              
-              {orderType === 'sales' && (
-                  <>
-                      <div><label style={labelStyle}>Sales Order #</label><input value={soId} onChange={e=>setSoId(e.target.value)} style={inputStyle} /></div>
-                      <div><label style={labelStyle}>Customer</label><input value={customer} onChange={e=>setCustomer(e.target.value)} style={inputStyle} /></div>
-                  </>
-              )}
-              
-              <div>
-                  <label style={labelStyle}>Finish Recipe</label>
-                  <select value={recipe} onChange={e=>setRecipe(e.target.value)} style={{...inputStyle, background: '#fff'}}>
-                      <option value="">Select Finish...</option>
-                      {recipes && Object.keys(recipes).map(rCode => (
-                          <option key={rCode} value={rCode}>{rCode}</option>
-                      ))}
-                  </select>
-              </div>
-
-              {orderType === 'stock' ? (
-                  <div><label style={labelStyle}>Total Parts</label><input type="number" value={qty} onChange={e=>setQty(e.target.value)} style={inputStyle} /></div>
-              ) : (
-                  <>
-                      <div><label style={labelStyle}>Poles</label><input type="number" value={poles} onChange={e=>setPoles(e.target.value)} style={inputStyle} /></div>
-                      <div><label style={labelStyle}>Finials</label><input type="number" value={finials} onChange={e=>setFinials(e.target.value)} style={inputStyle} /></div>
-                      <div><label style={labelStyle}>Rings</label><input type="number" value={rings} onChange={e=>setRings(e.target.value)} style={inputStyle} /></div>
-                      <div><label style={labelStyle}>Brackets</label><input type="number" value={brackets} onChange={e=>setBrackets(e.target.value)} style={inputStyle} /></div>
-                  </>
-              )}
-
-              <div><label style={labelStyle}>Required Date</label><input type="date" value={reqDate} onChange={e=>setReqDate(e.target.value)} style={inputStyle} /></div>
-          </div>
-          <button onClick={handleCreateOrder} style={{ ...btnStyle, marginTop: '24px', width: '100%', background: 'var(--brass)', color: '#fff' }}>Ingest to Queue</button>
-      </div>
 
       <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderRadius: '2px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -227,28 +117,35 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
                 );
             })()}
         </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-            <button onClick={nukeQueue} style={{ padding: '12px 24px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Nuke Queue</button>
-            <button onClick={() => setAiOptimized(!aiOptimized)} style={{ padding: '12px 24px', background: aiOptimized ? 'var(--ink)' : '#fff', color: aiOptimized ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>
-                {aiOptimized ? 'AI Batching: Active' : 'Activate AI Batching'}
-            </button>
-        </div>
+        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: '2px', background: '#fff' }}>
+            {finishGroups.length} finish batch{finishGroups.length === 1 ? '' : 'es'} · {pendingOrders.length} order{pendingOrders.length === 1 ? '' : 's'}
+        </span>
       </div>
       
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
-        {pendingOrders.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', gridColumn: '1/-1', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>Queue is empty.</div>
-        ) : (
-          pendingOrders.map(wo => {
-            const isMatched = wo.stagingStatus === 'MATCHED';
-            return (
-            <div key={wo.id} style={{...cardStyle, background: isMatched ? '#f6fbf7' : (cardStyle.background || '#fff'), borderLeft: isMatched ? '4px solid #3a7d44' : (aiOptimized ? '4px solid var(--brass)' : '4px solid var(--ink)')}}>
+      {pendingOrders.length === 0 && (
+        <div style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem', background: '#fff', border: '1px dashed var(--line)' }}>Queue is empty.</div>
+      )}
+      {finishGroups.map(g => (
+        <div key={g.recipe} style={{ marginBottom: '28px' }}>
+          {/* One section per FINISH — run it as a batch, then move to the next finish. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 16px', background: 'var(--ink)', color: '#fff', borderRadius: '2px', marginBottom: '14px' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>{g.recipe}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.85 }}>{g.orders.length} order{g.orders.length === 1 ? '' : 's'} · {g.pieces} pcs — batch this finish together</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
+            {g.orders.map(wo => {
+              const isMatched = wo.stagingStatus === 'MATCHED';
+              return (
+            <div key={wo.id} style={{...cardStyle, background: isMatched ? '#f6fbf7' : (cardStyle.background || '#fff'), borderLeft: isMatched ? '4px solid #3a7d44' : '4px solid var(--ink)'}}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
                     <strong style={{ fontSize: '1.1rem', color: 'var(--ink)', fontWeight: 500 }}>
                         WO: {wo.woNum || wo.displayId || wo.id}
                         {(wo.type === 'sales' || wo.soNum) && <span style={{color:'var(--ink-soft)', fontSize:'0.85rem'}}> (SO: {wo.soId || wo.soNum})</span>}
                     </strong>
-                    <span style={{ background: 'var(--paper)', padding: '4px 8px', fontSize: '0.85rem', fontFamily: 'var(--mono)', textTransform: 'uppercase', border: '1px solid var(--line)', color: 'var(--ink)' }}>{wo.recipe || wo.color}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ background: 'var(--paper)', padding: '4px 8px', fontSize: '0.85rem', fontFamily: 'var(--mono)', textTransform: 'uppercase', border: '1px solid var(--line)', color: 'var(--ink)' }}>{wo.recipe || wo.color}</span>
+                        <button onClick={() => closeOrder(wo)} title="Close this work order — removes it from production (record kept; an attached NetSuite WO is closed too)" style={{ background: 'none', border: '1px solid var(--line)', color: '#d9534f', fontSize: '0.9rem', cursor: 'pointer', padding: '2px 8px', lineHeight: 1.4 }}>✕</button>
+                    </div>
                 </div>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '12px' }}><span style={{color:'var(--ink-soft)'}}>Customer:</span> {wo.customer || wo.clientName || 'N/A'}</div>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '16px' }}><span style={{color:'var(--ink-soft)'}}>Req Date:</span> <span style={{ fontWeight: 500 }}>{wo.reqDate || 'ASAP'}</span></div>
@@ -296,9 +193,10 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
                     )}
                 </div>
             </div>
-          );})
-        )}
-      </div>
+            );})}
+          </div>
+        </div>
+      ))}
 
       {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
 
