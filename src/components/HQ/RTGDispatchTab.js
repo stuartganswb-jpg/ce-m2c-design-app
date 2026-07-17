@@ -684,10 +684,49 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         // releasing it is a verbatim copy, so nothing is lost or re-derived at dispatch.
         if (hqOrder.finPayload && hqOrder.finPayload.id) {
             try {
-                await setDoc(doc(db, "fin_workorders", hqOrder.finPayload.id), { ...hqOrder.finPayload, dispatchedAt: Date.now(), dispatchedBy: currentUser || '' });
+                const fp = hqOrder.finPayload;
+                await setDoc(doc(db, "fin_workorders", fp.id), { ...fp, dispatchedAt: Date.now(), dispatchedBy: currentUser || '' });
                 await updateDoc(doc(db, "hq_work_orders", hqOrder.id), { pushedToFinishing: true, status: "Dispatched" });
-                addLog(`✅ Stock WO ${hqOrder.finPayload.id} released → Finishing Setup queue.`, "success");
-                alert(`Successfully pushed ${hqOrder.finPayload.id} to Finishing Floor Setup Queue!`);
+                // ROUTE A (2026-07-16): these stocked items are real NetSuite assemblies with BOMs,
+                // so releasing to the floor ALSO queues a real NetSuite work order (outbox — serial,
+                // retried, idempotent). On-Ord sees it on the next live pull; component demand is
+                // real; the floor's bake-complete auto-queues the WO COMPLETION (server trigger).
+                let nsQueuedNote = '';
+                try {
+                    const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
+                    if (fp.stockInternalId && nsConfig.location) {
+                        await enqueueNsWrite({
+                            kind: 'workorder',
+                            label: `NS WO — build ${fp.stockErpId || fp.id} ×${fp.totalParts}`,
+                            sourceApp: 'RTG', createdBy: currentUser || '',
+                            targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',
+                            method: 'POST',
+                            payload: {
+                                item: { id: String(fp.stockInternalId) },
+                                quantity: Number(fp.totalParts) || 1,
+                                location: { id: nsConfig.location },
+                                subsidiary: { id: nsConfig.subsidiary },
+                                ...(fp.reqDate ? { endDate: fp.reqDate } : {}),
+                                memo: `Stock build ${fp.id} (Sales Snapshot)`
+                            },
+                            // Ids stamp back onto BOTH docs: the floor card shows the WO#, and the
+                            // completion trigger needs nsWoId on the fin doc.
+                            writeBack: [
+                                { collection: 'fin_workorders', docId: fp.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' },
+                                { collection: 'hq_work_orders', docId: hqOrder.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }
+                            ]
+                        });
+                        addLog(`📤 NetSuite work order queued: ${fp.stockErpId || fp.id} ×${fp.totalParts}.`, 'success');
+                        nsQueuedNote = '\n\n📤 A real NetSuite work order is queued (11.1 → NetSuite Sync Queue) — On-Ord picks it up on the next live pull, and completion posts automatically when the bake finishes.';
+                    } else {
+                        addLog(`⚠ No NetSuite WO queued for ${fp.id} — missing item internal id or brand location.`, 'warn');
+                        nsQueuedNote = '\n\n⚠ No NetSuite work order queued (item has no NetSuite internal id) — sync the item in 11.1 first next time.';
+                    }
+                } catch (obErr) {
+                    addLog(`⚠ NetSuite WO queue failed for ${hqOrder.id}: ${obErr.message}`, 'error');
+                    nsQueuedNote = '\n\n⚠ NetSuite work order could NOT be queued — floor release stands; create the WO manually or re-check 11.1.';
+                }
+                alert(`Successfully pushed ${fp.id} to Finishing Floor Setup Queue!${nsQueuedNote}`);
                 loadRTGOrders();
             } catch (error) {
                 console.error("Dispatch Error:", error);

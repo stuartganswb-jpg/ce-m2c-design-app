@@ -439,11 +439,15 @@ exports.nsOutboxWorker = onSchedule({
         } catch (e) { return null; }
     };
     const finishPosted = async (e, nsId, nsTran, note) => {
-        if (e.writeBack && e.writeBack.collection && e.writeBack.docId) {
-            const patch = { ...(e.writeBack.patch || {}) };
-            if (e.writeBack.idField && nsId) patch[e.writeBack.idField] = String(nsId);
-            if (e.writeBack.tranField && nsTran) patch[e.writeBack.tranField] = nsTran;
-            await fdb.doc(`${e.writeBack.collection}/${e.writeBack.docId}`).set(patch, { merge: true }).catch(() => {});
+        // writeBack accepts one spec or an array (e.g. a WO stamps ids onto BOTH the
+        // floor doc and the RTG record).
+        const wbs = Array.isArray(e.writeBack) ? e.writeBack : (e.writeBack ? [e.writeBack] : []);
+        for (const wb of wbs) {
+            if (!(wb && wb.collection && wb.docId)) continue;
+            const patch = { ...(wb.patch || {}) };
+            if (wb.idField && nsId) patch[wb.idField] = String(nsId);
+            if (wb.tranField && nsTran) patch[wb.tranField] = nsTran;
+            await fdb.doc(`${wb.collection}/${wb.docId}`).set(patch, { merge: true }).catch(() => {});
         }
         await e.ref.update({ status: 'POSTED', postedAt: Date.now(), nsId: nsId || null, nsTran: nsTran || null, ...(note ? { note } : {}) });
     };
@@ -507,6 +511,67 @@ exports.nsOutboxWorker = onSchedule({
         }
         await new Promise(r => setTimeout(r, 350)); // pacing — stay a polite single-file consumer
     }
+});
+
+
+// ============================================================================
+// 2c. STOCK BUILD → NETSUITE WO COMPLETION (Route A close, Stuart 2026-07-16)
+// ============================================================================
+// RTG creates a REAL NetSuite work order when it releases a Sales-Snapshot stock
+// WO to the finishing floor (the outbox worker stamps nsWoId/nsWoTran back onto
+// the floor doc). This trigger watches the floor doc and, the moment the build's
+// bake task completes (poleBake for pole WOs, spinBake for small parts), enqueues
+// the WO COMPLETION through the same outbox: transform workorder →
+// workordercompletion, qty = the QC good count (falls back to ordered qty), the
+// built assembly received into the item's home bin when one is known. Components
+// backflush from the NetSuite BOM. Partial/scrap: the remainder stays open on the
+// NetSuite WO (visible in the snapshot's On-Ord) until finished or closed there.
+// Server-side on purpose: tasks complete from several floor screens — this is the
+// one choke point, and it can't be forgotten. Fires on every fin_workorders write,
+// so the guards exit cheaply; nsCompletionQueued makes it once-only.
+exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (event) => {
+    const after = event.data && event.data.after && event.data.after.exists ? event.data.after.data() : null;
+    if (!after) return;
+    if (after.orderType !== 'stock' || !after.nsWoId || after.nsCompletionQueued) return;
+    const isPole = !!(after.poles || after.totalPoles);
+    const tasks = after.tasks || {};
+    const bakeDone = isPole
+        ? (tasks.poleBake && tasks.poleBake.status === 'Complete')
+        : (tasks.spinBake && tasks.spinBake.status === 'Complete');
+    if (!bakeDone) return;
+
+    const fdb = admin.firestore();
+    const woDocId = event.params.woId;
+    // Idempotency stamp FIRST — this trigger re-fires on our own writes.
+    await fdb.doc(`fin_workorders/${woDocId}`).set({ nsCompletionQueued: true }, { merge: true });
+
+    const qty = Number(after.completedParts) > 0 ? Number(after.completedParts) : (Number(after.totalParts) || 1);
+    // Home bin for the built assembly (a bin-managed location wants a receive bin).
+    let bin = '';
+    try {
+        if (after.stockErpId) {
+            const q = await fdb.collection('Approved_Designs').where('legacyErpId', '==', after.stockErpId).limit(1).get();
+            if (!q.empty) bin = String((q.docs[0].data().manufacturingSpecs || {}).binLocation || '').trim().toUpperCase();
+            if (bin === 'UNASSIGNED') bin = '';
+        }
+    } catch (e) { /* bin optional — the queue entry fails visibly if NetSuite insists */ }
+
+    const obRef = fdb.collection('ns_outbox').doc();
+    await obRef.set({
+        id: obRef.id, kind: 'workordercompletion',
+        label: `Complete NS WO ${after.nsWoTran || after.nsWoId} — ${after.stockErpId || woDocId} ×${qty}`,
+        sourceApp: 'FINISHING', createdBy: 'auto (bake complete)',
+        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${after.nsWoId}/!transform/workordercompletion`,
+        method: 'POST',
+        payload: {
+            quantity: qty,
+            memo: `Stock build ${woDocId} complete [ob:${obRef.id}]`,
+            ...(bin ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: qty }] } } } : {})
+        },
+        writeBack: { collection: 'fin_workorders', docId: woDocId, patch: { nsWoCompletionPosted: true }, idField: 'nsWoCompletionId', tranField: 'nsWoCompletionTran' },
+        status: 'PENDING', attempts: 0, lastError: null, nsId: null, nsTran: null,
+        createdAt: Date.now(), nextAttemptAt: Date.now(), leasedAt: null, postedAt: null
+    });
 });
 
 
