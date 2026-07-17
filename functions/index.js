@@ -182,9 +182,76 @@ const generateNetSuiteHeader = (method, url, creds) => {
 // traffic all lives under this one host.
 const NS_ALLOWED_HOSTS = ['3728153.suitetalk.api.netsuite.com'];
 
+// ============================================================================
+// LAYER 1 — NETSUITE CONCURRENCY SHAPING (Stuart 2026-07-16)
+// ============================================================================
+// NetSuite's concurrency governance is ACCOUNT-WIDE (~5 concurrent requests on a
+// standard tier, shared by every user and integration). Every app call already
+// funnels through this one proxy, so the proxy is the traffic cop:
+//   • maxInstances: 1 + high per-instance concurrency → ONE process sees all
+//     traffic, so the in-process gate below is a true global limit.
+//   • Semaphore: at most NS_MAX_CONCURRENT calls out to NetSuite; the rest wait
+//     FIFO (users see a slightly slower response instead of a 429 error).
+//   • Retry with backoff on 429/503 that still slip through (other integrations
+//     share the same account pool).
+//   • 30s cache + in-flight coalescing for READS (GET + SuiteQL): four people
+//     pulling the same stock ask NetSuite once. Any successful WRITE flushes
+//     the cache so a post-push re-pull is never stale.
+const NS_MAX_CONCURRENT = 4;      // outbound calls to NetSuite at once
+const NS_QUEUE_MAX = 300;         // waiting requests beyond this are rejected fast
+const NS_QUEUE_WAIT_MS = 45000;   // max time a request may wait for a slot
+const NS_READ_TTL_MS = 30000;     // read-cache lifetime
+const NS_CACHE_MAX = 120;         // read-cache entries (oldest evicted)
+
+let nsActive = 0;
+const nsWaiters = [];
+const nsGateAcquire = () => new Promise((resolve, reject) => {
+    if (nsActive < NS_MAX_CONCURRENT) { nsActive++; return resolve(); }
+    if (nsWaiters.length >= NS_QUEUE_MAX) {
+        return reject(Object.assign(new Error('NetSuite queue is full'), { nsQueue: true }));
+    }
+    const w = { resolve, reject, timer: null };
+    w.timer = setTimeout(() => {
+        const i = nsWaiters.indexOf(w);
+        if (i >= 0) nsWaiters.splice(i, 1);
+        reject(Object.assign(new Error('Timed out waiting for a NetSuite slot'), { nsQueue: true }));
+    }, NS_QUEUE_WAIT_MS);
+    nsWaiters.push(w);
+});
+const nsGateRelease = () => {
+    const w = nsWaiters.shift();
+    if (w) { clearTimeout(w.timer); w.resolve(); } // slot hands off directly to the next waiter
+    else nsActive = Math.max(0, nsActive - 1);
+};
+
+const nsReadCache = new Map();  // key -> { status, text, expires }
+const nsInflight = new Map();   // key -> Promise<{status, text}> (coalesce identical concurrent reads)
+const nsIsRead = (method, targetUrl) =>
+    method === 'GET' || (method === 'POST' && targetUrl.includes('/services/rest/query/v1/suiteql'));
+const nsCacheKey = (method, targetUrl, payload) =>
+    crypto.createHash('sha256').update(method + '|' + targetUrl + '|' + JSON.stringify(payload || null)).digest('hex');
+const nsCacheGet = (key) => {
+    const e = nsReadCache.get(key);
+    if (!e) return null;
+    if (Date.now() > e.expires) { nsReadCache.delete(key); return null; }
+    return e;
+};
+const nsCacheSet = (key, status, text) => {
+    if (text && text.length > 1500000) return; // don't hold giant result sets in memory
+    if (nsReadCache.size >= NS_CACHE_MAX) nsReadCache.delete(nsReadCache.keys().next().value);
+    nsReadCache.set(key, { status, text, expires: Date.now() + NS_READ_TTL_MS });
+};
+
 exports.netsuiteProxy = onRequest({
     cors: true,
-    secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET]
+    secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET],
+    // ONE instance handles all traffic (calls are I/O-bound, so 80 concurrent requests in a
+    // single Node process is light work) — this is what makes the gate above account-global.
+    // 120s ceiling gives a queued request room: up to 45s in line + the NetSuite call + retries.
+    maxInstances: 1,
+    concurrency: 80,
+    timeoutSeconds: 120,
+    memory: '512MiB'
 }, async (req, res) => {
     try {
         // 🛡️ AuthN/AuthZ — this proxy OAuth-signs with server-held NetSuite secrets, so it must
@@ -238,32 +305,74 @@ exports.netsuiteProxy = onRequest({
             tokenSecret: NS_TOKEN_SECRET.value()
         };
 
-        const authHeader = generateNetSuiteHeader(method, targetUrl, creds);
+        const isRead = nsIsRead(method, targetUrl);
+        const cacheKey = isRead ? nsCacheKey(method, targetUrl, payload) : null;
 
-        const fetchOptions = {
-            method: method,
-            headers: {
-                "Authorization": authHeader,
-                "Content-Type": "application/json",
-                "Prefer": method === 'POST' && targetUrl.includes('/record/') ? 'return=representation' : 'transient'
+        // Read cache: an identical GET/SuiteQL inside 30s answers from memory — no NetSuite slot.
+        if (isRead) {
+            const hit = nsCacheGet(cacheKey);
+            if (hit) return res.status(hit.status).send(hit.text ? JSON.parse(hit.text) : {});
+            const inflight = nsInflight.get(cacheKey);
+            if (inflight) {
+                const r = await inflight; // identical read already on the wire — share its answer
+                return res.status(r.ok ? 200 : r.status).send(r.text ? JSON.parse(r.text) : {});
             }
+        }
+
+        // One NetSuite call, retried on 429/503 (the account pool is shared with any other
+        // integrations). OAuth nonce/timestamp must be fresh PER ATTEMPT, so the auth header
+        // is generated inside the loop.
+        const doNsCall = async () => {
+            let last = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                if (attempt) await new Promise(r => setTimeout(r, 800 * Math.pow(2, attempt - 1) + Math.random() * 400));
+                const fetchOptions = {
+                    method: method,
+                    headers: {
+                        "Authorization": generateNetSuiteHeader(method, targetUrl, creds),
+                        "Content-Type": "application/json",
+                        "Prefer": method === 'POST' && targetUrl.includes('/record/') ? 'return=representation' : 'transient'
+                    }
+                };
+                if (payload && method !== 'GET') {
+                    fetchOptions.body = JSON.stringify(payload);
+                }
+                const response = await fetch(targetUrl, fetchOptions);
+                const text = await response.text();
+                last = { status: response.status, ok: response.ok, text };
+                if (response.status !== 429 && response.status !== 503) break;
+            }
+            return last;
         };
 
-        if (payload && method !== 'GET') {
-            fetchOptions.body = JSON.stringify(payload);
+        const run = (async () => {
+            await nsGateAcquire();
+            try { return await doNsCall(); }
+            finally { nsGateRelease(); }
+        })();
+        run.catch(() => {}); // mark handled so a coalesced follower's rejection never goes unobserved
+
+        if (isRead) nsInflight.set(cacheKey, run);
+        let result;
+        try {
+            result = await run;
+        } finally {
+            if (isRead) nsInflight.delete(cacheKey);
         }
 
-        const response = await fetch(targetUrl, fetchOptions);
-        const textData = await response.text();
-        const data = textData ? JSON.parse(textData) : {};
-
-        if (!response.ok) {
-            return res.status(response.status).send(data);
+        if (result.ok) {
+            if (isRead) nsCacheSet(cacheKey, result.status, result.text);
+            else nsReadCache.clear(); // a write changed NetSuite state — never serve a pre-write read
         }
 
-        return res.status(200).send(data);
+        const data = result.text ? JSON.parse(result.text) : {};
+        return res.status(result.ok ? 200 : result.status).send(data);
 
     } catch (error) {
+        if (error && error.nsQueue) {
+            // The gate rejected (queue full / waited too long) — nothing was sent to NetSuite.
+            return res.status(503).send({ error: "NetSuite is very busy right now — this request waited in line too long and was NOT posted. Wait a few seconds and try again." });
+        }
         console.error("Cloud Proxy Error:", error);
         return res.status(500).send({ error: error.message });
     }
