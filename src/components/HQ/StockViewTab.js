@@ -820,8 +820,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // The Order column is ALWAYS manually entered (Rec is guidance, never auto-filled). Rows with a
     // qty route by sourcing: BOUGHT items (isInHouse false + vendor) group into ONE app PO per
     // vendor (hq_purchase_orders, status Approved → RTG Dispatch pushes each to NetSuite); MADE
-    // items get one finishing WO per row (unchanged contract); in-house items that ALSO carry a
-    // vendor prompt per item — PO to the vendor or WO to the floor.
+    // items get one WO per row PARKED IN RTG DISPATCH (Stuart 2026-07-16: same control gate as
+    // the POs — nothing reaches the floor un-reviewed); in-house items that ALSO carry a vendor
+    // prompt per item — PO to the vendor or WO to the floor.
     const createStockFinWOs = async (toMake) => {
         let n = 0;
         {
@@ -832,7 +833,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // Poles are racked (8/rack), not sled-packed → no paintSizes; carry poles.qty so the planner
                 // treats it as a rack-based workstream. Small parts carry the S/M/L size for sled packing.
                 const paintSizes = (!info.isPole && ['S', 'M', 'L'].includes(info.size)) ? { S: 0, M: 0, L: 0, [info.size]: qty } : null;
-                await setDoc(doc(db, "fin_workorders", woId), {
+                // The COMPLETE finishing doc is pre-built here but PARKED on the RTG work order —
+                // it reaches fin_workorders only when RTG "Push to Finishing" releases it
+                // (verbatim copy, so pole/rack/stock fields survive the review hop untouched).
+                const finPayload = {
                     id: woId, displayId: woId, woNum: woId, orderKey: woId,
                     quoteId: null, salesOrderId: null, estimateId: null,
                     orderType: 'stock', soId: null, soNum: null,
@@ -852,8 +856,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     sentToPickPack: false, pickStatus: 'Pending',
                     shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
                     brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
-                });
-                await setDoc(doc(db, "hq_work_orders", woId), { id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Dispatched', pushedToFinishing: true, erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, reqDate, paintSize: info.size || null, customer: 'Internal Stock', createdAt: Date.now(), createdBy: currentUser || '' }, { merge: true });
+                };
+                await setDoc(doc(db, "hq_work_orders", woId), {
+                    id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
+                    source: 'SALES_SNAPSHOT', routeTo: 'FINISHING', finPayload,
+                    erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, totalParts: qty, reqDate,
+                    paintSize: info.size || null, customer: 'Internal Stock',
+                    createdAt: Date.now(), createdBy: currentUser || ''
+                }, { merge: true });
                 n++;
             }
         }
@@ -919,9 +929,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const executeOrders = async (buy, make) => {
         const pieces = [];
         if (buy.length) pieces.push(`${new Set(buy.map(x => String(x.info.part?.manufacturingSpecs?.vendorName || '').trim())).size} vendor PO(s) covering ${buy.length} item(s)`);
-        if (make.length) pieces.push(`${make.length} finishing work order(s)`);
+        if (make.length) pieces.push(`${make.length} stock work order(s)`);
         if (!pieces.length) return alert('Nothing to generate.');
-        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}\n\nPOs land in RTG Dispatch (one per vendor) for the NetSuite push; work orders go to the Finishing Floor Setup queue.`)) return;
+        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}\n\nBOTH land in RTG Dispatch for review: POs (one per vendor) push to NetSuite from there; work orders release to the Finishing Floor from there. Nothing reaches NetSuite or the floor until dispatched.`)) return;
         setGenBusy(true);
         try {
             const poResult = buy.length ? await createStockPOs(buy) : { made: [], unmatched: [] };
@@ -929,7 +939,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             setOrderQty({});
             const lines = [
                 ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
-                ...(wos ? [`• ${wos} finishing work order(s) → Setup queue`] : []),
+                ...(wos ? [`• ${wos} stock work order(s) → RTG Dispatch (release to Finishing there)`] : []),
             ];
             if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
         } catch (e) { addLog(`Generate orders failed: ${e.message}`, 'error'); alert('Failed to generate orders:\n\n' + (e.message || e)); }

@@ -679,6 +679,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const pushToFinishing = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
 
+        // SALES-SNAPSHOT stock WOs (2026-07-16): the snapshot pre-builds the COMPLETE finishing
+        // doc (pole rack info, paint sizes, stock ids) and parks the WO here for review —
+        // releasing it is a verbatim copy, so nothing is lost or re-derived at dispatch.
+        if (hqOrder.finPayload && hqOrder.finPayload.id) {
+            try {
+                await setDoc(doc(db, "fin_workorders", hqOrder.finPayload.id), { ...hqOrder.finPayload, dispatchedAt: Date.now(), dispatchedBy: currentUser || '' });
+                await updateDoc(doc(db, "hq_work_orders", hqOrder.id), { pushedToFinishing: true, status: "Dispatched" });
+                addLog(`✅ Stock WO ${hqOrder.finPayload.id} released → Finishing Setup queue.`, "success");
+                alert(`Successfully pushed ${hqOrder.finPayload.id} to Finishing Floor Setup Queue!`);
+                loadRTGOrders();
+            } catch (error) {
+                console.error("Dispatch Error:", error);
+                addLog(`Dispatch Failed: ${error.message}`, "error");
+                alert("Failed to push to Finishing Floor. Check permissions/console.");
+            }
+            return;
+        }
+
         try {
             const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(hqOrder.hqJobId, orderType);
 
@@ -1086,9 +1104,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                         <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>
                                             {wo.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
                                         </button>
-                                        <button style={{ ...btnStyle, flex: 1, background: wo.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: wo.pushedToShop ? 'var(--ink-soft)' : '#fff', border: wo.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(wo, 'stock')}>
-                                            {wo.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
-                                        </button>
+                                        {wo.routeTo !== 'FINISHING' && (
+                                            <button style={{ ...btnStyle, flex: 1, background: wo.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: wo.pushedToShop ? 'var(--ink-soft)' : '#fff', border: wo.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(wo, 'stock')}>
+                                                {wo.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             ))}
