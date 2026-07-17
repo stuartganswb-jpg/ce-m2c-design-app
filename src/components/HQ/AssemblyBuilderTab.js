@@ -177,7 +177,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)))
             .map(x => ({ legacyErpId: x.legacyErpId, itemId: x.itemId, itemName: x.itemName }));
         const index = buildCodeIndex(parts);
-        const byNorm = new Map(); index.forEach(e => byNorm.set(e.norm, e));
+        // Normalized-code COLLISIONS are kept (H1-75BPR ring vs H1-75BP-R backplate both norm to
+        // H175BPR) — byNorm maps norm → ARRAY of entries; exact-raw lookups pick within it.
+        const byNorm = new Map(); index.forEach(e => { const a = byNorm.get(e.norm); if (a) a.push(e); else byNorm.set(e.norm, [e]); });
         codeIndexRef.current = { brand: activeBrand, index, byNorm };
         return index;
     };
@@ -186,7 +188,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // stays the ERP code (CPQ appends the description for display); partId follows VA's convention
     // of the part's itemId. Returns {} when the code isn't in the brand library (typo → plain pin).
     const libLinkFields = (code) => {
-        const e = codeIndexRef.current?.byNorm?.get(normCode(code));
+        const list = codeIndexRef.current?.byNorm?.get(normCode(code)) || [];
+        // Exact raw code wins over a norm-collision sibling — a typed H1-75BPR must never
+        // link to H1-75BP-R just because the dashes strip the same.
+        const raw = String(code || '').trim().toUpperCase();
+        const e = list.find(x => String(x.code).toUpperCase() === raw) || list[0];
         if (!e) return {};
         const erp = (e.erp && e.erp !== 'PENDING') ? e.erp : e.code;
         return { partId: e.itemId || e.code, partName: erp, legacyErpId: erp, isExistingLibraryPart: true, status: 'SPECS_LOCKED' };
@@ -219,7 +225,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const analysis = await analyzeFusionFbx(buffer);
             const index = await ensureCodeIndex().catch(() => null);
             const rows = analysis.components.map(c => {
-                const m = index ? matchItemByName(c.cleanName, index) : null;
+                const m = index ? matchItemByName(c.cleanName, index, normalizeCategory(slot.category) || slot.category) : null;
                 // hardware/screw bodies default to KEPT (they render) but keep their cleaned name;
                 // a matched item code becomes the suggested canonical mesh name.
                 return { key: c.key, keep: true, origName: c.origName, bodies: c.bodies, tris: c.tris, size: c.size, finalName: m ? `${m.code}${/LEFT|RIGHT/i.test(slot.position || '') ? ` ${slot.position}` : ''}` : c.cleanName, matched: !!m };
@@ -277,7 +283,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // "RETURN backplate" must not be mistaken for a return CHOICE).
             const isEndSlot = normalizeCategory(slot.category) === 'FINIAL';
             const choices = names.map(nm => {
-                const m = index ? matchItemByName(nm, index) : null;
+                const m = index ? matchItemByName(nm, index, normalizeCategory(slot.category) || slot.category) : null;
                 if (m) hit++;
                 const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
                 return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, thumb: '' };
@@ -355,7 +361,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             [slotId]: {
                 ...prev[slotId],
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
-                    const m = index ? matchItemByName(nm, index) : null;
+                    const m = index ? matchItemByName(nm, index, normalizeCategory(slotDef?.category) || slotDef?.category) : null;
                     const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
                     return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, thumb: '' };
                 }))
@@ -748,7 +754,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         else if (pin.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId) && pin.legacyErpId !== pin.partId) itemNo = pin.legacyErpId;
                         else if (!synthetic && pin.partId && pin.legacyErpId === pin.partId && !/-\d{12,}/.test(pin.partId)) itemNo = pin.partId;
                     }
-                    if (!itemNo && !flagged && index) { const m = matchItemByName(label, index); if (m) { itemNo = m.code; matched++; } }
+                    if (!itemNo && !flagged && index) { const m = matchItemByName(label, index, normalizeCategory(cl.category) || cl.category); if (m) { itemNo = m.code; matched++; } }
                     // endTreatment: saved pin tag wins; unsaved end-cluster rows seed from the name.
                     const et = pin?.endTreatment || (isEndCluster ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '');
                     // 1.5 cluster flags SEED the checkboxes when the pin doesn't carry them yet (returnOnly on
@@ -907,8 +913,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const snap = await getDocs(collection(db, 'Approved_Designs'));
             const partsAll = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                 .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)));
-            const byNorm = new Map();
-            partsAll.forEach(p => { [p.legacyErpId, p.itemId, p.id].forEach(c => { if (!c || c === 'PENDING') return; const n = normCode(c); if (n.length >= 4 && !byNorm.has(n)) byNorm.set(n, p); }); });
+            // byRaw (exact code) is consulted FIRST — a pin saying H1-75BPR must join the ring,
+            // not the H1-75BP-R backplate it collides with after normalization.
+            const byNorm = new Map(); const byRaw = new Map();
+            const rawOf = (v) => String(v || '').trim().toUpperCase();
+            partsAll.forEach(p => { [p.legacyErpId, p.itemId, p.id].forEach(c => { if (!c || c === 'PENDING') return; const raw = rawOf(c); if (raw && !byRaw.has(raw)) byRaw.set(raw, p); const n = normCode(c); if (n.length >= 4 && !byNorm.has(n)) byNorm.set(n, p); }); });
             const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', target?.itemId || syncId)));
             let linked = 0, already = 0, flagged = 0; const unresolved = [];
             for (const d of pinSnap.docs) {
@@ -918,7 +927,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 if (pin.isFee || pin.isHiddenPart) { flagged++; }
                 else if (pin.isExistingLibraryPart) { already++; }
                 else {
-                    const part = byNorm.get(normCode(pin.partId)) || byNorm.get(normCode(pin.legacyErpId)) || byNorm.get(normCode(pin.partName));
+                    const part = byRaw.get(rawOf(pin.partId)) || byRaw.get(rawOf(pin.legacyErpId)) || byRaw.get(rawOf(pin.partName))
+                        || byNorm.get(normCode(pin.partId)) || byNorm.get(normCode(pin.legacyErpId)) || byNorm.get(normCode(pin.partName));
                     if (part) {
                         const erp = (part.legacyErpId && part.legacyErpId !== 'PENDING') ? part.legacyErpId : (part.itemId || part.id);
                         Object.assign(patch, { partId: part.itemId || part.id, partName: erp, legacyErpId: erp, isExistingLibraryPart: true, specs: part.manufacturingSpecs || {}, status: 'SPECS_LOCKED' });
@@ -949,7 +959,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             for (let i = 0; i < rows.length; i++) {
                 const r = rows[i];
                 const erp = r.itemId.toUpperCase();
-                if (byNorm.has(normCode(erp))) { skipped.push(erp); continue; }
+                // Skip only an EXACT existing code — a norm-collision sibling (H1-75BP-R vs
+                // H1-75BPR) must not block creating the genuinely new item.
+                if ((byNorm.get(normCode(erp)) || []).some(x => String(x.code).toUpperCase() === erp)) { skipped.push(erp); continue; }
                 const isFeeClass = /fee/i.test(r.entityClass || '');
                 const id = `${String(activeBrand || 'CE').toUpperCase()}-${isFeeClass ? 'FEE' : 'INV'}-${Date.now()}-${i}`;
                 const customData = {};
