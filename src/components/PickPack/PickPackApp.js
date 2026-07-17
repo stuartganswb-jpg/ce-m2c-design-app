@@ -476,8 +476,18 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // Returns/fees leaked into some already-dispatched partsLists — never pickable (no item #,
     // no bin; the bend rides the shop's custom order). New splits exclude them at the source
     // (lineClassification rule 0); this filter heals orders dispatched before that.
-    const RETURN_LINE_RE = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b/i;
-    const pickableLines = (job) => (job.partsList || []).filter(l => !RETURN_LINE_RE.test(String(l.name || '')));
+    // Fee/return/splice heal for ALREADY-dispatched partsLists (line-only signals — no part
+    // join here): explicit fee flags, or a fee-ish name on a line with NO real item #.
+    // Names alone are NOT enough — real backplates echo the return option in their names
+    // ("Backplate (Mounting Base for 1\" French Return)") and must stay pickable.
+    const FEEISH_NAME_RE = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b|\bSPLICE\b|\bFEE\b/i;
+    const lineIsFeeish = (l) => {
+        if (l && (l.isFee || l.lineIsFee)) return true;
+        const pid = String((l && (l.legacyErpId || l.partId)) || '');
+        const hasRealId = pid && pid !== 'PENDING' && pid !== 'N/A' && pid !== 'UNASSIGNED' && !/(^|-)(FEE|HIDDEN)-/.test(pid);
+        return !hasRealId && FEEISH_NAME_RE.test(String((l && l.name) || ''));
+    };
+    const pickableLines = (job) => (job.partsList || []).filter(l => !lineIsFeeish(l));
 
     // --- ROD CUTS (cut stocked 8 ft rods down to 6 ft / 4 ft; issued from the HQ Sales Snapshot) ---
     const [rodCutOrders, setRodCutOrders] = useState([]);

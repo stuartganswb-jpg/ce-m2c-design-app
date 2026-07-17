@@ -174,6 +174,24 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
                         </div>
                     );
                 })()}
+
+                {/* Small-parts PICK status (2026-07-17): picking runs IN PARALLEL with shop fab —
+                    an order sitting here while it's also in the WMS pick queue is the designed
+                    pipeline, so show that progress instead of looking contradictory. */}
+                {((wo.partsList || []).length > 0 || wo.sentToPickPack) && (() => {
+                    const ps = wo.pickStatus || 'Pending';
+                    const picked = ps === 'Picked_Awaiting_Staging';
+                    const label = !wo.sentToPickPack ? 'Awaiting release (starts with shop fab)'
+                        : picked ? (wo.pickHadSkips ? `Picked ⚠ ${(wo.pickSkips || []).length} skip(s)` : 'Picked — at staging')
+                        : 'In pick queue (WMS)';
+                    const color = picked ? (wo.pickHadSkips ? '#d9534f' : 'var(--ink)') : (wo.sentToPickPack ? 'var(--brass)' : 'var(--ink-soft)');
+                    return (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: wo.hasCustomSibling ? '8px' : '14px', padding: '10px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Small Parts (Pick)</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', fontWeight: 600, color }}>● {label}</span>
+                        </div>
+                    );
+                })()}
                 
                 {isMatched && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px', padding: '10px 12px', background: '#eaf5ec', border: '1px solid #3a7d44', borderRadius: '2px' }}>
