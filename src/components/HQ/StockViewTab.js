@@ -862,12 +862,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         let last6 = (r.cells || []).slice(-6).reduce((s, c) => s + (c.v || 0), 0); // merged (new+old) last 6 months
         let packNote = '';
         if (pk && pk.isSingle) {
-            // The single carries ALL demand in single units: its own EA sales + pack sales × size;
-            // available counts remaining pack shelf stock as single-equivalents.
-            total12 += pk.extraTotal;
-            last6 += pk.extra6;
+            // PACKS-ONLY (Stuart 2026-07-17): the EA row's own sales history MIRRORS pack
+            // consumption, so counting both double-counts. The single's demand = pack sales ×
+            // pack size, exclusively. Available still counts remaining pack shelf stock as
+            // single-equivalents (real inventory position).
+            total12 = pk.extraTotal;
+            last6 = pk.extra6;
             available += pk.packAvailEq;
-            packNote = ` — incl. ${pk.extraTotal} singles of pack demand from ${pk.packItemIds.length} pack SKU(s)`;
+            packNote = ` — packs-only: ${pk.extraTotal} singles from ${pk.packItemIds.length} pack SKU(s) (own EA history mirrors packs — excluded)`;
         }
         let minOnHand, minRule;
         if (isOutsourced) { minOnHand = Math.round(total12 / 2); minRule = 'Outsourced: 6 months of demand' + packNote; }
@@ -1247,7 +1249,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         if (cut <= 0) return;
                         const base = id.slice(0, cut).toUpperCase();
                         // Pack rows consume pack-size cores per unit sold (…/SG-12 × 50 = 600 cores).
+                        // -EA rows WITH pack siblings are skipped — their history mirrors the packs,
+                        // so packs alone carry the core demand (no double-count).
                         const pk = packMap.get(id.toUpperCase());
+                        if (pk && pk.isSingle) return;
                         const mult = pk && pk.isPack ? pk.size : 1;
                         let g = byBase.get(base);
                         if (!g) { g = { base, cells: salesHist.months.map(() => 0), total: 0, orders: 0, variants: [] }; byBase.set(base, g); }
@@ -1398,7 +1403,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 const ov = orderQty[r.internalId] ?? '';
                                                 return (
                                                 <tr key={r.internalId}>
-                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}{info.isPack ? <span title={info.minRule} style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · PACK×{info.packSize}</span> : (info.isSingleAgg ? <span title="Aggregates its pack SKUs — pack demand × size and pack shelf stock roll in here" style={{ color: '#3a7d44', fontSize: '9px' }}> · EA+</span> : null)}</td>
+                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}{info.isPack ? <span title={info.minRule} style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · PACK×{info.packSize}</span> : (info.isSingleAgg ? <span title="Demand = pack SKUs × pack size ONLY (own EA history mirrors packs — excluded); avail counts pack shelf stock × size" style={{ color: '#3a7d44', fontSize: '9px' }}> · EA+</span> : null)}</td>
                                                     <td style={{ ...numTd, textAlign: 'left', color: r.oldInternalId ? OLD_BLUE : 'var(--line)' }}>{r.oldInternalId || '—'}</td>
                                                     {r.cells.map((c, i) => (
                                                         <td key={salesHist.months[i].key} style={{ ...numTd, color: c.src === 'new' ? 'var(--ink)' : (c.src === 'old' ? OLD_BLUE : 'var(--line)'), fontWeight: c.src === 'new' ? 500 : 400 }}>{c.v || '·'}</td>
