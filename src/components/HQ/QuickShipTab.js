@@ -79,11 +79,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [custOpen, setCustOpen] = useState(false);
     const [jobName, setJobName] = useState('');
 
-    const [cart, setCart] = useState([]);             // flat lines
+    const [cart, setCart] = useState([]);             // flat lines (rates resolve LIVE — see pricedCart)
     const [quickItemId, setQuickItemId] = useState('');
     const [quickQty, setQuickQty] = useState(1);
     const [kb, setKb] = useState(EMPTY_KB);
     const [kitName, setKitName] = useState('');
+    const [kitCollection, setKitCollection] = useState(''); // "file" the kit under a collection (e.g. TQS)
+    const [kitEdit, setKitEdit] = useState(null);     // kit pricing/collection editor {name, brand, basePrice, collection, clientPricing}
+    const [openCols, setOpenCols] = useState({});     // collection accordion state
 
     const [pushing, setPushing] = useState(false);
     const [log, setLog] = useState([]);
@@ -132,13 +135,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         return r;
     };
 
-    const pushLine = (it, qty, note) => {
+    const pushLine = (it, qty, note, kitMeta) => {
         if (!it) return;
         setCart(prev => [...prev, {
             key: `${it.id}-${Date.now()}-${Math.round(prev.length)}`,
             itemId: it.id, erp: erpOf(it), nsId: nsIdOf(it), name: it.itemName || erpOf(it),
-            qty: Math.max(1, parseInt(qty) || 1), rate: rateFor(it), note: note || '',
-            bin: it.manufacturingSpecs?.homeBin || it.binLocation || ''
+            qty: Math.max(1, parseInt(qty) || 1), note: note || '',
+            bin: it.manufacturingSpecs?.homeBin || it.binLocation || '',
+            // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
+            kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null
         }]);
     };
 
@@ -175,7 +180,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const addSavedKit = (kit) => {
         const lines = resolveKb(kit.cfg || {});
         if (!lines.length) return alert('That kit has no resolvable stocked items right now.');
-        lines.forEach(l => pushLine(l.it, l.qty, l.note));
+        // One kitKey per ADD — adding the same kit twice makes two independently-priced groups.
+        const kitKey = `${kit.name}-${Date.now()}`;
+        lines.forEach(l => pushLine(l.it, l.qty, l.note, { kitKey, kitName: kit.name, kitBrand: kit.brand }));
         addLog(`Kit "${kit.name}" → ${lines.length} line(s) added`, 'success');
     };
 
@@ -187,12 +194,39 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             const ref = doc(db, KITS_DOC.col, KITS_DOC.id);
             const snap = await getDoc(ref);
             const existing = snap.exists() && Array.isArray(snap.data().kits) ? snap.data().kits : [];
+            const prior = existing.find(k => k.name === name && k.brand === activeBrand);
             const others = existing.filter(k => !(k.name === name && k.brand === activeBrand));
-            const next = [...others, { name, brand: activeBrand, cfg: { ...kb }, savedBy: currentUser || '', savedAt: Date.now() }];
+            // Re-saving a kit's CONTENTS never wipes its filing/pricing (collection, basePrice,
+            // clientPricing survive an overwrite).
+            const next = [...others, {
+                name, brand: activeBrand, cfg: { ...kb },
+                collection: (kitCollection || '').trim() || prior?.collection || '',
+                basePrice: prior?.basePrice ?? '', clientPricing: prior?.clientPricing || [],
+                savedBy: currentUser || '', savedAt: Date.now()
+            }];
             await setDoc(ref, { kits: next }, { merge: true });
-            setKitName('');
+            setKitName(''); setKitCollection('');
             addLog(`Saved kit "${name}"`, 'success');
         } catch (e) { addLog(`Save kit failed: ${e.message}`, 'error'); }
+    };
+
+    // Rewrite one kit's metadata (pricing / collection) in place.
+    const updateKitMeta = async (kitRef, patch) => {
+        const ref = doc(db, KITS_DOC.col, KITS_DOC.id);
+        const snap = await getDoc(ref);
+        const existing = snap.exists() && Array.isArray(snap.data().kits) ? snap.data().kits : [];
+        await setDoc(ref, { kits: existing.map(k => (k.name === kitRef.name && k.brand === kitRef.brand) ? { ...k, ...patch } : k) }, { merge: true });
+    };
+
+    // Effective KIT price for the CURRENT customer: clientPricing row → base kit price → null
+    // (null = no kit pricing, lines bill at their own item rates).
+    const effectiveKitPrice = (kitName2, kitBrand) => {
+        const kit = kits.find(k => k.name === kitName2 && k.brand === kitBrand);
+        if (!kit) return null;
+        const cp = (kit.clientPricing || []).find(c => c.customerId === customerId);
+        if (cp && cp.price !== '' && cp.price !== undefined && !isNaN(parseFloat(cp.price))) return parseFloat(cp.price);
+        const bp = parseFloat(kit.basePrice);
+        return (kit.basePrice !== '' && kit.basePrice !== undefined && kit.basePrice !== null && !isNaN(bp)) ? bp : null;
     };
 
     const deleteKit = async (kit) => {
@@ -208,7 +242,42 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
 
     const setQty = (key, q) => setCart(prev => prev.map(l => l.key === key ? { ...l, qty: Math.max(1, parseInt(q) || 1) } : l));
     const removeLine = (key) => setCart(prev => prev.filter(l => l.key !== key));
-    const cartTotal = cart.reduce((s, l) => s + l.rate * l.qty, 0);
+
+    // LIVE pricing (Stuart 2026-07-17): rates resolve at RENDER/PUSH time, never frozen at add
+    // time — so picking the customer before OR after filling the cart reprices every line
+    // (item clientPricing included). A kit group with a kit price distributes it across the
+    // group's lines proportionally to their standard subtotals (2dp, LAST line absorbs the
+    // rounding) so the SO sums to the kit price; kits without a price bill per item.
+    const rateForId = (id) => { const it = itemById(id); return it ? rateFor(it) : 0; };
+    const pricedCart = useMemo(() => {
+        const rateMap = new Map();
+        const byKit = {};
+        cart.forEach(l => {
+            if (l.kitKey) (byKit[l.kitKey] = byKit[l.kitKey] || []).push(l);
+            else rateMap.set(l.key, rateForId(l.itemId));
+        });
+        Object.values(byKit).forEach(group => {
+            const kp = effectiveKitPrice(group[0].kitName, group[0].kitBrand);
+            const stds = group.map(l => ({ l, std: rateForId(l.itemId) }));
+            if (kp === null) { stds.forEach(({ l, std }) => rateMap.set(l.key, std)); return; }
+            const S = stds.reduce((s, x) => s + x.std * x.l.qty, 0);
+            let spent = 0;
+            stds.forEach(({ l, std }, i) => {
+                let rate;
+                if (i === stds.length - 1) {
+                    rate = Math.round(((kp - spent) / Math.max(1, l.qty)) * 100) / 100; // absorbs rounding
+                } else {
+                    const share = S > 0 ? (kp * (std * l.qty) / S) : (kp / group.length);
+                    rate = Math.floor((share / Math.max(1, l.qty)) * 100) / 100;
+                }
+                rate = Math.max(0, rate);
+                spent += rate * l.qty;
+                rateMap.set(l.key, rate);
+            });
+        });
+        return cart.map(l => ({ ...l, rate: rateMap.get(l.key) ?? 0 }));
+    }, [cart, customerId, kits, allItems]); // eslint-disable-line react-hooks/exhaustive-deps
+    const cartTotal = pricedCart.reduce((s, l) => s + l.rate * l.qty, 0);
 
     const myKits = kits.filter(k => k.brand === activeBrand);
     const selectedCustomer = customers.find(c => c.id === customerId);
@@ -216,11 +285,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const pushToNetSuite = async () => {
         if (!customerId) return alert('Select a customer first.');
         if (cart.length === 0) return alert('Cart is empty.');
-        const unmapped = cart.filter(l => !l.nsId);
+        const unmapped = pricedCart.filter(l => !l.nsId);
         if (unmapped.length) {
             if (!window.confirm(`${unmapped.length} line(s) have no NetSuite ID and will be skipped:\n\n${unmapped.map(l => `• ${l.erp || l.name}`).join('\n')}\n\nContinue with the rest?`)) return;
         }
-        const lines = cart.filter(l => l.nsId);
+        const lines = pricedCart.filter(l => l.nsId);
         if (!lines.length) return alert('No lines have a NetSuite item ID. Sync these items to NetSuite first.');
         if (!window.confirm(`Create a NetSuite SALES ORDER for ${selectedCustomer?.name || customerId} with ${lines.length} stock line(s)?`)) return;
 
@@ -241,7 +310,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         quantity: l.qty,
                         rate: parseFloat((l.rate || 0).toFixed(2)),
                         price: { id: "-1" },
-                        description: `${l.name}${l.note ? ' (' + l.note + ')' : ''} [Quick Ship stock]`
+                        description: `${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.kitName ? ' [Kit: ' + l.kitName + ']' : ''} [Quick Ship stock]`
                     }))
                 }
             };
@@ -264,7 +333,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 jobName: jobName || '', memo: memoText,
                 status: 'Pending', pickStatus: 'Pending',
                 totalParts: lines.reduce((s, l) => s + l.qty, 0),
-                lines: lines.map(l => ({ erp: l.erp, name: l.name, qty: l.qty, bin: l.bin || '', note: l.note || '' })),
+                lines: lines.map(l => ({ erp: l.erp, name: l.name, qty: l.qty, bin: l.bin || '', note: l.note || '', kit: l.kitName || '' })),
                 createdBy: currentUser || '', createdAt: Date.now(), createdDate: new Date().toISOString()
             });
             addLog(`Recorded ${hqId} for pick/pack (Stock tab).`, 'success');
@@ -334,21 +403,99 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 <div><span style={lbl}>Job / Sidemark (optional)</span><input value={jobName} onChange={e => setJobName(e.target.value)} placeholder="e.g. Smith Residence" style={inp} /></div>
             </div>
 
-            {/* PREBUILT KITS */}
+            {/* PREBUILT KITS — filed under collections (Stuart 2026-07-17); click a group title to
+                open it. Each kit chip shows its effective price for the SELECTED customer (★ = a
+                per-customer row is driving it); the $ button edits pricing + filing. */}
             <div style={card}>
-                <div style={cardHd}>Prebuilt Kits</div>
-                <div style={{ padding: '16px 20px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                    {myKits.length === 0 && <span style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '0.95rem' }}>No saved kits yet — build one below and “Save as kit”.</span>}
-                    {myKits.map(kit => (
-                        <div key={kit.name} style={{ display: 'flex', alignItems: 'stretch', border: '1px solid var(--line)' }}>
-                            <button onClick={() => addSavedKit(kit)} style={{ ...btn('var(--paper-2)', 'var(--ink)'), border: 'none', textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--sans)', fontSize: '0.9rem' }}
-                                onMouseOver={e => e.currentTarget.style.background = 'var(--brass)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper-2)'}>
-                                + {kit.name}
-                            </button>
-                            <button title="Delete kit" onClick={() => deleteKit(kit)} style={{ border: 'none', borderLeft: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', padding: '0 10px', fontSize: '0.9rem' }}>×</button>
-                        </div>
-                    ))}
+                <div style={{ ...cardHd, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>Prebuilt Kits</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', fontWeight: 400 }}>{myKits.length} kit(s) · filed by collection</span>
                 </div>
+                <div style={{ padding: '4px 20px 16px' }}>
+                    {myKits.length === 0 && <div style={{ padding: '12px 0', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '0.95rem' }}>No saved kits yet — build one below and “Save as kit”.</div>}
+                    {(() => {
+                        const groups = new Map();
+                        myKits.forEach(k => { const c = (k.collection || '').trim() || 'Unfiled'; if (!groups.has(c)) groups.set(c, []); groups.get(c).push(k); });
+                        const names = [...groups.keys()].sort((a, b) => ((a === 'Unfiled') - (b === 'Unfiled')) || a.localeCompare(b));
+                        return names.map(colName => {
+                            const open = !!openCols[colName];
+                            const list = groups.get(colName);
+                            return (
+                                <div key={colName} style={{ marginTop: '10px', border: '1px solid var(--line)' }}>
+                                    <div onClick={() => setOpenCols(p => ({ ...p, [colName]: !p[colName] }))} style={{ padding: '10px 14px', background: open ? 'var(--ink)' : 'var(--paper-2)', color: open ? '#fff' : 'var(--ink)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>{open ? '▾' : '▸'} {colName}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.75 }}>{list.length} kit(s)</span>
+                                    </div>
+                                    {open && (
+                                        <div style={{ padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                                            {list.map(kit => {
+                                                const kp = effectiveKitPrice(kit.name, kit.brand);
+                                                const hasCust = !!customerId && (kit.clientPricing || []).some(c => c.customerId === customerId);
+                                                return (
+                                                    <div key={kit.name} style={{ display: 'flex', alignItems: 'stretch', border: '1px solid var(--line)' }}>
+                                                        <button onClick={() => addSavedKit(kit)} style={{ ...btn('var(--paper-2)', 'var(--ink)'), border: 'none', textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--sans)', fontSize: '0.9rem' }}
+                                                            onMouseOver={e => e.currentTarget.style.background = 'var(--brass)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper-2)'}>
+                                                            + {kit.name}{kp !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', color: hasCust ? '#3a7d44' : 'var(--ink-soft)' }}> · ${kp.toFixed(2)}{hasCust ? ' ★' : ''}</span>}
+                                                        </button>
+                                                        <button title="Kit pricing & collection" onClick={() => setKitEdit({ name: kit.name, brand: kit.brand, basePrice: kit.basePrice ?? '', collection: kit.collection || '', clientPricing: (kit.clientPricing || []).map(r => ({ ...r })), addCust: '', addPrice: '' })} style={{ border: 'none', borderLeft: '1px solid var(--line)', background: '#fff', color: 'var(--brass)', cursor: 'pointer', padding: '0 10px', fontSize: '0.85rem', fontFamily: 'var(--mono)' }}>$</button>
+                                                        <button title="Delete kit" onClick={() => deleteKit(kit)} style={{ border: 'none', borderLeft: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', padding: '0 10px', fontSize: '0.9rem' }}>×</button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        });
+                    })()}
+                </div>
+
+                {kitEdit && (
+                    <div style={{ borderTop: '1px solid var(--brass)', padding: '16px 20px', background: 'var(--paper)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.1rem', color: 'var(--ink)' }}>Kit Pricing & Filing — {kitEdit.name}</span>
+                            <button onClick={() => setKitEdit(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
+                        </div>
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'end', flexWrap: 'wrap', marginBottom: '12px' }}>
+                            <div><span style={lbl}>Collection (filing)</span><input value={kitEdit.collection} onChange={e => setKitEdit({ ...kitEdit, collection: e.target.value })} list="qs-collections" placeholder="e.g. TQS" style={{ ...inp, width: '160px' }} /></div>
+                            <div><span style={lbl}>Base kit price ($)</span><input type="number" value={kitEdit.basePrice} onChange={e => setKitEdit({ ...kitEdit, basePrice: e.target.value })} placeholder="blank = per-item" style={{ ...inp, width: '140px', fontFamily: 'var(--mono)' }} /></div>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', paddingBottom: '10px', maxWidth: '380px' }}>Blank = lines bill at their own item rates. A kit price distributes across the component lines so the sales order totals exactly the kit price.</span>
+                        </div>
+                        <span style={lbl}>Per-customer kit pricing</span>
+                        {(kitEdit.clientPricing || []).length === 0 && <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic', padding: '4px 0 8px' }}>None — every customer gets the base kit price.</div>}
+                        {(kitEdit.clientPricing || []).map((r, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--paper-2)' }}>
+                                <span style={{ flex: 1, fontSize: '0.85rem', color: 'var(--ink)' }}>{r.customerName || r.customerId}</span>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', color: 'var(--ink)' }}>${parseFloat(r.price || 0).toFixed(2)}</span>
+                                <button onClick={() => setKitEdit({ ...kitEdit, clientPricing: kitEdit.clientPricing.filter((_, x) => x !== i) })} style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1rem' }}>×</button>
+                            </div>
+                        ))}
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'end', marginTop: '10px', flexWrap: 'wrap' }}>
+                            <div style={{ minWidth: '240px', flex: 1 }}>
+                                <span style={lbl}>Customer</span>
+                                <select value={kitEdit.addCust} onChange={e => setKitEdit({ ...kitEdit, addCust: e.target.value })} style={{ ...inp, background: '#fff' }}>
+                                    <option value="">Select customer…</option>
+                                    {customers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.id})</option>)}
+                                </select>
+                            </div>
+                            <div><span style={lbl}>Kit price ($)</span><input type="number" value={kitEdit.addPrice} onChange={e => setKitEdit({ ...kitEdit, addPrice: e.target.value })} style={{ ...inp, width: '120px', fontFamily: 'var(--mono)' }} /></div>
+                            <button onClick={() => {
+                                if (!kitEdit.addCust || kitEdit.addPrice === '' || isNaN(parseFloat(kitEdit.addPrice))) return alert('Pick a customer and enter a price.');
+                                const c = customers.find(x => x.id === kitEdit.addCust);
+                                const rows = (kitEdit.clientPricing || []).filter(r => r.customerId !== kitEdit.addCust);
+                                setKitEdit({ ...kitEdit, clientPricing: [...rows, { customerId: kitEdit.addCust, customerName: c?.name || '', price: parseFloat(kitEdit.addPrice) }], addCust: '', addPrice: '' });
+                            }} style={btn('transparent', 'var(--ink)')}>+ Add Row</button>
+                            <div style={{ flex: 1 }} />
+                            <button onClick={async () => {
+                                try {
+                                    await updateKitMeta({ name: kitEdit.name, brand: kitEdit.brand }, { collection: (kitEdit.collection || '').trim(), basePrice: (kitEdit.basePrice === '' || kitEdit.basePrice === null) ? '' : parseFloat(kitEdit.basePrice), clientPricing: kitEdit.clientPricing || [] });
+                                    addLog(`Kit "${kitEdit.name}" pricing/filing saved`, 'success');
+                                    setKitEdit(null);
+                                } catch (e) { alert('Save failed: ' + (e.message || e)); }
+                            }} style={btn('var(--ink)', '#fff')}>Save Kit Pricing</button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: '20px', alignItems: 'start' }}>
@@ -382,7 +529,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 <button onClick={addKbToCart} style={btn('var(--brass)', '#fff')}>Add Kit to Cart</button>
                                 <button onClick={() => setKb(EMPTY_KB)} style={btn('transparent', 'var(--ink-soft)')}>Clear</button>
                                 <div style={{ flex: 1 }} />
-                                <input value={kitName} onChange={e => setKitName(e.target.value)} placeholder="Name to save as kit…" style={{ ...inp, width: '180px', flex: 'none' }} />
+                                <input value={kitName} onChange={e => setKitName(e.target.value)} placeholder="Name to save as kit…" style={{ ...inp, width: '170px', flex: 'none' }} />
+                                <input value={kitCollection} onChange={e => setKitCollection(e.target.value)} list="qs-collections" placeholder="Collection (e.g. TQS)" style={{ ...inp, width: '150px', flex: 'none' }} />
+                                <datalist id="qs-collections">{[...new Set(myKits.map(k => (k.collection || '').trim()).filter(Boolean))].map(c => <option key={c} value={c} />)}</datalist>
                                 <button onClick={saveKit} style={btn('var(--ink)', '#fff')}>Save as Kit</button>
                             </div>
                         </div>
@@ -397,13 +546,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     </div>
                     <div style={{ padding: '12px 16px', flex: 1, overflowY: 'auto' }}>
                         {cart.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', padding: '20px', textAlign: 'center' }}>Empty — add stocked items or a kit.</div>}
-                        {cart.map(l => (
-                            <div key={l.key} style={{ display: 'grid', gridTemplateColumns: '1fr 64px auto', gap: '10px', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
+                        {pricedCart.map(l => (
+                            <div key={l.key} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 74px auto', gap: '10px', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}</span>}</div>
                                 </div>
                                 <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} />
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', textAlign: 'right', color: 'var(--ink)' }}>${(l.rate * l.qty).toFixed(2)}</div>
                                 <button onClick={() => removeLine(l.key)} style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.1rem' }} title="Remove">×</button>
                             </div>
                         ))}
