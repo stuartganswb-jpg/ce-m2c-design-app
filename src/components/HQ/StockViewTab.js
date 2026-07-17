@@ -4,6 +4,7 @@ import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, upd
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
+import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 
 const BRAND_NETSUITE_MAP = {
@@ -963,6 +964,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             for (const { r, info, qty } of toMake) {
                 const finish = finishOf(r.itemid);
                 const woId = `WO-STK-${r.internalId}-${Date.now()}`;
+                // Short human reference (staff say "WO-1041") — doc id stays long/unique. Falls
+                // back to the long id if the counter isn't reachable (rules not deployed yet).
+                let woNo = woId;
+                try { woNo = await reserveShortNo('WO'); } catch (e) { /* long-id fallback */ }
                 // Poles are racked (8/rack), not sled-packed → no paintSizes; carry poles.qty so the planner
                 // treats it as a rack-based workstream. Small parts carry the S/M/L size for sled packing.
                 const paintSizes = (!info.isPole && ['S', 'M', 'L'].includes(info.size)) ? { S: 0, M: 0, L: 0, [info.size]: qty } : null;
@@ -970,7 +975,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // it reaches fin_workorders only when RTG "Push to Finishing" releases it
                 // (verbatim copy, so pole/rack/stock fields survive the review hop untouched).
                 const finPayload = {
-                    id: woId, displayId: woId, woNum: woId, orderKey: woId,
+                    id: woId, displayId: woNo, woNum: woNo, orderKey: woId,
                     quoteId: null, salesOrderId: null, estimateId: null,
                     orderType: 'stock', soId: null, soNum: null,
                     customerId: null, customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
@@ -991,7 +996,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
                 };
                 await setDoc(doc(db, "hq_work_orders", woId), {
-                    id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
+                    id: woId, woId, woNo, brand: activeBrand, type: 'Stock', status: 'Approved',
                     source: 'SALES_SNAPSHOT', routeTo: 'FINISHING', finPayload,
                     erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, totalParts: qty, reqDate,
                     paintSize: info.size || null, customer: 'Internal Stock',
@@ -1037,7 +1042,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const rec = resolveVendorRec(vendors, vendor);
             if (!rec) { unmatched.push({ vendor, items: list.map(x => x.r.itemid) }); continue; }
             const nsVendorId = String(rec.id || '').replace(/^VEND-/, '');
-            const newPoId = `PO-${(vendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0, 5)}-${Date.now().toString().slice(-6)}`;
+            // Short human reference (PO-1042) as the id itself — unique via the atomic counter;
+            // falls back to the legacy vendor-stamp format if the counter isn't reachable.
+            let newPoId;
+            try { newPoId = await reserveShortNo('PO'); }
+            catch (e) { newPoId = `PO-${(vendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0, 5)}-${Date.now().toString().slice(-6)}`; }
             const items = list.map(({ r, info, qty }) => ({
                 itemId: info.part?.legacyErpId || info.part?.itemId || r.itemid,
                 nsItemId: String(r.internalId),   // NetSuite item internal id — the push builds real lines from this

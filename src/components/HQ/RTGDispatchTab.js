@@ -694,20 +694,36 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 let nsQueuedNote = '';
                 try {
                     const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
-                    if (fp.stockInternalId && nsConfig.location) {
+                    // Resolve the assembly's NetSuite internal id from THREE sources — the payload
+                    // field → the Master Library (by item #) → the WO id itself (WO-STK-<id>-…) —
+                    // so one dropped field can never silently skip the NetSuite work order.
+                    let nsAsmId = String(fp.stockInternalId || '');
+                    let idSrc = 'payload';
+                    if (!nsAsmId && fp.stockErpId) {
+                        try {
+                            const libSnap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', fp.stockErpId)));
+                            const hit = libSnap.docs.map(d => d.data()).find(p => p.netSuiteInternalId);
+                            if (hit) { nsAsmId = String(hit.netSuiteInternalId); idSrc = 'library'; }
+                        } catch (lookErr) { /* fall through to the WO-id parse */ }
+                    }
+                    if (!nsAsmId) {
+                        const m = String(hqOrder.id || '').match(/^WO-STK-(\d+)-/);
+                        if (m) { nsAsmId = m[1]; idSrc = 'wo-id'; }
+                    }
+                    if (nsAsmId && nsConfig.location) {
                         await enqueueNsWrite({
                             kind: 'workorder',
-                            label: `NS WO — build ${fp.stockErpId || fp.id} ×${fp.totalParts}`,
+                            label: `NS WO — build ${fp.stockErpId || fp.woNum || fp.id} ×${fp.totalParts}`,
                             sourceApp: 'RTG', createdBy: currentUser || '',
                             targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',
                             method: 'POST',
                             payload: {
-                                item: { id: String(fp.stockInternalId) },
+                                item: { id: nsAsmId },
                                 quantity: Number(fp.totalParts) || 1,
                                 location: { id: nsConfig.location },
                                 subsidiary: { id: nsConfig.subsidiary },
                                 ...(fp.reqDate ? { endDate: fp.reqDate } : {}),
-                                memo: `Stock build ${fp.id} (Sales Snapshot)`
+                                memo: `Stock build ${fp.woNum || fp.id} (Sales Snapshot)`
                             },
                             // Ids stamp back onto BOTH docs: the floor card shows the WO#, and the
                             // completion trigger needs nsWoId on the fin doc.
@@ -716,11 +732,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                 { collection: 'hq_work_orders', docId: hqOrder.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }
                             ]
                         });
-                        addLog(`📤 NetSuite work order queued: ${fp.stockErpId || fp.id} ×${fp.totalParts}.`, 'success');
+                        addLog(`📤 NetSuite work order queued: ${fp.stockErpId || fp.id} ×${fp.totalParts}${idSrc !== 'payload' ? ` (internal id recovered via ${idSrc})` : ''}.`, 'success');
                         nsQueuedNote = '\n\n📤 A real NetSuite work order is queued (11.1 → NetSuite Sync Queue) — On-Ord picks it up on the next live pull, and completion posts automatically when the bake finishes.';
                     } else {
-                        addLog(`⚠ No NetSuite WO queued for ${fp.id} — missing item internal id or brand location.`, 'warn');
-                        nsQueuedNote = '\n\n⚠ No NetSuite work order queued (item has no NetSuite internal id) — sync the item in 11.1 first next time.';
+                        const why = !nsAsmId ? 'no NetSuite internal id found in the payload, the Master Library, or the WO id' : 'no NetSuite location mapping for this brand';
+                        addLog(`⚠ No NetSuite WO queued for ${fp.woNum || fp.id} — ${why}.`, 'warn');
+                        nsQueuedNote = `\n\n⚠ No NetSuite work order queued — ${why}.`;
                     }
                 } catch (obErr) {
                     addLog(`⚠ NetSuite WO queue failed for ${hqOrder.id}: ${obErr.message}`, 'error');
@@ -1131,7 +1148,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                 <div key={wo.id} style={{ ...cardStyle, borderLeft: '4px solid var(--brass)' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                                         <div>
-                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>WO: {wo.woId || wo.id}</div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }} title={wo.id}>WO: {wo.woNo || wo.woId || wo.id}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Build to Stock</div>
                                             {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}
                                             {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
