@@ -199,6 +199,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [activePickJob, setActivePickJob] = useState(null);
     const [currentPickLine, setCurrentPickLine] = useState(0);
     const [validation, setValidation] = useState({ bin: '', qty: '' });
+    const [pickSkips, setPickSkips] = useState([]); // lines skipped this pick (order flagged, fixed later)
+    const [expandedJob, setExpandedJob] = useState(null); // awaiting-pick card whose BOM detail is open
     // §A2: the staging handshake is a two-label verify — small-parts label + custom (shop) label.
     const [stagingSmallScan, setStagingSmallScan] = useState('');
     const [stagingCustomScan, setStagingCustomScan] = useState('');
@@ -1443,19 +1445,46 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         }
 
         setValidation({ bin: '', qty: '' });
-        
+
         if (currentPickLine + 1 < activePickJob.partsList.length) {
             setCurrentPickLine(prev => prev + 1);
         } else {
-            setShowNacho(true);
-            setTimeout(async () => {
-                await updateDoc(doc(db, "fin_workorders", activePickJob.id), { pickStatus: 'Picked_Awaiting_Staging' });
-                writeLog(`Order Picked: ${activePickJob.id}`, 'wms');
-                printZebraLabel(activePickJob, 'SMALL_PARTS');
-                setActivePickJob(null);
-                setShowNacho(false);
-                setOperator(null);
-            }, 2000);
+            completePick(pickSkips);
+        }
+    };
+
+    // Finish the pick (from the last confirmed line OR a skip of the last line). When lines were
+    // skipped, the order is stamped so staging/HQ can fix it — the parts still went to staging,
+    // just short the skipped line(s).
+    const completePick = (skips) => {
+        setShowNacho(true);
+        setTimeout(async () => {
+            const patch = { pickStatus: 'Picked_Awaiting_Staging' };
+            if (skips && skips.length) { patch.pickSkips = skips; patch.pickHadSkips = true; }
+            await updateDoc(doc(db, "fin_workorders", activePickJob.id), patch);
+            writeLog(`Order Picked: ${activePickJob.id}${(skips && skips.length) ? ` — ⚠ ${skips.length} line(s) SKIPPED (fix at staging): ${skips.map(s => s.itemId || s.name).join(', ')}` : ''}`, 'wms');
+            printZebraLabel(activePickJob, 'SMALL_PARTS');
+            setActivePickJob(null);
+            setPickSkips([]);
+            setShowNacho(false);
+            setOperator(null);
+        }, 2000);
+    };
+
+    // Skip the current line (Stuart 2026-07-17): some CPQ orders pushed lines that later defaulted
+    // to 0 (e.g. splices) — the operator can't pick a phantom, so skip it and keep going. The order
+    // is flagged (pickHadSkips) and the skipped lines recorded so it's corrected at the end.
+    const handleSkipLine = () => {
+        const lineItem = activePickJob.partsList[currentPickLine];
+        if (!window.confirm(`Skip "${lineItem.name}"${lineItem.legacyErpId || lineItem.partId ? ` (item ${lineItem.legacyErpId || lineItem.partId})` : ''}?\n\nIt will NOT be picked. The order is flagged so it can be fixed at staging/end — use this for lines that shouldn't be on the order (e.g. a splice that should be 0).`)) return;
+        const skip = { line: currentPickLine, itemId: lineItem.legacyErpId || lineItem.partId || '', name: lineItem.name || '', qty: lineItem.qty || 0 };
+        const nextSkips = [...pickSkips, skip];
+        setPickSkips(nextSkips);
+        setValidation({ bin: '', qty: '' });
+        if (currentPickLine + 1 < activePickJob.partsList.length) {
+            setCurrentPickLine(prev => prev + 1);
+        } else {
+            completePick(nextSkips);
         }
     };
 
@@ -1715,8 +1744,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         return (
             <div style={{ position: 'fixed', inset: 0, backgroundColor: theme.paper, color: theme.ink, zIndex: 9999, display: 'flex', flexDirection: 'column', padding: '40px', fontFamily: theme.sans }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: `1px solid ${theme.line}`, paddingBottom: '20px', marginBottom: '40px' }}>
-                    <h1 style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {activePickJob.id}</h1>
-                    <button onClick={() => setActivePickJob(null)} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
+                    <h1 style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {activePickJob.id}{pickSkips.length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '0.9rem', color: '#d9534f', marginLeft: '16px' }}>⚠ {pickSkips.length} SKIPPED</span>}</h1>
+                    <button onClick={() => { setActivePickJob(null); setPickSkips([]); setValidation({ bin: '', qty: '' }); }} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
                 </div>
 
                 {showNacho ? (
@@ -1751,6 +1780,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 </div>
                                 <button type="submit" style={{ padding: '20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', marginTop: '20px', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                                     CONFIRM PICK
+                                </button>
+                                <button type="button" onClick={handleSkipLine} style={{ padding: '14px', background: 'transparent', color: '#d9534f', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', border: `1px solid ${theme.line}`, cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = '#d9534f'} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>
+                                    ⤼ Skip This Item — can't pick / not on order
                                 </button>
                             </form>
                         </div>
@@ -1802,20 +1834,43 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const poNum = so?.poNum || so?.po || so?.otherrefnum || '';
                                     const pickable = pickableLines(job);
                                     return (
-                                    <div key={job.id} style={{ border: `1px solid ${theme.line}`, padding: '20px', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
-                                        <div style={{ minWidth: 0 }}>
-                                            <h3 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.2rem', fontWeight: 500 }}>{job.id}</h3>
-                                            {customer && <div style={{ color: theme.ink, fontFamily: theme.sans, fontSize: '0.95rem', fontWeight: 500, marginTop: '5px' }}>{customer}</div>}
-                                            {(sidemark || poNum) && (
-                                                <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', marginTop: '3px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                                                    {sidemark ? `REF: ${sidemark}` : ''}{sidemark && poNum ? '  ·  ' : ''}{poNum ? `PO: ${poNum}` : ''}
-                                                </div>
-                                            )}
-                                            <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Items{pickable.length !== (job.partsList?.length || 0) ? ` (${(job.partsList?.length || 0) - pickable.length} return/fee line(s) ride the shop order)` : ''}</div>
+                                    <div key={job.id} style={{ border: `1px solid ${theme.line}`, marginBottom: '15px' }}>
+                                        {/* Header row toggles the BOM detail; START PICKING stops propagation. */}
+                                        <div onClick={() => setExpandedJob(expandedJob === job.id ? null : job.id)} style={{ padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', cursor: 'pointer' }}>
+                                            <div style={{ minWidth: 0 }}>
+                                                <h3 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.2rem', fontWeight: 500 }}>
+                                                    <span style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '0.9rem', marginRight: '8px' }}>{expandedJob === job.id ? '▾' : '▸'}</span>{job.id}
+                                                </h3>
+                                                {customer && <div style={{ color: theme.ink, fontFamily: theme.sans, fontSize: '0.95rem', fontWeight: 500, marginTop: '5px' }}>{customer}</div>}
+                                                {(sidemark || poNum) && (
+                                                    <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', marginTop: '3px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                                        {sidemark ? `REF: ${sidemark}` : ''}{sidemark && poNum ? '  ·  ' : ''}{poNum ? `PO: ${poNum}` : ''}
+                                                    </div>
+                                                )}
+                                                <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Items{pickable.length !== (job.partsList?.length || 0) ? ` (${(job.partsList?.length || 0) - pickable.length} return/fee line(s) ride the shop order)` : ''} · tap for parts</div>
+                                            </div>
+                                            <button onClick={(e) => { e.stopPropagation(); setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setValidation({ bin: '', qty: '' }); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
+                                                START PICKING
+                                            </button>
                                         </div>
-                                        <button onClick={() => { setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
-                                            START PICKING
-                                        </button>
+                                        {expandedJob === job.id && (
+                                            <div style={{ borderTop: `1px solid ${theme.line}`, background: theme.paper, padding: '8px 20px 16px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft, display: 'flex', gap: '12px', padding: '10px 0 6px', borderBottom: `1px solid ${theme.line}` }}>
+                                                    <span style={{ flex: 1 }}>Part</span><span style={{ width: '90px' }}>Bin</span><span style={{ width: '40px', textAlign: 'right' }}>Qty</span>
+                                                </div>
+                                                {pickable.length === 0 && <div style={{ padding: '12px 0', fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No pickable parts on this order.</div>}
+                                                {pickable.map((l, i) => (
+                                                    <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '8px 0', borderBottom: `1px solid ${theme.line}` }}>
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', fontWeight: 600, color: theme.ink }}>{l.legacyErpId || l.partId || '—'}</span>
+                                                            <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginLeft: '8px' }}>{l.name}</span>
+                                                        </div>
+                                                        <span style={{ width: '90px', fontFamily: theme.mono, fontSize: '11px', color: theme.brass }}>{l.binLocation || 'UNASSIGNED'}</span>
+                                                        <span style={{ width: '40px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{l.qty}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                     );
                                 })}
