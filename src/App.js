@@ -8,10 +8,13 @@ import ShopFloor from './components/ShopFloor/ShopFloor';
 import FinishingFloor from './components/FinishingFloor/FinishingFloor';
 import PickPackApp from './components/PickPack/PickPackApp'; // 🚀 NEW: Import Pick & Pack App
 import OuterGate from './components/Shared/OuterGate';
+import UpdateBanner from './components/Shared/UpdateBanner';
 
 const App = () => {
   return (
     <Router>
+      {/* One-tap reload when a newer deploy is live — shows on every surface, incl. login. */}
+      <UpdateBanner />
       {/* Daily email sign-in fronts every route; PINs switch users behind it. */}
       <OuterGate>
       <Routes>

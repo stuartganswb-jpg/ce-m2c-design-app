@@ -39,7 +39,8 @@ const OUTER_MAX_AGE_HOURS = 16;
 
 exports.authenticatePin = onCall({
     enforceAppCheck: true, // 🛡️ Requires a valid App Check (reCAPTCHA) token
-    cors: true
+    cors: true,
+    minInstances: 1 // always warm — the 7am login rush never eats a cold start
 }, async (request) => {
 
     const { pin, outerToken } = request.data;
@@ -250,6 +251,7 @@ exports.netsuiteProxy = onRequest({
     // single Node process is light work) — this is what makes the gate above account-global.
     // 120s ceiling gives a queued request room: up to 45s in line + the NetSuite call + retries.
     maxInstances: 1,
+    minInstances: 1, // always warm — first NetSuite call of the day skips the cold start (~$/mo)
     concurrency: 80,
     timeoutSeconds: 120,
     memory: '512MiB'
