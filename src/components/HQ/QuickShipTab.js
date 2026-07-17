@@ -85,8 +85,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [kb, setKb] = useState(EMPTY_KB);
     const [kitName, setKitName] = useState('');
     const [kitCollection, setKitCollection] = useState(''); // "file" the kit under a collection (e.g. TQS)
-    const [kitEdit, setKitEdit] = useState(null);     // kit pricing/collection editor {name, brand, basePrice, collection, clientPricing}
+    const [kitEdit, setKitEdit] = useState(null);     // kit pricing/collection editor {name, brand, basePrice, collection, clientPricing, finishCodes}
     const [openCols, setOpenCols] = useState({});     // collection accordion state
+    const [finishList, setFinishList] = useState([]); // [{code, name, outsourced}] — kit finish options
+    const [kitFinishPick, setKitFinishPick] = useState(null); // kit awaiting a finish choice on add
 
     const [pushing, setPushing] = useState(false);
     const [log, setLog] = useState([]);
@@ -106,7 +108,17 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const unsubKits = onSnapshot(doc(db, KITS_DOC.col, KITS_DOC.id), (s) => {
             setKits(s.exists() && Array.isArray(s.data().kits) ? s.data().kits : []);
         }, e => console.warn('Quick Ship kits listen failed', e));
-        return () => { unsubParts(); unsubCrm(); unsubKits(); };
+        // Finish codes (in-house + outsourced) feed the kit "available finishes" picker —
+        // one PATTERN kit + a color choice replaces one kit per finish.
+        const unsubFin = onSnapshot(doc(db, "system", "master_finishes"), (s) => {
+            const arr = (s.exists() && s.data().finishes) || [];
+            setFinishList(prev => [...arr.filter(f => f && f.code).map(f => ({ code: String(f.code).toUpperCase(), name: f.name || f.code, outsourced: false })), ...prev.filter(p => p.outsourced)]);
+        }, e => console.warn('Quick Ship finishes listen failed', e));
+        const unsubOut = onSnapshot(collection(db, "hq_outsource_finishes"), (s) => {
+            const arr = s.docs.map(d => d.data()).filter(f => f && f.code);
+            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code).toUpperCase(), name: f.name || f.code, outsourced: true }))]);
+        }, e => console.warn('Quick Ship outsource finishes listen failed', e));
+        return () => { unsubParts(); unsubCrm(); unsubKits(); unsubFin(); unsubOut(); };
     }, [activeBrand]);
 
     // Strictly-stocked: only items flagged isStocked feed quick-add + the part dropdowns.
@@ -143,7 +155,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             qty: Math.max(1, parseInt(qty) || 1), note: note || '',
             bin: it.manufacturingSpecs?.homeBin || it.binLocation || '',
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
-            kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null
+            kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
         }]);
     };
 
@@ -177,13 +189,37 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         setKb(EMPTY_KB);
     };
 
-    const addSavedKit = (kit) => {
+    // Finish-variant swap (Stuart 2026-07-17): stocked components follow the same "/<FIN>"
+    // suffix rule as production — HCUMP410/BL → HCUMP410/SG. Components without a "/" are
+    // finish-agnostic and pass through unchanged.
+    const variantFor = (it, fin) => {
+        const erp = erpOf(it);
+        if (!erp.includes('/')) return it;
+        const target = `${erp.split('/')[0]}/${String(fin).toUpperCase()}`;
+        return allItems.find(x => erpOf(x) === target) || null;
+    };
+
+    const addSavedKit = (kit, finCode) => {
+        const fins = Array.isArray(kit.finishCodes) ? kit.finishCodes : [];
+        if (!finCode && fins.length === 1) finCode = fins[0];
+        if (!finCode && fins.length > 1) { setKitFinishPick(kit); return; } // choose a color first
         const lines = resolveKb(kit.cfg || {});
         if (!lines.length) return alert('That kit has no resolvable stocked items right now.');
+        let resolved = lines;
+        if (finCode) {
+            const missing = [];
+            resolved = [];
+            lines.forEach(l => {
+                const v = variantFor(l.it, finCode);
+                if (v) resolved.push({ ...l, it: v });
+                else missing.push(`${erpOf(l.it).split('/')[0]}/${String(finCode).toUpperCase()}`);
+            });
+            if (missing.length) return alert(`Can't add "${kit.name}" in ${finCode} — no stocked item for:\n\n${missing.map(m => `• ${m}`).join('\n')}\n\nCreate/stock those variants, or remove ${finCode} from this kit's available finishes.`);
+        }
         // One kitKey per ADD — adding the same kit twice makes two independently-priced groups.
         const kitKey = `${kit.name}-${Date.now()}`;
-        lines.forEach(l => pushLine(l.it, l.qty, l.note, { kitKey, kitName: kit.name, kitBrand: kit.brand }));
-        addLog(`Kit "${kit.name}" → ${lines.length} line(s) added`, 'success');
+        resolved.forEach(l => pushLine(l.it, l.qty, l.note, { kitKey, kitName: kit.name, kitBrand: kit.brand, kitFinish: finCode ? String(finCode).toUpperCase() : '' }));
+        addLog(`Kit "${kit.name}"${finCode ? ` · ${finCode}` : ''} → ${resolved.length} line(s) added`, 'success');
     };
 
     const saveKit = async () => {
@@ -310,7 +346,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         quantity: l.qty,
                         rate: parseFloat((l.rate || 0).toFixed(2)),
                         price: { id: "-1" },
-                        description: `${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.kitName ? ' [Kit: ' + l.kitName + ']' : ''} [Quick Ship stock]`
+                        description: `${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`
                     }))
                 }
             };
@@ -333,7 +369,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 jobName: jobName || '', memo: memoText,
                 status: 'Pending', pickStatus: 'Pending',
                 totalParts: lines.reduce((s, l) => s + l.qty, 0),
-                lines: lines.map(l => ({ erp: l.erp, name: l.name, qty: l.qty, bin: l.bin || '', note: l.note || '', kit: l.kitName || '' })),
+                lines: lines.map(l => ({ erp: l.erp, name: l.name, qty: l.qty, bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '' })),
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -343,7 +379,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     lines.forEach(l => { if (l.kitKey) (groups[l.kitKey] = groups[l.kitKey] || []).push(l); });
                     const out = Object.values(groups).map(g => {
                         const kp = effectiveKitPrice(g[0].kitName, g[0].kitBrand);
-                        return { type: 'KIT', code: g[0].kitName, price: kp !== null ? kp : g.reduce((s, l) => s + l.rate * l.qty, 0), components: g.map(l => ({ erp: l.erp, name: l.name, qty: l.qty })) };
+                        // Customer-facing kit # = pattern + finish suffix (HS0109T … - SG).
+                        return { type: 'KIT', code: `${g[0].kitName}${g[0].kitFinish ? ' - ' + g[0].kitFinish : ''}`, price: kp !== null ? kp : g.reduce((s, l) => s + l.rate * l.qty, 0), components: g.map(l => ({ erp: l.erp, name: l.name, qty: l.qty })) };
                     });
                     lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.erp, name: l.name, qty: l.qty, rate: l.rate, total: l.rate * l.qty }));
                     return out;
@@ -450,9 +487,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                                     <div key={kit.name} style={{ display: 'flex', alignItems: 'stretch', border: '1px solid var(--line)' }}>
                                                         <button onClick={() => addSavedKit(kit)} style={{ ...btn('var(--paper-2)', 'var(--ink)'), border: 'none', textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--sans)', fontSize: '0.9rem' }}
                                                             onMouseOver={e => e.currentTarget.style.background = 'var(--brass)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper-2)'}>
-                                                            + {kit.name}{kp !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', color: hasCust ? '#3a7d44' : 'var(--ink-soft)' }}> · ${kp.toFixed(2)}{hasCust ? ' ★' : ''}</span>}
+                                                            + {kit.name}{(kit.finishCodes || []).length > 0 && <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', color: 'var(--ink-soft)' }}> · {kit.finishCodes.length} color{kit.finishCodes.length === 1 ? '' : 's'}</span>}{kp !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', color: hasCust ? '#3a7d44' : 'var(--ink-soft)' }}> · ${kp.toFixed(2)}{hasCust ? ' ★' : ''}</span>}
                                                         </button>
-                                                        <button title="Kit pricing & collection" onClick={() => setKitEdit({ name: kit.name, brand: kit.brand, basePrice: kit.basePrice ?? '', collection: kit.collection || '', clientPricing: (kit.clientPricing || []).map(r => ({ ...r })), addCust: '', addPrice: '' })} style={{ border: 'none', borderLeft: '1px solid var(--line)', background: '#fff', color: 'var(--brass)', cursor: 'pointer', padding: '0 10px', fontSize: '0.85rem', fontFamily: 'var(--mono)' }}>$</button>
+                                                        <button title="Kit pricing, finishes & collection" onClick={() => setKitEdit({ name: kit.name, brand: kit.brand, basePrice: kit.basePrice ?? '', collection: kit.collection || '', clientPricing: (kit.clientPricing || []).map(r => ({ ...r })), finishCodes: Array.isArray(kit.finishCodes) ? [...kit.finishCodes] : [], addCust: '', addPrice: '' })} style={{ border: 'none', borderLeft: '1px solid var(--line)', background: '#fff', color: 'var(--brass)', cursor: 'pointer', padding: '0 10px', fontSize: '0.85rem', fontFamily: 'var(--mono)' }}>$</button>
                                                         <button title="Delete kit" onClick={() => deleteKit(kit)} style={{ border: 'none', borderLeft: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', padding: '0 10px', fontSize: '0.9rem' }}>×</button>
                                                     </div>
                                                 );
@@ -475,6 +512,19 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             <div><span style={lbl}>Collection (filing)</span><input value={kitEdit.collection} onChange={e => setKitEdit({ ...kitEdit, collection: e.target.value })} list="qs-collections" placeholder="e.g. TQS" style={{ ...inp, width: '160px' }} /></div>
                             <div><span style={lbl}>Base kit price ($)</span><input type="number" value={kitEdit.basePrice} onChange={e => setKitEdit({ ...kitEdit, basePrice: e.target.value })} placeholder="blank = per-item" style={{ ...inp, width: '140px', fontFamily: 'var(--mono)' }} /></div>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', paddingBottom: '10px', maxWidth: '380px' }}>Blank = lines bill at their own item rates. A kit price distributes across the component lines so the sales order totals exactly the kit price.</span>
+                        </div>
+                        <span style={lbl}>Available finishes — the counter picks a color; components resolve to their /CODE variants</span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '14px' }}>
+                            {[...new Map(finishList.map(f => [f.code, f])).values()].sort((a, b) => a.code.localeCompare(b.code)).map(f => {
+                                const on = (kitEdit.finishCodes || []).includes(f.code);
+                                return (
+                                    <button key={f.code} title={f.name} onClick={() => setKitEdit({ ...kitEdit, finishCodes: on ? (kitEdit.finishCodes || []).filter(c => c !== f.code) : [...(kitEdit.finishCodes || []), f.code] })}
+                                        style={{ padding: '5px 10px', border: on ? '1px solid var(--ink)' : '1px solid var(--line)', background: on ? 'var(--ink)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px' }}>
+                                        {f.code}
+                                    </button>
+                                );
+                            })}
+                            {finishList.length === 0 && <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No finish codes found — add them to the in-house / outsourced finish lists first (11.x / Library).</span>}
                         </div>
                         <span style={lbl}>Per-customer kit pricing</span>
                         {(kitEdit.clientPricing || []).length === 0 && <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic', padding: '4px 0 8px' }}>None — every customer gets the base kit price.</div>}
@@ -503,7 +553,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             <div style={{ flex: 1 }} />
                             <button onClick={async () => {
                                 try {
-                                    await updateKitMeta({ name: kitEdit.name, brand: kitEdit.brand }, { collection: (kitEdit.collection || '').trim(), basePrice: (kitEdit.basePrice === '' || kitEdit.basePrice === null) ? '' : parseFloat(kitEdit.basePrice), clientPricing: kitEdit.clientPricing || [] });
+                                    await updateKitMeta({ name: kitEdit.name, brand: kitEdit.brand }, { collection: (kitEdit.collection || '').trim(), basePrice: (kitEdit.basePrice === '' || kitEdit.basePrice === null) ? '' : parseFloat(kitEdit.basePrice), clientPricing: kitEdit.clientPricing || [], finishCodes: kitEdit.finishCodes || [] });
                                     addLog(`Kit "${kitEdit.name}" pricing/filing saved`, 'success');
                                     setKitEdit(null);
                                 } catch (e) { alert('Save failed: ' + (e.message || e)); }
@@ -565,7 +615,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             <div key={l.key} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 74px auto', gap: '10px', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}</span>}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
                                 </div>
                                 <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} />
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', textAlign: 'right', color: 'var(--ink)' }}>${(l.rate * l.qty).toFixed(2)}</div>
@@ -585,6 +635,29 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
             </div>
+
+            {/* FINISH CHOOSER — a pattern kit with 2+ available finishes asks for the color first */}
+            {kitFinishPick && (
+                <div onClick={() => setKitFinishPick(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 11000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '24px', width: 'min(560px, 94vw)', border: '1px solid var(--line)', borderRadius: '4px', boxShadow: '0 16px 60px rgba(0,0,0,0.3)' }}>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.25rem', color: 'var(--ink)', marginBottom: '4px' }}>{kitFinishPick.name}</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: '16px' }}>Select finish — every component resolves to its /CODE variant</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                            {(kitFinishPick.finishCodes || []).map(code => {
+                                const f = finishList.find(x => x.code === code);
+                                return (
+                                    <button key={code} onClick={() => { const k = kitFinishPick; setKitFinishPick(null); addSavedKit(k, code); }}
+                                        style={{ ...btn('var(--paper-2)', 'var(--ink)'), textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--sans)', fontSize: '0.9rem' }}
+                                        onMouseOver={e => e.currentTarget.style.background = 'var(--brass)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper-2)'}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{code}</span>{f && f.name && f.name !== code ? ` — ${f.name}` : ''}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <button onClick={() => setKitFinishPick(null)} style={{ marginTop: '18px', background: 'none', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Cancel</button>
+                    </div>
+                </div>
+            )}
 
             {/* LOG */}
             {log.length > 0 && (
