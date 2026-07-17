@@ -7,6 +7,7 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { enqueueNsWrite } from "../Shared/nsOutbox";
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
 // the trade-discount / net-total display rows).
@@ -67,10 +68,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!po.nsVendorId) return alert(`PO ${po.poId || po.id} has no NetSuite vendor id.\n\nVendor "${po.vendor || '?'}" must match a NetSuite-synced vendor — run 11.1 → Sync Active Vendors (or fix the vendor name on the items), then re-generate the PO from the Sales Snapshot.`);
         const missing = (po.items || []).filter(l => !l.nsItemId);
         if (missing.length) return alert(`${missing.length} line(s) have no NetSuite item id — sync those items (11.1 → Sync Master Library) and re-generate:\n\n${missing.slice(0, 10).map(l => `• ${l.itemId}`).join('\n')}`);
-        if (!window.confirm(`Push PO ${po.poId || po.id} → NetSuite?\n\nVendor: ${po.vendor} (internal id ${po.nsVendorId})\n${(po.items || []).length} line(s), req ${po.reqDate || 'n/a'}.`)) return;
+        if (!window.confirm(`Queue PO ${po.poId || po.id} → NetSuite?\n\nVendor: ${po.vendor} (internal id ${po.nsVendorId})\n${(po.items || []).length} line(s), req ${po.reqDate || 'n/a'}.\n\nIt posts from the sync queue within ~a minute (11.1 → NetSuite Sync Queue shows status); the PO record picks up the NetSuite # automatically.`)) return;
         try {
             const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
-            const r = await nsProxyFetch({
+            // LAYER 2 (2026-07-16): staged write — the outbox worker posts it (serial, retried,
+            // idempotent via the [ob:] memo marker) and writes status + nsPoId/nsPoTran back
+            // onto the PO doc. Concurrency-safe under the whole team; nobody waits on a PO.
+            const obId = await enqueueNsWrite({
+                kind: 'purchaseorder',
+                label: `PO ${po.poId || po.id} → ${po.vendor}`,
+                sourceApp: 'RTG',
+                createdBy: currentUser || '',
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
                 method: 'POST',
                 payload: {
@@ -78,26 +86,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     location: { id: nsConfig.location },
                     memo: `Stock replenishment ${po.poId || po.id} (Sales Snapshot)`,
                     item: { items: (po.items || []).map(l => ({ item: { id: String(l.nsItemId) }, quantity: parseInt(l.quantity) || 1, ...(parseFloat(l.rate) > 0 ? { rate: parseFloat(l.rate) } : {}), description: l.description || l.itemId })) }
-                }
+                },
+                writeBack: { collection: 'hq_purchase_orders', docId: po.id, patch: { status: 'Pushed to NetSuite', pushedAt: Date.now() }, idField: 'nsPoId', tranField: 'nsPoTran' }
             });
-            const body = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(typeof body === 'object' ? JSON.stringify(body) : String(body));
-            // Record POSTs return the id only in the Location header (proxy drops it) — recover via
-            // the unique memo, like the plating PO does.
-            let nsPoId = body.id ? String(body.id) : null, nsPoTran = body.tranId || null;
-            if (!nsPoId || !nsPoTran) {
-                try {
-                    const lu = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q: `SELECT id, tranid FROM transaction WHERE type = 'PurchOrd' AND UPPER(memo) LIKE '%${String(po.poId || po.id).toUpperCase()}%'` } });
-                    const lb = await lu.json().catch(() => ({}));
-                    if (lb.items && lb.items[0]) { nsPoId = nsPoId || String(lb.items[0].id || ''); nsPoTran = nsPoTran || lb.items[0].tranid || null; }
-                } catch (luErr) { /* PO created; ids sync later */ }
-            }
-            await updateDoc(doc(db, 'hq_purchase_orders', po.id), { status: 'Pushed to NetSuite', nsPoId: nsPoId || null, nsPoTran: nsPoTran || null, pushedAt: Date.now() });
-            addLog(`✅ PO ${po.poId || po.id} → NetSuite ${nsPoTran || nsPoId || ''} (${po.vendor}).`, 'success');
-            alert(`✅ NetSuite PO created for ${po.vendor}: ${nsPoTran || nsPoId || '(id pending sync)'}`);
+            await updateDoc(doc(db, 'hq_purchase_orders', po.id), { status: 'Queued to NetSuite', nsOutboxId: obId, queuedAt: Date.now() });
+            addLog(`📤 PO ${po.poId || po.id} queued → NetSuite (${po.vendor}); posts within ~1 min.`, 'success');
+            alert(`📤 PO queued for ${po.vendor}.\n\nIt posts to NetSuite from the sync queue within about a minute — watch 11.1 → NetSuite Sync Queue for the live status and PO #.`);
+            loadRTGOrders();
         } catch (e) {
-            console.error('PO push failed:', e);
-            alert('❌ NetSuite rejected the PO:\n\n' + (e.message || e) + '\n\nIf it names a form or field, tell me and I\'ll adjust the payload (the vendor + item ids are pre-aligned, so those are not the issue).');
+            console.error('PO queue failed:', e);
+            alert('❌ Could not queue the PO: ' + (e.message || e));
         }
     };
 

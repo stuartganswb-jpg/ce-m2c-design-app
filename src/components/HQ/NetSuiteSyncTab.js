@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch } from "firebase/firestore";
+import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch, onSnapshot, updateDoc, query, orderBy, limit } from "firebase/firestore";
 import { parseFabricutWorkbook, buildFabricutPlan } from '../Shared/fabricutImport';
 import { nsProxyFetch } from "../Shared/nsProxy";
 
@@ -15,12 +15,20 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3");
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncLog, setSyncLog] = useState([]);
+    const [outbox, setOutbox] = useState([]); // staged NetSuite writes (ns_outbox) — live monitor
 
     useEffect(() => {
         if (BRAND_NETSUITE_MAP[activeBrand]) {
             setNsSubsidiaryId(BRAND_NETSUITE_MAP[activeBrand].subsidiary);
         }
     }, [activeBrand]);
+
+    useEffect(() => {
+        const unsub = onSnapshot(query(collection(db, 'ns_outbox'), orderBy('createdAt', 'desc'), limit(80)),
+            snap => setOutbox(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+            () => { /* collection may not exist yet — panel just stays empty */ });
+        return () => unsub();
+    }, []);
 
     const addLog = (msg, type = 'info') => {
         const time = new Date().toLocaleTimeString();
@@ -814,6 +822,37 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>NetSuite Master Sync (Pull)</h2>
                 </div>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '4px 8px', borderRadius: '2px' }}>Role: {currentUser}</span>
+            </div>
+
+            {/* NETSUITE SYNC QUEUE (Layer 2, 2026-07-16): staged writes (ns_outbox) drained ~1/min
+                by the nsOutboxWorker function — serial, retried with backoff, idempotent. This is
+                the live monitor: retry FAILED entries after fixing data; ✕ cancels an un-posted one. */}
+            <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px' }}>
+                <div style={{ padding: '14px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>NetSuite Sync Queue</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
+                        {outbox.filter(o => o.status === 'PENDING').length} pending · {outbox.filter(o => o.status === 'PROCESSING').length} posting · {outbox.filter(o => o.status === 'FAILED').length} failed — drains ~1/min, retries automatically
+                    </span>
+                </div>
+                {outbox.length === 0 ? (
+                    <div style={{ padding: '14px 24px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Queue is empty — staged pushes (e.g. RTG purchase orders) appear here with live status.</div>
+                ) : (
+                    <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
+                        {outbox.map(o => (
+                            <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '8px 24px', borderTop: '1px solid var(--paper-2)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '3px 8px', whiteSpace: 'nowrap', border: '1px solid', borderColor: o.status === 'POSTED' ? '#3a7d44' : o.status === 'FAILED' ? '#d9534f' : 'var(--brass)', color: o.status === 'POSTED' ? '#3a7d44' : o.status === 'FAILED' ? '#d9534f' : 'var(--brass)' }}>{o.status}</span>
+                                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink)' }} title={o.lastError || ''}>{o.label || o.kind}{o.nsTran ? ` → ${o.nsTran}` : ''}{o.status === 'FAILED' && o.lastError ? ` — ${String(o.lastError).slice(0, 90)}` : ''}</span>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.createdBy || ''}{o.createdAt ? ` · ${new Date(o.createdAt).toLocaleTimeString()}` : ''}{o.attempts ? ` · try ${o.attempts}` : ''}</span>
+                                {(o.status === 'FAILED' || o.status === 'CANCELLED') && (
+                                    <button onClick={() => updateDoc(doc(db, 'ns_outbox', o.id), { status: 'PENDING', attempts: 0, lastError: null, nextAttemptAt: Date.now() })} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>↻ Retry</button>
+                                )}
+                                {(o.status === 'PENDING' || o.status === 'FAILED') && (
+                                    <button onClick={() => { if (window.confirm(`Cancel "${o.label || o.kind}"? It will NOT be posted to NetSuite.`)) updateDoc(doc(db, 'ns_outbox', o.id), { status: 'CANCELLED' }); }} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>✕</button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
             <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>

@@ -85,6 +85,7 @@ service cloud.firestore {
     match /hq_work_orders/{document=**}         { allow read, write: if isAuth(); }
     match /hq_sales_orders/{document=**}        { allow read, write: if isAuth(); }
     match /hq_purchase_orders/{document=**}     { allow read, write: if isAuth(); }
+    match /ns_outbox/{document=**}              { allow read, write: if isAuth(); }
     match /hq_inventory_tasks/{document=**}     { allow read, write: if isAuth(); }
 
     // ---- Shop Floor ----

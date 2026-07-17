@@ -1,5 +1,6 @@
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const CryptoJS = require("crypto-js");
@@ -375,6 +376,136 @@ exports.netsuiteProxy = onRequest({
         }
         console.error("Cloud Proxy Error:", error);
         return res.status(500).send({ error: error.message });
+    }
+});
+
+
+// ============================================================================
+// 2b. NS OUTBOX WORKER — LAYER 2 STAGED WRITES (Stuart 2026-07-16)
+// ============================================================================
+// Clients enqueue NetSuite WRITES into Firestore `ns_outbox` (see
+// src/components/Shared/nsOutbox.js) instead of posting live. This worker
+// drains the queue once a minute, STRICTLY SERIAL with pacing — the proxy's
+// gate above allows 4 concurrent, so 4 + this 1 fits a 5-slot account.
+//   • 429/5xx/network → retry with exponential backoff (30s → 15min cap),
+//     up to NS_OB_MAX_ATTEMPTS, then FAILED.
+//   • Validation 4xx → FAILED immediately (it won't fix itself; a human
+//     retries from the 11.1 "NetSuite Sync Queue" panel after fixing data).
+//   • Idempotency: the enqueue helper stamps `[ob:<docId>]` into the payload
+//     memo; a retry after a mid-flight crash FIRST looks that marker up in
+//     NetSuite and recovers the posted transaction instead of double-posting.
+//   • writeBack: once posted, merge a patch onto an app doc and stamp the
+//     NetSuite id/tran into named fields (e.g. hq_purchase_orders.nsPoId).
+const NS_OB_MAX_ATTEMPTS = 6;
+const nsObBackoffMs = (attempts) => Math.min(30000 * Math.pow(2, attempts), 15 * 60 * 1000);
+
+exports.nsOutboxWorker = onSchedule({
+    schedule: 'every 1 minutes',
+    timeoutSeconds: 240,
+    maxInstances: 1,
+    secrets: [NS_ACCOUNT, NS_CONSUMER_KEY, NS_CONSUMER_SECRET, NS_TOKEN_ID, NS_TOKEN_SECRET]
+}, async () => {
+    const fdb = admin.firestore();
+    const now = Date.now();
+    const creds = {
+        account: NS_ACCOUNT.value(),
+        consumerKey: NS_CONSUMER_KEY.value(),
+        consumerSecret: NS_CONSUMER_SECRET.value(),
+        tokenId: NS_TOKEN_ID.value(),
+        tokenSecret: NS_TOKEN_SECRET.value()
+    };
+
+    const nsCall = async (method, targetUrl, payload) => {
+        const r = await fetch(targetUrl, {
+            method,
+            headers: {
+                "Authorization": generateNetSuiteHeader(method, targetUrl, creds),
+                "Content-Type": "application/json",
+                "Prefer": method === 'POST' && targetUrl.includes('/record/') ? 'return=representation' : 'transient'
+            },
+            ...(payload && method !== 'GET' ? { body: JSON.stringify(payload) } : {})
+        });
+        const text = await r.text();
+        let body = {};
+        try { body = text ? JSON.parse(text) : {}; } catch (e) { body = { raw: String(text).slice(0, 500) }; }
+        return { status: r.status, ok: r.ok, body, location: r.headers.get('location') || '' };
+    };
+    const recoverByMarker = async (docId) => {
+        try {
+            const r = await nsCall('POST', 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+                { q: `SELECT id, tranid FROM transaction WHERE memo LIKE '%[ob:${docId}]%'` });
+            const row = r.ok && r.body.items && r.body.items[0];
+            return row ? { nsId: String(row.id), nsTran: row.tranid || null } : null;
+        } catch (e) { return null; }
+    };
+    const finishPosted = async (e, nsId, nsTran, note) => {
+        if (e.writeBack && e.writeBack.collection && e.writeBack.docId) {
+            const patch = { ...(e.writeBack.patch || {}) };
+            if (e.writeBack.idField && nsId) patch[e.writeBack.idField] = String(nsId);
+            if (e.writeBack.tranField && nsTran) patch[e.writeBack.tranField] = nsTran;
+            await fdb.doc(`${e.writeBack.collection}/${e.writeBack.docId}`).set(patch, { merge: true }).catch(() => {});
+        }
+        await e.ref.update({ status: 'POSTED', postedAt: Date.now(), nsId: nsId || null, nsTran: nsTran || null, ...(note ? { note } : {}) });
+    };
+    const bumpRetry = async (e, errText) => {
+        const attempts = (e.attempts || 0) + 1;
+        if (attempts >= NS_OB_MAX_ATTEMPTS) {
+            await e.ref.update({ status: 'FAILED', attempts, lastError: errText, failedAt: Date.now() });
+        } else {
+            await e.ref.update({ status: 'PENDING', attempts, lastError: errText, nextAttemptAt: Date.now() + nsObBackoffMs(attempts) });
+        }
+    };
+
+    // Reclaim entries stuck PROCESSING >5 min (a crashed run). The marker check below
+    // prevents a double-post when the crash happened AFTER NetSuite accepted the write.
+    const stuck = await fdb.collection('ns_outbox').where('status', '==', 'PROCESSING').get();
+    for (const d of stuck.docs) {
+        if ((d.data().leasedAt || 0) < now - 5 * 60 * 1000) await d.ref.update({ status: 'PENDING' });
+    }
+
+    // Due PENDING entries — equality-only query (no composite index needed); order in memory.
+    const snap = await fdb.collection('ns_outbox').where('status', '==', 'PENDING').limit(60).get();
+    const due = snap.docs
+        .map(d => ({ ref: d.ref, id: d.id, ...d.data() }))
+        .filter(e => (e.nextAttemptAt || 0) <= now)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+        .slice(0, 20);
+
+    for (const e of due) {
+        // Claim in a transaction so an overlapping run can never double-process.
+        const claimed = await fdb.runTransaction(async (tx) => {
+            const cur = await tx.get(e.ref);
+            if (!cur.exists || cur.data().status !== 'PENDING') return false;
+            tx.update(e.ref, { status: 'PROCESSING', leasedAt: Date.now() });
+            return true;
+        }).catch(() => false);
+        if (!claimed) continue;
+
+        try {
+            const hasMarker = JSON.stringify(e.payload || {}).includes(`[ob:${e.id}]`);
+            if ((e.attempts || 0) > 0 && hasMarker && e.method === 'POST' && String(e.targetUrl).includes('/record/v1/')) {
+                const rec = await recoverByMarker(e.id);
+                if (rec) { await finishPosted(e, rec.nsId, rec.nsTran, 'recovered after retry — not double-posted'); continue; }
+            }
+            const r = await nsCall(e.method, e.targetUrl, e.payload);
+            if (r.ok) {
+                let nsId = r.body && r.body.id ? String(r.body.id) : '';
+                let nsTran = (r.body && (r.body.tranId || r.body.tranid)) || null;
+                if (!nsId && r.location) { const m = String(r.location).match(/\/(\d+)\s*$/); if (m) nsId = m[1]; }
+                if ((!nsId || !nsTran) && hasMarker) {
+                    const rec = await recoverByMarker(e.id);
+                    if (rec) { nsId = nsId || rec.nsId; nsTran = nsTran || rec.nsTran; }
+                }
+                await finishPosted(e, nsId || null, nsTran, null);
+            } else if (r.status === 429 || r.status >= 500) {
+                await bumpRetry(e, `HTTP ${r.status}: ${JSON.stringify(r.body).slice(0, 400)}`);
+            } else {
+                await e.ref.update({ status: 'FAILED', lastError: `HTTP ${r.status}: ${JSON.stringify(r.body).slice(0, 900)}`, failedAt: Date.now() });
+            }
+        } catch (err) {
+            await bumpRetry(e, String(err && err.message ? err.message : err).slice(0, 400)).catch(() => {});
+        }
+        await new Promise(r => setTimeout(r, 350)); // pacing — stay a polite single-file consumer
     }
 });
 
