@@ -887,8 +887,51 @@ const ShopFloor = () => {
     const renderCustomTab = () => {
         // Keeping logic for Custom Fab orders from RTG
         const activeOrders = customOrders.filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating').sort((a,b) => a.priority - b.priority);
-        const rods = activeOrders.filter(o => o.category === 'Cut to Size Rods');
-        const fabs = activeOrders.filter(o => o.category === 'Custom Fabrication');
+        // STAGED → ACTIVE flow (Stuart 2026-07-16): new orders wait on the LEFT as a compact
+        // staged queue; ▶ Start moves ONE across to the RIGHT as the full working card. The
+        // shared signal is status 'In Process', so every tablet sees the same active job.
+        const inProcess = activeOrders.filter(o => o.status === 'In Process');
+        const staged = activeOrders.filter(o => o.status !== 'In Process');
+        const stagedRods = staged.filter(o => o.category === 'Cut to Size Rods');
+        const stagedFabs = staged.filter(o => o.category !== 'Cut to Size Rods');
+        // Same side effects as the card's Start button: sibling small parts release to
+        // Pick/Pack and finishing gets notified — starting IS the release trigger (§A1).
+        const startOrder = async (order) => {
+            if (!window.confirm(`▶ START ${order.woNum}?\n\n${order.item || order.partNum || ''}\n\nIt moves to the Active side; sibling small parts release to Pick/Pack and finishing is notified.`)) return;
+            try {
+                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process', startedAt: serverTimestamp(), startedBy: user.name });
+                await mirrorCustomStatusToSibling(order, 'In Process');
+                await releaseSiblingToPickPack(order);
+                await addDoc(collection(db, "global_messages"), {
+                    sender: 'System', sourceApp: 'SHOP', target: 'FINISHING',
+                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true
+                });
+            } catch (e) { alert('Failed to start: ' + (e.message || e)); }
+        };
+        // Compact staged row: enough to review (View Item / SOP / Drawing) without the bulk —
+        // the full card renders on the right once started.
+        const StagedCard = ({ order }) => (
+            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '14px 16px', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '6px' }}>
+                    <span style={{ fontFamily: 'var(--sans)', fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{order.item || order.partNum}</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', border: '1px solid var(--line)', padding: '3px 7px', whiteSpace: 'nowrap', color: 'var(--ink-soft)' }}>WO {order.woNum}</span>
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '10px' }}>
+                    SO {order.soNum} · Qty {order.qty}{order.cutLength ? ` · Cut ${order.cutLength}"` : ''}{order.clientName ? ` · ${order.clientName}` : ''}{order.isOutsourced ? ' · PLATED (outsourced)' : ''}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => startOrder(order)} style={{ flex: 1.4, background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>▶ Start</button>
+                    {order.quoteId && (
+                        <button onClick={() => { setCfgLine(0); setCfgQuote(order.quoteId); }} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer' }}>🔍 View</button>
+                    )}
+                    {(orderDrawings[order.quoteId] || []).map((d, i) => (
+                        d.kind === 'SOP'
+                            ? <button key={i} title={`${d.name} — standing SOPs`} onClick={() => setSopView(d.docId)} style={{ background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '10px 12px', fontFamily: 'var(--mono)', fontSize: '10px', cursor: 'pointer' }}>📋</button>
+                            : <button key={i} title={d.name} onClick={() => window.open(d.url, '_blank', 'noopener')} style={{ background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '10px 12px', fontFamily: 'var(--mono)', fontSize: '10px', cursor: 'pointer' }}>📄</button>
+                    ))}
+                </div>
+            </div>
+        );
         // UNDO (Stuart 2026-07-15 — an accidental Complete pushed a whole job to finishing):
         // recently completed orders stay visible below with one button that puts the order back
         // into production AND tells the finishing/staging side the customs are NOT complete
@@ -1186,14 +1229,32 @@ const ShopFloor = () => {
         return (
             <div>
                 <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '24px' }}>Custom Orders Inbox</h2>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' }}>
-                    <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Cut-to-Size Rods</h3>
-                        {rods.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending rod orders.</div> : rods.map(o => <CustomCard key={o.id} order={o} />)}
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 400px) 1fr', gap: '30px', alignItems: 'start' }}>
+                    <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                        <h3 style={{ margin: '0 0 6px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Staged Orders{staged.length ? ` (${staged.length})` : ''}</h3>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', margin: '10px 0 18px' }}>New orders wait here — ▶ Start moves one to the active side</div>
+                        {staged.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No staged orders.</div>}
+                        {stagedRods.length > 0 && (
+                            <>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', margin: '0 0 10px' }}>✂ Cut-to-Size Rods</div>
+                                {stagedRods.map(o => <StagedCard key={o.id} order={o} />)}
+                            </>
+                        )}
+                        {stagedFabs.length > 0 && (
+                            <>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', margin: stagedRods.length ? '18px 0 10px' : '0 0 10px' }}>⚒ Custom Fabrication</div>
+                                {stagedFabs.map(o => <StagedCard key={o.id} order={o} />)}
+                            </>
+                        )}
                     </div>
                     <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Custom Fabrication</h3>
-                        {fabs.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No pending custom fab orders.</div> : fabs.map(o => <CustomCard key={o.id} order={o} />)}
+                        <h3 style={{ margin: '0 0 24px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>
+                            <span>Active Order</span>
+                            {inProcess.length > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', textTransform: 'uppercase' }}>{inProcess.length} in process</span>}
+                        </h3>
+                        {inProcess.length === 0
+                            ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>Nothing active — hit ▶ Start on a staged order to bring it over.</div>
+                            : inProcess.map(o => <CustomCard key={o.id} order={o} />)}
                     </div>
                 </div>
 
