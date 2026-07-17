@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc } from "firebase/firestore";
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
