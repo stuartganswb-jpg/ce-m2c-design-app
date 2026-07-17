@@ -488,8 +488,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     const stamp = Date.now().toString().slice(-6);
                     const safeErp = String(basePart.legacyErpId || basePart.itemId).replace(/[^A-Za-z0-9]+/g, '-');
                     const woId = `WO-${safeErp}-${stamp}-${i}`;
+                    // Easy-to-speak reference (WO-1043); long doc id stays the key.
+                    let woNo = `WO-${basePart.legacyErpId || basePart.itemId}-${stamp}`;
+                    try { woNo = await reserveShortNo('WO'); } catch (e) { /* legacy fallback */ }
                     await setDoc(doc(db, "hq_work_orders", woId), {
-                        id: woId, woId, woDisplayId: `WO-${basePart.legacyErpId || basePart.itemId}-${stamp}`,
+                        id: woId, woId, woNo, woDisplayId: woNo,
                         partErpId: basePart.legacyErpId || basePart.itemId,
                         brand: activeBrand, status: "Approved", customer: "Internal Stock",
                         hqJobId: basePart.id, totalParts: shortfall,
@@ -514,7 +517,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     alert(`⚠️ Vendor "${activeVendor}" doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors) — PO not created. Fix the vendor name or sync vendors, then retry.`);
                 } else {
                     const nsVendorId = String(rec.id || '').replace(/^VEND-/, '');
-                    const newPoId = `PO-${(activeVendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0,5)}-${Date.now().toString().slice(-6)}`;
+                    // Easy-to-speak reference (PO-1044) as the id; legacy vendor-stamp fallback.
+                    let newPoId;
+                    try { newPoId = await reserveShortNo('PO'); }
+                    catch (e) { newPoId = `PO-${(activeVendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0, 5)}-${Date.now().toString().slice(-6)}`; }
                     const items = directBuyLines.map(({ part, qty }) => ({
                         itemId: part.legacyErpId || part.itemId,
                         nsItemId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null,
@@ -568,10 +574,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const stamp = Date.now().toString().slice(-6);
                 const safeErp = String(erpId).replace(/[^A-Za-z0-9]+/g, '-');
                 const newWoId = `WO-${safeErp}-${stamp}`;
+                // Easy-to-speak reference (WO-1045); the true item code stays on variantErpId.
+                let woNo = `WO-${erpId}-${stamp}`;
+                try { woNo = await reserveShortNo('WO'); } catch (e) { /* legacy fallback */ }
                 await setDoc(doc(db, "hq_work_orders", newWoId), {
                     id: newWoId,
                     woId: newWoId,
-                    woDisplayId: `WO-${erpId}-${stamp}`,
+                    woNo,
+                    woDisplayId: woNo,
                     brand: activeBrand,
                     status: "Approved",
                     customer: "Internal Stock",

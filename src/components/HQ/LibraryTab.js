@@ -6,6 +6,7 @@ import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, 
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 import { fabricutCodeOf } from '../Shared/priceLevels';
+import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 
 
@@ -730,9 +731,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       const stamp = Date.now().toString().slice(-6);
       const safeErp = String(part.legacyErpId).replace(/[^A-Za-z0-9]+/g, '-');
       const newWoId = `WO-${safeErp}-${stamp}`;
+      // Easy-to-speak reference (WO-1046); the real part number stays on partErpId.
+      let woNo = `WO-${part.legacyErpId}-${stamp}`;
+      try { woNo = await reserveShortNo('WO'); } catch (e) { /* legacy fallback */ }
       await setDoc(doc(db, "hq_work_orders", newWoId), {
-          id: newWoId, woId: newWoId,
-          woDisplayId: `WO-${part.legacyErpId}-${stamp}`, partErpId: part.legacyErpId,
+          id: newWoId, woId: newWoId, woNo,
+          woDisplayId: woNo, partErpId: part.legacyErpId,
           brand: activeBrand, status: "Approved", customer: "Internal Stock",
           hqJobId: part.id, totalParts: Number(qty),
           reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
