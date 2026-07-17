@@ -803,6 +803,36 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // The "-N" is a temporary new-item marker and any "-10"/"-12" is a size, not part of the finish.
     const finishOf = (itemid) => { const s = String(itemid || ''); const i = s.lastIndexOf('/'); return i >= 0 ? s.slice(i + 1).split('-')[0].toUpperCase() : ''; };
     const POLE_RACK = 8; // poles are painted 8 per rack (not sled-packed by S/M/L)
+    // RING PACKS (Stuart 2026-07-17): "BASE/FIN-EA" = the stocked SINGLE; "BASE/FIN-7/-10/-12"
+    // (any digits, WITH an -EA sibling in the report) = customer pack ASSEMBLIES of that single —
+    // no longer stocked. Packs are analysis-only rows: their demand (× pack size) and their
+    // remaining shelf stock (× pack size) roll into the single's numbers, and ordering happens
+    // on the -EA row only. Same per finish (SG packs → SG single, BL → BL, …).
+    const packMap = (() => {
+        const rowsAll = salesHist?.rows || [];
+        const ids = new Set(rowsAll.map(r => String(r.itemid).toUpperCase()));
+        const m = new Map();
+        rowsAll.forEach(r => {
+            const id = String(r.itemid).toUpperCase();
+            const mt = id.match(/^(.+\/[A-Z0-9]+)-(\d+)$/);
+            if (mt && ids.has(`${mt[1]}-EA`)) m.set(id, { isPack: true, size: parseInt(mt[2]), singleId: `${mt[1]}-EA` });
+        });
+        rowsAll.forEach(r => {
+            const id = String(r.itemid).toUpperCase();
+            if (!id.endsWith('-EA')) return;
+            const packs = rowsAll.filter(x => m.get(String(x.itemid).toUpperCase())?.singleId === id);
+            if (!packs.length) return;
+            const sz = (x) => m.get(String(x.itemid).toUpperCase()).size;
+            m.set(id, {
+                isSingle: true,
+                packItemIds: packs.map(p => p.itemid),
+                extraTotal: packs.reduce((s, p) => s + (p.total || 0) * sz(p), 0),
+                extra6: packs.reduce((s, p) => s + (p.cells || []).slice(-6).reduce((a, c) => a + (c.v || 0), 0) * sz(p), 0),
+                packAvailEq: packs.reduce((s, p) => s + Math.round(Number(p.available) || 0) * sz(p), 0)
+            });
+        });
+        return m;
+    })();
     // Per-row reorder analysis (Stuart 2026-07-17 rules):
     //   OUTSOURCED (isInHouse === false + vendor + NOT an assembly): Min OH = 6 MONTHS of
     //     demand (12-mo total ÷ 2) — a safe-stock buffer so we can't run out inside 6 months.
@@ -821,21 +851,35 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const isPole = /POLE|ROD/.test(ptype);
         const isAssembly = part?.partClass === 'Assembly' || part?.netSuiteRecordType === 'assemblyitem';
         const isOutsourced = specs.isInHouse === false && !!String(specs.vendorName || '').trim() && !isAssembly;
-        const available = Math.round(Number(r.available) || 0);
+        let available = Math.round(Number(r.available) || 0);
         const onOrd = Math.round(Number(r.onOrd) || 0);
-        const total12 = Number(r.total) || 0;
-        const last6 = (r.cells || []).slice(-6).reduce((s, c) => s + (c.v || 0), 0); // merged (new+old) last 6 months
+        const pk = packMap.get(String(r.itemid).toUpperCase());
+        if (pk && pk.isPack) {
+            // Pack assemblies aren't ordered here — they build from -EA singles at pick.
+            return { part, size, ptype, isPole: false, isAssembly, isOutsourced: false, isPack: true, packSingle: pk.singleId, packSize: pk.size, available, onOrd, minOnHand: 0, minRule: `Pack of ${pk.size} — demand + ordering roll into ${pk.singleId}`, rop: null, threshold: 0, cap: 0, recommended: 0 };
+        }
+        let total12 = Number(r.total) || 0;
+        let last6 = (r.cells || []).slice(-6).reduce((s, c) => s + (c.v || 0), 0); // merged (new+old) last 6 months
+        let packNote = '';
+        if (pk && pk.isSingle) {
+            // The single carries ALL demand in single units: its own EA sales + pack sales × size;
+            // available counts remaining pack shelf stock as single-equivalents.
+            total12 += pk.extraTotal;
+            last6 += pk.extra6;
+            available += pk.packAvailEq;
+            packNote = ` — incl. ${pk.extraTotal} singles of pack demand from ${pk.packItemIds.length} pack SKU(s)`;
+        }
         let minOnHand, minRule;
-        if (isOutsourced) { minOnHand = Math.round(total12 / 2); minRule = 'Outsourced: 6 months of demand'; }
-        else if (isAssembly) { minOnHand = Math.round((total12 / 52) * 6); minRule = 'Assembly: 6 weeks of demand (3wk finishing lead + 3wk safety)'; }
-        else { minOnHand = Math.round((last6 / 26) * 4); minRule = 'Legacy: 4 weeks of the 6-month rate'; }
+        if (isOutsourced) { minOnHand = Math.round(total12 / 2); minRule = 'Outsourced: 6 months of demand' + packNote; }
+        else if (isAssembly) { minOnHand = Math.round((total12 / 52) * 6); minRule = 'Assembly: 6 weeks of demand (3wk finishing lead + 3wk safety)' + packNote; }
+        else { minOnHand = Math.round((last6 / 26) * 4); minRule = 'Legacy: 4 weeks of the 6-month rate' + packNote; }
         const ropRaw = specs.reorderPoint;
         const rop = (ropRaw === '' || ropRaw === undefined || ropRaw === null) ? null : (parseInt(ropRaw) || 0);
         const threshold = (rop !== null && rop > 0) ? rop : minOnHand;
         const cap = isPole ? POLE_RACK : (lookupCapacity(capacityMatrix, size, ptype) || SIZE_CAPACITY[size] || 0);
         const shortfall = Math.max(0, threshold - (available + onOrd));
         const recommended = shortfall > 0 ? (cap > 0 ? Math.ceil(shortfall / cap) * cap : shortfall) : 0;
-        return { part, size, ptype, isPole, isAssembly, isOutsourced, available, onOrd, minOnHand, minRule, rop, threshold, cap, recommended };
+        return { part, size, ptype, isPole, isAssembly, isOutsourced, isSingleAgg: !!(pk && pk.isSingle), packCount: pk && pk.isSingle ? pk.packItemIds.length : 0, available, onOrd, minOnHand, minRule, rop, threshold, cap, recommended };
     };
 
     // Push edited ROPs → Master Library (manufacturingSpecs.reorderPoint). Keyed by ERP code so
@@ -1202,10 +1246,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         const cut = id.lastIndexOf('/');
                         if (cut <= 0) return;
                         const base = id.slice(0, cut).toUpperCase();
+                        // Pack rows consume pack-size cores per unit sold (…/SG-12 × 50 = 600 cores).
+                        const pk = packMap.get(id.toUpperCase());
+                        const mult = pk && pk.isPack ? pk.size : 1;
                         let g = byBase.get(base);
                         if (!g) { g = { base, cells: salesHist.months.map(() => 0), total: 0, orders: 0, variants: [] }; byBase.set(base, g); }
-                        r.cells.forEach((c, i) => { g.cells[i] += (c.v || 0); });
-                        g.total += r.total; g.orders += r.orders; g.variants.push(id);
+                        r.cells.forEach((c, i) => { g.cells[i] += (c.v || 0) * mult; });
+                        g.total += (r.total || 0) * mult; g.orders += r.orders; g.variants.push(mult > 1 ? `${id} (×${mult})` : id);
                     });
                     return [...byBase.values()]
                         .filter(g => !term || g.base.includes(term))
@@ -1351,7 +1398,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 const ov = orderQty[r.internalId] ?? '';
                                                 return (
                                                 <tr key={r.internalId}>
-                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}</td>
+                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}{info.isPack ? <span title={info.minRule} style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · PACK×{info.packSize}</span> : (info.isSingleAgg ? <span title="Aggregates its pack SKUs — pack demand × size and pack shelf stock roll in here" style={{ color: '#3a7d44', fontSize: '9px' }}> · EA+</span> : null)}</td>
                                                     <td style={{ ...numTd, textAlign: 'left', color: r.oldInternalId ? OLD_BLUE : 'var(--line)' }}>{r.oldInternalId || '—'}</td>
                                                     {r.cells.map((c, i) => (
                                                         <td key={salesHist.months[i].key} style={{ ...numTd, color: c.src === 'new' ? 'var(--ink)' : (c.src === 'old' ? OLD_BLUE : 'var(--line)'), fontWeight: c.src === 'new' ? 500 : 400 }}>{c.v || '·'}</td>
@@ -1359,12 +1406,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>{r.total || '·'}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.avg.toFixed(1)}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.orders}</td>
-                                                    <td style={{ ...numTd, color: info.available <= info.threshold ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{info.available}</td>
+                                                    <td style={{ ...numTd, color: (!info.isPack && info.available <= info.threshold) ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title={info.isSingleAgg ? 'Includes remaining pack shelf stock × pack size (single-equivalents)' : undefined}>{info.available}</td>
                                                     <td style={{ ...numTd }}>{r.onOrd > 0 ? <button onClick={() => setOnOrdModal(r)} title="Open POs / work orders — click for detail" style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{Math.round(r.onOrd)}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }} title={info.minRule}>{info.minOnHand || '·'}</td>
-                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[String(r.itemid).toUpperCase()] ?? (info.rop ?? '')} placeholder="—" disabled={!info.part} title={info.part ? 'Re-order point — ⬆ Save pushes to the Master Library; overrides Min OH' : 'No matching Master Library part — sync the item first'} onChange={e => setRopEdits(prev => ({ ...prev, [String(r.itemid).toUpperCase()]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[String(r.itemid).toUpperCase()] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: info.part ? '#fff' : 'var(--paper-2)' }} /></td>
-                                                    <td style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)' }}>{info.recommended || '·'}</td>
-                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ov} placeholder="0" onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none' }} /></td>
+                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[String(r.itemid).toUpperCase()] ?? (info.rop ?? '')} placeholder={info.isPack ? '·' : '—'} disabled={!info.part || info.isPack} title={info.isPack ? `Pack assembly — set the ROP on ${info.packSingle}` : (info.part ? 'Re-order point — ⬆ Save pushes to the Master Library; overrides Min OH' : 'No matching Master Library part — sync the item first')} onChange={e => setRopEdits(prev => ({ ...prev, [String(r.itemid).toUpperCase()]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[String(r.itemid).toUpperCase()] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: (info.part && !info.isPack) ? '#fff' : 'var(--paper-2)' }} /></td>
+                                                    <td style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)' }}>{info.isPack ? <span title={`Packs build from singles at pick — order ${info.packSingle}`} style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 400 }}>→ EA</span> : (info.recommended || '·')}</td>
+                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ov} placeholder={info.isPack ? '·' : '0'} disabled={!!info.isPack} title={info.isPack ? `Packs are built from ${info.packSingle} at pick — order the single row` : undefined} onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none', background: info.isPack ? 'var(--paper-2)' : '#fff' }} /></td>
                                                     <td style={{ ...numTd }}>{(info.isPole && /8(1[05])/.test(String(r.itemid))) ? <button title="Cut 8 ft rods down to 6 ft / 4 ft" onClick={() => setCutModal({ itemid: r.itemid, internalId: r.internalId, available: info.available, qty: '', target: '4FT' })} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                 </tr>
                                                 );

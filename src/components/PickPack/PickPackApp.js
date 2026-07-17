@@ -10,6 +10,7 @@ import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { printItemLabel, printBinLabel } from '../Shared/labelPrint';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { enqueueNsWrite } from "../Shared/nsOutbox";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -1926,8 +1927,54 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                 {/* 📦 TAB: STOCK / QUICK SHIP — pre-finished stocked orders, kept apart from custom */}
                 {activeTab === 'STOCK' && (() => {
+                    // RING PACKS (Stuart 2026-07-17): "BASE/FIN-EA" = the stocked SINGLE on the shelf;
+                    // "BASE/FIN-7/-10/-12" (digits, with an -EA sibling in the library) = customer pack
+                    // ASSEMBLIES of that single. The floor picks SINGLES; confirming the pick queues a
+                    // NetSuite ASSEMBLY BUILD per pack line (consumes the -EA per the pack's BOM) so the
+                    // sales order can be fulfilled/packed in NetSuite.
+                    const findPartByErp = (erp) => hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
+                    const packOf = (l) => {
+                        const erp = String(l.erp || '').toUpperCase();
+                        const m = erp.match(/^(.+\/[A-Z0-9]+)-(\d+)$/);
+                        if (!m) return null;
+                        const singleErp = `${m[1]}-EA`;
+                        if (!findPartByErp(singleErp)) return null; // no -EA sibling → not a pack
+                        return { size: parseInt(m[2]), singleErp };
+                    };
                     const setQSStatus = async (o, status) => {
-                        try { await updateDoc(doc(db, "hq_sales_orders", o.id), { status, pickStatus: status }); writeLog(`Quick Ship ${o.id} → ${status}`, 'STOCK'); }
+                        try {
+                            await updateDoc(doc(db, "hq_sales_orders", o.id), { status, pickStatus: status });
+                            writeLog(`Quick Ship ${o.id} → ${status}`, 'STOCK');
+                            if (status === 'Picked' && !o.packBuildsQueued) {
+                                const packs = (o.lines || []).map(l => { const pk = packOf(l); return pk ? { l, pk, part: findPartByErp(String(l.erp).toUpperCase()) } : null; }).filter(Boolean);
+                                if (packs.length) {
+                                    const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
+                                    let queued = 0; const skipped = [];
+                                    for (const p of packs) {
+                                        if (!p.part?.netSuiteInternalId) { skipped.push(p.l.erp); continue; }
+                                        await enqueueNsWrite({
+                                            kind: 'assemblybuild',
+                                            label: `Build ${p.l.qty} × ${p.l.erp} (${(Number(p.l.qty) || 0) * p.pk.size} × ${p.pk.singleErp}) — SO ${o.soId || o.id}`,
+                                            sourceApp: 'WMS', createdBy: operator?.name || '',
+                                            targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild',
+                                            method: 'POST',
+                                            payload: {
+                                                item: { id: String(p.part.netSuiteInternalId) },
+                                                quantity: Number(p.l.qty) || 1,
+                                                location: { id: nsCfg.location },
+                                                subsidiary: { id: nsCfg.subsidiary },
+                                                memo: `Pack build for SO ${o.soId || o.id} — picked as singles`
+                                            },
+                                            writeBack: { collection: 'hq_sales_orders', docId: o.id, patch: { packBuildsPosted: true } }
+                                        });
+                                        queued++;
+                                    }
+                                    if (queued) await updateDoc(doc(db, "hq_sales_orders", o.id), { packBuildsQueued: true });
+                                    writeLog(`Queued ${queued} pack assembly build(s) for ${o.id}${skipped.length ? ` — ⚠ skipped (no NS id): ${skipped.join(', ')}` : ''}`, 'STOCK');
+                                    if (queued || skipped.length) alert(`📦 ${queued} pack assembly build(s) queued to NetSuite (watch 11.1 → NetSuite Sync Queue).${skipped.length ? `\n\n⚠ Skipped — no NetSuite id (sync these items): ${skipped.join(', ')}` : ''}`);
+                                }
+                            }
+                        }
                         catch (e) { alert('Update failed: ' + e.message); }
                     };
                     const open = quickShipOrders.filter(o => (o.status || 'Pending') !== 'Shipped');
@@ -1949,7 +1996,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {(o.lines || []).map((l, i) => (
                                         <tr key={i}>
                                             <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.erp || '—'}</td>
-                                            <td style={{ padding: '9px 18px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.name}{l.note ? ` · ${l.note}` : ''}</td>
+                                            <td style={{ padding: '9px 18px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.name}{l.note ? ` · ${l.note}` : ''}{(() => { const pk = packOf(l); return pk ? <span style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px' }}> → pull {(Number(l.qty) || 0) * pk.size} × {pk.singleErp}</span> : null; })()}</td>
                                             <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.bin ? theme.ink : theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.bin || 'UNASSIGNED'}</td>
                                             <td style={{ padding: '9px 18px', textAlign: 'center', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.qty}</td>
                                         </tr>
