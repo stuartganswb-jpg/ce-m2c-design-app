@@ -334,6 +334,21 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 status: 'Pending', pickStatus: 'Pending',
                 totalParts: lines.reduce((s, l) => s + l.qty, 0),
                 lines: lines.map(l => ({ erp: l.erp, name: l.name, qty: l.qty, bin: l.bin || '', note: l.note || '', kit: l.kitName || '' })),
+                // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
+                // against the KIT # + kit price; components print as unpriced sub-lines; loose
+                // items itemized. Captured at TRANSACTION time so later kit-price edits never
+                // rewrite an issued invoice. NetSuite keeps the distributed per-item lines.
+                invoiceLines: (() => {
+                    const groups = {};
+                    lines.forEach(l => { if (l.kitKey) (groups[l.kitKey] = groups[l.kitKey] || []).push(l); });
+                    const out = Object.values(groups).map(g => {
+                        const kp = effectiveKitPrice(g[0].kitName, g[0].kitBrand);
+                        return { type: 'KIT', code: g[0].kitName, price: kp !== null ? kp : g.reduce((s, l) => s + l.rate * l.qty, 0), components: g.map(l => ({ erp: l.erp, name: l.name, qty: l.qty })) };
+                    });
+                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.erp, name: l.name, qty: l.qty, rate: l.rate, total: l.rate * l.qty }));
+                    return out;
+                })(),
+                invoiceTotal: lines.reduce((s, l) => s + l.rate * l.qty, 0),
                 createdBy: currentUser || '', createdAt: Date.now(), createdDate: new Date().toISOString()
             });
             addLog(`Recorded ${hqId} for pick/pack (Stock tab).`, 'success');

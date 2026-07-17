@@ -4,6 +4,7 @@ import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, deleteObject } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
+import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
 import FormPreview from '../Shared/FormPreview';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
@@ -238,6 +239,17 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
   const [activeModalJob, setActiveModalJob] = useState(null);
   const [cfgQuote, setCfgQuote] = useState(null); // read-only configured-item 3D viewer (opens a CONFIGURED job straight from the pipeline)
+  const [qsOrders, setQsOrders] = useState([]);   // Quick Ship (stocked) orders — invoiced from the CRM
+  const [qsInvoice, setQsInvoice] = useState(null); // Quick Ship invoice modal
+
+  // Quick Ship orders live-feed: the customer card shows them with kit-grouped invoices
+  // (customer pays the KIT price; NetSuite carries the per-item accounting lines).
+  useEffect(() => {
+    const unsub = onSnapshot(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', 'QUICKSHIP')), snap => {
+      setQsOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand));
+    }, () => { /* none yet */ });
+    return () => unsub();
+  }, [activeBrand]);
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssemblyName, setActiveAssemblyName] = useState('');
   
@@ -1101,7 +1113,34 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                       )}
 
                                       {/* --- ARCHIVE PIPELINE COLLAPSIBLE --- */}
-                                      <div 
+                                      {/* QUICK SHIP INVOICES (2026-07-17): stocked-program orders for this customer.
+                                          The app invoice shows KIT # + kit price w/ unpriced component sub-lines;
+                                          Match pulls the NetSuite invoice # so accounting ties 1:1 before sending. */}
+                                      {(() => {
+                                          const custQs = qsOrders.filter(o => o.customerId === activeCrmRecord.id).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                                          if (!custQs.length) return null;
+                                          return (
+                                              <div style={{ marginBottom: '16px' }}>
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '12px' }}>
+                                                      <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Quick Ship Invoices</h4>
+                                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{custQs.length} order(s)</span>
+                                                  </div>
+                                                  {custQs.slice(0, 12).map(o => (
+                                                      <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid var(--line)', background: 'var(--paper)', padding: '10px 14px', marginBottom: '8px' }}>
+                                                          <div style={{ flex: 1, minWidth: 0 }}>
+                                                              <span style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--ink)' }}>SO {o.soId}</span>
+                                                              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{o.createdAt ? new Date(o.createdAt).toLocaleDateString() : ''}{o.jobName ? ` · ${o.jobName}` : ''} · ${Number(o.invoiceTotal || 0).toFixed(2)}</span>
+                                                          </div>
+                                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid', borderColor: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', color: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', whiteSpace: 'nowrap' }}>{o.nsInvoiceNo ? `INV ${o.nsInvoiceNo}` : 'NO NS INV #'}</span>
+                                                          <button onClick={() => setQsInvoice(o)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>🧾 Invoice</button>
+                                                      </div>
+                                                  ))}
+                                              </div>
+                                          );
+                                      })()}
+                                      {qsInvoice && <QuickShipInvoiceModal order={qsInvoice} customer={activeCrmRecord} brand={activeBrand} onClose={() => setQsInvoice(null)} />}
+
+                                      <div
                                           onClick={() => setExpandedSections(prev => ({ ...prev, archive: !prev.archive }))}
                                           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px', cursor: 'pointer', marginTop: expandedSections.active ? '10px' : '0' }}
                                       >
