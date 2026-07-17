@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
-import { buildCodeIndex, matchItemByName, normCode } from '../Shared/itemCodeMatch';
+import { buildCodeIndex, matchItemByName, normCode, nameCategorySignature } from '../Shared/itemCodeMatch';
 import { analyzeFusionFbx, buildGlbFromAnalysis, UNIT_CHOICES } from '../Shared/fusionImport';
 import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
@@ -199,6 +199,45 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     };
 
     const addLog = (m, t = 'info') => setLog(p => [{ t: new Date().toLocaleTimeString(), m, type: t }, ...p].slice(0, 40));
+
+    // CODE COLLISION AUDIT (Stuart 2026-07-16): dash-only twins are common in this catalog
+    // (H1-75BPR ring vs H1-75BP-R backplate → both normalize to H175BPR). This scan lists every
+    // group of DISTINCT codes sharing one normalized form. ✓ = their NAMES carry different
+    // category words, so the matcher's tie-break tells them apart automatically; ⚠ = names too
+    // similar — rename one (put ring/backplate/bracket/finial/pole in the name) so it can.
+    const [audit, setAudit] = useState(null);
+    const [auditBusy, setAuditBusy] = useState(false);
+    const runCollisionAudit = async () => {
+        setAuditBusy(true);
+        try {
+            const snap = await getDocs(collection(db, 'Approved_Designs'));
+            const parts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)));
+            const groups = new Map(); // norm -> Map(rawCode -> {code, name, cls})
+            parts.forEach(p => {
+                [p.legacyErpId, p.itemId].forEach(code => {
+                    if (!code || code === 'PENDING' || /-\d{12,}/.test(String(code))) return; // skip app-internal ids
+                    const n = normCode(code);
+                    if (n.length < 4) return;
+                    const raw = String(code).toUpperCase();
+                    const g = groups.get(n) || new Map();
+                    if (!g.has(raw)) g.set(raw, { code: String(code), name: p.itemName || '', cls: p.partClass || '' });
+                    groups.set(n, g);
+                });
+            });
+            const found = [...groups.entries()]
+                .filter(([, g]) => g.size > 1)
+                .map(([norm, g]) => {
+                    const items = [...g.values()];
+                    const sigs = new Set(items.map(it => nameCategorySignature(it.name)));
+                    return { norm, items, breakable: sigs.size > 1 };
+                })
+                .sort((a, b) => (a.breakable === b.breakable ? a.norm.localeCompare(b.norm) : (a.breakable ? 1 : -1)));
+            setAudit(found);
+            addLog(`Collision audit: ${found.length} colliding code group(s)${found.length ? ` — ${found.filter(f => !f.breakable).length} need a rename` : ''}.`, found.some(f => !f.breakable) ? 'error' : 'success');
+        } catch (e) { alert('Audit failed: ' + (e.message || e)); }
+        setAuditBusy(false);
+    };
 
     useEffect(() => () => { Object.values(layers).forEach(l => l.url && URL.revokeObjectURL(l.url)); }, []); // eslint-disable-line
 
@@ -1066,6 +1105,38 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 <button onClick={handleRepairNodeNames} disabled={repairBusy || !repairId} style={{ padding: '11px 22px', background: repairBusy ? 'var(--paper-2)' : 'var(--ink)', color: repairBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: repairBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                     {repairBusy ? '⚙ Repairing…' : '⚙ Repair Node Names'}
                 </button>
+            </div>
+
+            {/* Code collision audit — punctuation-only twin codes shadow each other in auto-match. */}
+            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: '240px' }}>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>Code collision audit</span>
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>Finds item #s that differ only by punctuation (H1-75BPR vs H1-75BP-R) — twins can shadow each other in auto-match and pickers. ✓ = the names tell them apart, the matcher handles it. ⚠ = rename one item so its part type (ring / backplate / bracket / finial / pole) is in the name.</span>
+                    </div>
+                    <button onClick={runCollisionAudit} disabled={auditBusy} style={{ padding: '11px 22px', background: auditBusy ? 'var(--paper-2)' : 'var(--ink)', color: auditBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: auditBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                        {auditBusy ? '⚙ Scanning…' : '🔎 Scan Library'}
+                    </button>
+                </div>
+                {audit && (
+                    <div style={{ maxHeight: '280px', overflowY: 'auto', borderTop: '1px solid var(--line)' }}>
+                        {audit.length === 0 && <div style={{ padding: '12px 0', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: '#3a7d44' }}>✓ No punctuation-only code collisions in the {String(activeBrand || '').toUpperCase()} library.</div>}
+                        {audit.map(g => (
+                            <div key={g.norm} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '8px 0', borderBottom: '1px solid var(--paper-2)' }}>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: g.breakable ? '#3a7d44' : '#d9534f', minWidth: '16px' }}>{g.breakable ? '✓' : '⚠'}</span>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                    {g.items.map(it => (
+                                        <div key={it.code} style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)' }}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{it.code}</span>
+                                            <span style={{ color: 'var(--ink-soft)' }}> — {it.name || '(no name)'}{it.cls ? ` · ${it.cls}` : ''}</span>
+                                        </div>
+                                    ))}
+                                    {!g.breakable && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '2px' }}>names too similar — the matcher can't tell these apart; rename one in the Master Library</div>}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
             {/* Assign item numbers to an existing assembly's choices (for assemblies built with 0 pins). */}

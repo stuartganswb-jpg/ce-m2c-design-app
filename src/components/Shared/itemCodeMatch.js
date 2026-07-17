@@ -12,13 +12,19 @@ export const normCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/
 // ring vanished from pickers and auto-match returned the backplate. So the index now KEEPS
 // every distinct code, and matchItemByName breaks ties with the slot/cluster CATEGORY the
 // caller is filling (a RING slot prefers the item whose NAME says ring).
-const CATEGORY_NAME_RX = {
-    RING: /\bRINGS?\b/i,
-    BACKPLATE: /BACK\s*-?\s*PLATE|BACKPLATE|COVER\s*-?\s*PLATE|COVERPLATE/i,
-    BRACKET: /BRACKET|\bARMS?\b/i,
-    FINIAL: /FINIAL|RETURN|END\s*CAP|ENDCAP/i,
+export const CATEGORY_NAME_RX = {
+    RING: /\bRINGS?\b|EYELET/i,
+    BACKPLATE: /BACK\s*-?\s*PLATE|BACKPLATE|COVER\s*-?\s*PLATE|COVERPLATE|MOUNTING\s+BASE|\bPLATE\b/i,
+    BRACKET: /BRACKET|\bARMS?\b|SUPPORT/i,
+    FINIAL: /FINIAL|RETURN|END\s*CAP|ENDCAP|\bKNOB\b/i,
     POLE: /\bPOLE\b|\bRODS?\b|TUBE/i,
 };
+
+// Which category words appear in an item's NAME (sorted, '+'-joined; '' = none). Two colliding
+// codes are machine-distinguishable when their signatures differ — the audit uses this to flag
+// the pairs that need a human rename instead.
+export const nameCategorySignature = (name) =>
+    Object.keys(CATEGORY_NAME_RX).filter(k => CATEGORY_NAME_RX[k].test(String(name || ''))).sort().join('+');
 
 // parts: [{ legacyErpId, itemId, itemName }] → index sorted longest-first so the first prefix hit is
 // the longest (H1-75RBP-H beats H1-75RBP). Codes under 4 chars are dropped — too short to be safe.
@@ -56,10 +62,18 @@ export function matchItemByName(nodeName, index, category) {
     }
     if (!hits.length) return null;
     if (hits.length > 1) {
-        const rx = CATEGORY_NAME_RX[String(category || '').toUpperCase().trim()];
+        const cat = String(category || '').toUpperCase().trim();
+        const rx = CATEGORY_NAME_RX[cat];
         if (rx) {
-            const preferred = hits.filter(h => rx.test(h.name || ''));
-            if (preferred.length) hits = preferred;
+            const positive = hits.filter(h => rx.test(h.name || ''));
+            if (positive.length) hits = positive;
+            else {
+                // No candidate is named for THIS category — drop the ones clearly named as a
+                // DIFFERENT one (a RING slot choosing between a blandly-named item and
+                // "…Backplate…" should take the bland one).
+                const neutral = hits.filter(h => !Object.entries(CATEGORY_NAME_RX).some(([k, r]) => k !== cat && r.test(h.name || '')));
+                if (neutral.length) hits = neutral;
+            }
         }
     }
     return hits[0];
