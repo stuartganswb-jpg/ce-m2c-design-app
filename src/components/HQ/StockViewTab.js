@@ -59,6 +59,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [onOrdModal, setOnOrdModal] = useState(null); // snapshot row → open PO/WO inbound detail popup
     const [cutModal, setCutModal] = useState(null);     // rod-cut order builder ({itemid, internalId, available, qty, target})
     const [snapWatch, setSnapWatch] = useState('');     // snapshot watchlist filter (catalog is growing)
+    const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants
+    const [rawStock, setRawStock] = useState(null);     // { loading, availById, inboundById } — raw cores' NetSuite stock, fetched on first RAW toggle
+    const [ropEdits, setRopEdits] = useState({});       // erp(base) -> edited ROP (pushed to Master Library manufacturingSpecs.reorderPoint)
+    const [ropSaving, setRopSaving] = useState(false);
     const [routeModal, setRouteModal] = useState(null); // in-house items WITH a vendor → per-item PO-vs-WO choice {buy, make, items}
 
     // BUILDER STATE
@@ -799,21 +803,105 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // The "-N" is a temporary new-item marker and any "-10"/"-12" is a size, not part of the finish.
     const finishOf = (itemid) => { const s = String(itemid || ''); const i = s.lastIndexOf('/'); return i >= 0 ? s.slice(i + 1).split('-')[0].toUpperCase() : ''; };
     const POLE_RACK = 8; // poles are painted 8 per rack (not sled-packed by S/M/L)
-    // Per-row reorder analysis. min-on-hand = 4 weeks of the 6-month avg sales rate; recommended = the
-    // shortfall rounded UP to a full finishing batch — a sled for the part's size (S~70/M~35/L~22), or a
-    // rack of 8 for POLES (productType flagged POLE/ROD).
+    // Per-row reorder analysis (Stuart 2026-07-17 rules):
+    //   OUTSOURCED (isInHouse === false + vendor + NOT an assembly): Min OH = 6 MONTHS of
+    //     demand (12-mo total ÷ 2) — a safe-stock buffer so we can't run out inside 6 months.
+    //   ASSEMBLY (finished in-house): Min OH = 6 WEEKS of demand (12-mo weekly avg × 6) —
+    //     3-week finishing lead + 3-week safety stock.
+    //   Anything else keeps the legacy 4-weeks-of-6-month-rate rule.
+    // ROP (manufacturingSpecs.reorderPoint — editable here, pushed to the Master Library, and
+    // the same field the main grid's low-stock flag reads) OVERRIDES the calculated Min OH
+    // when set. Shortfall counts stock ON ORDER (open POs + the Route A work orders) so we
+    // never double-order; Recommended rounds up to a finishing batch (sled by size / rack of 8).
     const reorderFor = (r) => {
         const part = partByKey['id:' + String(r.internalId)] || partByKey['erp:' + String(r.itemid).toUpperCase()];
-        const size = (part?.manufacturingSpecs?.paintSize || '').toUpperCase();
-        const ptype = (part?.manufacturingSpecs?.productType || '').toUpperCase();
+        const specs = part?.manufacturingSpecs || {};
+        const size = (specs.paintSize || '').toUpperCase();
+        const ptype = (specs.productType || '').toUpperCase();
         const isPole = /POLE|ROD/.test(ptype);
+        const isAssembly = part?.partClass === 'Assembly' || part?.netSuiteRecordType === 'assemblyitem';
+        const isOutsourced = specs.isInHouse === false && !!String(specs.vendorName || '').trim() && !isAssembly;
         const available = Math.round(Number(r.available) || 0);
+        const onOrd = Math.round(Number(r.onOrd) || 0);
+        const total12 = Number(r.total) || 0;
         const last6 = (r.cells || []).slice(-6).reduce((s, c) => s + (c.v || 0), 0); // merged (new+old) last 6 months
-        const minOnHand = Math.round((last6 / 26) * 4);
+        let minOnHand, minRule;
+        if (isOutsourced) { minOnHand = Math.round(total12 / 2); minRule = 'Outsourced: 6 months of demand'; }
+        else if (isAssembly) { minOnHand = Math.round((total12 / 52) * 6); minRule = 'Assembly: 6 weeks of demand (3wk finishing lead + 3wk safety)'; }
+        else { minOnHand = Math.round((last6 / 26) * 4); minRule = 'Legacy: 4 weeks of the 6-month rate'; }
+        const ropRaw = specs.reorderPoint;
+        const rop = (ropRaw === '' || ropRaw === undefined || ropRaw === null) ? null : (parseInt(ropRaw) || 0);
+        const threshold = (rop !== null && rop > 0) ? rop : minOnHand;
         const cap = isPole ? POLE_RACK : (lookupCapacity(capacityMatrix, size, ptype) || SIZE_CAPACITY[size] || 0);
-        const shortfall = Math.max(0, minOnHand - available);
+        const shortfall = Math.max(0, threshold - (available + onOrd));
         const recommended = shortfall > 0 ? (cap > 0 ? Math.ceil(shortfall / cap) * cap : shortfall) : 0;
-        return { part, size, ptype, isPole, available, minOnHand, cap, recommended };
+        return { part, size, ptype, isPole, isAssembly, isOutsourced, available, onOrd, minOnHand, minRule, rop, threshold, cap, recommended };
+    };
+
+    // Push edited ROPs → Master Library (manufacturingSpecs.reorderPoint). Keyed by ERP code so
+    // the same editor serves both the finished view and the RAW-cores view.
+    const saveRops = async () => {
+        const entries = Object.entries(ropEdits);
+        if (!entries.length) return;
+        setRopSaving(true);
+        let saved = 0; const missed = [];
+        for (const [erp, val] of entries) {
+            const part = partByKey['erp:' + erp];
+            if (!part?.id) { missed.push(erp); continue; }
+            try {
+                await updateDoc(doc(db, 'Approved_Designs', part.id), { 'manufacturingSpecs.reorderPoint': val === '' ? '' : (parseInt(val) || 0) });
+                saved++;
+            } catch (e) { missed.push(erp); }
+        }
+        setRopEdits({});
+        setRopSaving(false);
+        addLog(`ROP push: ${saved} saved to the Master Library${missed.length ? `, ${missed.length} unmatched/failed (${missed.slice(0, 5).join(', ')})` : ''}.`, missed.length ? 'warn' : 'success');
+        if (missed.length) alert(`⚠ ${missed.length} item(s) have no matching Master Library part — sync them first:\n\n${missed.slice(0, 10).join('\n')}`);
+    };
+
+    // RAW-CORES stock: live NetSuite avail + open PO/WO for the BASE items behind the finish
+    // variants (HCUSMBF1/BL,/CP,/SG → HCUSMBF1). Fetched once per report on first RAW toggle.
+    const loadRawStock = async () => {
+        setRawStock({ loading: true });
+        try {
+            const bases = new Set();
+            (salesHist?.rows || []).forEach(r => { const id = String(r.itemid); const cut = id.lastIndexOf('/'); if (cut > 0) bases.add(id.slice(0, cut).toUpperCase()); });
+            const ids = [...bases].map(b => partByKey['erp:' + b]?.netSuiteInternalId).filter(Boolean).map(String);
+            const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17';
+            const runSql = async (q) => {
+                const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
+                const b = await r.json().catch(() => ({}));
+                if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b).slice(0, 300) : String(b));
+                return b.items || [];
+            };
+            const availById = {};
+            for (let i = 0; i < ids.length; i += 200) {
+                const ch = ids.slice(i, i + 200);
+                (await runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail FROM AggregateItemLocation ail WHERE ail.item IN (${ch.join(',')}) AND ail.location = ${loc} GROUP BY ail.item`))
+                    .forEach(row => { availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0); });
+            }
+            const inboundById = {};
+            const pushInb = (row, kind, source, expected) => {
+                const iid = String(row.internal_id);
+                const ordered = Math.abs(parseFloat(row.ordered) || 0);
+                const done = Math.max(0, parseFloat(row.done) || 0);
+                const open = ordered - done;
+                if (open <= 0) return;
+                let rec = inboundById[iid]; if (!rec) { rec = { qty: 0, lines: [] }; inboundById[iid] = rec; }
+                rec.qty += open;
+                rec.lines.push({ kind, tranid: row.tranid, source: source || '', ordered, done, open, expected: expected || '', status: row.statusname || '' });
+            };
+            for (let i = 0; i < ids.length; i += 150) {
+                const ch = ids.slice(i, i + 150);
+                (await runSql(`SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate, BUILTIN.DF(t.status) AS statusname, BUILTIN.DF(t.entity) AS vendor, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'PurchOrd' AND tl.item IN (${ch.join(',')}) AND NVL(tl.isclosed,'F') = 'F' AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Rejected%'`))
+                    .forEach(row => pushInb(row, 'PO', row.vendor, row.duedate));
+                (await runSql(`SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate, BUILTIN.DF(t.status) AS statusname, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'WorkOrd' AND tl.item IN (${ch.join(',')}) AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Built%'`))
+                    .forEach(row => pushInb(row, 'WO', 'Production', row.duedate));
+            }
+            setRawStock({ loading: false, availById, inboundById });
+        } catch (e) {
+            setRawStock({ loading: false, error: e.message || String(e), availById: {}, inboundById: {} });
+        }
     };
 
     // ---- ORDER GENERATION (Stuart 2026-07-14) -------------------------------------------------
@@ -1103,6 +1191,42 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const rows = (salesHist.rows || []).filter(r =>
                     (!term || String(r.itemid).toUpperCase().includes(term)) &&
                     (snapWatch === '' || watchOf(r) === snapWatch.toUpperCase()));
+                // RAW-CORES view (Stuart 2026-07-17): demand rolled up to the BASE item behind the
+                // finish variants (suffix rule — everything before the last "/"; 1 core consumed per
+                // finished unit). Rows without a "/" have no separate core and are excluded.
+                const rawRows = (() => {
+                    if (snapView !== 'RAW') return [];
+                    const byBase = new Map();
+                    (salesHist.rows || []).forEach(r => {
+                        const id = String(r.itemid);
+                        const cut = id.lastIndexOf('/');
+                        if (cut <= 0) return;
+                        const base = id.slice(0, cut).toUpperCase();
+                        let g = byBase.get(base);
+                        if (!g) { g = { base, cells: salesHist.months.map(() => 0), total: 0, orders: 0, variants: [] }; byBase.set(base, g); }
+                        r.cells.forEach((c, i) => { g.cells[i] += (c.v || 0); });
+                        g.total += r.total; g.orders += r.orders; g.variants.push(id);
+                    });
+                    return [...byBase.values()]
+                        .filter(g => !term || g.base.includes(term))
+                        .sort((a, b) => a.base.localeCompare(b.base, undefined, { numeric: true, sensitivity: 'base' }));
+                })();
+                // Core default Min OH = 6 MONTHS of the combined variant demand — the sub-screen's
+                // whole purpose: never, ever run out of the cores that feed finishing. ROP overrides.
+                const rawInfo = (g) => {
+                    const part = partByKey['erp:' + g.base];
+                    const iid = part?.netSuiteInternalId ? String(part.netSuiteInternalId) : null;
+                    const available = (iid && rawStock?.availById) ? Math.round(rawStock.availById[iid] || 0) : 0;
+                    const inb = (iid && rawStock?.inboundById) ? rawStock.inboundById[iid] : null;
+                    const onOrd = inb ? Math.round(inb.qty) : 0;
+                    const specs = part?.manufacturingSpecs || {};
+                    const minOnHand = Math.round(g.total / 2);
+                    const ropRaw = specs.reorderPoint;
+                    const rop = (ropRaw === '' || ropRaw === undefined || ropRaw === null) ? null : (parseInt(ropRaw) || 0);
+                    const threshold = (rop !== null && rop > 0) ? rop : minOnHand;
+                    const shortfall = Math.max(0, threshold - (available + onOrd));
+                    return { part, iid, available, onOrd, onOrdLines: inb ? inb.lines : [], minOnHand, rop, threshold, shortfall, vendored: !!String(specs.vendorName || '').trim() };
+                };
                 const gt = salesHist.months.map((m, i) => rows.reduce((s, r) => s + (r.cells[i]?.v || 0), 0));
                 const gtTotal = rows.reduce((s, r) => s + r.total, 0);
                 const reo = rows.map(r => reorderFor(r));
@@ -1115,7 +1239,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const monthTh = { padding: '8px 6px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', whiteSpace: 'nowrap' };
                 return (
                     <div onClick={() => setSalesHist(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '28px 32px', width: '94vw', maxWidth: '1240px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '28px 32px', width: '97vw', maxWidth: '1900px', maxHeight: '94vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
                                 <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Stocked Items — Sales Snapshot</h2>
                                 <button onClick={() => setSalesHist(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
@@ -1134,10 +1258,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <option value="NONE">None / Unassigned</option>
                                     {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
                                 </select>
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${rows.length} item${rows.length === 1 ? '' : 's'}`}</span>
+                                <div style={{ display: 'flex', border: '1px solid var(--line)' }}>
+                                    <button onClick={() => setSnapView('FIN')} style={{ padding: '9px 14px', background: snapView === 'FIN' ? 'var(--ink)' : '#fff', color: snapView === 'FIN' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Finished Items</button>
+                                    <button onClick={() => { setSnapView('RAW'); if (!rawStock) loadRawStock(); }} title="Demand rolled up to the RAW core behind each finish variant (…/BL + /CP + /SG → base item) — set core ROPs so finishing never runs out of parts" style={{ padding: '9px 14px', background: snapView === 'RAW' ? 'var(--ink)' : '#fff', color: snapView === 'RAW' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Raw Cores (BOM)</button>
+                                </div>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${snapView === 'RAW' ? rawRows.length : rows.length} item${(snapView === 'RAW' ? rawRows.length : rows.length) === 1 ? '' : 's'}`}</span>
+                                {Object.keys(ropEdits).length > 0 && (
+                                    <button onClick={saveRops} disabled={ropSaving} title="Write the edited re-order points to the Master Library (manufacturingSpecs.reorderPoint)" style={{ padding: '9px 16px', background: ropSaving ? 'var(--paper-2)' : 'var(--brass)', color: ropSaving ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: ropSaving ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{ropSaving ? 'Saving…' : `⬆ Save ${Object.keys(ropEdits).length} ROP(s)`}</button>
+                                )}
                                 <button onClick={lockRetiredByInternalId} disabled={!salesHist.withOld} title="Notate the OLD counterparts by NetSuite internal ID and hide them app-wide" style={{ marginLeft: 'auto', padding: '9px 16px', background: salesHist.withOld ? 'var(--brass)' : 'var(--paper-2)', color: salesHist.withOld ? '#fff' : 'var(--ink-soft)', border: salesHist.withOld ? 'none' : '1px solid var(--line)', cursor: salesHist.withOld ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🔒 Lock {salesHist.withOld || ''} OLD</button>
                                 <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
-                                <button onClick={generateOrders} disabled={genBusy || !rows.length} title="Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → one finishing WO each; in-house items with a vendor ask PO-or-WO per item" style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : '⚙ Generate Orders (PO + WO)'}</button>
+                                <button onClick={generateOrders} disabled={genBusy || !rows.length || snapView === 'RAW'} title={snapView === 'RAW' ? 'Ordering runs from the Finished view — the Raw Cores view sets thresholds (ROPs); low cores then flag on the main stock grid' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: (genBusy || snapView === 'RAW') ? 'var(--paper-2)' : '#3a7d44', color: (genBusy || snapView === 'RAW') ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : (snapView === 'RAW' ? 'not-allowed' : 'pointer'), fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : '⚙ Generate Orders (PO + WO)'}</button>
                             </div>
 
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
@@ -1145,6 +1276,53 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Querying NetSuite sales history…</div>
                                 ) : salesHist.error ? (
                                     <div style={{ padding: '32px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '12px' }}>Failed: {salesHist.error}</div>
+                                ) : snapView === 'RAW' ? (
+                                    rawStock?.loading ? (
+                                        <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Pulling raw-core stock from NetSuite…</div>
+                                    ) : rawRows.length === 0 ? (
+                                        <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>No finish-variant items{term ? ' match your search' : ''} — nothing to roll up to raw cores.</div>
+                                    ) : (
+                                        <>
+                                            {rawStock?.error && <div style={{ padding: '10px 16px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px', borderBottom: '1px solid var(--line)' }}>⚠ Stock pull failed ({rawStock.error}) — demand shows; Avail/On-Ord may be blank.</div>}
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
+                                                <thead style={{ position: 'sticky', top: 0, background: 'var(--paper)', zIndex: 5 }}>
+                                                    <tr>
+                                                        <th style={{ padding: '8px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', position: 'sticky', left: 0, background: 'var(--paper)' }}>Raw Core (BOM base)</th>
+                                                        {salesHist.months.map(m => <th key={m.key} style={monthTh}>{m.label}</th>)}
+                                                        <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '1px solid var(--line)' }}>Total</th>
+                                                        <th style={monthTh}>Avg/mo</th>
+                                                        <th style={monthTh} title="How many finish variants consume this core">Variants</th>
+                                                        <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="Raw core's own NetSuite quantity available">Avail</th>
+                                                        <th style={{ ...monthTh, color: '#3f7fc4' }} title="Open POs / work orders for the raw core">On Ord</th>
+                                                        <th style={monthTh} title="Core default: 6 MONTHS of the combined variant demand — never run out of the cores that feed finishing">Min OH</th>
+                                                        <th style={{ ...monthTh, color: 'var(--brass)' }} title="Core re-order point — ⬆ Save pushes to the Master Library; low cores then flag on the main stock grid">ROP</th>
+                                                        <th style={{ ...monthTh, color: '#d9534f' }} title="Deficit vs (ROP or Min OH) counting stock on order">Short</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {rawRows.map(g => {
+                                                        const ri = rawInfo(g);
+                                                        return (
+                                                        <tr key={g.base}>
+                                                            <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }} title={`Feeds: ${g.variants.join(', ')}`}>
+                                                                {g.base}{!ri.part && <span title="No matching Master Library part — sync it to get stock + ROP" style={{ color: '#d9534f', fontSize: '9px' }}> · UNLINKED</span>}{ri.part && ri.vendored && <span style={{ color: '#3f7fc4', fontSize: '9px' }}> · VENDOR</span>}
+                                                            </td>
+                                                            {g.cells.map((v, i) => <td key={salesHist.months[i].key} style={{ ...numTd, color: v ? 'var(--ink)' : 'var(--line)' }}>{v || '·'}</td>)}
+                                                            <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>{g.total || '·'}</td>
+                                                            <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{(g.total / 12).toFixed(1)}</td>
+                                                            <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{g.variants.length}</td>
+                                                            <td style={{ ...numTd, color: ri.available <= ri.threshold ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{ri.iid ? ri.available : '—'}</td>
+                                                            <td style={{ ...numTd }}>{ri.onOrd > 0 ? <button onClick={() => setOnOrdModal({ itemid: g.base, onOrd: ri.onOrd, onOrdLines: ri.onOrdLines })} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{ri.onOrd}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
+                                                            <td style={{ ...numTd, color: 'var(--ink-soft)' }} title="6 months of combined variant demand">{ri.minOnHand || '·'}</td>
+                                                            <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[g.base] ?? (ri.rop ?? '')} placeholder="—" disabled={!ri.part} title={ri.part ? 'Core re-order point — ⬆ Save pushes to the Master Library' : 'No matching Master Library part'} onChange={e => setRopEdits(prev => ({ ...prev, [g.base]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[g.base] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: ri.part ? '#fff' : 'var(--paper-2)' }} /></td>
+                                                            <td style={{ ...numTd, fontWeight: 600, color: ri.shortfall > 0 ? '#d9534f' : 'var(--line)' }}>{ri.shortfall || '·'}</td>
+                                                        </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </>
+                                    )
                                 ) : rows.length === 0 ? (
                                     <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>No stocked items{term ? ' match your search' : ' — flag items stocked (custitem27) in NetSuite'}.</div>
                                 ) : (
@@ -1159,8 +1337,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <th style={monthTh}>Orders</th>
                                                 <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="NetSuite quantity available">Avail</th>
                                                 <th style={{ ...monthTh, color: '#3f7fc4' }} title="Inbound: open purchase orders + work orders in production — click a number for the orders behind it">On Ord</th>
-                                                <th style={monthTh} title="Min on hand = 4 weeks of the 6-month avg sales rate">Min OH</th>
-                                                <th style={{ ...monthTh, color: '#3a7d44' }} title="Shortfall rounded up to full finishing sleds for the part size">Rec</th>
+                                                <th style={monthTh} title="Calculated minimum: OUTSOURCED = 6 months of demand · ASSEMBLY = 6 weeks (3wk finishing lead + 3wk safety) · else legacy 4-weeks rule. Hover a value for its rule.">Min OH</th>
+                                                <th style={{ ...monthTh, color: 'var(--brass)' }} title="Re-order point — editable; ⬆ Save pushes to the Master Library (manufacturingSpecs.reorderPoint). Overrides the calculated Min OH when set.">ROP</th>
+                                                <th style={{ ...monthTh, color: '#3a7d44' }} title="Shortfall vs (ROP or Min OH) counting stock on order, rounded up to full finishing batches">Rec</th>
                                                 <th style={{ ...monthTh, color: 'var(--ink)' }}>Order</th>
                                                 <th style={monthTh} title="Rod cuts — turn 8 ft rods into 6 ft or 4 ft">Cut</th>
                                             </tr>
@@ -1172,7 +1351,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 const ov = orderQty[r.internalId] ?? '';
                                                 return (
                                                 <tr key={r.internalId}>
-                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}</td>
+                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}</td>
                                                     <td style={{ ...numTd, textAlign: 'left', color: r.oldInternalId ? OLD_BLUE : 'var(--line)' }}>{r.oldInternalId || '—'}</td>
                                                     {r.cells.map((c, i) => (
                                                         <td key={salesHist.months[i].key} style={{ ...numTd, color: c.src === 'new' ? 'var(--ink)' : (c.src === 'old' ? OLD_BLUE : 'var(--line)'), fontWeight: c.src === 'new' ? 500 : 400 }}>{c.v || '·'}</td>
@@ -1180,9 +1359,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>{r.total || '·'}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.avg.toFixed(1)}</td>
                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{r.orders}</td>
-                                                    <td style={{ ...numTd, color: info.available <= info.minOnHand ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{info.available}</td>
+                                                    <td style={{ ...numTd, color: info.available <= info.threshold ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{info.available}</td>
                                                     <td style={{ ...numTd }}>{r.onOrd > 0 ? <button onClick={() => setOnOrdModal(r)} title="Open POs / work orders — click for detail" style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{Math.round(r.onOrd)}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
-                                                    <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{info.minOnHand || '·'}</td>
+                                                    <td style={{ ...numTd, color: 'var(--ink-soft)' }} title={info.minRule}>{info.minOnHand || '·'}</td>
+                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[String(r.itemid).toUpperCase()] ?? (info.rop ?? '')} placeholder="—" disabled={!info.part} title={info.part ? 'Re-order point — ⬆ Save pushes to the Master Library; overrides Min OH' : 'No matching Master Library part — sync the item first'} onChange={e => setRopEdits(prev => ({ ...prev, [String(r.itemid).toUpperCase()]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[String(r.itemid).toUpperCase()] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: info.part ? '#fff' : 'var(--paper-2)' }} /></td>
                                                     <td style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)' }}>{info.recommended || '·'}</td>
                                                     <td style={{ ...numTd }}><input type="number" min="0" value={ov} placeholder="0" onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none' }} /></td>
                                                     <td style={{ ...numTd }}>{(info.isPole && /8(1[05])/.test(String(r.itemid))) ? <button title="Cut 8 ft rods down to 6 ft / 4 ft" onClick={() => setCutModal({ itemid: r.itemid, internalId: r.internalId, available: info.available, qty: '', target: '4FT' })} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
@@ -1201,6 +1381,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)', borderLeft: '2px solid var(--ink)' }}>{totAvail}</td>
                                                 <td style={{ ...numTd, fontWeight: 700, color: '#3f7fc4', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{Math.round(totOnOrd) || '·'}</td>
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totMin}</td>
+                                                <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
                                                 <td style={{ ...numTd, fontWeight: 700, color: '#3a7d44', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totRec}</td>
                                                 <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}>{totOrder}</td>
                                                 <td style={{ ...numTd, background: 'var(--paper-2)', borderTop: '2px solid var(--ink)' }}></td>
