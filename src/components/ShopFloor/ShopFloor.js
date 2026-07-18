@@ -121,7 +121,13 @@ const ShopFloor = () => {
         if (!user) return;
         const unsubs = [
             onSnapshot(collection(db, "Approved_Designs"), s => {
-                const parts = s.docs.map(d => ({id: d.id, ...d.data()})).filter(p => ['Inventory', 'Assembly', 'Master Assembly'].includes(p.partClass) || p.category === 'Inventory');
+                // Shop scope = Classical Elements + M2C only (Stuart 2026-07-17): Uniquity and
+                // Leyla Gans have no relation to the shop floor — dropped at the source so every
+                // shop picker/search inherits it. Parts without a brand stamp stay (legacy docs).
+                const SHOP_EXCLUDED_BRANDS = ['uniquity', 'leyla'];
+                const parts = s.docs.map(d => ({id: d.id, ...d.data()}))
+                    .filter(p => ['Inventory', 'Assembly', 'Master Assembly'].includes(p.partClass) || p.category === 'Inventory')
+                    .filter(p => !SHOP_EXCLUDED_BRANDS.includes(String(p.brandId || p.brand || '').toLowerCase()));
                 setHqParts(parts.sort((a,b) => (a.legacyErpId || a.itemName || '').localeCompare(b.legacyErpId || b.itemName || '')));
             }),
             onSnapshot(shopDb.collection("routings"), s => { const arr = s.docs.map(d=>({id: d.id, ...d.data()})); setRoutings(arr); const m={}; arr.forEach(r=>m[r.partId]=r); setRoutingsMap(m); }),

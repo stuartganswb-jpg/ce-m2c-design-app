@@ -286,7 +286,10 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
             const specs = p.manufacturingSpecs || {};
             const cust = specs.customData || {};
 
-            // 1. Omit Finished Parts (Filters out anything with '/' like /EP1, /P)
+            // 1. BASE assemblies only — any '/' means a finished variant (H1-1BR/EP1, /P …).
+            // Check BOTH raw code fields, not just the resolved display id: a PENDING-erp
+            // variant whose code lives on itemId would otherwise slip through via the doc id.
+            if ([p.legacyErpId, p.itemId].some(c => String(c || '').includes('/'))) return false;
             if (id.includes('/')) return false;
 
             // 2. Search Box Filter
