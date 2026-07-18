@@ -49,7 +49,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const requeueOutbox = async (o) => {
         if (!window.confirm(`Re-queue "${o.label || o.id}" to NetSuite?\n\nThe worker will retry it within ~1 minute.`)) return;
         try {
-            await updateDoc(doc(db, 'ns_outbox', o.id), { status: 'PENDING', attempts: 0, nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
+            // Heal known payload-shape mistakes before resending, so a retry isn't a guaranteed
+            // repeat failure: workorder creation must use `assemblyItem`, not `item` (2026-07-17).
+            const p = { ...(o.payload || {}) };
+            if (o.kind === 'workorder' && p.item && !p.assemblyItem) { p.assemblyItem = p.item; delete p.item; }
+            await updateDoc(doc(db, 'ns_outbox', o.id), { payload: p, status: 'PENDING', attempts: 0, nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
             addLog(`↻ Re-queued ${o.label || o.id}.`, 'info');
         } catch (e) { alert(`Re-queue failed: ${e.message}`); }
     };
@@ -755,7 +759,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',
                             method: 'POST',
                             payload: {
-                                item: { id: nsAsmId },
+                                // NetSuite's workorder record names the assembly field `assemblyItem`
+                                // (plain `item` is rejected with FIELD_PARAM_REQD — learned 2026-07-17).
+                                assemblyItem: { id: nsAsmId },
                                 quantity: Number(fp.totalParts) || 1,
                                 location: { id: nsConfig.location },
                                 subsidiary: { id: nsConfig.subsidiary },
@@ -1304,7 +1310,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const payloadSummary = (o) => {
                     const p = o.payload || {};
                     const bits = [];
-                    if (p.item?.id) bits.push(`item ${p.item.id}`);
+                    if (p.assemblyItem?.id || p.item?.id) bits.push(`item ${p.assemblyItem?.id || p.item.id}`);
                     if (p.quantity != null) bits.push(`qty ${p.quantity}`);
                     if (p.location?.id) bits.push(`loc ${p.location.id}`);
                     if (p.subsidiary?.id) bits.push(`sub ${p.subsidiary.id}`);
