@@ -42,6 +42,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     // diagnosis when the queue isn't draining (PENDING >3 min with zero attempts means the
     // nsOutboxWorker cloud function isn't deployed/running).
     const [nsOutboxTail, setNsOutboxTail] = useState([]);
+    const [openObId, setOpenObId] = useState(null); // transmit-log row expanded for full error/payload
+
+    // One-click recovery straight from the transmit log: reset a FAILED outbox entry so the
+    // worker retries it on its next 1-minute tick (same effect as Retry in 11.1).
+    const requeueOutbox = async (o) => {
+        if (!window.confirm(`Re-queue "${o.label || o.id}" to NetSuite?\n\nThe worker will retry it within ~1 minute.`)) return;
+        try {
+            await updateDoc(doc(db, 'ns_outbox', o.id), { status: 'PENDING', attempts: 0, nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
+            addLog(`↻ Re-queued ${o.label || o.id}.`, 'info');
+        } catch (e) { alert(`Re-queue failed: ${e.message}`); }
+    };
     useEffect(() => {
         const unsub = onSnapshot(query(collection(db, 'ns_outbox'), orderBy('createdAt', 'desc'), limit(12)),
             snap => setNsOutboxTail(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
@@ -739,7 +750,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     if (nsAsmId && nsConfig.location) {
                         await enqueueNsWrite({
                             kind: 'workorder',
-                            label: `NS WO — build ${fp.stockErpId || fp.woNum || fp.id} ×${fp.totalParts}`,
+                            label: `${fp.woNum || 'NS WO'} — build ${fp.stockErpId || fp.id} ×${fp.totalParts}`,
                             sourceApp: 'RTG', createdBy: currentUser || '',
                             targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',
                             method: 'POST',
@@ -1283,6 +1294,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const nowMs = Date.now();
                 const stuck = nsOutboxTail.filter(o => o.status === 'PENDING' && !o.attempts && (nowMs - (o.createdAt || nowMs)) > 3 * 60 * 1000);
                 const chipC = (s) => s === 'POSTED' ? '#3a7d44' : (s === 'FAILED' ? '#d9534f' : 'var(--brass)');
+                // NetSuite errors arrive as an RFC-9110 JSON envelope — the human-readable reason
+                // lives in o:errorDetails[].detail. Pull those out; fall back to the raw string.
+                const errDetail = (raw) => {
+                    const s = String(raw || '');
+                    const m = [...s.matchAll(/"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(x => x[1].replace(/\\"/g, '"').replace(/\\n/g, ' '));
+                    return m.length ? m.join(' · ') : s;
+                };
+                const payloadSummary = (o) => {
+                    const p = o.payload || {};
+                    const bits = [];
+                    if (p.item?.id) bits.push(`item ${p.item.id}`);
+                    if (p.quantity != null) bits.push(`qty ${p.quantity}`);
+                    if (p.location?.id) bits.push(`loc ${p.location.id}`);
+                    if (p.subsidiary?.id) bits.push(`sub ${p.subsidiary.id}`);
+                    if (p.endDate) bits.push(`due ${p.endDate}`);
+                    if (p.tranId) bits.push(`tran ${p.tranId}`);
+                    return bits.join(' · ');
+                };
                 return (
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>
                         <div style={{ padding: '14px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
@@ -1297,11 +1326,25 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         <div style={{ maxHeight: '220px', overflowY: 'auto' }}>
                             {nsOutboxTail.length === 0 && <div style={{ padding: '14px 24px', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>Nothing staged yet — WO/PO pushes from this screen appear here with live status.</div>}
                             {nsOutboxTail.map(o => (
-                                <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '8px 24px', borderTop: '1px solid var(--paper-2)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
-                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.createdAt ? new Date(o.createdAt).toLocaleTimeString() : ''}</span>
-                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '2px 8px', border: `1px solid ${chipC(o.status)}`, color: chipC(o.status), whiteSpace: 'nowrap' }}>{o.status}</span>
-                                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink)' }} title={o.lastError || ''}>{o.label || o.kind}{o.nsTran ? ` → ${o.nsTran}` : ''}{o.status === 'FAILED' && o.lastError ? ` — ${String(o.lastError).slice(0, 80)}` : ''}</span>
-                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.attempts ? `try ${o.attempts}` : ''}</span>
+                                <div key={o.id} style={{ borderTop: '1px solid var(--paper-2)' }}>
+                                    <div onClick={() => setOpenObId(openObId === o.id ? null : o.id)} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '8px 24px', fontFamily: 'var(--sans)', fontSize: '0.85rem', cursor: 'pointer' }} title="Click for full details">
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.createdAt ? new Date(o.createdAt).toLocaleTimeString() : ''}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '2px 8px', border: `1px solid ${chipC(o.status)}`, color: chipC(o.status), whiteSpace: 'nowrap' }}>{o.status}</span>
+                                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink)' }}>{o.label || o.kind}{o.nsTran ? ` → ${o.nsTran}` : ''}{o.status === 'FAILED' && o.lastError ? ` — ${errDetail(o.lastError).slice(0, 140)}` : ''}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.attempts ? `try ${o.attempts}` : ''}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{openObId === o.id ? '▾' : '▸'}</span>
+                                    </div>
+                                    {openObId === o.id && (
+                                        <div style={{ padding: '10px 24px 14px 24px', background: 'var(--paper)', fontFamily: 'var(--mono)', fontSize: '11px', lineHeight: 1.7, color: 'var(--ink)', userSelect: 'text' }}>
+                                            {payloadSummary(o) && <div style={{ color: 'var(--ink-soft)' }}>SENT: {payloadSummary(o)}</div>}
+                                            {o.lastError && <div style={{ color: '#d9534f', overflowWrap: 'anywhere', marginTop: '4px' }}>NETSUITE SAID: {errDetail(o.lastError)}</div>}
+                                            {o.lastError && errDetail(o.lastError) !== String(o.lastError) && <div style={{ color: 'var(--ink-soft)', overflowWrap: 'anywhere', marginTop: '4px', fontSize: '10px' }}>RAW: {String(o.lastError)}</div>}
+                                            {o.nsId && <div style={{ marginTop: '4px' }}>NETSUITE ID: {o.nsId}{o.nsTran ? ` · ${o.nsTran}` : ''}</div>}
+                                            {o.status === 'FAILED' && (
+                                                <button onClick={(e) => { e.stopPropagation(); requeueOutbox(o); }} style={{ marginTop: '8px', background: 'var(--ink)', color: '#fff', border: 'none', padding: '6px 14px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>↻ Re-queue to NetSuite</button>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -1337,7 +1380,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             </thead>
                             <tbody>
                                 {dailyJobs.map(job => {
-                                    const label = job.soId ? `SO ${job.soId}` : (job.woId ? `WO ${job.woId}` : job.key);
+                                    // Short speakable # (WO-1002) leads; the long doc id drops to a small
+                                    // grey second line so it stays findable without dominating the row.
+                                    const woShort = job.woRec?.woNo || job.woRec?.finPayload?.woNum || null;
+                                    const label = job.soId ? `SO ${job.soId}` : (job.woId ? (woShort || `WO ${job.woId}`) : job.key);
                                     const chips = [
                                         job.stages.HQ && { k: 'HQ', c: 'var(--ink)' },
                                         job.stages.SHOP && { k: 'Shop', c: 'var(--brass)' },
@@ -1352,6 +1398,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                         <tr key={job.key} style={{ borderBottom: '1px solid var(--line)' }}>
                                             <td style={{ padding: '12px 16px' }}>
                                                 <button onClick={() => openJobDetails(job)} title="Open details" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--brass)', fontFamily: 'var(--sans)', fontSize: '0.9rem', fontWeight: 600, textDecoration: 'underline' }}>{label}</button>
+                                                {woShort && job.woId && <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '2px' }}>{job.woId}</span>}
                                             </td>
                                             <td style={{ padding: '12px 16px', color: 'var(--ink)' }}>{job.customer || '—'}</td>
                                             <td style={{ padding: '12px 16px', color: 'var(--ink-soft)' }}>{fmtD(job.orderTs)}</td>

@@ -27,7 +27,7 @@ After deploy, the user must **hard-refresh** (⌘⇧R) to clear the cached bundl
 
 ## Hard constraints
 - **Firestore enforces App Check** → no local/Node script can read or write production data (permission-denied). Bulk data changes must be done **inside the authenticated app** (build an admin button) — not via scripts.
-- **NetSuite reads for diagnosis**: you CAN POST read-only SuiteQL to the proxy via curl: `https://netsuiteproxy-f3h3jadzaq-uc.a.run.app` with `{targetUrl, method:"POST", payload:{q:"..."}}`. Useful to verify locations/bins/stock.
+- **NetSuite reads for diagnosis**: the old unauthenticated SuiteQL curl to the proxy is **DEAD** — since the 2026-07 security hardening the proxy rejects it with `Missing App Check token`. Diagnosis paths: the RTG "NetSuite Transmit Log" (click a row = full NetSuite error + sent payload), 11.1 → NetSuite Sync Queue, or ask the user for a screenshot.
 
 ## Key conventions & gotchas
 - **Super admin**: gate admin features with a role normalized to include super admin (e.g. ShopFloor maps `superadmin`→`admin`). Super admin can reach tabs but was historically excluded from inner `['admin','programmer']` gates — include it.
