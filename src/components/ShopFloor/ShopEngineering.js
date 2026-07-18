@@ -10,6 +10,23 @@ import { unzipSync, strFromU8 } from 'fflate';
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
 
+// Machine-screen photos off a tablet camera run 3–5MB — downscale to ≤1600px JPEG before
+// upload so step sheets open fast on the floor. Caller falls back to the raw file if the
+// browser can't decode the format (e.g. HEIC outside Safari).
+const downscaleImage = (file, maxDim = 1600) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(img.src);
+        c.toBlob(b => b ? resolve(b) : reject(new Error('compress failed')), 'image/jpeg', 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(img.src); reject(new Error('unreadable image')); };
+    img.src = URL.createObjectURL(file);
+});
+
 // Seed max tool-life (hours) by Fusion tool type on import; the machinist tunes per tool afterward.
 const DEFAULT_TOOL_LIFE_HRS = { 'drill': 8, 'spot drill': 12, 'center drill': 12, 'reamer': 10, 'tap right hand': 6, 'tap left hand': 6, 'flat end mill': 10, 'bull nose end mill': 10, 'ball end mill': 10, 'slot mill': 8, 'tapered mill': 8, 'dovetail mill': 8, 'chamfer mill': 15, 'face mill': 20, 'turning general': 8, 'turning threading': 6, 'turning boring': 8, 'probe': 0, 'holder': 0 };
 const defaultToolLife = (type) => { const v = DEFAULT_TOOL_LIFE_HRS[String(type || '').toLowerCase()]; return v === undefined ? 8 : v; };
@@ -17,7 +34,9 @@ const defaultToolLife = (type) => { const v = DEFAULT_TOOL_LIFE_HRS[String(type 
 const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, writeLog, handleDelete, safeUserRole, printMap = new Map(), nukeTestJobs }) => {
     
     const [routingForm, setRoutingForm] = useState({ id: null, partId: '', isRawMat: false, matProfile: '', matLength: '', ops: [] });
-    const [progForm, setProgForm] = useState({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
+    const [progForm, setProgForm] = useState({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {}, machineSteps: [] });
+    const [stepViewer, setStepViewer] = useState(null);   // program whose step-by-step sheet is open
+    const [stepUploading, setStepUploading] = useState(null); // index of the step with a photo in flight
     const [toolForm, setToolForm] = useState({ item: '', desc: '', machine: '', max: '', qty: '', reorder: '', toolNum: '' });
     const [importCat, setImportCat] = useState('');     // machine category/pool the .tools file imports into
     const [importBusy, setImportBusy] = useState(false);
@@ -217,7 +236,10 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         if(!progForm.name || progForm.machines.length === 0) return alert("Name & at least one Compatible Machine required.");
         let drawingUrl = null;
         if(progForm.file) { const fRef = ref(storage, `drawings/${progForm.name}.pdf`); await uploadBytesResumable(fRef, progForm.file); drawingUrl = await getDownloadURL(fRef); }
-        const payload = { name: progForm.name, machines: progForm.machines, timePerPiece: parseFloat(progForm.timePerPiece)||0, setupTime: parseFloat(progForm.setupTime)||0, setupCode: progForm.setupCode, steps: progForm.steps, toolTimes: progForm.toolTimes };
+        const payload = { name: progForm.name, machines: progForm.machines, timePerPiece: parseFloat(progForm.timePerPiece)||0, setupTime: parseFloat(progForm.setupTime)||0, setupCode: progForm.setupCode, steps: progForm.steps, toolTimes: progForm.toolTimes,
+            // Step-by-step machine data set (Stuart 2026-07-18): the exact values keyed into the
+            // control at program start — label + data + optional machine-screen photo, in order.
+            machineSteps: (progForm.machineSteps || []).map(s => ({ label: s.label || '', value: s.value || '', imageUrl: s.imageUrl || null })).filter(s => s.label || s.value || s.imageUrl) };
         if(drawingUrl) {
             payload.drawingUrl = drawingUrl;
             // Also register centrally (hidden program_prints store) so the Print button resolves it everywhere.
@@ -227,7 +249,39 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         }
         await setDoc(doc(shopDb.collection("programs"), progForm.id || cleanId(progForm.name, "")), payload, {merge:true});
         writeLog(`Saved Operation Program: ${progForm.name}`, 'engineering');
-        setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} });
+        setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {}, machineSteps: [] });
+    };
+
+    // --- Step-by-step machine data builder (functional updates: a photo upload finishing
+    // mid-typing must never clobber keystrokes with a stale form snapshot) ---
+    const patchMachineStep = (i, patch) => setProgForm(f => {
+        const steps = [...(f.machineSteps || [])];
+        steps[i] = { ...steps[i], ...patch };
+        return { ...f, machineSteps: steps };
+    });
+    const addMachineStep = () => setProgForm(f => ({ ...f, machineSteps: [...(f.machineSteps || []), { label: '', value: '', imageUrl: null }] }));
+    const removeMachineStep = (i) => setProgForm(f => ({ ...f, machineSteps: (f.machineSteps || []).filter((_, x) => x !== i) }));
+    const moveMachineStep = (i, dir) => setProgForm(f => {
+        const steps = [...(f.machineSteps || [])];
+        const j = i + dir;
+        if (j < 0 || j >= steps.length) return f;
+        [steps[i], steps[j]] = [steps[j], steps[i]];
+        return { ...f, machineSteps: steps };
+    });
+    const uploadStepPhoto = async (i, file) => {
+        if (!file) return;
+        setStepUploading(i);
+        try {
+            let blob = file;
+            try { blob = await downscaleImage(file); } catch (e) { /* undecodable format — upload raw */ }
+            const path = `machine_steps/${cleanId(progForm.name || 'program', '')}/${Date.now()}.jpg`;
+            const fRef = ref(storage, path);
+            await uploadBytesResumable(fRef, blob);
+            const url = await getDownloadURL(fRef);
+            patchMachineStep(i, { imageUrl: url });
+        } catch (e) {
+            alert('Photo upload failed: ' + (e.message || e));
+        } finally { setStepUploading(null); }
     };
 
     const handleToolAction = async (action, tool) => {
@@ -576,11 +630,40 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                             <label style={labelStyle}>Set Up & Run Instructions</label>
                             <textarea value={progForm.steps} onChange={e => setProgForm({...progForm, steps: e.target.value})} style={{ ...fieldStyle, minHeight: '100px', resize: 'vertical' }}></textarea>
                         </div>
+
+                        {/* STEP-BY-STEP MACHINE DATA SET — the exact values keyed into the control at
+                            program start (offset, work holding, bar feeder…), each with an optional
+                            photo of the machine screen. Renders on the card as the Step-by-Step sheet. */}
+                        <div style={{ marginTop: '24px', background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px' }}>
+                            <h4 style={{ ...sectionHeaderStyle, marginBottom: '6px' }}>Machine Data — Step by Step</h4>
+                            <p style={{ margin: '0 0 16px 0', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Label the step, enter the exact data the operator keys in ("Use offset" → "1.09"). Add a photo of the machine screen where it helps.</p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {(progForm.machineSteps || []).map((s, i) => (
+                                    <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'center', background: 'var(--paper-2)', padding: '10px 12px', border: '1px solid var(--line)', flexWrap: 'wrap' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 'bold', color: 'var(--ink-soft)', width: '22px', textAlign: 'center' }}>{i + 1}</span>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                            <button onClick={() => moveMachineStep(i, -1)} disabled={i === 0} title="Move up" style={{ background: 'none', border: 'none', cursor: i === 0 ? 'default' : 'pointer', color: i === 0 ? 'var(--line)' : 'var(--ink-soft)', fontSize: '10px', padding: 0, lineHeight: 1 }}>▲</button>
+                                            <button onClick={() => moveMachineStep(i, 1)} disabled={i === (progForm.machineSteps || []).length - 1} title="Move down" style={{ background: 'none', border: 'none', cursor: i === (progForm.machineSteps || []).length - 1 ? 'default' : 'pointer', color: i === (progForm.machineSteps || []).length - 1 ? 'var(--line)' : 'var(--ink-soft)', fontSize: '10px', padding: 0, lineHeight: 1 }}>▼</button>
+                                        </div>
+                                        <input type="text" placeholder='Step label (e.g. "Use offset")' value={s.label} onChange={e => patchMachineStep(i, { label: e.target.value })} style={{ ...fieldStyle, flex: 2, minWidth: '160px', padding: '8px 10px' }} />
+                                        <input type="text" placeholder='Data (e.g. "1.09")' value={s.value} onChange={e => patchMachineStep(i, { value: e.target.value })} style={{ ...fieldStyle, flex: 1, minWidth: '110px', padding: '8px 10px', fontFamily: 'var(--mono)' }} />
+                                        <label title="Photo of the machine screen" style={{ cursor: 'pointer', border: '1px solid var(--line)', background: '#fff', padding: '7px 10px', fontFamily: 'var(--mono)', fontSize: '10px', whiteSpace: 'nowrap' }}>
+                                            {stepUploading === i ? '⏳…' : (s.imageUrl ? '📷 Retake' : '📷 Photo')}
+                                            <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { uploadStepPhoto(i, e.target.files[0]); e.target.value = ''; }} />
+                                        </label>
+                                        {s.imageUrl && <img src={s.imageUrl} alt={`step ${i + 1}`} onClick={() => window.open(s.imageUrl, '_blank')} style={{ height: '38px', width: '56px', objectFit: 'cover', border: '1px solid var(--line)', cursor: 'zoom-in' }} />}
+                                        <button onClick={() => removeMachineStep(i)} title="Remove step" style={{ background: 'none', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '1rem', padding: '0 4px' }}>✕</button>
+                                    </div>
+                                ))}
+                            </div>
+                            <button onClick={addMachineStep} style={{ marginTop: '12px', background: 'transparent', border: '1px dashed var(--line)', color: 'var(--ink)', padding: '10px 18px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', width: '100%' }}>+ Add Step</button>
+                        </div>
+
                         <div style={{ marginTop: '20px' }}><label style={labelStyle}>Upload PDF Drawing</label><input type="file" onChange={e => setProgForm({...progForm, file: e.target.files[0]})} style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem' }} /></div>
                         
                         <div style={{ display: 'flex', gap: '16px', marginTop: '30px' }}>
                             <button onClick={handleSaveProgram} style={{ flex: 2, ...btnStyle, background: progForm.id ? 'var(--brass)' : 'var(--ink)' }}>{progForm.id ? 'Update Program' : 'Save New Program'}</button>
-                            {progForm.id && <button onClick={() => setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {} })} style={{ flex: 1, ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Cancel</button>}
+                            {progForm.id && <button onClick={() => setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {}, machineSteps: [] })} style={{ flex: 1, ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Cancel</button>}
                         </div>
                     </div>
                 )}
@@ -608,9 +691,41 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                     ? <button onClick={() => window.open(url, '_blank')} style={{ width: '100%', ...btnStyle, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>🖨 Print</button>
                                     : <div style={{ width: '100%', textAlign: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', border: '1px dashed var(--line)', boxSizing: 'border-box' }}>No print on file</div>;
                             })()}
+                            {(p.machineSteps || []).length > 0 && (
+                                <button onClick={() => setStepViewer(p)} style={{ width: '100%', ...btnStyle, marginTop: '10px' }}>⚙ Step-by-Step ({p.machineSteps.length})</button>
+                            )}
                         </div>
                     ))}
                 </div>
+
+                {/* STEP-BY-STEP VIEWER — the machine-start sheet, sized to be read from a tablet
+                    standing at the control: label small, the DATA huge. */}
+                {stepViewer && (
+                    <div onClick={() => setStepViewer(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '640px', maxWidth: '96vw', maxHeight: '92vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 12px 48px rgba(0,0,0,0.2)' }}>
+                            <div style={{ padding: '20px 28px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0 }}>
+                                <div>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Machine start · step by step</span>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: 'var(--ink)' }}>{stepViewer.name}</span>
+                                    {(stepViewer.machines || []).length > 0 && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', display: 'block', marginTop: '4px' }}>{(stepViewer.machines || []).join(' · ')}</span>}
+                                </div>
+                                <button onClick={() => setStepViewer(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                {(stepViewer.machineSteps || []).map((s, i) => (
+                                    <div key={i} style={{ border: '1px solid var(--line)', background: 'var(--paper)', padding: '16px 20px' }}>
+                                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 'bold', color: '#fff', background: 'var(--ink)', borderRadius: '50%', width: '26px', height: '26px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', alignSelf: 'center' }}>{i + 1}</span>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)' }}>{s.label || '—'}</span>
+                                            {s.value && <span style={{ fontFamily: 'var(--mono)', fontSize: '1.7rem', fontWeight: 'bold', color: 'var(--ink)', marginLeft: 'auto' }}>{s.value}</span>}
+                                        </div>
+                                        {s.imageUrl && <img src={s.imageUrl} alt={`step ${i + 1} screen`} onClick={() => window.open(s.imageUrl, '_blank')} style={{ width: '100%', maxHeight: '340px', objectFit: 'contain', marginTop: '12px', border: '1px solid var(--line)', background: '#000', cursor: 'zoom-in' }} />}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }
