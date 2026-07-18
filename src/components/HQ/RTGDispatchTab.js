@@ -754,7 +754,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     if (nsAsmId && nsConfig.location) {
                         await enqueueNsWrite({
                             kind: 'workorder',
-                            label: `${fp.woNum || 'NS WO'} — build ${fp.stockErpId || fp.id} ×${fp.totalParts}`,
+                            label: `NS WO — build ${fp.stockErpId || fp.id} ×${fp.totalParts}`,
                             sourceApp: 'RTG', createdBy: currentUser || '',
                             targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',
                             method: 'POST',
@@ -1191,7 +1191,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                 <div key={wo.id} style={{ ...cardStyle, borderLeft: '4px solid var(--brass)' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                                         <div>
-                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }} title={wo.id}>WO: {wo.woNo || wo.woId || wo.id}</div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }} title={`${wo.id}${wo.nsWoTran ? ` · NetSuite ${wo.nsWoTran}` : ''}`}>WO: {wo.nsWoTran || wo.woId || wo.id}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Build to Stock</div>
                                             {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}
                                             {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
@@ -1386,10 +1386,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             </thead>
                             <tbody>
                                 {dailyJobs.map(job => {
-                                    // Short speakable # (WO-1002) leads; the long doc id drops to a small
-                                    // grey second line so it stays findable without dominating the row.
-                                    const woShort = job.woRec?.woNo || job.woRec?.finPayload?.woNum || null;
-                                    const label = job.soId ? `SO ${job.soId}` : (job.woId ? (woShort || `WO ${job.woId}`) : job.key);
+                                    // Source numbers only (Stuart 2026-07-17): the real NetSuite WO # leads
+                                    // once posted; until then the app's long id is the reference.
+                                    const woTran = job.woRec?.nsWoTran || null;
+                                    const label = job.soId ? `SO ${job.soId}` : (job.woId ? (woTran || `WO ${job.woId}`) : job.key);
                                     const chips = [
                                         job.stages.HQ && { k: 'HQ', c: 'var(--ink)' },
                                         job.stages.SHOP && { k: 'Shop', c: 'var(--brass)' },
@@ -1404,7 +1404,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                         <tr key={job.key} style={{ borderBottom: '1px solid var(--line)' }}>
                                             <td style={{ padding: '12px 16px' }}>
                                                 <button onClick={() => openJobDetails(job)} title="Open details" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--brass)', fontFamily: 'var(--sans)', fontSize: '0.9rem', fontWeight: 600, textDecoration: 'underline' }}>{label}</button>
-                                                {woShort && job.woId && <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '2px' }}>{job.woId}</span>}
+                                                {woTran && job.woId && <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '2px' }}>{job.woId}</span>}
                                             </td>
                                             <td style={{ padding: '12px 16px', color: 'var(--ink)' }}>{job.customer || '—'}</td>
                                             <td style={{ padding: '12px 16px', color: 'var(--ink-soft)' }}>{fmtD(job.orderTs)}</td>

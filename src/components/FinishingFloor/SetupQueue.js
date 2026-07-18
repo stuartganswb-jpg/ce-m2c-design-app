@@ -139,7 +139,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
             <div key={wo.id} style={{...cardStyle, background: isMatched ? '#f6fbf7' : (cardStyle.background || '#fff'), borderLeft: isMatched ? '4px solid #3a7d44' : '4px solid var(--ink)'}}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
                     <strong style={{ fontSize: '1.1rem', color: 'var(--ink)', fontWeight: 500 }}>
-                        WO: {wo.woNum || wo.displayId || wo.id}
+                        WO: {wo.nsWoTran || wo.woNum || wo.displayId || wo.id}
                         {(wo.type === 'sales' || wo.soNum) && <span style={{color:'var(--ink-soft)', fontSize:'0.85rem'}}> (SO: {wo.soId || wo.soNum})</span>}
                     </strong>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -222,7 +222,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ background: '#fff', padding: '40px', borderRadius: '2px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px' }}>
-                      <h2 style={{ color: 'var(--ink)', margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>Job Specs: {activeSpecs.woNum || activeSpecs.displayId || activeSpecs.id}</h2>
+                      <h2 style={{ color: 'var(--ink)', margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>Job Specs: {activeSpecs.nsWoTran || activeSpecs.woNum || activeSpecs.displayId || activeSpecs.id}</h2>
                       <button onClick={() => setActiveSpecs(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '2rem', cursor: 'pointer' }}>×</button>
                   </div>
                   

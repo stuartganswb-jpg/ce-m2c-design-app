@@ -488,11 +488,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     const stamp = Date.now().toString().slice(-6);
                     const safeErp = String(basePart.legacyErpId || basePart.itemId).replace(/[^A-Za-z0-9]+/g, '-');
                     const woId = `WO-${safeErp}-${stamp}-${i}`;
-                    // Easy-to-speak reference (WO-1043); long doc id stays the key.
-                    let woNo = `WO-${basePart.legacyErpId || basePart.itemId}-${stamp}`;
-                    try { woNo = await reserveShortNo('WO'); } catch (e) { /* legacy fallback */ }
+                    // Source numbers only (Stuart 2026-07-17): no invented short WO # — the app id
+                    // shows until a NetSuite WO posts, then nsWoTran takes over on every screen.
                     await setDoc(doc(db, "hq_work_orders", woId), {
-                        id: woId, woId, woNo, woDisplayId: woNo,
+                        id: woId, woId, woDisplayId: `WO-${basePart.legacyErpId || basePart.itemId}-${stamp}`,
                         partErpId: basePart.legacyErpId || basePart.itemId,
                         brand: activeBrand, status: "Approved", customer: "Internal Stock",
                         hqJobId: basePart.id, totalParts: shortfall,
@@ -574,14 +573,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const stamp = Date.now().toString().slice(-6);
                 const safeErp = String(erpId).replace(/[^A-Za-z0-9]+/g, '-');
                 const newWoId = `WO-${safeErp}-${stamp}`;
-                // Easy-to-speak reference (WO-1045); the true item code stays on variantErpId.
-                let woNo = `WO-${erpId}-${stamp}`;
-                try { woNo = await reserveShortNo('WO'); } catch (e) { /* legacy fallback */ }
+                // Source numbers only (2026-07-17): app id until the NetSuite WO posts, then nsWoTran.
                 await setDoc(doc(db, "hq_work_orders", newWoId), {
                     id: newWoId,
                     woId: newWoId,
-                    woNo,
-                    woDisplayId: woNo,
+                    woDisplayId: `WO-${erpId}-${stamp}`,
                     brand: activeBrand,
                     status: "Approved",
                     customer: "Internal Stock",
@@ -974,10 +970,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             for (const { r, info, qty } of toMake) {
                 const finish = finishOf(r.itemid);
                 const woId = `WO-STK-${r.internalId}-${Date.now()}`;
-                // Short human reference (staff say "WO-1041") — doc id stays long/unique. Falls
-                // back to the long id if the counter isn't reachable (rules not deployed yet).
-                let woNo = woId;
-                try { woNo = await reserveShortNo('WO'); } catch (e) { /* long-id fallback */ }
+                // Source numbers only (Stuart 2026-07-17): no invented short WO # — screens show the
+                // app id until the real NetSuite WO posts (~1 min after RTG release), then nsWoTran.
                 // Poles are racked (8/rack), not sled-packed → no paintSizes; carry poles.qty so the planner
                 // treats it as a rack-based workstream. Small parts carry the S/M/L size for sled packing.
                 const paintSizes = (!info.isPole && ['S', 'M', 'L'].includes(info.size)) ? { S: 0, M: 0, L: 0, [info.size]: qty } : null;
@@ -985,7 +979,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // it reaches fin_workorders only when RTG "Push to Finishing" releases it
                 // (verbatim copy, so pole/rack/stock fields survive the review hop untouched).
                 const finPayload = {
-                    id: woId, displayId: woNo, woNum: woNo, orderKey: woId,
+                    id: woId, orderKey: woId,
                     quoteId: null, salesOrderId: null, estimateId: null,
                     orderType: 'stock', soId: null, soNum: null,
                     customerId: null, customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
@@ -1006,7 +1000,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
                 };
                 await setDoc(doc(db, "hq_work_orders", woId), {
-                    id: woId, woId, woNo, brand: activeBrand, type: 'Stock', status: 'Approved',
+                    id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
                     source: 'SALES_SNAPSHOT', routeTo: 'FINISHING', finPayload,
                     erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, totalParts: qty, reqDate,
                     paintSize: info.size || null, customer: 'Internal Stock',
