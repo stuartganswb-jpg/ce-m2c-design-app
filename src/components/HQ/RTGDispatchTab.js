@@ -27,11 +27,13 @@ const testSeedDocs = () => [
 // Strip the "  - " display prefix CPQTab adds when merging cart lines.
 const cleanLineName = (name) => String(name || '').replace(/^\s*[-▶]\s*/, '').trim();
 
+// Keep in sync with PickPackApp/NetSuiteSyncTab/ERPPushPullTab/AdminTab (CLAUDE.md map).
+// The missing `location` fields here were why Route A NetSuite work orders never queued.
 const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3" },
-    'uniquity': { subsidiary: "6" },
-    'ce': { subsidiary: "2" },
-    'leyla': { subsidiary: "5" }
+    'm2c': { subsidiary: "3", location: "19" },
+    'uniquity': { subsidiary: "6", location: "20" },
+    'ce': { subsidiary: "2", location: "17" },
+    'leyla': { subsidiary: "5", location: "18" }
 };
 
 const RTGDispatchTab = ({ currentUser, activeBrand }) => {
@@ -349,7 +351,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
     const handleViewOrder = async (order, orderType) => {
         setActiveViewOrder({ ...order, orderType });
-        setActiveJobDetails(null); 
+        setActiveJobDetails(null);
+        // Snapshot stock WOs carry everything on the parked finPayload — no CPQ job to fetch
+        // (the old path spun on "Fetching…" forever because hqJobId doesn't exist).
+        if (order.finPayload && order.finPayload.id) {
+            setActiveJobDetails({ snapshotStock: true, fp: order.finPayload });
+            return;
+        }
         if (order.hqJobId) {
             const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(order.hqJobId, orderType);
             if (originalJob) {
@@ -358,6 +366,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 addLog(`Warning: Original Document [${order.hqJobId}] not found in database.`, 'warn');
                 setActiveJobDetails({ finishRecipe, svgUri });
             }
+        } else {
+            // No linked CPQ job at all (legacy grid/library stock builds) — show the order
+            // record's own facts via the same stock summary instead of spinning.
+            setActiveJobDetails({
+                snapshotStock: true,
+                fp: { stockErpId: order.partErpId || order.variantErpId || order.rootItem || '', type: order.type || 'Stock Build', woNum: order.woNo || order.woDisplayId || order.id, totalParts: order.totalParts || order.qty || 0, recipe: order.recipe || '', reqDate: order.reqDate || '', note: '' }
+            });
         }
     };
 
@@ -1336,6 +1351,22 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             <div style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>
                                 Fetching Original Configuration Data...
                             </div>
+                        ) : activeJobDetails.snapshotStock ? (
+                            (() => { const fp = activeJobDetails.fp || {}; return (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                    <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '20px 24px' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '8px' }}>Stock Build</div>
+                                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>{fp.stockErpId || fp.type || '—'}</div>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginTop: '6px' }}>
+                                            WO {fp.woNum || fp.id} · Qty {fp.totalParts || 0} · Finish {fp.recipe || '—'} · Req {fp.reqDate || '—'}{fp.paintSize ? ` · Size ${fp.paintSize}` : ''}{fp.poles ? ' · POLES (rack of 8)' : ''}
+                                        </div>
+                                    </div>
+                                    {fp.note && <div style={{ border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)', padding: '14px 18px', fontSize: '0.9rem', color: 'var(--ink)' }}>{fp.note}</div>}
+                                    {(activeViewOrder.nsWoId || activeViewOrder.nsWoTran) && (
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: '#3a7d44' }}>NetSuite WO: {activeViewOrder.nsWoTran || activeViewOrder.nsWoId}</div>
+                                    )}
+                                </div>
+                            ); })()
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
 
