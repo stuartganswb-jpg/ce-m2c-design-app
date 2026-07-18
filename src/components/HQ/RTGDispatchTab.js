@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { classifyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
@@ -37,6 +37,17 @@ const BRAND_NETSUITE_MAP = {
 };
 
 const RTGDispatchTab = ({ currentUser, activeBrand }) => {
+    // NETSUITE TRANSMIT LOG (Stuart 2026-07-17): live ns_outbox tail so THIS screen shows the
+    // data actually leaving for NetSuite — one row per staged push with live status, and a loud
+    // diagnosis when the queue isn't draining (PENDING >3 min with zero attempts means the
+    // nsOutboxWorker cloud function isn't deployed/running).
+    const [nsOutboxTail, setNsOutboxTail] = useState([]);
+    useEffect(() => {
+        const unsub = onSnapshot(query(collection(db, 'ns_outbox'), orderBy('createdAt', 'desc'), limit(12)),
+            snap => setNsOutboxTail(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+            () => { /* collection may not exist yet */ });
+        return () => unsub();
+    }, []);
     const [salesOrders, setSalesOrders] = useState([]);
     const [workOrders, setWorkOrders] = useState([]);
     const [purchaseOrders, setPurchaseOrders] = useState([]);
@@ -1266,6 +1277,37 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 </div>
 
             </div>
+
+            {/* ============ NETSUITE TRANSMIT LOG (live outbox tail) ============ */}
+            {(() => {
+                const nowMs = Date.now();
+                const stuck = nsOutboxTail.filter(o => o.status === 'PENDING' && !o.attempts && (nowMs - (o.createdAt || nowMs)) > 3 * 60 * 1000);
+                const chipC = (s) => s === 'POSTED' ? '#3a7d44' : (s === 'FAILED' ? '#d9534f' : 'var(--brass)');
+                return (
+                    <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>
+                        <div style={{ padding: '14px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>NetSuite Transmit Log</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>staged writes drain ~1/min · full queue + retry lives in 11.1 → NetSuite Sync Queue</span>
+                        </div>
+                        {stuck.length > 0 && (
+                            <div style={{ padding: '12px 24px', background: '#fdf2f2', borderBottom: '1px solid #d9534f', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px', lineHeight: 1.6 }}>
+                                ⚠ {stuck.length} entr{stuck.length === 1 ? 'y has' : 'ies have'} sat PENDING for over 3 minutes with ZERO attempts — the queue is NOT draining. The nsOutboxWorker cloud function isn't deployed/running. Cloud Shell: firebase deploy --only functions --project ce-m2c-design-collab
+                            </div>
+                        )}
+                        <div style={{ maxHeight: '220px', overflowY: 'auto' }}>
+                            {nsOutboxTail.length === 0 && <div style={{ padding: '14px 24px', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>Nothing staged yet — WO/PO pushes from this screen appear here with live status.</div>}
+                            {nsOutboxTail.map(o => (
+                                <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '8px 24px', borderTop: '1px solid var(--paper-2)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.createdAt ? new Date(o.createdAt).toLocaleTimeString() : ''}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '2px 8px', border: `1px solid ${chipC(o.status)}`, color: chipC(o.status), whiteSpace: 'nowrap' }}>{o.status}</span>
+                                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink)' }} title={o.lastError || ''}>{o.label || o.kind}{o.nsTran ? ` → ${o.nsTran}` : ''}{o.status === 'FAILED' && o.lastError ? ` — ${String(o.lastError).slice(0, 80)}` : ''}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.attempts ? `try ${o.attempts}` : ''}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* ============ DAILY JOB LOG (live, full-width, bottom of page) ============ */}
             <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
