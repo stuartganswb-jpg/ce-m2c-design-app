@@ -622,8 +622,61 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         try {
             await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packBoxes: packBoxSel });
             writeLog(`Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
+            // PACKED → NETSUITE (Stuart 2026-07-18): transform the NetSuite SO into an Item
+            // Fulfillment at status Packed (staged via the outbox — serial, retried, visible in
+            // the RTG transmit log + 11.1). Shipping then executes/ships it IN NetSuite; the
+            // ⤓ Tracking pull below brings the tracking # back onto the sales order.
+            let nsNote = '';
+            try {
+                const soDoc = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || null);
+                const nsSoId = String((isQsOrder(job) ? (job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
+                if (nsSoId && !job.nsFulfillQueued) {
+                    const writeBack = [{ collection: isQsOrder(job) ? 'hq_sales_orders' : 'fin_workorders', docId: job.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' }];
+                    if (!isQsOrder(job) && soDoc && soDoc.id) writeBack.push({ collection: 'hq_sales_orders', docId: soDoc.id, patch: {}, idField: 'nsIfId', tranField: 'nsIfTran' });
+                    await enqueueNsWrite({
+                        kind: 'itemfulfillment',
+                        label: `NS Fulfillment — ${packRef(job)} (${job.customerName || job.clientName || job.customer || ''})`,
+                        sourceApp: 'WMS', createdBy: operator?.name || '',
+                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${nsSoId}/!transform/itemFulfillment`,
+                        method: 'POST',
+                        payload: { shipStatus: { id: 'B' }, memo: `Packed in app by ${operator?.name || 'Packer'}` },
+                        writeBack
+                    });
+                    await updateDoc(packDocOf(job), { nsFulfillQueued: true });
+                    nsNote = '\n\n📤 NetSuite Item Fulfillment queued (status: Packed). Shipping completes it in NetSuite — then hit ⤓ Tracking here to pull the tracking # back onto the sales order.';
+                } else if (!nsSoId) {
+                    nsNote = '\n\n⚠ No NetSuite sales order linked to this order — fulfillment NOT queued. Fulfill it manually in NetSuite.';
+                }
+            } catch (obErr) { nsNote = `\n\n⚠ Could not queue the NetSuite fulfillment: ${obErr.message || obErr}. Packing stands — retry from 11.1 or fulfill manually.`; }
             setPackOrderId(null);
+            alert(`📦 ${packRef(job)} packed.${nsNote}`);
         } catch (e) { alert('Could not complete packing: ' + (e.message || e)); }
+    };
+    // FULFILLED → BACK INTO THE APP: pull the SO's Item Fulfillment(s) from NetSuite and stamp
+    // status + tracking #(s) onto the sales order (and the fin doc for custom orders).
+    const pullFulfillment = async (job) => {
+        const soDoc = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || null);
+        const nsSoId = String((isQsOrder(job) ? (job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
+        if (!nsSoId) return alert('No NetSuite sales order linked to this order.');
+        try {
+            const rq = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: `SELECT t.id, t.tranid, BUILTIN.DF(t.status) AS status FROM transaction t WHERE t.type = 'ItemShip' AND t.createdfrom = ${nsSoId} ORDER BY t.id DESC` } });
+            const jq = await rq.json();
+            if (!rq.ok) throw new Error(JSON.stringify(jq).slice(0, 300));
+            const ifs = jq.items || [];
+            if (!ifs.length) return alert('No Item Fulfillment in NetSuite for this SO yet.\n\nIf packing just completed, the queued transform may still be draining (~1/min — RTG transmit log / 11.1). Otherwise shipping hasn\'t started it.');
+            let tracks = [];
+            try {
+                const rt = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: `SELECT DISTINCT tn.trackingnumber FROM trackingnumbermap tnm JOIN trackingnumber tn ON tn.id = tnm.trackingnumber WHERE tnm.transaction IN (${ifs.map(x => x.id).join(',')})` } });
+                const jt = await rt.json();
+                tracks = (jt.items || []).map(x => x.trackingnumber).filter(Boolean);
+            } catch (tErr) { /* tracking join can fail on perms — status still stamps */ }
+            const latest = ifs[0];
+            const patch = { nsIfId: String(latest.id), nsIfTran: latest.tranid || '', nsFulfillStatus: latest.status || '', trackingNumbers: tracks, trackingPulledAt: Date.now() };
+            await updateDoc(packDocOf(job), patch);
+            if (!isQsOrder(job) && soDoc && soDoc.id) { try { await updateDoc(doc(db, 'hq_sales_orders', soDoc.id), patch); } catch (soErr) { /* fin doc still carries it */ } }
+            writeLog(`Pulled fulfillment ${latest.tranid || latest.id} (${latest.status || '—'}) for ${packRef(job)}${tracks.length ? ` · 🚚 ${tracks.join(', ')}` : ''}`, 'packing');
+            alert(`Fulfillment ${latest.tranid || latest.id} — ${latest.status || '—'}${tracks.length ? `\n\n🚚 Tracking: ${tracks.join(', ')}\n\nStamped onto the sales order.` : '\n\nNo tracking # on it yet — pull again after shipping adds it.'}`);
+        } catch (e) { alert('Fulfillment pull failed: ' + (e.message || e)); }
     };
     // ================= END PACKING STATION =================
 
@@ -2145,8 +2198,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             {o.status !== 'Shipped' && (
                                 <div style={{ padding: '12px 18px', display: 'flex', gap: '10px', justifyContent: 'flex-end', alignItems: 'center', borderTop: `1px solid ${theme.line}` }}>
                                     {o.packStatus === 'Packed'
-                                        ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}</span>
+                                        ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}{o.nsIfTran ? ` · IF ${o.nsIfTran}${o.nsFulfillStatus ? ` (${o.nsFulfillStatus})` : ''}` : (o.nsFulfillQueued ? ' · IF queued…' : '')}{(o.trackingNumbers || []).length ? ` · 🚚 ${o.trackingNumbers.join(', ')}` : ''}</span>
                                         : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
+                                    {o.packStatus === 'Packed' && <button onClick={() => pullFulfillment(o)} title="Pull fulfillment status + tracking # from NetSuite" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⤓ Tracking</button>}
                                     {o.status !== 'Picked' && <button onClick={() => setQSStatus(o, 'Picked')} style={{ padding: '9px 18px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Picked</button>}
                                     <button onClick={() => setQSStatus(o, 'Shipped')} style={{ padding: '9px 18px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Shipped</button>
                                 </div>
@@ -2281,10 +2335,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <div style={{ marginTop: '30px' }}>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '10px' }}>Recently Packed</div>
                                     {packedRecent.map(j => (
-                                        <div key={j.id} style={{ display: 'flex', gap: '14px', alignItems: 'center', padding: '8px 12px', borderTop: `1px solid ${theme.paper2}`, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>
+                                        <div key={j.id} style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', borderTop: `1px solid ${theme.paper2}`, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>
                                             <span style={{ fontFamily: theme.mono, color: theme.ink }}>{packRef(j)}</span>
                                             <span>{j.customerName || j.clientName || j.customer || ''}</span>
-                                            <span style={{ marginLeft: 'auto', fontFamily: theme.mono, fontSize: '10px' }}>{j.packedBy || ''} · {j.packedAt ? new Date(j.packedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · {(j.packPhotos || []).length} 📷</span>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: j.nsIfTran ? '#3a7d44' : theme.inkSoft }}>
+                                                {j.nsIfTran ? `IF ${j.nsIfTran}${j.nsFulfillStatus ? ` · ${j.nsFulfillStatus}` : ''}` : (j.nsFulfillQueued ? 'IF queued…' : '')}
+                                            </span>
+                                            {(j.trackingNumbers || []).length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink }}>🚚 {j.trackingNumbers.join(', ')}</span>}
+                                            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '10px' }}>{j.packedBy || ''} · {j.packedAt ? new Date(j.packedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · {(j.packPhotos || []).length} 📷</span>
+                                                <button onClick={() => pullFulfillment(j)} title="Pull fulfillment status + tracking # from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⤓ Tracking</button>
+                                            </span>
                                         </div>
                                     ))}
                                 </div>
