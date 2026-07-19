@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth, functions, getOuterIdToken } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp } from "firebase/firestore";
+import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
+import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion } from "firebase/firestore";
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
+import { CATEGORY_NAME_RX } from '../Shared/itemCodeMatch';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
@@ -13,6 +15,22 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
+
+// Packing photos come off a tablet camera at 3–5MB — downscale to ≤1600px JPEG before Storage
+// upload. Caller falls back to the raw file if the browser can't decode the format (e.g. HEIC).
+const downscalePackImage = (file, maxDim = 1600) => new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+        const c = document.createElement('canvas'); c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(img.src);
+        c.toBlob(b => b ? resolve(b) : reject(new Error('compress failed')), 'image/jpeg', 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(img.src); reject(new Error('unreadable image')); };
+    img.src = URL.createObjectURL(file);
+});
 
 // TABS updated to include COUNT + CHIPS (sample-chip production control)
 const TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'ROD CUTS', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
@@ -195,6 +213,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [batchQty, setBatchQty] = useState({}); // assign-amount per `${orderId}::${finish}` (default 200)
     const [perms, setPerms] = useState({});
     const [jobs, setJobs] = useState([]);
+    const [finAll, setFinAll] = useState([]); // every fin_workorder (packing station's source)
     
     // Picking & Staging State
     const [activePickJob, setActivePickJob] = useState(null);
@@ -460,7 +479,17 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const unsub = onSnapshot(collection(db, "fin_workorders"), (snap) => {
             const fetched = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             setJobs(fetched.filter(j => j.sentToPickPack));
+            // Packing station reads the UNfiltered set: an order can finish without ever being
+            // released to pick (pole-only jobs), and it still has to be packed.
+            setFinAll(fetched);
         });
+        return () => unsub();
+    }, []);
+
+    // Standard boxes from HQ → Packaging (tab 15) — the box designs the packing groups align to.
+    const [stdBoxes, setStdBoxes] = useState([]);
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, 'standard_boxes'), s => setStdBoxes(s.docs.map(d => ({ id: d.id, ...d.data() }))), () => {});
         return () => unsub();
     }, []);
 
@@ -489,6 +518,101 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return !hasRealId && FEEISH_NAME_RE.test(String((l && l.name) || ''));
     };
     const pickableLines = (job) => (job.partsList || []).filter(l => !lineIsFeeish(l));
+
+    // ================= PACKING STATION (Stuart 2026-07-18) =================
+    // Finished orders (currentPhase 'Complete', custom only) queue compactly up top; opening one
+    // gives a two-sided workspace — TO PACK on the left, physically confirmed pieces move right.
+    // Lines group by category in packing order (brackets → rings → finials → plates → other small
+    // parts = the SMALL box, then poles = the LARGE box/tube), aligned to the standard boxes
+    // defined on HQ → Packaging (tab 15). ≥1 photo of the packaged parts is required to complete.
+    const [packOrderId, setPackOrderId] = useState(null);
+    const [packUploading, setPackUploading] = useState(false);
+    const [packBoxSel, setPackBoxSel] = useState({ SMALL: '', POLE: '' });
+    const packJob = finAll.find(j => j.id === packOrderId) || null;
+
+    const PACK_GROUP_ORDER = [
+        { cat: 'BRACKET', title: 'Brackets & Arms', box: 'SMALL' },
+        { cat: 'RING', title: 'Rings', box: 'SMALL' },
+        { cat: 'FINIAL', title: 'Finials & End Caps', box: 'SMALL' },
+        { cat: 'BACKPLATE', title: 'Backplates & Plates', box: 'SMALL' },
+        { cat: 'SMALL', title: 'Other Small Parts', box: 'SMALL' },
+        { cat: 'POLE', title: 'Poles', box: 'POLE' },
+    ];
+    // Order matters: BACKPLATE before FINIAL so "Backplate (Mounting Base for French Return)"
+    // lands with the plates, not the finials its name echoes.
+    const packCatOf = (l) => {
+        const n = `${l.erp} ${l.name}`;
+        if (l.isPole || CATEGORY_NAME_RX.POLE.test(n)) return 'POLE';
+        if (CATEGORY_NAME_RX.BACKPLATE.test(n)) return 'BACKPLATE';
+        if (CATEGORY_NAME_RX.BRACKET.test(n)) return 'BRACKET';
+        if (CATEGORY_NAME_RX.RING.test(n)) return 'RING';
+        if (CATEGORY_NAME_RX.FINIAL.test(n)) return 'FINIAL';
+        return 'SMALL';
+    };
+    const packLinesOf = (job) => {
+        const out = [];
+        (job.partsList || []).forEach((l, i) => {
+            if (lineIsFeeish(l)) return;
+            out.push({ key: `L${i}`, erp: l.legacyErpId || l.partId || '', name: l.partName || l.name || 'Part', qty: Number(l.quantity ?? l.qty) || 1 });
+        });
+        const poleQty = Number(job.totalPoles || (job.poles && job.poles.qty)) || 0;
+        if (poleQty > 0) out.push({ key: 'POLES', erp: job.poles?.type || job.type || 'POLE', name: `Pole${poleQty === 1 ? '' : 's'} · ${job.poles?.type || job.type || ''}`, qty: poleQty, isPole: true });
+        return out.map(l => ({ ...l, cat: packCatOf(l) }));
+    };
+    const packRef = (j) => j.nsWoTran || j.displayId || j.woNum || j.id;
+    const packQueue = finAll
+        .filter(j => j.currentPhase === 'Complete' && j.orderType !== 'stock' && j.packStatus !== 'Packed')
+        .sort((a, b) => (a.completedAt || 0) - (b.completedAt || 0));
+    const packedRecent = finAll.filter(j => j.packStatus === 'Packed').sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)).slice(0, 6);
+
+    const openPackOrder = (job) => {
+        setPackOrderId(job.id);
+        const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
+        const small = brandBoxes.find(b => /small/i.test(b.name || ''));
+        const large = brandBoxes.find(b => /pole|tube|large/i.test(b.name || ''));
+        setPackBoxSel({
+            SMALL: (job.packBoxes && job.packBoxes.SMALL) || (small ? small.name : ''),
+            POLE: (job.packBoxes && job.packBoxes.POLE) || (large ? large.name : '')
+        });
+    };
+    const confirmPackLine = async (job, line) => {
+        try { await updateDoc(doc(db, 'fin_workorders', job.id), { [`packedLines.${line.key}`]: { at: Date.now(), by: operator?.name || 'Packer' } }); }
+        catch (e) { alert('Could not mark packed: ' + (e.message || e)); }
+    };
+    const unpackLine = async (job, line) => {
+        if (!window.confirm(`Move "${line.name}" back to TO PACK?`)) return;
+        try { await updateDoc(doc(db, 'fin_workorders', job.id), { [`packedLines.${line.key}`]: deleteField() }); }
+        catch (e) { alert(e.message || e); }
+    };
+    const uploadPackPhotos = async (job, files) => {
+        const list = Array.from(files || []);
+        if (!list.length) return;
+        setPackUploading(true);
+        try {
+            for (let i = 0; i < list.length; i++) {
+                let blob = list[i];
+                try { blob = await downscalePackImage(list[i]); } catch (e) { /* undecodable — upload raw */ }
+                const fRef = ref(storage, `packing_photos/${job.id}/${Date.now()}_${i}.jpg`);
+                await uploadBytesResumable(fRef, blob);
+                const url = await getDownloadURL(fRef);
+                await updateDoc(doc(db, 'fin_workorders', job.id), { packPhotos: arrayUnion(url) });
+            }
+        } catch (e) { alert('Photo upload failed: ' + (e.message || e)); }
+        finally { setPackUploading(false); }
+    };
+    const completePacking = async (job) => {
+        const lines = packLinesOf(job);
+        const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
+        if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
+        if (!(job.packPhotos || []).length) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
+        if (!window.confirm(`Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\nSmall parts box: ${packBoxSel.SMALL || '—'}\nPole box: ${packBoxSel.POLE || '—'}`)) return;
+        try {
+            await updateDoc(doc(db, 'fin_workorders', job.id), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packBoxes: packBoxSel });
+            writeLog(`Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
+            setPackOrderId(null);
+        } catch (e) { alert('Could not complete packing: ' + (e.message || e)); }
+    };
+    // ================= END PACKING STATION =================
 
     // --- ROD CUTS (cut stocked 8 ft rods down to 6 ft / 4 ft; issued from the HQ Sales Snapshot) ---
     const [rodCutOrders, setRodCutOrders] = useState([]);
@@ -2027,24 +2151,129 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     );
                 })()}
 
-                {/* 🏷️ TAB: PACKAGING PREP */}
-                {activeTab === 'PACKING' && (
-                    <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
-                        <h2 style={{ borderBottom: `1px solid ${theme.line}`, paddingBottom: '15px', color: theme.ink, fontFamily: theme.serif, fontWeight: 500, margin: '0 0 30px 0' }}>Packaging Prep Queue</h2>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-                            {jobs.filter(j => j.pickStatus === 'Staged_Ready_For_Finishing').map(job => (
-                                <div key={job.id} style={{ border: `1px solid ${theme.line}`, padding: '20px', background: theme.paper }}>
-                                    <h3 style={{ margin: '0 0 10px 0', color: theme.ink, fontFamily: theme.serif, fontWeight: 500, fontSize: '1.3rem' }}>{job.id}</h3>
-                                    <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', color: theme.ink }}>Dims: {job.dimensions?.length || 0}"L x {job.dimensions?.width || 0}"W</div>
-                                    <div style={{ fontSize: '0.85rem', color: theme.inkSoft, marginTop: '10px' }}>Review box sizes & tube lengths to prep materials while finishing cures.</div>
+                {/* 📦 TAB: PACKING STATION */}
+                {activeTab === 'PACKING' && (() => {
+                    const lines = packJob ? packLinesOf(packJob) : [];
+                    const isPacked = (l) => !!(packJob.packedLines && packJob.packedLines[l.key]);
+                    const toPack = packJob ? lines.filter(l => !isPacked(l)) : [];
+                    const packed = packJob ? lines.filter(isPacked) : [];
+                    const photos = packJob ? (packJob.packPhotos || []) : [];
+                    const canComplete = packJob && toPack.length === 0 && photos.length > 0;
+                    const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
+                    const boxSelect = (slot, label) => (
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>
+                            {label}
+                            <select value={packBoxSel[slot] || ''} onChange={e => setPackBoxSel({ ...packBoxSel, [slot]: e.target.value })} style={{ padding: '8px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', background: '#fff' }}>
+                                <option value="">— pick box —</option>
+                                {brandBoxes.map(b => <option key={b.id} value={b.name}>{b.name}{b.w ? ` (${b.w}×${b.h}${b.d ? `×${b.d}` : ''})` : ''}</option>)}
+                            </select>
+                        </label>
+                    );
+                    const lineRow = (l, side) => (
+                        <div key={l.key} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', background: side === 'right' ? '#f0f7f1' : '#fff', border: `1px solid ${side === 'right' ? '#bcd8c0' : theme.line}`, marginBottom: '8px' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', color: theme.ink }}>{l.erp || '—'}</div>
+                                <div style={{ fontSize: '0.8rem', color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</div>
+                                {side === 'right' && packJob.packedLines[l.key] && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', marginTop: '2px' }}>✓ {packJob.packedLines[l.key].by} · {new Date(packJob.packedLines[l.key].at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
+                            </div>
+                            <span style={{ fontFamily: theme.mono, fontWeight: 'bold', fontSize: '1rem', color: theme.ink, whiteSpace: 'nowrap' }}>× {l.qty}</span>
+                            {side === 'left'
+                                ? <button onClick={() => confirmPackLine(packJob, l)} style={{ background: theme.ink, color: '#fff', border: 'none', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>✓ Packed</button>
+                                : <button onClick={() => unpackLine(packJob, l)} title="Undo — move back to TO PACK" style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>↩</button>}
+                        </div>
+                    );
+                    const groupBlock = (side, list) => PACK_GROUP_ORDER.map(g => {
+                        const gl = list.filter(l => l.cat === g.cat);
+                        if (!gl.length) return null;
+                        return (
+                            <div key={g.cat} style={{ marginBottom: '18px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: g.box === 'POLE' ? theme.brass : theme.inkSoft, borderBottom: `1px solid ${theme.line}`, paddingBottom: '6px', marginBottom: '10px' }}>
+                                    {g.title} · {g.box === 'POLE' ? 'LARGE BOX / TUBE' : 'SMALL BOX'}
                                 </div>
-                            ))}
-                            {jobs.filter(j => j.pickStatus === 'Staged_Ready_For_Finishing').length === 0 && (
-                                <div style={{ gridColumn: '1 / -1', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No orders currently awaiting packaging prep.</div>
+                                {gl.map(l => lineRow(l, side))}
+                            </div>
+                        );
+                    });
+                    return (
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                            <div style={{ borderBottom: `1px solid ${theme.line}`, paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '10px' }}>
+                                <h2 style={{ color: theme.ink, fontFamily: theme.serif, fontWeight: 500, margin: 0 }}>Packing Station</h2>
+                                <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em' }}>small parts first (brackets · rings · finials) → small box · poles last → large box · photo required</span>
+                            </div>
+
+                            {/* READY-TO-PACK QUEUE — compact strip up top */}
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '24px' }}>
+                                {packQueue.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No finished orders waiting to be packed.</span>}
+                                {packQueue.map(j => {
+                                    const jl = packLinesOf(j);
+                                    const done = jl.filter(l => j.packedLines && j.packedLines[l.key]).length;
+                                    const active = packOrderId === j.id;
+                                    return (
+                                        <button key={j.id} onClick={() => active ? setPackOrderId(null) : openPackOrder(j)} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}</div>
+                                            <div style={{ fontFamily: theme.sans, fontSize: '0.75rem', color: active ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>
+                                                {j.customerName || j.clientName || j.customer || '—'} · {jl.length} line{jl.length === 1 ? '' : 's'}{done > 0 ? ` · ${done}/${jl.length} packed` : ''}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {/* WORKSPACE — TO PACK left, physically confirmed pieces move right */}
+                            {packJob ? (
+                                <>
+                                    <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px', background: theme.paper2, border: `1px solid ${theme.line}`, marginBottom: '16px' }}>
+                                        <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{packRef(packJob)}</span>
+                                        <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{packJob.customerName || packJob.clientName || packJob.customer || ''}{packJob.recipe ? ` · ${packJob.recipe}` : ''}</span>
+                                        <span style={{ marginLeft: 'auto', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                                            {boxSelect('SMALL', 'Small parts box')}
+                                            {boxSelect('POLE', 'Pole box')}
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
+                                        <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: theme.paper }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: theme.ink, marginBottom: '14px' }}>To Pack ({toPack.length})</div>
+                                            {toPack.length === 0 ? <div style={{ color: '#3a7d44', fontFamily: theme.serif, fontStyle: 'italic' }}>Everything is packed — add the photo and complete below.</div> : groupBlock('left', toPack)}
+                                        </div>
+                                        <div style={{ border: `1px solid ${theme.line}`, padding: '16px', background: '#fff' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', color: '#3a7d44', marginBottom: '14px' }}>Packed ({packed.length}/{lines.length})</div>
+                                            {packed.length === 0 ? <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>Confirm pieces on the left as you physically pack them.</div> : groupBlock('right', packed)}
+                                        </div>
+                                    </div>
+
+                                    {/* REQUIRED PHOTOS + COMPLETE */}
+                                    <div style={{ marginTop: '20px', border: `1px solid ${theme.line}`, background: theme.paper, padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                                        <label style={{ cursor: 'pointer', border: `1px solid ${theme.line}`, background: '#fff', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                            {packUploading ? '⏳ Uploading…' : '📷 Add Photo (required)'}
+                                            <input type="file" accept="image/*" capture="environment" multiple style={{ display: 'none' }} onChange={e => { uploadPackPhotos(packJob, e.target.files); e.target.value = ''; }} />
+                                        </label>
+                                        {photos.map((u, i) => <img key={i} src={u} alt={`packed ${i + 1}`} onClick={() => window.open(u, '_blank')} style={{ height: '54px', width: '76px', objectFit: 'cover', border: `1px solid ${theme.line}`, cursor: 'zoom-in' }} />)}
+                                        {photos.length === 0 && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>No photo yet — a photo of the packaged parts is required.</span>}
+                                        <button onClick={() => completePacking(packJob)} disabled={!canComplete} style={{ marginLeft: 'auto', background: canComplete ? theme.ink : theme.paper2, color: canComplete ? '#fff' : theme.inkSoft, border: `1px solid ${canComplete ? theme.ink : theme.line}`, padding: '14px 26px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: canComplete ? 'pointer' : 'default' }}>
+                                            ✓ Complete Packing
+                                        </button>
+                                    </div>
+                                </>
+                            ) : (
+                                packQueue.length > 0 && <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>Tap an order above to open the packing workspace.</div>
+                            )}
+
+                            {/* RECENTLY PACKED */}
+                            {packedRecent.length > 0 && (
+                                <div style={{ marginTop: '30px' }}>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '10px' }}>Recently Packed</div>
+                                    {packedRecent.map(j => (
+                                        <div key={j.id} style={{ display: 'flex', gap: '14px', alignItems: 'center', padding: '8px 12px', borderTop: `1px solid ${theme.paper2}`, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>
+                                            <span style={{ fontFamily: theme.mono, color: theme.ink }}>{packRef(j)}</span>
+                                            <span>{j.customerName || j.clientName || j.customer || ''}</span>
+                                            <span style={{ marginLeft: 'auto', fontFamily: theme.mono, fontSize: '10px' }}>{j.packedBy || ''} · {j.packedAt ? new Date(j.packedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · {(j.packPhotos || []).length} 📷</span>
+                                        </div>
+                                    ))}
+                                </div>
                             )}
                         </div>
-                    </div>
-                )}
+                    );
+                })()}
 
                 {/* 📋 TAB: BIN COUNT */}
                 {activeTab === 'COUNT' && (
