@@ -313,9 +313,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // 🚀 NEW: Added comp.itemtype and comp.cost joins to explicitly identify and cost Service items
                 const q = `
                     SELECT 
-                        item.id, 
-                        item.itemid, 
-                        item.displayname, 
+                        item.id,
+                        item.itemid,
+                        item.displayname,
+                        item.itemtype AS ns_itemtype,
                         item.weight,
                         BUILTIN.DF(item.custitem_bit_product_type) AS product_type,
                         BUILTIN.DF(item.custitem_bit_itemcollection) AS collection,
@@ -444,15 +445,21 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 let isInHouse = true;
                 let outsourceAction = "";
 
-                // 1. Classify Assembly vs Inventory
-                if (sku.includes('/P') || sku.includes('/EP')) {
+                // 1. Classify Assembly vs Inventory — NetSuite's REAL record type is the truth
+                // (2026-07-18: HCUNEC1/PT, a BOUGHT Pewter finial, was mis-classed Assembly by the
+                // '/P' substring guess, while painted /N25 and /SG — real NetSuite assemblies with
+                // paint BOMs — fell through to Inventory). The suffix heuristic survives only as a
+                // fallback for rows where itemtype is somehow missing.
+                const nsItemType = String(item.ns_itemtype || '').toLowerCase();
+                if (nsItemType === 'assembly') {
                     partClass = "Assembly";
                     routingType = "STANDARD";
-                    
-                    if (sku.includes('/EP')) {
-                        isInHouse = false;
-                    }
+                } else if (nsItemType !== 'invtpart' && (sku.includes('/P') || sku.includes('/EP'))) {
+                    partClass = "Assembly";
+                    routingType = "STANDARD";
                 }
+                // Plated variants are outsourced regardless of class (custitem26 below still wins).
+                if (sku.includes('/EP')) isInHouse = false;
 
                 // 2. Outsource Action Logic (/EP1-6 and /P25)
                 if (sku.match(/\/EP[1-6]\b/) || sku.includes('/P25')) {
@@ -495,12 +502,15 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
                 const payload = {
                     legacyErpId: item.itemid || item.id,
-                    netSuiteInternalId: item.id, 
+                    netSuiteInternalId: item.id,
                     itemName: item.displayname || item.itemid,
                     partClass: partClass,
                     routingType: routingType,
                     updatedAt: new Date().toISOString()
                 };
+                // Stamp the REAL NetSuite record type so the write-back path (which otherwise
+                // guesses it from partClass) can never target the wrong endpoint.
+                if (nsItemType) payload.netSuiteRecordType = nsItemType === 'assembly' ? 'assemblyitem' : 'inventoryitem';
 
                 const newSpecs = {
                     cost: determinedCost,
