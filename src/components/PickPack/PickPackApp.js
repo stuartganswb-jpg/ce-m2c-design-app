@@ -528,7 +528,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [packOrderId, setPackOrderId] = useState(null);
     const [packUploading, setPackUploading] = useState(false);
     const [packBoxSel, setPackBoxSel] = useState({ SMALL: '', POLE: '' });
-    const packJob = finAll.find(j => j.id === packOrderId) || null;
+    // Two order sources share this station: custom finishing WOs (fin_workorders) and Quick Ship
+    // stocked sales orders from HQ tab 7 (hq_sales_orders, orderClass QUICKSHIP — queue once
+    // Picked off the shelf). Writes land on whichever doc the order came from.
+    const isQsOrder = (j) => j && j.orderClass === 'QUICKSHIP';
+    const packDocOf = (j) => doc(db, isQsOrder(j) ? 'hq_sales_orders' : 'fin_workorders', j.id);
+    const packJob = finAll.find(j => j.id === packOrderId) || quickShipOrders.find(o => o.id === packOrderId) || null;
 
     const PACK_GROUP_ORDER = [
         { cat: 'BRACKET', title: 'Brackets & Arms', box: 'SMALL' },
@@ -551,19 +556,27 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
     const packLinesOf = (job) => {
         const out = [];
-        (job.partsList || []).forEach((l, i) => {
-            if (lineIsFeeish(l)) return;
-            out.push({ key: `L${i}`, erp: l.legacyErpId || l.partId || '', name: l.partName || l.name || 'Part', qty: Number(l.quantity ?? l.qty) || 1 });
-        });
-        const poleQty = Number(job.totalPoles || (job.poles && job.poles.qty)) || 0;
-        if (poleQty > 0) out.push({ key: 'POLES', erp: job.poles?.type || job.type || 'POLE', name: `Pole${poleQty === 1 ? '' : 's'} · ${job.poles?.type || job.type || ''}`, qty: poleQty, isPole: true });
+        if (isQsOrder(job)) {
+            // Quick Ship SO: flat stocked lines (kit label kept so the packer sees the set).
+            (job.lines || []).forEach((l, i) => {
+                out.push({ key: `L${i}`, erp: l.erp || '', name: `${l.name || 'Item'}${l.kit ? ` · ${l.kit}` : ''}`, qty: Number(l.qty) || 1 });
+            });
+        } else {
+            (job.partsList || []).forEach((l, i) => {
+                if (lineIsFeeish(l)) return;
+                out.push({ key: `L${i}`, erp: l.legacyErpId || l.partId || '', name: l.partName || l.name || 'Part', qty: Number(l.quantity ?? l.qty) || 1 });
+            });
+            const poleQty = Number(job.totalPoles || (job.poles && job.poles.qty)) || 0;
+            if (poleQty > 0) out.push({ key: 'POLES', erp: job.poles?.type || job.type || 'POLE', name: `Pole${poleQty === 1 ? '' : 's'} · ${job.poles?.type || job.type || ''}`, qty: poleQty, isPole: true });
+        }
         return out.map(l => ({ ...l, cat: packCatOf(l) }));
     };
-    const packRef = (j) => j.nsWoTran || j.displayId || j.woNum || j.id;
-    const packQueue = finAll
-        .filter(j => j.currentPhase === 'Complete' && j.orderType !== 'stock' && j.packStatus !== 'Packed')
-        .sort((a, b) => (a.completedAt || 0) - (b.completedAt || 0));
-    const packedRecent = finAll.filter(j => j.packStatus === 'Packed').sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)).slice(0, 6);
+    const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : (j.nsWoTran || j.displayId || j.woNum || j.id);
+    const packQueue = [
+        ...quickShipOrders.filter(o => o.status === 'Picked' && o.packStatus !== 'Packed'),
+        ...finAll.filter(j => j.currentPhase === 'Complete' && j.orderType !== 'stock' && j.packStatus !== 'Packed')
+    ].sort((a, b) => (a.packedReadyAt || a.completedAt || a.createdAt || 0) - (b.packedReadyAt || b.completedAt || b.createdAt || 0));
+    const packedRecent = [...finAll, ...quickShipOrders].filter(j => j.packStatus === 'Packed').sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)).slice(0, 6);
 
     const openPackOrder = (job) => {
         setPackOrderId(job.id);
@@ -576,12 +589,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         });
     };
     const confirmPackLine = async (job, line) => {
-        try { await updateDoc(doc(db, 'fin_workorders', job.id), { [`packedLines.${line.key}`]: { at: Date.now(), by: operator?.name || 'Packer' } }); }
+        try { await updateDoc(packDocOf(job), { [`packedLines.${line.key}`]: { at: Date.now(), by: operator?.name || 'Packer' } }); }
         catch (e) { alert('Could not mark packed: ' + (e.message || e)); }
     };
     const unpackLine = async (job, line) => {
         if (!window.confirm(`Move "${line.name}" back to TO PACK?`)) return;
-        try { await updateDoc(doc(db, 'fin_workorders', job.id), { [`packedLines.${line.key}`]: deleteField() }); }
+        try { await updateDoc(packDocOf(job), { [`packedLines.${line.key}`]: deleteField() }); }
         catch (e) { alert(e.message || e); }
     };
     const uploadPackPhotos = async (job, files) => {
@@ -595,7 +608,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 const fRef = ref(storage, `packing_photos/${job.id}/${Date.now()}_${i}.jpg`);
                 await uploadBytesResumable(fRef, blob);
                 const url = await getDownloadURL(fRef);
-                await updateDoc(doc(db, 'fin_workorders', job.id), { packPhotos: arrayUnion(url) });
+                await updateDoc(packDocOf(job), { packPhotos: arrayUnion(url) });
             }
         } catch (e) { alert('Photo upload failed: ' + (e.message || e)); }
         finally { setPackUploading(false); }
@@ -607,7 +620,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!(job.packPhotos || []).length) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
         if (!window.confirm(`Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\nSmall parts box: ${packBoxSel.SMALL || '—'}\nPole box: ${packBoxSel.POLE || '—'}`)) return;
         try {
-            await updateDoc(doc(db, 'fin_workorders', job.id), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packBoxes: packBoxSel });
+            await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packBoxes: packBoxSel });
             writeLog(`Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
             setPackOrderId(null);
         } catch (e) { alert('Could not complete packing: ' + (e.message || e)); }
@@ -2066,6 +2079,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         return { size: parseInt(m[2]), singleErp };
                     };
                     const setQSStatus = async (o, status) => {
+                        // Flow discipline: Pick (here) → Pack (PACKING tab, photo required) → Ship.
+                        if (status === 'Shipped' && o.packStatus !== 'Packed' && !window.confirm(`SO ${o.soId || o.id} has NOT been packed on the PACKING tab (piece-by-piece confirm + photo).\n\nShip anyway?`)) return;
                         try {
                             await updateDoc(doc(db, "hq_sales_orders", o.id), { status, pickStatus: status });
                             writeLog(`Quick Ship ${o.id} → ${status}`, 'STOCK');
@@ -2128,7 +2143,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 </tbody>
                             </table>
                             {o.status !== 'Shipped' && (
-                                <div style={{ padding: '12px 18px', display: 'flex', gap: '10px', justifyContent: 'flex-end', borderTop: `1px solid ${theme.line}` }}>
+                                <div style={{ padding: '12px 18px', display: 'flex', gap: '10px', justifyContent: 'flex-end', alignItems: 'center', borderTop: `1px solid ${theme.line}` }}>
+                                    {o.packStatus === 'Packed'
+                                        ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}</span>
+                                        : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
                                     {o.status !== 'Picked' && <button onClick={() => setQSStatus(o, 'Picked')} style={{ padding: '9px 18px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Picked</button>}
                                     <button onClick={() => setQSStatus(o, 'Shipped')} style={{ padding: '9px 18px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Shipped</button>
                                 </div>
@@ -2210,7 +2228,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const active = packOrderId === j.id;
                                     return (
                                         <button key={j.id} onClick={() => active ? setPackOrderId(null) : openPackOrder(j)} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
-                                            <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}</div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}{isQsOrder(j) && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : theme.brass, border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : theme.brass}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>QUICK SHIP</span>}</div>
                                             <div style={{ fontFamily: theme.sans, fontSize: '0.75rem', color: active ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>
                                                 {j.customerName || j.clientName || j.customer || '—'} · {jl.length} line{jl.length === 1 ? '' : 's'}{done > 0 ? ` · ${done}/${jl.length} packed` : ''}
                                             </div>
