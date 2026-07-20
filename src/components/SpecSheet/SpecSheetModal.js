@@ -302,7 +302,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     let dead = false;
     (async () => {
       try {
-        const url = assembly?.manufacturingSpecs?.cadUrl;
+        // SPEC LAYOUT PREFERRED (Stuart 2026-07-20): if the assembly carries a dedicated
+        // spec-sheet layout (1.6 "Spec Sheet Layout (📐)" slot → manufacturingSpecs.specCadUrl),
+        // draw from THAT — flat, code-named, true positions per pole size/projection — instead
+        // of the merged sellable model. Fixes the larger pole sizes / projections the combined
+        // Fabricut .75 / 1 / 1-3/8 files couldn't render correctly.
+        const specUrl = assembly?.manufacturingSpecs?.specCadUrl;
+        const url = specUrl || assembly?.manufacturingSpecs?.cadUrl;
         if (!url) throw new Error('This assembly has no working GLB (manufacturingSpecs.cadUrl).');
         const [scene, cfgSnap] = await Promise.all([
           loadGLBScene(url),
@@ -321,7 +327,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         if (cfgSnap?.exists()) { setWallCfg(cfgSnap.data()?.wallPlates || {}); setSizeSources(cfgSnap.data()?.sizeSources || {}); }
         // DIRECT SPEC GLB sources have no pins/clusters at all — derive every choice from the
         // scene's top-level code-named nodes, categorized by the LIBRARY (part.productType).
-        const clusterless = !(assembly?.nodeClusters || []).length && !(pins || []).length;
+        // An assembly-carried spec layout (specCadUrl) is the same kind of scene: its clusters
+        // and pins describe the MERGED model, not this flat layout, so scene-derivation applies.
+        const clusterless = !!specUrl || (!(assembly?.nodeClusters || []).length && !(pins || []).length);
         let sceneChoices = null;
         if (clusterless) {
           sceneChoices = { BRACKET: [], BACKPLATE: [], FINIAL: [], RING: [], POLE: [] };

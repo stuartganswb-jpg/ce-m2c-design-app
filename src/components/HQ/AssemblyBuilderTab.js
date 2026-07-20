@@ -44,6 +44,13 @@ const LOCATIONS = ['', ...TAG_LOCATIONS];
 // working model, and generates no clusters/pins. Tab .6 (Interactive 3D Instructions) builds the
 // SOP pages on this model; the BOM Engine + shop floor open them in the SOP viewer.
 const SOP_SLOT_DEF = { id: 'sop', label: 'Shop Floor SOPs & Instructions', category: 'SOP', position: 'SHARED', location: '', desc: 'NOT part of the sellable model: load only the pieces needed for the shop-floor instruction sheets. Saved as its own .glb on the assembly; build the annotated pages in Tab .6, view from BOM Engine + Custom floor.' };
+// SPEC SHEET LAYOUT SLOT (Stuart 2026-07-20): same dedicated-slot idea for the 📐 Spec Sheet
+// generator. The designer draws the spec-sheet LAYOUT in Fusion — flat orthographic arrangement,
+// one of each component, code-named nodes, at every pole size / projection the sheet must show
+// (the combined Fabricut .75 / 1 / 1-3/8 masters the original files couldn't produce). It exports
+// as its OWN .glb (manufacturingSpecs.specCadUrl), never merged; the 📐 tool prefers it over the
+// sellable model and derives its choices from the scene's code-named nodes at true scale.
+const SPEC_SLOT_DEF = { id: 'spec', label: 'Spec Sheet Layout (📐)', category: 'SPEC', position: 'SHARED', location: '', desc: 'NOT part of the sellable model: the flat spec-sheet layout drawn in Fusion — one of each component, code-named nodes, true positions per pole size/projection. Saved as its own .glb; the 📐 Spec Sheet generator draws from THIS instead of the merged model.' };
 
 const STANDARD_SLOTS = [
     { id: 'short_rod', label: 'Short Rod — center (always shown)', category: 'POLE', position: 'CENTER', location: '', desc: 'The short french-return-length rod. Always visible — it carries the return ends. Tag position CENTER.' },
@@ -61,6 +68,7 @@ const STANDARD_SLOTS = [
     { id: 'left_end', label: 'Left End — finials + returns', category: 'FINIAL', position: 'LEFT', location: '', desc: 'Stack ALL left-end choices in one file: finials + french/bent/mitered returns. Name the return choices with "return"/"french" so they hide the left long half.' },
     { id: 'right_end', label: 'Right End — finials + returns', category: 'FINIAL', position: 'RIGHT', location: '', desc: 'Stack ALL right-end choices: finials + returns. Name returns with "return"/"french" so they hide the right long half.' },
     SOP_SLOT_DEF,
+    SPEC_SLOT_DEF,
 ];
 
 // DOUBLE BRACKET — same idea, but the bracket carries TWO rows: a FRONT pole+finials and a BACK
@@ -76,6 +84,7 @@ const DOUBLE_SLOTS = [
     { id: 'back_finials', label: 'Back Finials', category: 'FINIAL', position: 'BACK', location: '', desc: 'Back-row finial choices (both ends). Stack all options in one file.' },
     { id: 'dbl_rings', label: 'Rings', category: 'RING', position: 'SHARED', location: '', desc: 'Optional decorative rings (either row).' },
     SOP_SLOT_DEF,
+    SPEC_SLOT_DEF,
 ];
 
 const TEMPLATES = {
@@ -434,25 +443,48 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         const task = uploadBytesResumable(sRef(storage, path), blob);
         return new Promise((res, rej) => task.on('state_changed', null, rej, async () => res(await getDownloadURL(task.snapshot.ref))));
     };
+    // Spec-sheet layout: identical own-.glb export, its own storage folder, no renaming — the
+    // Fusion node names ARE the codes the 📐 tool classifies by.
+    const exportAndUploadSpec = async (layer, asmName) => {
+        const g = layer.scene.clone(true);
+        g.position.set(layer.offset.x, layer.offset.y, layer.offset.z);
+        const buf = await new Promise((res, rej) => new GLTFExporter().parse(g, r => res(r), e => rej(e), { binary: true }));
+        const blob = new Blob([buf], { type: 'model/gltf-binary' });
+        const path = `spec_models/${activeBrand}_${String(asmName).replace(/[^a-z0-9]/gi, '_')}_${Date.now()}.glb`;
+        const task = uploadBytesResumable(sRef(storage, path), blob);
+        return new Promise((res, rej) => task.on('state_changed', null, rej, async () => res(await getDownloadURL(task.snapshot.ref))));
+    };
 
     const build = async () => {
         const extendTarget = extendId ? repairList.find(a => a.id === extendId) : null;
         if (!extendTarget && !assemblyName.trim()) return alert('Name the assembly first.');
-        // The SOP slot never merges into the sellable model — it exports as its own .glb.
+        // The SOP + SPEC slots never merge into the sellable model — each exports as its own .glb.
         const sopLayer = layers['sop'];
-        const mergeSlots = filledSlots.filter(s => s.id !== 'sop');
-        if (!mergeSlots.length && !(extendTarget && sopLayer)) return alert('Upload at least one slot .glb first.\n\n(The SOP slot on its own can only be ATTACHED to an existing assembly — pick one under Extend.)');
-        // SOP-only attach: geometry, clusters and pins untouched — upload + point sopCadUrl.
-        if (!mergeSlots.length && extendTarget && sopLayer) {
-            if (!window.confirm(`Attach the SOP/instructions model to "${extendTarget.itemName}"?\n\nThe working model, clusters and pins are untouched. Tab .6 (Interactive 3D Instructions) will build its pages on THIS model.`)) return;
+        const specLayer = layers['spec'];
+        const mergeSlots = filledSlots.filter(s => s.id !== 'sop' && s.id !== 'spec');
+        if (!mergeSlots.length && !(extendTarget && (sopLayer || specLayer))) return alert('Upload at least one slot .glb first.\n\n(The SOP / Spec Sheet slots on their own can only be ATTACHED to an existing assembly — pick one under Extend.)');
+        // Side-slot-only attach: geometry, clusters and pins untouched — upload + point the url(s).
+        if (!mergeSlots.length && extendTarget && (sopLayer || specLayer)) {
+            const what = [sopLayer && 'SOP/instructions', specLayer && '📐 Spec Sheet layout'].filter(Boolean).join(' + ');
+            if (!window.confirm(`Attach the ${what} model to "${extendTarget.itemName}"?\n\nThe working model, clusters and pins are untouched.`)) return;
             setBusy('build');
             try {
-                const sopUrl = await exportAndUploadSop(sopLayer, extendTarget.itemName || extendTarget.id);
-                await updateDoc(doc(db, 'Approved_Designs', extendTarget.id), { 'manufacturingSpecs.sopCadUrl': sopUrl, 'manufacturingSpecs.sopCadFile': sopLayer.fileName || '', updatedAt: Date.now() });
-                addLog(`✅ SOP model attached to "${extendTarget.itemName}".`, 'success');
-                alert(`✅ SOP/instructions model attached to "${extendTarget.itemName}".\n\nBuild the annotated pages in Tab .6 (Interactive 3D Instructions) — it now loads this model for that assembly.`);
+                const patch = { updatedAt: Date.now() };
+                if (sopLayer) {
+                    const sopUrl = await exportAndUploadSop(sopLayer, extendTarget.itemName || extendTarget.id);
+                    patch['manufacturingSpecs.sopCadUrl'] = sopUrl;
+                    patch['manufacturingSpecs.sopCadFile'] = sopLayer.fileName || '';
+                }
+                if (specLayer) {
+                    const specUrl = await exportAndUploadSpec(specLayer, extendTarget.itemName || extendTarget.id);
+                    patch['manufacturingSpecs.specCadUrl'] = specUrl;
+                    patch['manufacturingSpecs.specCadFile'] = specLayer.fileName || '';
+                }
+                await updateDoc(doc(db, 'Approved_Designs', extendTarget.id), patch);
+                addLog(`✅ ${what} model attached to "${extendTarget.itemName}".`, 'success');
+                alert(`✅ ${what} attached to "${extendTarget.itemName}".${sopLayer ? '\n\n• Tab .6 (Interactive 3D Instructions) now builds its pages on the SOP model.' : ''}${specLayer ? '\n\n• The 📐 Spec Sheet generator now draws this assembly from the spec layout (proper scale, every pole size/projection in the file).' : ''}`);
                 setExtendId('');
-            } catch (e) { console.error(e); addLog(`SOP attach failed: ${e.message || e}`, 'error'); alert('SOP attach failed:\n\n' + (e.message || e)); }
+            } catch (e) { console.error(e); addLog(`Attach failed: ${e.message || e}`, 'error'); alert('Attach failed:\n\n' + (e.message || e)); }
             setBusy('');
             return;
         }
@@ -587,6 +619,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 addLog('Exporting + uploading SOP/instructions model…', 'info');
                 sopUrl = await exportAndUploadSop(sopLayer, asmName);
             }
+            // Spec-sheet layout (if loaded): its OWN .glb — the 📐 generator prefers it.
+            let specUrl = '';
+            if (specLayer) {
+                addLog('Exporting + uploading 📐 spec-sheet layout…', 'info');
+                specUrl = await exportAndUploadSpec(specLayer, asmName);
+            }
 
             // 4) Write the assembly doc. EXTEND = append clusters + swap cadUrl on the SAME doc (old
             // .glb kept as backup; nothing existing is rewritten). NEW = create the mainline PRODUCT.
@@ -596,6 +634,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     'manufacturingSpecs.cadUrl': cadUrl,
                     'manufacturingSpecs.cadUrlBackup': oldCadUrl,
                     ...(sopUrl ? { 'manufacturingSpecs.sopCadUrl': sopUrl, 'manufacturingSpecs.sopCadFile': sopLayer.fileName || '' } : {}),
+                    ...(specUrl ? { 'manufacturingSpecs.specCadUrl': specUrl, 'manufacturingSpecs.specCadFile': specLayer.fileName || '' } : {}),
                     builtFromLayers: [...existingBuiltFrom, ...mergeSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName }))],
                     updatedAt: Date.now()
                 });
@@ -608,7 +647,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // everywhere that gates on approvals (e.g. Visual Assembly) without an Inception pass.
                     approvals: { designer: currentUser || 'BUILDER', technical: currentUser || 'BUILDER', machinist: currentUser || 'BUILDER' },
                     nodeClusters: clusters,
-                    manufacturingSpecs: { cadUrl, status: 'BUILT_FROM_LAYERS', ...(sopUrl ? { sopCadUrl: sopUrl, sopCadFile: sopLayer.fileName || '' } : {}) },
+                    manufacturingSpecs: { cadUrl, status: 'BUILT_FROM_LAYERS', ...(sopUrl ? { sopCadUrl: sopUrl, sopCadFile: sopLayer.fileName || '' } : {}), ...(specUrl ? { specCadUrl: specUrl, specCadFile: specLayer.fileName || '' } : {}) },
                     builtFromLayers: mergeSlots.map(s => ({ slot: s.label, file: layers[s.id].fileName })),
                     createdAt: Date.now(), updatedAt: Date.now(), author: currentUser || ''
                 }, { merge: true });
