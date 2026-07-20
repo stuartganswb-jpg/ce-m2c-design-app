@@ -48,7 +48,7 @@ const Summary = ({ workOrders }) => {
                             return (
                                 <tr key={wo.id} style={{ borderBottom: '1px solid var(--line)', background: '#fff' }}>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink-soft)' }}>{new Date(wo.completedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
-                                    <td style={{ padding: '16px 20px', fontWeight: 500, color: 'var(--ink)' }}>{wo.id}</td>
+                                    <td title={wo.id} style={{ padding: '16px 20px', fontWeight: 500, color: 'var(--ink)' }}>{wo.nsWoTran || wo.displayId || wo.woNum || wo.id}</td>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{wo.soId || '-'}</td>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink-soft)' }}>{wo.custPo || '-'}</td>
                                     <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{woKind === 'stock' ? <span style={{fontFamily: 'var(--mono)', fontSize: '10px'}}>{p} (STOCK)</span> : p}</td>

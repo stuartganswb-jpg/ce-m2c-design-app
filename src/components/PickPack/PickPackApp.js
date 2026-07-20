@@ -1750,17 +1750,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const job = resolveByExactKey(jobs, smallKey);
         if (!job) return alert(`❌ No picked small-parts order matches "${smallKey}".`);
         if (job.pickStatus !== 'Picked_Awaiting_Staging') {
-            return alert(`❌ ${job.id}: small parts are not picked yet (status: ${job.pickStatus || 'Pending'}).`);
+            return alert(`❌ ${packRef(job)}: small parts are not picked yet (status: ${job.pickStatus || 'Pending'}).`);
         }
 
         // Orders with a custom (shop) half must pass the two-label verify; small-only orders skip it.
         if (job.hasCustomSibling) {
-            if (!custKey) return alert(`📋 ${job.id} has custom shop parts — scan the CUSTOM (shop) label too.`);
+            if (!custKey) return alert(`📋 ${packRef(job)} has custom shop parts — scan the CUSTOM (shop) label too.`);
             if (smallKey !== custKey) {
                 return alert(`🛑 DIFFERENT ORDERS — DO NOT MIX.\n\nSmall-parts label: ${smallKey}\nCustom label: ${custKey}\n\nSeparate these before staging.`);
             }
             if (job.customFabStatus !== 'Complete') {
-                return alert(`❌ ${job.id}: custom parts not yet complete in the shop (status: ${job.customFabStatus || 'Pending'}). Wait for the shop to finish + label them.`);
+                return alert(`❌ ${packRef(job)}: custom parts not yet complete in the shop (status: ${job.customFabStatus || 'Pending'}). Wait for the shop to finish + label them.`);
             }
         }
 
@@ -1769,8 +1769,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             stagingStatus: 'MATCHED',
             stagedAt: serverTimestamp()
         });
-        writeLog(`Order Staged & Matched: ${job.id}`, 'wms');
-        alert(`✅ MATCH CONFIRMED: ${job.id} is staged and ready for the Finishing floor.`);
+        writeLog(`Order Staged & Matched: ${packRef(job)}`, 'wms');
+        alert(`✅ MATCH CONFIRMED: ${packRef(job)} is staged and ready for the Finishing floor.`);
         setStagingSmallScan('');
         setStagingCustomScan('');
         setOperator(null);
@@ -1992,7 +1992,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         return (
             <div style={{ position: 'fixed', inset: 0, backgroundColor: theme.paper, color: theme.ink, zIndex: 9999, display: 'flex', flexDirection: 'column', padding: '40px', fontFamily: theme.sans }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: `1px solid ${theme.line}`, paddingBottom: '20px', marginBottom: '40px' }}>
-                    <h1 style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {activePickJob.id}{pickSkips.length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '0.9rem', color: '#d9534f', marginLeft: '16px' }}>⚠ {pickSkips.length} SKIPPED</span>}</h1>
+                    <h1 title={activePickJob.id} style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {packRef(activePickJob)}{pickSkips.length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '0.9rem', color: '#d9534f', marginLeft: '16px' }}>⚠ {pickSkips.length} SKIPPED</span>}</h1>
                     <button onClick={() => { setActivePickJob(null); setPickSkips([]); setValidation({ bin: '', qty: '' }); }} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
                 </div>
 
@@ -2093,7 +2093,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div onClick={() => { const opening = expandedJob !== job.id; setExpandedJob(opening ? job.id : null); if (opening) fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', cursor: 'pointer' }}>
                                             <div style={{ minWidth: 0 }}>
                                                 <h3 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.2rem', fontWeight: 500 }}>
-                                                    <span style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '0.9rem', marginRight: '8px' }}>{expandedJob === job.id ? '▾' : '▸'}</span>{job.id}
+                                                    <span style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '0.9rem', marginRight: '8px' }}>{expandedJob === job.id ? '▾' : '▸'}</span><span title={job.id}>{packRef(job)}</span>
                                                 </h3>
                                                 {customer && <div style={{ color: theme.ink, fontFamily: theme.sans, fontSize: '0.95rem', fontWeight: 500, marginTop: '5px' }}>{customer}</div>}
                                                 {(sidemark || poNum) && (

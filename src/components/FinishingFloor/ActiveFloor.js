@@ -4,6 +4,8 @@ import { doc, updateDoc } from "firebase/firestore";
 import { resolveRecipe } from '../Shared/finishingTime';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
+// Source numbers first: the REAL NetSuite WO # leads wherever it exists; long app id is the fallback.
+const woRef = (wo) => (wo && (wo.nsWoTran || wo.displayId || wo.woNum || wo.id)) || '';
 const inputStyle = { padding: '10px', border: '1px solid var(--line)', borderRadius: '2px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
 
 // What a sled is doing right now, derived from its WO's current-step task state (set by operator
@@ -62,7 +64,7 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear }) => {
             <div style={{ position: 'absolute', top: '42px', left: spotLeft(pos), width: '14%', height: '88px', background: '#fff', border: `2px solid ${accent}`, borderRadius: '2px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px', zIndex: 10, transition: 'left 1.5s ease-in-out', boxShadow: act.running ? '0 0 0 3px rgba(176,141,87,0.30)' : '0 4px 12px rgba(0,0,0,0.06)' }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: accent, fontWeight: 600 }}>{color}</span>
                 <span style={{ fontSize: '0.72rem', color: 'var(--ink)', marginTop: '3px' }}>{act.label}</span>
-                {wo && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '2px' }}>{wo.id}</span>}
+                {wo && <span title={wo.id} style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '2px' }}>{woRef(wo)}</span>}
             </div>
         );
     };
@@ -105,7 +107,7 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear }) => {
             </div>
 
             <div style={{ marginTop: '18px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em', lineHeight: 1.6 }}>
-                RED: {redAct.label}{redWO ? ` (${redWO.id})` : ''} · BLUE: {blueAct.label}{blueWO ? ` (${blueWO.id})` : ''} · Oven {ovenLabel}.
+                RED: {redAct.label}{redWO ? ` (${woRef(redWO)})` : ''} · BLUE: {blueAct.label}{blueWO ? ` (${woRef(blueWO)})` : ''} · Oven {ovenLabel}.
                 Sleds shuffle — the cured sled moves right to setup/spray, the next moves left under the oven; the oven slides left for poles.
             </div>
         </div>
@@ -117,6 +119,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const activeJobs = workOrders.filter(j => j.tasks && Object.values(j.tasks).some(t => t.status === 'Running'));
   const redlineWOs = workOrders.filter(w => w.redlineAlert);
   const floorOps = users?.filter(u => ['painter', 'hand_painter', 'paint_manager'].includes(u.role)) || [];
+  const [viewWo, setViewWo] = useState(null); // read-only order details popup (tap any job window)
 
   const cfg = {
     potLifeMins: sysConfig?.potLifeMins || 189, recoatMins: sysConfig?.recoatMins || 90,
@@ -326,9 +329,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 const blockSpray = machineState.ovenPos === 'SPINDLE' && machineState.isOvenRunning;
 
                                 if (!isSetupComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} />
+                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} />
                                 } else if (!isSprayComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSpray"} titleOverride="2. Spray Coat" wo={item.wo} type="spinSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinPaintMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSpray')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSpray ? "Waiting on Station 2 Oven" : null} />
+                                    return <TaskCard key={item.wo.id+"spinSpray"} titleOverride="2. Spray Coat" wo={item.wo} type="spinSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinPaintMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSpray')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSpray ? "Waiting on Station 2 Oven" : null} />
                                 } else {
                                     return <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center', fontSize: '0.9rem', color: 'var(--ink)', fontFamily: 'var(--sans)' }}>Ready for track cycle</div>
                                 }
@@ -350,9 +353,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                 const blockBake = machineState.ovenPos === 'POLES';
 
                                 if (!isSetupComplete) {
-                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSetup ? "Oven is blocking station" : null} />
+                                    return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSetup ? "Oven is blocking station" : null} />
                                 } else if (!isBakeComplete) {
-                                    return <TaskCard key={item.wo.id+"spinBake"} titleOverride="2. Bake Cycle" wo={item.wo} type="spinBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} now={now} aiRec={getAiRecommendation('spinBake')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockBake ? "Oven is at pole rack" : null} />
+                                    return <TaskCard key={item.wo.id+"spinBake"} titleOverride="2. Bake Cycle" wo={item.wo} type="spinBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinBake')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockBake ? "Oven is at pole rack" : null} />
                                 } else {
                                     return (
                                         <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
@@ -388,16 +391,16 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                     // Hand-applied coat in the pole stream — done off-rack; advance when finished.
                                     return (
                                         <div key={item.wo.id + 'poleHand'} style={{ ...cardStyle, textAlign: 'center' }}>
-                                            <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '6px' }}>WO: {item.wo.id}</div>
+                                            <div onClick={() => setViewWo(item.wo)} title={`${item.wo.id} — tap for order details`} style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '6px', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--line)' }}>WO: {woRef(item.wo)}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '14px' }}>Poles · Step {item.step.step}: {item.step.color} (hand applied)</div>
                                             <button onClick={() => handleCompletePoleStep(item.wo)} style={{ width: '100%', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{idx + 1 >= len ? 'Poles Finished' : 'Hand Coat Done → Next'}</button>
                                         </div>
                                     );
                                 }
                                 if (!isSprayComplete) {
-                                    return <TaskCard key={item.wo.id+"poleSpray"} titleOverride={`Spray Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={poleQty * cfg.poleMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
+                                    return <TaskCard key={item.wo.id+"poleSpray"} titleOverride={`Spray Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={poleQty * cfg.poleMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
                                 } else if (!isBakeComplete) {
-                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride={`Bake Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven busy curing a sled" : null} />
+                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride={`Bake Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven busy curing a sled" : null} />
                                 } else {
                                     return (
                                         <div key={item.wo.id + 'poleNext'} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
@@ -414,7 +417,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', color: 'var(--ink-soft)', marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Hand Finish Station (Off-Track)</div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                                 {colorGroups[color]?.map(item => item.step.app === 'Hand Applied' && item.wo.tasks?.hand?.status !== 'Complete' && (
-                                    <TaskCard key={item.wo.id+"hand"} wo={item.wo} type="hand" step={item.step} user={user} setQcModal={setQcModal} estTime={item.wo.type === 'Poles' ? ((item.wo.totalParts || 0) * cfg.handPoleMins) : ((item.wo.totalParts || 0) * cfg.handSmallMins)} activePots={activePots} now={now} aiRec={getAiRecommendation('hand')} users={users} activeWOs={activeWOs} cfg={cfg} />
+                                    <TaskCard key={item.wo.id+"hand"} wo={item.wo} type="hand" step={item.step} user={user} setQcModal={setQcModal} estTime={item.wo.type === 'Poles' ? ((item.wo.totalParts || 0) * cfg.handPoleMins) : ((item.wo.totalParts || 0) * cfg.handSmallMins)} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('hand')} users={users} activeWOs={activeWOs} cfg={cfg} />
                                 ))}
                             </div>
                         </div>
@@ -484,9 +487,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           if (recoatMinsLeft < 30) recoatWarning = `Recoat Danger: ${recoatMinsLeft}m left`;
                       }
                       return (
-                          <div key={wo.id} style={{ border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)', borderLeft: recoatWarning ? '2px solid #d9534f' : '2px solid var(--brass)' }}>
+                          <div key={wo.id} onClick={() => setViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)', borderLeft: recoatWarning ? '2px solid #d9534f' : '2px solid var(--brass)', cursor: 'pointer' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>WO: {wo.id}</span>
+                                  <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>WO: {woRef(wo)}</span>
                                   <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{wo.recipe}</span>
                               </div>
                               {recoatWarning && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: '#d9534f', marginTop: '8px' }}>{recoatWarning}</div>}
@@ -497,11 +500,60 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               )}
           </div>
       </div>
+
+      {/* 📋 ORDER DETAILS — read-only view+confirm popup; tap any job window to open. */}
+      {viewWo && (() => {
+          const wo = workOrders.find(w => w.id === viewWo.id) || viewWo;
+          const len = recipeLen(wo);
+          const hasP = woHasPoles(wo);
+          const pIdx = poleIdxOf(wo);
+          const t = wo.tasks || {};
+          const chip = (label, st) => (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', border: '1px solid var(--line)', background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>{label}</span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', fontWeight: 600, color: st === 'Complete' ? '#3a7d44' : (st === 'Running' ? 'var(--brass)' : 'var(--ink-soft)') }}>{st || 'Pending'}</span>
+              </div>
+          );
+          const row = (k, v) => v ? <div style={{ display: 'flex', gap: '10px', fontSize: '0.9rem', lineHeight: 1.7 }}><span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', width: '110px', flexShrink: 0, paddingTop: '2px' }}>{k}</span><span style={{ color: 'var(--ink)' }}>{v}</span></div> : null;
+          return (
+              <div onClick={() => setViewWo(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '560px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 12px 48px rgba(0,0,0,0.2)' }}>
+                      <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                              <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: 'var(--ink)' }}>{woRef(wo)}</div>
+                              {woRef(wo) !== wo.id && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '3px' }}>{wo.id}</div>}
+                          </div>
+                          <button onClick={() => setViewWo(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                      </div>
+                      <div style={{ padding: '20px 26px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {row('NetSuite WO', wo.nsWoTran || wo.nsWoId || 'not posted yet')}
+                          {row('Item', wo.stockErpId || wo.type || '')}
+                          {row('Recipe', wo.recipe || '')}
+                          {row('Quantity', `${wo.totalParts || 0} pcs${hasP ? ` · ${Number(wo.totalPoles || (wo.poles && wo.poles.qty)) || 0} pole(s)` : ''}`)}
+                          {row('Customer', wo.customerName || wo.clientName || wo.customer || '')}
+                          {row('Required', wo.reqDate || '')}
+                          {row('Parts coat', len ? (wo.currentStepIndex >= len ? `done (${len}/${len})` : `${(wo.currentStepIndex || 0) + 1} of ${len}`) : '')}
+                          {hasP && row('Poles coat', len ? (pIdx >= len ? `done (${len}/${len})` : `${pIdx + 1} of ${len}`) : '')}
+                          {wo.convertSuggestion && row('⇄ Suggestion', `convert ${wo.convertSuggestion.qty} × ${wo.convertSuggestion.from} → ${wo.convertSuggestion.to} (Setup Queue converter)`)}
+                          {row('Note', wo.note || '')}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '14px' }}>
+                              {chip('Sled Setup', t.spinSetup?.status)}
+                              {chip('Sled Spray', t.spinSpray?.status)}
+                              {chip('Sled Bake', t.spinBake?.status)}
+                              {hasP && chip('Pole Spray', t.poleSpray?.status)}
+                              {hasP && chip('Pole Bake', t.poleBake?.status)}
+                              {chip('Hand Finish', t.hand?.status)}
+                          </div>
+                      </div>
+                  </div>
+              </div>
+          );
+      })()}
     </div>
   );
 };
 
-const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason }) => {
+const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, activePots, now, aiRec, users, activeWOs, cfg, sled, blockReason, onViewWo }) => {
     const task = wo.tasks?.[type] || {}; 
     const isRunning = task.status === 'Running';
     
@@ -554,7 +606,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
         const rem = Math.max(0, Math.floor(((estTime * 60000) - (now - task.startTime)) / 60000));
         return (
             <div style={{ ...cardStyle, borderLeft: '2px solid var(--brass)', textAlign: 'center', background: '#fff' }}>
-                <div style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem' }}>{wo.id}</div>
+                <div onClick={() => onViewWo && onViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ color: 'var(--ink)', fontWeight: 500, fontSize: '0.95rem', cursor: onViewWo ? 'pointer' : 'default', textDecoration: onViewWo ? 'underline' : 'none', textDecorationColor: 'var(--line)' }}>{woRef(wo)}</div>
                 {sled && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '8px' }}>{sled} Station (Oven)</div>}
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '2rem', color: 'var(--ink)', margin: '16px 0' }}>{rem} mins</div>
                 <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' })} style={{ width: '100%', padding: '12px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Mark Dry Early</button>
@@ -573,7 +625,7 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
                 </div>
             )}
 
-            <div style={{ fontSize: '1.05rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '4px' }}>WO: {wo.id}</div>
+            <div onClick={() => onViewWo && onViewWo(wo)} title={`${wo.id} — tap for order details`} style={{ fontSize: '1.05rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '4px', cursor: onViewWo ? 'pointer' : 'default', textDecoration: onViewWo ? 'underline' : 'none', textDecorationColor: 'var(--line)' }}>WO: {woRef(wo)}</div>
             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>Step {step.step}: {step.color}</div>
             
             {isRunning ? (
