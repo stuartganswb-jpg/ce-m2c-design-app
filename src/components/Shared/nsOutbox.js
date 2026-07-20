@@ -10,10 +10,13 @@ import { collection, doc, setDoc } from 'firebase/firestore';
 // backoff retries on 429/5xx — so write bursts smear out over the day instead
 // of fighting for the account's ~5 concurrency slots.
 //
-// Idempotency: the new doc's id is stamped into the payload memo as
-// `[ob:<id>]`. If the worker crashes after NetSuite accepted the write, the
-// retry FIRST looks that marker up in NetSuite and recovers the posted
-// transaction instead of double-posting.
+// Idempotency: a marker is stamped into the payload memo — human-readable
+// push date/time plus a short unique ref: `[app push 07/20/26, 2:32 PM #aVNdVI]`
+// (Stuart 2026-07-20 — replaced the raw `[ob:<id>]` blob NetSuite users saw).
+// If the worker crashes after NetSuite accepted the write, the retry FIRST
+// looks the `#<ref>]` token up in NetSuite and recovers the posted transaction
+// instead of double-posting. The worker's recovery search matches BOTH the old
+// and new formats (functions/index.js — keep in sync).
 //
 // Optional writeBack: { collection, docId, patch, idField, tranField } — once
 // posted, the worker merges patch onto that app doc and stamps the NetSuite
@@ -24,8 +27,11 @@ import { collection, doc, setDoc } from 'firebase/firestore';
 export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, sourceApp, createdBy, writeBack }) => {
     const ref = doc(collection(db, 'ns_outbox'));
     const p = payload ? JSON.parse(JSON.stringify(payload)) : {};
-    if (typeof p.memo === 'string') p.memo = `${p.memo} [ob:${ref.id}]`;
-    else if (method === 'POST' && /\/record\/v1\//.test(String(targetUrl))) p.memo = `[ob:${ref.id}]`;
+    // Shop time (High Point NC) regardless of the device's zone, so the memo reads true on the floor.
+    const stamp = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' });
+    const marker = `[app push ${stamp} #${ref.id.slice(0, 6)}]`;
+    if (typeof p.memo === 'string') p.memo = `${p.memo} ${marker}`;
+    else if (method === 'POST' && /\/record\/v1\//.test(String(targetUrl))) p.memo = marker;
     await setDoc(ref, {
         id: ref.id, kind: kind || 'write', label: label || '', sourceApp: sourceApp || '', createdBy: createdBy || '',
         targetUrl, method, payload: p, writeBack: writeBack || null,

@@ -603,6 +603,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             (job.lines || []).forEach((l, i) => {
                 out.push({ key: `L${i}`, erp: l.erp || '', name: `${l.name || 'Item'}${l.kit ? ` · ${l.kit}` : ''}`, qty: Number(l.qty) || 1 });
             });
+        } else if (job.orderType === 'stock') {
+            // Stock build: what gets handled here is the FINISHED item going back to the shelf —
+            // not the raw pull line the pick stage used.
+            out.push({ key: 'STOCK', erp: job.stockErpId || job.type || '', name: `${job.stockErpId || job.type || 'Stock'} — finished stock, bin & shelve`, qty: Number(job.totalParts) || 1 });
         } else {
             (job.partsList || []).forEach((l, i) => {
                 if (lineIsFeeish(l)) return;
@@ -616,7 +620,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : (j.nsWoTran || j.displayId || j.woNum || j.id);
     const packQueue = [
         ...quickShipOrders.filter(o => o.status === 'Picked' && o.packStatus !== 'Packed'),
-        ...finAll.filter(j => j.currentPhase === 'Complete' && j.orderType !== 'stock' && j.packStatus !== 'Packed')
+        // Custom orders AND stock builds (Stuart 2026-07-20): a finished stock build lands here
+        // too — its "packing" is binning the finished goods back to the shelf, and this is the
+        // only queue that keeps a completed WO visible after it leaves the finishing floor.
+        ...finAll.filter(j => j.currentPhase === 'Complete' && j.packStatus !== 'Packed')
     ].sort((a, b) => (a.packedReadyAt || a.completedAt || a.createdAt || 0) - (b.packedReadyAt || b.completedAt || b.createdAt || 0));
     const packedRecent = [...finAll, ...quickShipOrders].filter(j => j.packStatus === 'Packed').sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)).slice(0, 6);
 
@@ -2338,7 +2345,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const active = packOrderId === j.id;
                                     return (
                                         <button key={j.id} onClick={() => active ? setPackOrderId(null) : openPackOrder(j)} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
-                                            <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}{isQsOrder(j) && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : theme.brass, border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : theme.brass}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>QUICK SHIP</span>}</div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}{isQsOrder(j) && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : theme.brass, border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : theme.brass}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>QUICK SHIP</span>}{j.orderType === 'stock' && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : '#3a7d44', border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : '#3a7d44'}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>STOCK → BIN</span>}</div>
                                             <div style={{ fontFamily: theme.sans, fontSize: '0.75rem', color: active ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>
                                                 {j.customerName || j.clientName || j.customer || '—'} · {jl.length} line{jl.length === 1 ? '' : 's'}{done > 0 ? ` · ${done}/${jl.length} packed` : ''}
                                             </div>

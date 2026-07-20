@@ -434,8 +434,10 @@ exports.nsOutboxWorker = onSchedule({
     };
     const recoverByMarker = async (docId) => {
         try {
+            // Matches BOTH marker generations: legacy `[ob:<full id>]` and the humanized
+            // `[app push 07/20/26, 2:32 PM #<6-char id>]` (Shared/nsOutbox.js — keep in sync).
             const r = await nsCall('POST', 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
-                { q: `SELECT id, tranid FROM transaction WHERE memo LIKE '%[ob:${docId}]%'` });
+                { q: `SELECT id, tranid FROM transaction WHERE memo LIKE '%[ob:${docId}]%' OR memo LIKE '%#${String(docId).substring(0, 6)}]%'` });
             const row = r.ok && r.body.items && r.body.items[0];
             return row ? { nsId: String(row.id), nsTran: row.tranid || null } : null;
         } catch (e) { return null; }
@@ -488,7 +490,8 @@ exports.nsOutboxWorker = onSchedule({
         if (!claimed) continue;
 
         try {
-            const hasMarker = JSON.stringify(e.payload || {}).includes(`[ob:${e.id}]`);
+            const payloadStr = JSON.stringify(e.payload || {});
+            const hasMarker = payloadStr.includes(`[ob:${e.id}]`) || payloadStr.includes(`#${String(e.id).substring(0, 6)}]`);
             if ((e.attempts || 0) > 0 && hasMarker && e.method === 'POST' && String(e.targetUrl).includes('/record/v1/')) {
                 const rec = await recoverByMarker(e.id);
                 if (rec) { await finishPosted(e, rec.nsId, rec.nsTran, 'recovered after retry — not double-posted'); continue; }
@@ -567,7 +570,7 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
         method: 'POST',
         payload: {
             quantity: qty,
-            memo: `Stock build ${woDocId} complete [ob:${obRef.id}]`,
+            memo: `Stock build ${woDocId} complete [app push ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' })} #${obRef.id.slice(0, 6)}]`,
             ...(bin ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: qty }] } } } : {})
         },
         writeBack: { collection: 'fin_workorders', docId: woDocId, patch: { nsWoCompletionPosted: true }, idField: 'nsWoCompletionId', tranField: 'nsWoCompletionTran' },
