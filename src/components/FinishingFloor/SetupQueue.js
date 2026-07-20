@@ -47,10 +47,36 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
       })).sort((a, b) => (a.firstSeq !== b.firstSeq) ? a.firstSeq - b.firstSeq : a.firstDate - b.firstDate);
   })();
 
+  // Same precision rule as the WMS pick app: a line with a real item # is pickable; the
+  // fee/return/splice NAME test only applies to lines with no real id.
+  const FEEISH_RE = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b|\bSPLICE\b|\bFEE\b/i;
+  const pickableCount = (wo) => (wo.partsList || []).filter(l => {
+      if (l && (l.isFee || l.lineIsFee)) return false;
+      const pid = String((l && (l.legacyErpId || l.partId)) || '');
+      const hasRealId = pid && pid !== 'PENDING' && pid !== 'N/A' && pid !== 'UNASSIGNED' && !/(^|-)(FEE|HIDDEN)-/.test(pid);
+      return hasRealId || !FEEISH_RE.test(String((l && l.name) || ''));
+  }).length;
+  // Release the small-parts pick to the WMS pick app (its queue = sentToPickPack +
+  // pickStatus 'Pending'). Idempotent: an already-released or already-picked order is untouched.
+  const releasePickPatch = (wo) => {
+      if (wo.sentToPickPack) return { patch: {}, note: '' };
+      const n = pickableCount(wo);
+      if (n === 0) return { patch: {}, note: ' — no small parts to pick (not sent to WMS)' };
+      return {
+          patch: { sentToPickPack: true, pickStatus: wo.pickStatus || 'Pending', sentToPickPackAt: Date.now() },
+          note: ` — ${n} part line${n === 1 ? '' : 's'} released to the WMS pick queue`
+      };
+  };
+
   const startSetup = async (wo) => {
     try {
-        await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Running" });
-        if (writeLog) writeLog(`Started Setup for ${wo.displayId || wo.id}`, 'production');
+        // Start Setup RELEASES THE PARTS PICK (Stuart 2026-07-18): warehouse pulls the small
+        // parts on the WMS pick app while setup runs — not just a button-status change.
+        const { patch, note } = releasePickPatch(wo);
+        await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Running", ...patch });
+        if (writeLog) writeLog(`Started Setup for ${wo.displayId || wo.id}${note}`, 'production');
+        if (patch.sentToPickPack) alert(`📦 Parts pick released to the WMS pick app${note.replace(' — ', ': ')}.`);
+        else if (note) alert(`Setup started${note}.`);
     } catch (err) {
         console.error("Start Setup Error:", err);
         alert(`FIREBASE BLOCKED UPDATE for ID [${wo.id}]. Reason: ${err.message}`);
@@ -65,8 +91,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
         return alert(`🚧 Active Floor is at capacity.\n\nOn the floor now: ${activeFloorLoad} pcs\nThis order: ${pieces} pcs\nDaily cap: ${ACTIVE_CAP} pcs\n\n"${wo.displayId || wo.id}" stays ready here until floor work clears.`);
     }
     try {
-        await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Staged", currentPhase: "Painting", currentStepIndex: 0 });
-        if (writeLog) writeLog(`Staged ${wo.displayId || wo.id} to Floor (${pieces} pcs; floor now ~${activeFloorLoad + pieces}/${ACTIVE_CAP})`, 'production');
+        // Safety net: an order that went Running before the Start-Setup release fix (or was
+        // never released) still gets its parts pick sent to WMS at the latest possible gate.
+        const { patch, note } = releasePickPatch(wo);
+        await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Staged", currentPhase: "Painting", currentStepIndex: 0, ...patch });
+        if (writeLog) writeLog(`Staged ${wo.displayId || wo.id} to Floor (${pieces} pcs; floor now ~${activeFloorLoad + pieces}/${ACTIVE_CAP})${note}`, 'production');
+        if (patch.sentToPickPack) alert(`📦 Parts pick released to the WMS pick app${note.replace(' — ', ': ')}.`);
     } catch (err) {
         console.error("Stage to Floor Error:", err);
         alert(`FIREBASE BLOCKED STAGE for ID [${wo.id}]. Reason: ${err.message}`);
@@ -181,7 +211,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
                 {((wo.partsList || []).length > 0 || wo.sentToPickPack) && (() => {
                     const ps = wo.pickStatus || 'Pending';
                     const picked = ps === 'Picked_Awaiting_Staging';
-                    const label = !wo.sentToPickPack ? 'Awaiting release (starts with shop fab)'
+                    const label = !wo.sentToPickPack ? 'Awaiting release (▶ Start Setup sends the pick)'
                         : picked ? (wo.pickHadSkips ? `Picked ⚠ ${(wo.pickSkips || []).length} skip(s)` : 'Picked — at staging')
                         : 'In pick queue (WMS)';
                     const color = picked ? (wo.pickHadSkips ? '#d9534f' : 'var(--ink)') : (wo.sentToPickPack ? 'var(--brass)' : 'var(--ink-soft)');
