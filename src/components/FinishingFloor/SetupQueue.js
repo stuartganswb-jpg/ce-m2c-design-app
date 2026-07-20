@@ -394,6 +394,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
                         </div>
                     );
                 })()}
+
+                {wo.convertSuggestion && (
+                    <div title="Attached by the planner on the Sales Snapshot — run it with the ⇄ Convert Finished → Raw tool at the top of this screen" style={{ marginTop: '8px', padding: '10px 12px', background: '#fdf8ef', border: '1px solid var(--brass)', borderRadius: '2px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', lineHeight: 1.5 }}>
+                        ⇄ <b>PLANNER SUGGESTS:</b> convert {wo.convertSuggestion.qty} × {wo.convertSuggestion.from} → {wo.convertSuggestion.to} (raw short — use the converter above)
+                    </div>
+                )}
                 
                 {isMatched && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px', padding: '10px 12px', background: '#eaf5ec', border: '1px solid #3a7d44', borderRadius: '2px' }}>

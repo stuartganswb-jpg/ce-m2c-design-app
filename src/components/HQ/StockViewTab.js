@@ -61,6 +61,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [cutModal, setCutModal] = useState(null);     // rod-cut order builder ({itemid, internalId, available, qty, target})
     const [snapWatch, setSnapWatch] = useState('');     // snapshot watchlist filter (catalog is growing)
     const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants
+    const [snapSort, setSnapSort] = useState('item');   // 'item' (load order) | 'finish' (/SG · /N25 grouped — batch same-finish WOs)
+    const [convSugFor, setConvSugFor] = useState(null); // row itemid with the ⇄ donor picker open
+    const [convSugMap, setConvSugMap] = useState({});   // itemid → { from, qty } — rides onto the WO as a SUGGESTION (Setup Queue converts)
     const [rawStock, setRawStock] = useState(null);     // { loading, availById, inboundById } — raw cores' NetSuite stock, fetched on first RAW toggle
     const [ropEdits, setRopEdits] = useState({});       // erp(base) -> edited ROP (pushed to Master Library manufacturingSpecs.reorderPoint)
     const [ropSaving, setRopSaving] = useState(false);
@@ -978,8 +981,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // The COMPLETE finishing doc is pre-built here but PARKED on the RTG work order —
                 // it reaches fin_workorders only when RTG "Push to Finishing" releases it
                 // (verbatim copy, so pole/rack/stock fields survive the review hop untouched).
+                // Planner's ⇄ convert suggestion (if attached on the snapshot row) rides along —
+                // the Setup Queue operator sees it on the card and runs the actual conversion.
+                const sug = convSugMap[r.itemid];
+                const sugBase = r.itemid.includes('/') ? r.itemid.slice(0, r.itemid.lastIndexOf('/')) : r.itemid;
                 const finPayload = {
                     id: woId, orderKey: woId,
+                    ...(sug ? { convertSuggestion: { from: sug.from, to: sugBase, qty: sug.qty } } : {}),
                     quoteId: null, salesOrderId: null, estimateId: null,
                     orderType: 'stock', soId: null, soNum: null,
                     customerId: null, customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
@@ -988,7 +996,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     stockErpId: r.itemid, stockInternalId: r.internalId,
                     paintSize: info.isPole ? null : (info.size || null), productType: info.ptype || null, paintSizes,
                     ...(info.isPole ? { poles: { qty, type: info.ptype || 'POLE' }, totalPoles: qty } : {}),
-                    note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}${info.isPole ? ' · POLE (rack of 8)' : ''}`,
+                    note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}${info.isPole ? ' · POLE (rack of 8)' : ''}${sug ? ` · ⇄ SUGGEST: convert ${sug.qty} × ${sug.from} → raw ${sugBase}` : ''}`,
                     cpqSpecs: {}, imageUrl: info.part?.finalImageUrl || null,
                     dimensions: { length: 0, width: 0, height: 0 },
                     partsList: [],
@@ -1246,9 +1254,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     const nsW = s.customData?.watchlist && s.customData.watchlist !== 'N/A' ? s.customData.watchlist : '';
                     return String(s.watchList || nsW || 'NONE').toUpperCase();
                 };
-                const rows = (salesHist.rows || []).filter(r =>
+                const rowsFiltered = (salesHist.rows || []).filter(r =>
                     (!term || String(r.itemid).toUpperCase().includes(term)) &&
                     (snapWatch === '' || watchOf(r) === snapWatch.toUpperCase()));
+                // Sort toggle (Stuart 2026-07-20): FINISH groups /SG · /N25 · … together so
+                // same-finish work orders can be issued as one batch; ITEM # = default order.
+                const rows = snapSort === 'finish'
+                    ? [...rowsFiltered].sort((a, b) =>
+                        (finishOf(a.itemid) || '~').localeCompare(finishOf(b.itemid) || '~') ||
+                        String(a.itemid).localeCompare(String(b.itemid), undefined, { numeric: true, sensitivity: 'base' }))
+                    : rowsFiltered;
                 // RAW-CORES view (Stuart 2026-07-17): demand rolled up to the BASE item behind the
                 // finish variants (suffix rule — everything before the last "/"; 1 core consumed per
                 // finished unit). Rows without a "/" have no separate core and are excluded.
@@ -1324,6 +1339,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 <div style={{ display: 'flex', border: '1px solid var(--line)' }}>
                                     <button onClick={() => setSnapView('FIN')} style={{ padding: '9px 14px', background: snapView === 'FIN' ? 'var(--ink)' : '#fff', color: snapView === 'FIN' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Finished Items</button>
                                     <button onClick={() => { setSnapView('RAW'); if (!rawStock) loadRawStock(); }} title="Demand rolled up to the RAW core behind each finish variant (…/BL + /CP + /SG → base item) — set core ROPs so finishing never runs out of parts" style={{ padding: '9px 14px', background: snapView === 'RAW' ? 'var(--ink)' : '#fff', color: snapView === 'RAW' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Raw Cores (BOM)</button>
+                                </div>
+                                <div style={{ display: 'flex', border: '1px solid var(--line)' }} title="Row order — Finish groups /SG · /N25 · … together so same-finish work orders go out as one batch">
+                                    <button onClick={() => setSnapSort('item')} style={{ padding: '9px 14px', background: snapSort === 'item' ? 'var(--ink)' : '#fff', color: snapSort === 'item' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Item #</button>
+                                    <button onClick={() => setSnapSort('finish')} style={{ padding: '9px 14px', background: snapSort === 'finish' ? 'var(--ink)' : '#fff', color: snapSort === 'finish' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Finish</button>
                                 </div>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${snapView === 'RAW' ? rawRows.length : rows.length} item${(snapView === 'RAW' ? rawRows.length : rows.length) === 1 ? '' : 's'}`}</span>
                                 {Object.keys(ropEdits).length > 0 && (
@@ -1412,9 +1431,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 const info = reorderFor(r);
                                                 // Order is ALWAYS entered by hand — Rec is guidance, never a prefill.
                                                 const ov = orderQty[r.internalId] ?? '';
+                                                const sug = convSugMap[r.itemid];
                                                 return (
-                                                <tr key={r.internalId}>
-                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}{info.isPack ? <span title={info.minRule} style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · PACK×{info.packSize}</span> : (info.isSingleAgg ? <span title="This EA history IS the full single demand (each-buyers + mirrored pack consumption); pack rows are not added on top — no double count. Avail counts pack shelf stock × size." style={{ color: '#3a7d44', fontSize: '9px' }}> · EA+</span> : null)}</td>
+                                                <React.Fragment key={r.internalId}>
+                                                <tr>
+                                                    <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}{info.isPack ? <span title={info.minRule} style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · PACK×{info.packSize}</span> : (info.isSingleAgg ? <span title="This EA history IS the full single demand (each-buyers + mirrored pack consumption); pack rows are not added on top — no double count. Avail counts pack shelf stock × size." style={{ color: '#3a7d44', fontSize: '9px' }}> · EA+</span> : null)}
+                                                    {finishOf(r.itemid) && !info.isPack ? (
+                                                        sug
+                                                            ? <button onClick={() => { if (window.confirm(`Clear the convert suggestion (${sug.qty} × ${sug.from})?`)) setConvSugMap(p => { const n = { ...p }; delete n[r.itemid]; return n; }); }} title="Convert suggestion attached — rides onto the WO for the Setup Queue operator. Click to clear." style={{ marginLeft: '6px', background: 'var(--brass)', color: '#fff', border: 'none', padding: '2px 7px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px' }}>⇄ {String(sug.from).split('/').pop()} ×{sug.qty}</button>
+                                                            : <button onClick={() => setConvSugFor(convSugFor === r.itemid ? null : r.itemid)} title="Suggest converting a sister finished color to raw for this build — the WO carries the note; the Setup Queue operator runs the actual conversion" style={{ marginLeft: '6px', background: convSugFor === r.itemid ? 'var(--ink)' : 'transparent', color: convSugFor === r.itemid ? '#fff' : 'var(--brass)', border: '1px solid var(--brass)', padding: '1px 6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px' }}>⇄</button>
+                                                    ) : null}</td>
                                                     <td style={{ ...numTd, textAlign: 'left', color: r.oldInternalId ? OLD_BLUE : 'var(--line)' }}>{r.oldInternalId || '—'}</td>
                                                     {r.cells.map((c, i) => (
                                                         <td key={salesHist.months[i].key} style={{ ...numTd, color: c.src === 'new' ? 'var(--ink)' : (c.src === 'old' ? OLD_BLUE : 'var(--line)'), fontWeight: c.src === 'new' ? 500 : 400 }}>{c.v || '·'}</td>
@@ -1430,6 +1456,39 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd }}><input type="number" min="0" value={ov} placeholder={info.isPack ? '·' : '0'} disabled={!!info.isPack} title={info.isPack ? `Packs are built from ${info.packSingle} at pick — order the single row` : undefined} onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none', background: info.isPack ? 'var(--paper-2)' : '#fff' }} /></td>
                                                     <td style={{ ...numTd }}>{(info.isPole && /8(1[05])/.test(String(r.itemid))) ? <button title="Cut 8 ft rods down to 6 ft / 4 ft" onClick={() => setCutModal({ itemid: r.itemid, internalId: r.internalId, available: info.available, qty: '', target: '4FT' })} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                 </tr>
+                                                {convSugFor === r.itemid && (() => {
+                                                    // Donor picker: sister finished variants of the same base with shelf stock.
+                                                    // Attaching does NOT convert anything — the WO carries the suggestion and
+                                                    // the Setup Queue operator executes it with the ⇄ converter there.
+                                                    const cut = String(r.itemid).lastIndexOf('/');
+                                                    const base = cut > 0 ? String(r.itemid).slice(0, cut) : String(r.itemid);
+                                                    const sibs = (salesHist.rows || []).filter(s => {
+                                                        const sc = String(s.itemid).lastIndexOf('/');
+                                                        return sc > 0 && String(s.itemid).slice(0, sc) === base && s.itemid !== r.itemid && !/-\d+$/.test(String(s.itemid)) && (s.available || 0) > 0;
+                                                    }).sort((a, b) => (b.available || 0) - (a.available || 0));
+                                                    return (
+                                                        <tr>
+                                                            <td colSpan={99} style={{ padding: '10px 16px', background: '#fdf8ef', borderBottom: '1px solid var(--brass)', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>
+                                                                ⇄ SUGGEST A DONOR for {r.itemid} (base {base} short?) — tap a sister finish; the WO carries the note, the Setup Queue operator runs the conversion:
+                                                                <span style={{ display: 'inline-flex', gap: '8px', flexWrap: 'wrap', marginLeft: '10px' }}>
+                                                                    {sibs.length === 0 && <span style={{ color: 'var(--ink-soft)' }}>no sister finishes with stock in this report</span>}
+                                                                    {sibs.map(s => (
+                                                                        <button key={s.itemid} onClick={() => {
+                                                                            const def = info.shortfall || info.recommended || '';
+                                                                            const q = parseInt(window.prompt(`Suggest converting how many ${s.itemid} → ${base}?\n\n${s.available} on the shelf.`, String(def)));
+                                                                            if (!q || q <= 0) return;
+                                                                            if (q > (s.available || 0)) return alert(`Only ${s.available} of ${s.itemid} on the shelf.`);
+                                                                            setConvSugMap(p => ({ ...p, [r.itemid]: { from: s.itemid, qty: q } }));
+                                                                            setConvSugFor(null);
+                                                                        }} style={{ background: '#fff', border: '1px solid var(--brass)', color: 'var(--ink)', padding: '4px 10px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px' }}>{String(s.itemid).split('/').pop()} · {s.available}</button>
+                                                                    ))}
+                                                                    <button onClick={() => setConvSugFor(null)} style={{ background: 'transparent', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px' }}>✕ close</button>
+                                                                </span>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })()}
+                                                </React.Fragment>
                                                 );
                                             })}
                                         </tbody>
