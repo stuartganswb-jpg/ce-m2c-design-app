@@ -518,6 +518,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return !hasRealId && FEEISH_NAME_RE.test(String((l && l.name) || ''));
     };
     const pickableLines = (job) => (job.partsList || []).filter(l => !lineIsFeeish(l));
+    // Line bin with live library fallback: snapshot stock releases carry no stamped bin
+    // (SetupQueue synthesizes the raw-base line), so resolve it from the item's home bin.
+    const lineBin = (l) => {
+        const stamped = (l && l.binLocation && l.binLocation !== 'UNASSIGNED') ? l.binLocation : '';
+        if (stamped) return stamped;
+        const code = String((l && (l.legacyErpId || l.partId)) || '').toUpperCase();
+        const p = code && hqParts.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === code);
+        return (p && (p.binLocation || p.manufacturingSpecs?.binLocation)) || (l && l.binLocation) || 'UNASSIGNED';
+    };
 
     // ================= PACKING STATION (Stuart 2026-07-18) =================
     // Finished orders (currentPhase 'Complete', custom only) queue compactly up top; opening one
@@ -1636,7 +1645,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const handlePickValidation = async (e) => {
         e.preventDefault();
         const lineItem = activePickJob.partsList[currentPickLine];
-        const expectedBin = lineItem.binLocation || 'UNASSIGNED';
+        const expectedBin = lineBin(lineItem);
 
         if (validation.bin.toUpperCase() !== expectedBin.toUpperCase() && expectedBin !== 'UNASSIGNED') {
             return alert("❌ Incorrect Bin Scanned! Please verify location.");
@@ -1961,7 +1970,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             <div style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>Item {currentPickLine + 1} of {activePickJob.partsList.length}</div>
                             <div style={{ fontSize: '1.5rem', fontFamily: theme.mono, color: theme.ink, fontWeight: 600, letterSpacing: '.04em', margin: '18px 0 6px' }}>ITEM #: {line.legacyErpId || line.partId || 'UNASSIGNED'}</div>
                             <div style={{ fontSize: '2.2rem', fontWeight: 300, color: theme.ink, margin: '0 0 18px', fontFamily: theme.serif }}>{line.name}</div>
-                            <div style={{ fontSize: '1.2rem', fontFamily: theme.mono, color: theme.brass, marginBottom: '40px' }}>BIN: {line.binLocation || 'UNASSIGNED'}</div>
+                            <div style={{ fontSize: '1.2rem', fontFamily: theme.mono, color: theme.brass, marginBottom: '40px' }}>BIN: {lineBin(line)}</div>
                             
                             <a href={line.assetUrl || '#'} target="_blank" rel="noreferrer" style={{ display: 'inline-block', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textDecoration: 'none', textTransform: 'uppercase', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = theme.brass} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>
                                 OPEN REFERENCE PHOTO
@@ -2066,7 +2075,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             <span style={{ fontFamily: theme.mono, fontSize: '11px', fontWeight: 600, color: theme.ink }}>{l.legacyErpId || l.partId || '—'}</span>
                                                             <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginLeft: '8px' }}>{l.name}</span>
                                                         </div>
-                                                        <span style={{ width: '90px', fontFamily: theme.mono, fontSize: '11px', color: theme.brass }}>{l.binLocation || 'UNASSIGNED'}</span>
+                                                        <span style={{ width: '90px', fontFamily: theme.mono, fontSize: '11px', color: theme.brass }}>{lineBin(l)}</span>
                                                         <span style={{ width: '40px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{l.qty}</span>
                                                     </div>
                                                 ))}

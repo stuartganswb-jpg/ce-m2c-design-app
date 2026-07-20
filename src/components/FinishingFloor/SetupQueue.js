@@ -61,11 +61,28 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
   const releasePickPatch = (wo) => {
       if (wo.sentToPickPack) return { patch: {}, note: '' };
       const n = pickableCount(wo);
-      if (n === 0) return { patch: {}, note: ' — no small parts to pick (not sent to WMS)' };
-      return {
+      if (n > 0) return {
           patch: { sentToPickPack: true, pickStatus: wo.pickStatus || 'Pending', sentToPickPackAt: Date.now() },
           note: ` — ${n} part line${n === 1 ? '' : 's'} released to the WMS pick queue`
       };
+      // SNAPSHOT STOCK BUILDS (Stuart 2026-07-20): no BOM partsList on these — the pull IS the
+      // raw base core (finish suffix stripped off the stock item), qty = the build count.
+      // Synthesize that single pick line so WMS pulls the cores for finishing; the bin
+      // resolves from the Master Library on the WMS side.
+      const stockErp = String(wo.stockErpId || (wo.orderType === 'stock' ? wo.type : '') || '');
+      if (stockErp) {
+          const cut = stockErp.lastIndexOf('/');
+          const base = cut > 0 ? stockErp.slice(0, cut) : stockErp;
+          const qty = Number(wo.totalParts) || 1;
+          return {
+              patch: {
+                  sentToPickPack: true, pickStatus: wo.pickStatus || 'Pending', sentToPickPackAt: Date.now(),
+                  partsList: [{ legacyErpId: base, partId: base, partName: `RAW ${base} — pull ${qty} to finish ${wo.recipe || ''} → ${stockErp}`, quantity: qty, partHandling: 'Small Parts' }]
+              },
+              note: ` — pull ${qty} × ${base} (raw base) released to the WMS pick queue`
+          };
+      }
+      return { patch: {}, note: ' — no small parts to pick (not sent to WMS)' };
   };
 
   const startSetup = async (wo) => {
