@@ -3,7 +3,12 @@ import { db } from '../../firebase';
 import { doc, updateDoc } from "firebase/firestore";
 import { btnStyle, cardStyle } from './finishingStyles';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
+import { nsProxyFetch } from '../Shared/nsProxy';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
+
+// Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
+// Finishing converts only ever run for the shop brands.
+const BRAND_NETSUITE_MAP = { 'ce': { subsidiary: "2", location: "17" }, 'm2c': { subsidiary: "3", location: "19" } };
 
 const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} }) => {
   // §A4: the Active Floor only ever holds about a day's work. Cap admission by piece count
@@ -149,6 +154,97 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
       } catch (err) { alert(`Close failed: ${err.message}`); }
   };
 
+  // ===== ⇄ CONVERT FINISHED → RAW (Stuart 2026-07-20) =====
+  // Out of raw base cores for a stock build? Strip a finished color back to raw instead of
+  // waiting on backorder. Works like the WMS phosphate convert but in reverse — a 2-line
+  // NetSuite inventory adjustment (acct 254, same shape as rod cuts): −finished(bin) +raw(bin).
+  const [convOpen, setConvOpen] = useState(false);
+  const [convBrand, setConvBrand] = useState('ce');
+  const [convCode, setConvCode] = useState('');
+  const [convBusy, setConvBusy] = useState(false);
+  const [convRows, setConvRows] = useState(null);
+  const [convSel, setConvSel] = useState(null);
+  const [convQty, setConvQty] = useState('');
+  const [convSrcBin, setConvSrcBin] = useState('');
+  const [convDstBin, setConvDstBin] = useState('');
+  const [convPosting, setConvPosting] = useState(false);
+  const convBase = (() => { const s = String(convCode || '').trim().toUpperCase(); const i = s.indexOf('/'); return i > 0 ? s.slice(0, i) : s; })();
+  const convRaw = (convRows || []).find(r => r.isRaw) || null;
+
+  const convSuiteql = async (q) => {
+      const r = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q } });
+      const j = await r.json();
+      if (!r.ok) throw new Error(JSON.stringify(j).slice(0, 300));
+      return j.items || [];
+  };
+  const convSearch = async () => {
+      if (!convBase) return alert('Enter the raw item # you need (e.g. HCUMLB415).');
+      setConvBusy(true); setConvRows(null); setConvSel(null);
+      try {
+          const loc = BRAND_NETSUITE_MAP[convBrand].location;
+          const items = await convSuiteql(`SELECT id, itemid FROM item WHERE (UPPER(itemid) = '${convBase}' OR UPPER(itemid) LIKE '${convBase}/%') AND isinactive = 'F'`);
+          if (!items.length) { alert(`No NetSuite items found for ${convBase}.`); return; }
+          const idList = items.map(x => `'${String(x.itemid).replace(/'/g, "''")}'`).join(',');
+          let binRows = [];
+          try {
+              binRows = await convSuiteql(`SELECT Item.itemid AS legacy_id, Bin.binnumber AS bin_number, SUM(InventoryBalance.quantityonhand) AS onhand FROM Item LEFT JOIN InventoryBalance ON InventoryBalance.item = Item.id LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id WHERE Item.itemid IN (${idList}) AND InventoryBalance.location = ${loc} GROUP BY Item.itemid, Bin.binnumber`);
+          } catch (binErr) { /* bins optional — totals still shown as 0 and NetSuite validates on post */ }
+          const rows = items.map(it => {
+              const code = String(it.itemid).toUpperCase();
+              const mine = binRows.filter(b => String(b.legacy_id || '').toUpperCase() === code);
+              const bins = mine.filter(b => (b.bin_number || '').trim()).map(b => ({ bin: String(b.bin_number).trim().toUpperCase(), qty: parseInt(b.onhand) || 0 })).filter(b => b.qty > 0).sort((a, b) => b.qty - a.qty);
+              const total = mine.reduce((s, b) => s + (parseInt(b.onhand) || 0), 0);
+              return { itemid: code, internalId: String(it.id), total, bins, isRaw: code === convBase, isPack: /-\d+$/.test(code) };
+          }).sort((a, b) => (b.isRaw ? 1 : 0) - (a.isRaw ? 1 : 0) || b.total - a.total);
+          setConvRows(rows);
+      } catch (e) { alert('Stock lookup failed: ' + (e.message || e)); }
+      finally { setConvBusy(false); }
+  };
+  const convPick = (row) => {
+      setConvSel(row); setConvQty('');
+      setConvSrcBin(row.bins[0]?.bin || '');
+      setConvDstBin((convRaw && convRaw.bins[0]?.bin) || '');
+  };
+  const convPost = async () => {
+      const src = convSel, raw = convRaw;
+      const qty = parseInt(convQty) || 0;
+      if (!src || !raw) return;
+      if (qty <= 0) return alert('Enter how many pieces to convert.');
+      if (qty > src.total) return alert(`Only ${src.total} on hand of ${src.itemid} at this location.`);
+      const srcBin = (convSrcBin || '').trim().toUpperCase();
+      const dstBin = (convDstBin || '').trim().toUpperCase();
+      if (src.bins.length > 0 && !srcBin) return alert('Pick the bin the finished parts come out of.');
+      const binQty = (src.bins.find(b => b.bin === srcBin) || {}).qty || 0;
+      if (srcBin && binQty < qty) return alert(`Bin ${srcBin} holds only ${binQty} of ${src.itemid} — pick a different bin or lower the qty.`);
+      if (!window.confirm(`⇄ CONVERT ${qty} × ${src.itemid} → ${raw.itemid}?\n\nOut of: ${srcBin || 'no bin'}\nInto: ${dstBin || 'no bin'}\n\nPosts the 2-line NetSuite inventory adjustment now.`)) return;
+      setConvPosting(true);
+      try {
+          const cfg = BRAND_NETSUITE_MAP[convBrand];
+          const r = await nsProxyFetch({
+              targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+              method: 'POST',
+              payload: {
+                  account: { id: "254" }, subsidiary: { id: cfg.subsidiary },
+                  memo: `Convert ${qty} ${src.itemid} → ${raw.itemid} for finishing (Setup Queue)`,
+                  inventory: { items: [
+                      { item: { id: src.internalId }, location: { id: cfg.location }, adjustQtyBy: -qty, ...(srcBin ? { inventoryDetail: { quantity: -qty, inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: -qty }] } } } : {}) },
+                      { item: { id: raw.internalId }, location: { id: cfg.location }, adjustQtyBy: qty, ...(dstBin ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: dstBin }, quantity: qty }] } } } : {}) }
+                  ] }
+              }
+          });
+          if (!r.ok) {
+              const btxt = await r.text().catch(() => '');
+              const det = (btxt.match(/"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/) || [])[1];
+              throw new Error(det || btxt.slice(0, 250) || `HTTP ${r.status}`);
+          }
+          if (writeLog) writeLog(`⇄ Converted ${qty} × ${src.itemid} → ${raw.itemid} (${srcBin || 'no bin'} → ${dstBin || 'no bin'})`, 'inventory');
+          alert(`✅ Converted ${qty} × ${src.itemid} → ${raw.itemid}.\n\nNetSuite adjusted — pull the parts and prep them for finishing.`);
+          setConvSel(null); setConvQty('');
+          convSearch();
+      } catch (e) { alert('Convert failed: ' + (e.message || e)); }
+      finally { setConvPosting(false); }
+  };
+
   return (
     <div style={{ padding: '30px', fontFamily: 'var(--sans)' }}>
 
@@ -168,7 +264,66 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
             {finishGroups.length} finish batch{finishGroups.length === 1 ? '' : 'es'} · {pendingOrders.length} order{pendingOrders.length === 1 ? '' : 's'}
         </span>
       </div>
-      
+
+      {/* ⇄ CONVERT FINISHED → RAW — for stock builds short on raw base cores */}
+      <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', marginBottom: '24px' }}>
+        <div onClick={() => setConvOpen(!convOpen)} style={{ padding: '14px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', background: 'var(--paper-2)', gap: '10px', flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>⇄ Convert Finished → Raw</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>short on raw cores? strip a finished color back to raw — posts the NetSuite adjustment {convOpen ? '▾' : '▸'}</span>
+        </div>
+        {convOpen && (
+          <div style={{ padding: '20px 24px' }}>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              {Object.keys(BRAND_NETSUITE_MAP).map(b => (
+                <button key={b} onClick={() => { setConvBrand(b); setConvRows(null); setConvSel(null); }} style={{ padding: '9px 14px', background: convBrand === b ? 'var(--ink)' : '#fff', color: convBrand === b ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{b}</button>
+              ))}
+              <input type="text" placeholder="Raw item # you need (e.g. HCUMLB415)" value={convCode} onChange={e => setConvCode(e.target.value)} onKeyDown={e => e.key === 'Enter' && convSearch()} style={{ flex: 1, minWidth: '220px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '0.9rem', outline: 'none' }} />
+              <button onClick={convSearch} disabled={convBusy} style={{ ...btnStyle, background: 'var(--ink)', color: '#fff', opacity: convBusy ? 0.6 : 1 }}>{convBusy ? '⏳ Checking…' : '🔍 Find Stock'}</button>
+            </div>
+            {convRows && (
+              <div style={{ marginTop: '16px' }}>
+                {convRows.map(r => (
+                  <div key={r.itemid} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '9px 12px', borderTop: '1px solid var(--paper-2)', background: r.isRaw ? '#f6fbf7' : (convSel && convSel.itemid === r.itemid ? 'var(--paper-2)' : '#fff'), flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.9rem', fontWeight: r.isRaw ? 700 : 400, color: 'var(--ink)', minWidth: '160px' }}>{r.itemid}{r.isRaw ? ' — RAW' : ''}</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.95rem', fontWeight: 600, color: r.total > 0 ? 'var(--ink)' : '#d9534f' }}>{r.total} on hand</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', flex: 1 }}>{r.bins.map(b => `${b.bin}: ${b.qty}`).join(' · ') || (r.total > 0 ? 'no bin' : '')}</span>
+                    {!r.isRaw && (
+                      r.isPack
+                        ? <span title="Pack assembly — unbuild packs in WMS first, then convert the singles" style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>PACK — skip</span>
+                        : <button onClick={() => convPick(r)} disabled={r.total <= 0} style={{ padding: '8px 14px', background: convSel && convSel.itemid === r.itemid ? 'var(--brass)' : '#fff', color: convSel && convSel.itemid === r.itemid ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: r.total > 0 ? 'pointer' : 'default', opacity: r.total > 0 ? 1 : 0.4, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Select</button>
+                    )}
+                  </div>
+                ))}
+                {convSel && (
+                  <div style={{ marginTop: '14px', padding: '14px 16px', background: 'var(--paper-2)', border: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.9rem', color: 'var(--ink)', fontWeight: 600 }}>{convSel.itemid} → {convBase}</span>
+                    <input type="number" min="1" placeholder="Qty" value={convQty} onChange={e => setConvQty(e.target.value)} style={{ width: '90px', padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '1rem', outline: 'none' }} />
+                    {convSel.bins.length > 0 ? (
+                      <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', display: 'flex', alignItems: 'center', gap: '6px' }}>OUT OF
+                        <select value={convSrcBin} onChange={e => setConvSrcBin(e.target.value)} style={{ padding: '9px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', background: '#fff' }}>
+                          {convSel.bins.map(b => <option key={b.bin} value={b.bin}>{b.bin} ({b.qty})</option>)}
+                        </select>
+                      </label>
+                    ) : <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>no source bin</span>}
+                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', display: 'flex', alignItems: 'center', gap: '6px' }}>INTO
+                      {convRaw && convRaw.bins.length > 0 ? (
+                        <select value={convDstBin} onChange={e => setConvDstBin(e.target.value)} style={{ padding: '9px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', background: '#fff' }}>
+                          {convRaw.bins.map(b => <option key={b.bin} value={b.bin}>{b.bin} ({b.qty})</option>)}
+                          <option value="">no bin</option>
+                        </select>
+                      ) : (
+                        <input type="text" placeholder="raw bin (blank = none)" value={convDstBin} onChange={e => setConvDstBin(e.target.value)} style={{ width: '150px', padding: '9px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', outline: 'none' }} />
+                      )}
+                    </label>
+                    <button onClick={convPost} disabled={convPosting} style={{ ...btnStyle, background: '#3a7d44', color: '#fff', marginLeft: 'auto', opacity: convPosting ? 0.6 : 1 }}>{convPosting ? '⏳ Posting…' : '⚡ Convert Now'}</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {pendingOrders.length === 0 && (
         <div style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem', background: '#fff', border: '1px dashed var(--line)' }}>Queue is empty.</div>
       )}
