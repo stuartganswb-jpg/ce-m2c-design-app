@@ -50,7 +50,7 @@ const computeLayout = (redWO, blueWO, activeWOs) => {
 // The oven is fixed on the LEFT over the cure spot; the two sleds shuffle between the left (under-
 // oven) spot and the right (setup/spray) spot. The oven only slides further left, over the pole
 // rack, when poles bake. All derived from task state, so it animates as operators run each step.
-const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs }) => {
+const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear }) => {
     const { redAct, blueAct, redPos, bluePos, ovenMode, polesBaking, ovenRunning } = computeLayout(redWO, blueWO, activeWOs);
     const spotLeft = (pos) => pos === 'LEFT' ? '36%' : '58%';   // left = oven/cure, right = setup/spray
     const ovenLeft = ovenMode === 'POLES' ? '2%' : '33%';       // over pole rack vs over the left sled
@@ -71,8 +71,15 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs }) => {
         <div style={{ background: '#fff', padding: '30px', border: '1px solid var(--line)', marginBottom: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '15px', marginBottom: '24px' }}>
                 <h3 style={{ margin: 0, color: 'var(--ink)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Live Digital Twin: Sleds & Oven</h3>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: ovenRunning ? 'var(--brass)' : 'var(--ink-soft)', border: '1px solid var(--line)', padding: '5px 10px', borderRadius: '2px' }}>
-                    ● Live · {ovenLabel}
+                <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: ovenRunning ? 'var(--brass)' : 'var(--ink-soft)', border: '1px solid var(--line)', padding: '5px 10px', borderRadius: '2px' }}>
+                        ● Live · {ovenLabel}
+                    </span>
+                    {onForceClear && (
+                        <button onClick={onForceClear} title="Reset every Running bake back to Pending — un-jams a locked oven; nothing is marked complete" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', background: 'transparent', border: '1px solid #d9534f', padding: '5px 10px', borderRadius: '2px', cursor: 'pointer' }}>
+                            ⚠ Force Oven Clear
+                        </button>
+                    )}
                 </span>
             </div>
 
@@ -143,19 +150,71 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
 
   const getSledLocation = (sledColor) => sledColor === 'RED' ? machineState.redSledAt : machineState.blueSledAt;
 
+  // POLES vs SMALL PARTS run on THEIR OWN TRACKS (Stuart 2026-07-20): batching them into the
+  // same coat is the ideal, never a gate. Small parts advance on currentStepIndex; poles advance
+  // on poleStepIndex (defaults to currentStepIndex on legacy docs). Orders without real poles
+  // never see pole cards or pole gates at all.
+  const woHasPoles = (wo) => Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0 || wo.type === 'Poles';
+  const poleIdxOf = (wo) => (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null) ? wo.poleStepIndex : (wo.currentStepIndex || 0);
+  const recipeLen = (wo) => { const r = resolveRecipe(recipes, wo.recipe); return (r && r.steps && r.steps.length) || 0; };
+
+  // Advance the SMALL-PARTS stream one coat. Pole tasks are untouched — they belong to the pole
+  // stream. When BOTH streams are past the last step, the order completes (currentPhase Complete
+  // → it enters the WMS packing queue) and the sled frees either way.
   const handleCompleteRecipeStep = async (wo) => {
-      const updates = {};
-      updates.currentStepIndex = wo.currentStepIndex + 1;
-      updates.lastCoatTime = Date.now();
-      
-      updates["tasks.spinSetup.status"] = "Pending";
-      updates["tasks.spinSpray.status"] = "Pending";
-      updates["tasks.spinBake.status"] = "Pending";
-      updates["tasks.poleSpray.status"] = "Pending";
-      updates["tasks.poleBake.status"] = "Pending";
-      updates["tasks.hand.status"] = "Pending";
-      
+      const len = recipeLen(wo);
+      const nextParts = (wo.currentStepIndex || 0) + 1;
+      const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= len;
+      const updates = {
+          currentStepIndex: nextParts,
+          lastCoatTime: Date.now(),
+          "tasks.spinSetup.status": "Pending",
+          "tasks.spinSpray.status": "Pending",
+          "tasks.spinBake.status": "Pending",
+          "tasks.hand.status": "Pending",
+      };
+      if (nextParts >= len) {
+          updates.machineAssigned = null; // parts are off the sled — free it for the next order
+          if (polesFinished) { updates.currentPhase = 'Complete'; updates.stepStatus = 'Complete'; updates.completedAt = Date.now(); }
+      }
       await updateDoc(doc(db,"fin_workorders", wo.id), updates);
+  };
+
+  // Advance the POLE stream one coat (its own pointer). Completes the order when parts are
+  // already done too.
+  const handleCompletePoleStep = async (wo) => {
+      const len = recipeLen(wo);
+      const next = poleIdxOf(wo) + 1;
+      const partsFinished = (wo.currentStepIndex || 0) >= len;
+      const updates = {
+          poleStepIndex: next,
+          lastPoleCoatTime: Date.now(),
+          "tasks.poleSpray.status": "Pending",
+          "tasks.poleBake.status": "Pending",
+      };
+      if (next >= len && partsFinished) { updates.currentPhase = 'Complete'; updates.stepStatus = 'Complete'; updates.completedAt = Date.now(); }
+      await updateDoc(doc(db,"fin_workorders", wo.id), updates);
+  };
+
+  // FORCE OVEN CLEAR (Stuart 2026-07-20): a bake left 'Running' (often on a ghost WO whose cards
+  // no longer render) pins the oven and blocks both stations. This resets every Running bake back
+  // to PENDING — nothing is marked complete (so no NetSuite completion fires); restart the bake
+  // when the parts are really in the oven.
+  const forceOvenClear = async () => {
+      const stuck = [];
+      workOrders.forEach(w => {
+          const t = w.tasks || {};
+          if (t.spinBake?.status === 'Running') stuck.push({ id: w.id, field: 'spinBake' });
+          if (t.poleBake?.status === 'Running') stuck.push({ id: w.id, field: 'poleBake' });
+      });
+      if (!stuck.length) return alert('The oven is not running anything — already clear.');
+      if (!window.confirm(`⚠ FORCE-CLEAR THE OVEN?\n\nRunning bake cycles found:\n${stuck.map(s => `  • ${s.field} on ${s.id}`).join('\n')}\n\nThey reset to PENDING — nothing is marked complete, restart the bake when ready.`)) return;
+      try {
+          for (const s of stuck) {
+              await updateDoc(doc(db, "fin_workorders", s.id), { [`tasks.${s.field}.status`]: 'Pending', [`tasks.${s.field}.forceClearedAt`]: Date.now(), [`tasks.${s.field}.forceClearedBy`]: user?.name || '' });
+          }
+          alert(`✅ Oven cleared — ${stuck.length} bake cycle(s) reset to Pending.`);
+      } catch (e) { alert('Force clear failed: ' + (e.message || e)); }
   };
 
   const colorGroups = {};
@@ -166,6 +225,19 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (!colorGroups[step.color]) colorGroups[step.color] = [];
       colorGroups[step.color].push({ wo, step });
   });
+  // Pole stream groups by the POLE pointer's step color — an order's poles can be a coat (or a
+  // color) behind its small parts, and each shows under its own batch.
+  const poleGroups = {};
+  activeWOs.forEach(wo => {
+      if (!woHasPoles(wo)) return;
+      const r = resolveRecipe(recipes, wo.recipe);
+      const idx = poleIdxOf(wo);
+      if (!r || !r.steps || idx >= r.steps.length) return;
+      const step = r.steps[idx];
+      if (!poleGroups[step.color]) poleGroups[step.color] = [];
+      poleGroups[step.color].push({ wo, step });
+  });
+  const batchColors = Array.from(new Set([...Object.keys(colorGroups), ...Object.keys(poleGroups)]));
 
   const getRemainingMins = (timestampMs, totalMinsAllowed) => Math.max(0, Math.floor(((totalMinsAllowed * 60000) - (now - timestampMs)) / 60000));
 
@@ -198,7 +270,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       
       {/* LEFT: PIPELINE */}
       <div>
-        <DigitalTwinSCADA redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} />
+        <DigitalTwinSCADA redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} onForceClear={forceOvenClear} />
 
         {redlineWOs.length > 0 && (
             <div style={{ background: '#fdf2f2', border: '1px solid #d9534f', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
@@ -211,9 +283,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
             </div>
         )}
 
-        {Object.keys(colorGroups).length === 0 && <div style={{ padding: '40px', background: 'var(--paper)', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', fontFamily: 'var(--serif)', fontSize: '1.2rem', marginBottom: '30px' }}>No batches actively painting.</div>}
+        {batchColors.length === 0 && <div style={{ padding: '40px', background: 'var(--paper)', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', fontFamily: 'var(--serif)', fontSize: '1.2rem', marginBottom: '30px' }}>No batches actively painting.</div>}
 
-        {Object.keys(colorGroups).map(color => {
+        {batchColors.map(color => {
             let potRemMins = null;
             let potBg = 'var(--ink)'; let potColor = '#fff';
             if (activePots[color]) {
@@ -286,9 +358,13 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                         <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
                                             <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '16px' }}>Baking Complete</div>
                                             <button onClick={() => {
-                                                const polesDone = !item.wo.tasks?.poleSpray || item.wo.tasks.poleBake?.status === 'Complete';
-                                                if (polesDone) handleCompleteRecipeStep(item.wo);
-                                                else alert("Waiting on Poles to finish before advancing recipe.");
+                                                // Poles never gate the small parts (Stuart 2026-07-20): batching the
+                                                // two together is the ideal, so we SUGGEST — but each moves on its own.
+                                                if (!woHasPoles(item.wo)) return handleCompleteRecipeStep(item.wo);
+                                                const len = recipeLen(item.wo);
+                                                const pIdx = poleIdxOf(item.wo);
+                                                const polesCaughtUp = pIdx >= len || pIdx > item.wo.currentStepIndex || (pIdx === item.wo.currentStepIndex && item.wo.tasks?.poleBake?.status === 'Complete');
+                                                if (polesCaughtUp || window.confirm(`Poles for this order are still on coat ${pIdx + 1} of ${len}.\n\nAdvance the SMALL PARTS anyway? Poles keep moving on their own track (painting them together is ideal, not required).`)) handleCompleteRecipeStep(item.wo);
                                             }} style={{ width: '100%', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Unload Parts</button>
                                         </div>
                                     )
@@ -298,17 +374,37 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
 
                         {/* --- POLE RACK / CUSTOM --- */}
                         <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '20px', borderRadius: '2px' }}>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', color: 'var(--ink-soft)', marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Pole Rack</div>
-                            {colorGroups[color]?.map(item => {
-                                if (item.step.app !== 'Sprayed' || item.wo.tasks?.poleSpray?.status === 'Complete' && item.wo.tasks?.poleBake?.status === 'Complete') return null;
-                                
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center', color: 'var(--ink-soft)', marginBottom: '20px', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Pole Rack — own track</div>
+                            {(poleGroups[color] || []).map(item => {
+                                // Pole stream only (orders that actually HAVE poles), on the POLE step pointer.
+                                const poleQty = Number(item.wo.totalPoles || (item.wo.poles && item.wo.poles.qty)) || Number(item.wo.totalParts) || 0;
                                 const isSprayComplete = item.wo.tasks?.poleSpray?.status === 'Complete';
-                                const blockBake = machineState.ovenPos === 'SPINDLE';
+                                const isBakeComplete = item.wo.tasks?.poleBake?.status === 'Complete';
+                                const blockBake = machineState.ovenPos === 'SPINDLE' && machineState.isOvenRunning;
+                                const len = recipeLen(item.wo);
+                                const idx = poleIdxOf(item.wo);
 
+                                if (item.step.app !== 'Sprayed') {
+                                    // Hand-applied coat in the pole stream — done off-rack; advance when finished.
+                                    return (
+                                        <div key={item.wo.id + 'poleHand'} style={{ ...cardStyle, textAlign: 'center' }}>
+                                            <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '6px' }}>WO: {item.wo.id}</div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '14px' }}>Poles · Step {item.step.step}: {item.step.color} (hand applied)</div>
+                                            <button onClick={() => handleCompletePoleStep(item.wo)} style={{ width: '100%', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{idx + 1 >= len ? 'Poles Finished' : 'Hand Coat Done → Next'}</button>
+                                        </div>
+                                    );
+                                }
                                 if (!isSprayComplete) {
-                                    return <TaskCard key={item.wo.id+"poleSpray"} titleOverride="Spray Poles" wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={(item.wo.totalParts || 0) * cfg.poleMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
+                                    return <TaskCard key={item.wo.id+"poleSpray"} titleOverride={`Spray Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={poleQty * cfg.poleMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleSpray')} users={users} activeWOs={activeWOs} cfg={cfg} />
+                                } else if (!isBakeComplete) {
+                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride={`Bake Poles (coat ${idx + 1}/${len})`} wo={item.wo} type="poleBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven busy curing a sled" : null} />
                                 } else {
-                                    return <TaskCard key={item.wo.id+"poleBake"} titleOverride="Bake Poles" wo={item.wo} type="poleBake" step={item.step} user={user} estTime={cfg.ovenMins} activePots={activePots} now={now} aiRec={getAiRecommendation('poleBake')} users={users} activeWOs={activeWOs} cfg={cfg} blockReason={blockBake ? "Oven is at spindle track" : null} />
+                                    return (
+                                        <div key={item.wo.id + 'poleNext'} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '16px' }}>Poles Baked — coat {idx + 1}/{len}</div>
+                                            <button onClick={() => handleCompletePoleStep(item.wo)} style={{ width: '100%', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{idx + 1 >= len ? 'Poles Finished — Unload' : 'Next Pole Coat →'}</button>
+                                        </div>
+                                    );
                                 }
                             })}
                         </div>
