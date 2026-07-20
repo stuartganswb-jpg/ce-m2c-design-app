@@ -547,6 +547,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { console.warn('Live bin pull failed:', e); }
     };
     const liveOf = (l) => liveBins[String((l && (l.legacyErpId || l.partId)) || '').toUpperCase()] || null;
+    // Lines carry `quantity` (custom BOM splits, synthetic stock lines) or `qty` (older docs) —
+    // one accessor so displays and validation can never read the wrong field again.
+    const lineQty = (l) => Number((l && (l.quantity ?? l.qty))) || 0;
     // Line bin: LIVE top-stock bin → stamped line bin → library home bin → UNASSIGNED.
     const lineBin = (l) => {
         const lv = liveOf(l);
@@ -1685,8 +1688,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!okByLive && scanned !== expectedBin.toUpperCase() && expectedBin !== 'UNASSIGNED') {
             return alert("❌ Incorrect Bin Scanned! Please verify location.");
         }
-        if (parseInt(validation.qty) !== lineItem.qty) {
-            return alert(`❌ Quantity Mismatch. Expected ${lineItem.qty}.`);
+        if (parseInt(validation.qty) !== lineQty(lineItem)) {
+            return alert(`❌ Quantity Mismatch. Expected ${lineQty(lineItem)}.`);
         }
 
         setValidation({ bin: '', qty: '' });
@@ -2019,7 +2022,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </div>
 
                         <div style={{ flex: 1, background: '#fff', padding: '40px', border: `1px solid ${theme.brass}`, boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
-                            <h2 style={{ margin: '0 0 30px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink, fontWeight: 500 }}>Target Qty: {line.qty}</h2>
+                            <h2 style={{ margin: '0 0 30px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink, fontWeight: 500 }}>Target Qty: {lineQty(line)}</h2>
                             <form onSubmit={handlePickValidation} style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
                                 <div>
                                     <label style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, display: 'block', marginBottom: '10px', textTransform: 'uppercase' }}>1. SCAN BIN BARCODE</label>
