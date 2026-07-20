@@ -518,9 +518,39 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return !hasRealId && FEEISH_NAME_RE.test(String((l && l.name) || ''));
     };
     const pickableLines = (job) => (job.partsList || []).filter(l => !lineIsFeeish(l));
-    // Line bin with live library fallback: snapshot stock releases carry no stamped bin
-    // (SetupQueue synthesizes the raw-base line), so resolve it from the item's home bin.
+    // LIVE PER-BIN STOCK for pick lines (Stuart 2026-07-20 — HCUBEA1 showed UNASSIGNED while
+    // NetSuite held 126 in a bin: the stored library home bin was blank/stale). Pulled when a
+    // card expands / picking starts / ⟳ Live is tapped; the display and the bin-scan
+    // validation both prefer this truth over the stamped or stored bin.
+    const [liveBins, setLiveBins] = useState({}); // ITEMID → { bins: [{bin, qty}] desc, total, at }
+    const fetchLiveBins = async (codes) => {
+        const list = Array.from(new Set((codes || []).map(c => String(c || '').toUpperCase()).filter(c => c && c !== 'PENDING' && c !== 'N/A')));
+        if (!list.length) return;
+        try {
+            const loc = BRAND_NETSUITE_MAP[activeBrand]?.location || '17';
+            const idList = list.map(c => `'${c.replace(/'/g, "''")}'`).join(',');
+            const r = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: `SELECT Item.itemid AS legacy_id, Bin.binnumber AS bin_number, SUM(InventoryBalance.quantityonhand) AS onhand FROM Item LEFT JOIN InventoryBalance ON InventoryBalance.item = Item.id LEFT JOIN Bin ON InventoryBalance.binnumber = Bin.id WHERE UPPER(Item.itemid) IN (${idList}) AND InventoryBalance.location = ${loc} GROUP BY Item.itemid, Bin.binnumber` } });
+            const j = await r.json();
+            if (!r.ok) throw new Error(JSON.stringify(j).slice(0, 200));
+            const map = {};
+            list.forEach(c => { map[c] = { bins: [], total: 0, at: Date.now() }; });
+            (j.items || []).forEach(row => {
+                const id = String(row.legacy_id || '').toUpperCase();
+                if (!map[id]) map[id] = { bins: [], total: 0, at: Date.now() };
+                const qty = parseInt(row.onhand) || 0;
+                map[id].total += qty;
+                const bn = (row.bin_number || '').trim().toUpperCase();
+                if (bn && qty > 0) map[id].bins.push({ bin: bn, qty });
+            });
+            Object.values(map).forEach(m => m.bins.sort((a, b) => b.qty - a.qty));
+            setLiveBins(prev => ({ ...prev, ...map }));
+        } catch (e) { console.warn('Live bin pull failed:', e); }
+    };
+    const liveOf = (l) => liveBins[String((l && (l.legacyErpId || l.partId)) || '').toUpperCase()] || null;
+    // Line bin: LIVE top-stock bin → stamped line bin → library home bin → UNASSIGNED.
     const lineBin = (l) => {
+        const lv = liveOf(l);
+        if (lv && lv.bins.length) return lv.bins[0].bin;
         const stamped = (l && l.binLocation && l.binLocation !== 'UNASSIGNED') ? l.binLocation : '';
         if (stamped) return stamped;
         const code = String((l && (l.legacyErpId || l.partId)) || '').toUpperCase();
@@ -1646,8 +1676,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         e.preventDefault();
         const lineItem = activePickJob.partsList[currentPickLine];
         const expectedBin = lineBin(lineItem);
+        // Any bin that LIVE-holds this item is a valid scan (an item can sit in several bins —
+        // NetSuite's balance is the truth, not just the displayed top bin).
+        const scanned = validation.bin.toUpperCase();
+        const lv = liveOf(lineItem);
+        const okByLive = !!(lv && lv.bins.some(b => b.bin === scanned && b.qty > 0));
 
-        if (validation.bin.toUpperCase() !== expectedBin.toUpperCase() && expectedBin !== 'UNASSIGNED') {
+        if (!okByLive && scanned !== expectedBin.toUpperCase() && expectedBin !== 'UNASSIGNED') {
             return alert("❌ Incorrect Bin Scanned! Please verify location.");
         }
         if (parseInt(validation.qty) !== lineItem.qty) {
@@ -1970,7 +2005,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             <div style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>Item {currentPickLine + 1} of {activePickJob.partsList.length}</div>
                             <div style={{ fontSize: '1.5rem', fontFamily: theme.mono, color: theme.ink, fontWeight: 600, letterSpacing: '.04em', margin: '18px 0 6px' }}>ITEM #: {line.legacyErpId || line.partId || 'UNASSIGNED'}</div>
                             <div style={{ fontSize: '2.2rem', fontWeight: 300, color: theme.ink, margin: '0 0 18px', fontFamily: theme.serif }}>{line.name}</div>
-                            <div style={{ fontSize: '1.2rem', fontFamily: theme.mono, color: theme.brass, marginBottom: '40px' }}>BIN: {lineBin(line)}</div>
+                            <div style={{ fontSize: '1.2rem', fontFamily: theme.mono, color: theme.brass, marginBottom: '8px' }}>BIN: {lineBin(line)}</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, marginBottom: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                {(() => { const lv = liveOf(line); return lv
+                                    ? <span>{lv.bins.length ? `LIVE: ${lv.bins.slice(0, 3).map(b => `${b.bin} ×${b.qty}`).join(' · ')}${lv.bins.length > 3 ? ' · …' : ''}` : (lv.total > 0 ? `LIVE: ${lv.total} on hand, no bin` : 'LIVE: none at this location')}</span>
+                                    : <span>live stock not pulled yet</span>; })()}
+                                <button onClick={() => fetchLiveBins([line.legacyErpId || line.partId])} title="Re-pull live per-bin stock from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 8px', fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>⟳ Live</button>
+                            </div>
                             
                             <a href={line.assetUrl || '#'} target="_blank" rel="noreferrer" style={{ display: 'inline-block', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textDecoration: 'none', textTransform: 'uppercase', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = theme.brass} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>
                                 OPEN REFERENCE PHOTO
@@ -2046,7 +2087,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     return (
                                     <div key={job.id} style={{ border: `1px solid ${theme.line}`, marginBottom: '15px' }}>
                                         {/* Header row toggles the BOM detail; START PICKING stops propagation. */}
-                                        <div onClick={() => setExpandedJob(expandedJob === job.id ? null : job.id)} style={{ padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', cursor: 'pointer' }}>
+                                        <div onClick={() => { const opening = expandedJob !== job.id; setExpandedJob(opening ? job.id : null); if (opening) fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', cursor: 'pointer' }}>
                                             <div style={{ minWidth: 0 }}>
                                                 <h3 style={{ margin: 0, fontFamily: theme.serif, fontSize: '1.2rem', fontWeight: 500 }}>
                                                     <span style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '0.9rem', marginRight: '8px' }}>{expandedJob === job.id ? '▾' : '▸'}</span>{job.id}
@@ -2059,14 +2100,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 )}
                                                 <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Items{pickable.length !== (job.partsList?.length || 0) ? ` (${(job.partsList?.length || 0) - pickable.length} return/fee line(s) ride the shop order)` : ''} · tap for parts</div>
                                             </div>
-                                            <button onClick={(e) => { e.stopPropagation(); setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setValidation({ bin: '', qty: '' }); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
+                                            <button onClick={(e) => { e.stopPropagation(); setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setValidation({ bin: '', qty: '' }); fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                                                 START PICKING
                                             </button>
                                         </div>
                                         {expandedJob === job.id && (
                                             <div style={{ borderTop: `1px solid ${theme.line}`, background: theme.paper, padding: '8px 20px 16px' }}>
-                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft, display: 'flex', gap: '12px', padding: '10px 0 6px', borderBottom: `1px solid ${theme.line}` }}>
-                                                    <span style={{ flex: 1 }}>Part</span><span style={{ width: '90px' }}>Bin</span><span style={{ width: '40px', textAlign: 'right' }}>Qty</span>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft, display: 'flex', gap: '12px', alignItems: 'center', padding: '10px 0 6px', borderBottom: `1px solid ${theme.line}` }}>
+                                                    <span style={{ flex: 1 }}>Part</span><span style={{ width: '130px' }}>Bin (live)</span><span style={{ width: '40px', textAlign: 'right' }}>Qty</span>
+                                                    <button onClick={() => fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId))} title="Re-pull live per-bin stock from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 8px', fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>⟳ Live</button>
                                                 </div>
                                                 {pickable.length === 0 && <div style={{ padding: '12px 0', fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No pickable parts on this order.</div>}
                                                 {pickable.map((l, i) => (
@@ -2075,8 +2117,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             <span style={{ fontFamily: theme.mono, fontSize: '11px', fontWeight: 600, color: theme.ink }}>{l.legacyErpId || l.partId || '—'}</span>
                                                             <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginLeft: '8px' }}>{l.name}</span>
                                                         </div>
-                                                        <span style={{ width: '90px', fontFamily: theme.mono, fontSize: '11px', color: theme.brass }}>{lineBin(l)}</span>
-                                                        <span style={{ width: '40px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{l.qty}</span>
+                                                        <span style={{ width: '130px', fontFamily: theme.mono, fontSize: '11px', color: theme.brass }} title={(liveOf(l)?.bins || []).map(b => `${b.bin}: ${b.qty}`).join(' · ') || 'no live data yet — tap ⟳ Live'}>
+                                                            {lineBin(l)}{(() => { const lv = liveOf(l); return lv ? <span style={{ color: lv.bins.length ? '#3a7d44' : '#d9534f' }}> · {lv.bins.length ? `${lv.bins[0].qty} live` : (lv.total > 0 ? `${lv.total} unbinned` : 'none live')}</span> : null; })()}
+                                                        </span>
+                                                        <span style={{ width: '40px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{Number(l.quantity ?? l.qty) || ''}</span>
                                                     </div>
                                                 ))}
                                             </div>
