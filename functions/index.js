@@ -492,7 +492,9 @@ exports.nsOutboxWorker = onSchedule({
         try {
             const payloadStr = JSON.stringify(e.payload || {});
             const hasMarker = payloadStr.includes(`[ob:${e.id}]`) || payloadStr.includes(`#${String(e.id).substring(0, 6)}]`);
-            if ((e.attempts || 0) > 0 && hasMarker && e.method === 'POST' && String(e.targetUrl).includes('/record/v1/')) {
+            // Recovery runs on ANY retried entry — attempts > 0 (worker retries) OR requeuedAt
+            // (manual ↻ Retry / Re-queue) — so hammering the button can never double-post.
+            if (((e.attempts || 0) > 0 || e.requeuedAt) && hasMarker && e.method === 'POST' && String(e.targetUrl).includes('/record/v1/')) {
                 const rec = await recoverByMarker(e.id);
                 if (rec) { await finishPosted(e, rec.nsId, rec.nsTran, 'recovered after retry — not double-posted'); continue; }
             }

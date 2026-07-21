@@ -65,7 +65,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             // Non-WIP WOs can't take workordercompletion — flip the transform to the WO-linked
             // assemblyBuild (the UI's "Create Build"), which IS how these complete (2026-07-21).
             const fixedUrl = String(o.targetUrl || '').replace('/!transform/workordercompletion', '/!transform/assemblyBuild');
-            await updateDoc(doc(db, 'ns_outbox', o.id), { payload: p, targetUrl: fixedUrl, status: 'PENDING', attempts: 0, nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
+            // Attempts are KEPT (not reset): the worker only runs its already-posted (marker
+            // recovery) check on retried entries — resetting to 0 disabled it and allowed
+            // double-posts when Retry was hammered (Stuart 2026-07-21).
+            await updateDoc(doc(db, 'ns_outbox', o.id), { payload: p, targetUrl: fixedUrl, status: 'PENDING', nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
             addLog(`↻ Re-queued ${o.label || o.id}.`, 'info');
         } catch (e) { alert(`Re-queue failed: ${e.message}`); }
     };
@@ -731,6 +734,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
     const pushToFinishing = async (hqOrder, orderType) => {
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
+        // STOP MECHANISM (Stuart 2026-07-21): a second tap must never quietly duplicate the
+        // floor card — an already-dispatched order needs an explicit, scary re-confirm.
+        if (hqOrder.pushedToFinishing && !window.confirm(`⚠ ${hqOrder.woNo || hqOrder.id} was ALREADY dispatched to finishing.\n\nRelease it AGAIN anyway? Normally NO — this re-copies the floor card.`)) return;
 
         // SALES-SNAPSHOT stock WOs (2026-07-16): the snapshot pre-builds the COMPLETE finishing
         // doc (pole rack info, paint sizes, stock ids) and parks the WO here for review —
@@ -763,7 +769,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                         const m = String(hqOrder.id || '').match(/^WO-STK-(\d+)-/);
                         if (m) { nsAsmId = m[1]; idSrc = 'wo-id'; }
                     }
-                    if (nsAsmId && nsConfig.location) {
+                    if (nsAsmId && nsConfig.location && (hqOrder.nsWoQueued || hqOrder.nsWoId || fp.nsWoId)) {
+                        // STOP MECHANISM: one NetSuite work order per app WO, ever — a re-release
+                        // (or double tap) must not queue a second one.
+                        addLog(`ℹ NetSuite WO already queued/created for ${fp.woNum || fp.id} — not queued again.`, 'warn');
+                        nsQueuedNote = '\n\nℹ The NetSuite work order was already queued/created earlier — NOT duplicated.';
+                    } else if (nsAsmId && nsConfig.location) {
                         await enqueueNsWrite({
                             kind: 'workorder',
                             label: `NS WO — build ${fp.stockErpId || fp.id} ×${fp.totalParts}`,
@@ -787,6 +798,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                 { collection: 'hq_work_orders', docId: hqOrder.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }
                             ]
                         });
+                        await updateDoc(doc(db, "hq_work_orders", hqOrder.id), { nsWoQueued: true });
                         addLog(`📤 NetSuite work order queued: ${fp.stockErpId || fp.id} ×${fp.totalParts}${idSrc !== 'payload' ? ` (internal id recovered via ${idSrc})` : ''}.`, 'success');
                         nsQueuedNote = '\n\n📤 A real NetSuite work order is queued (11.1 → NetSuite Sync Queue) — On-Ord picks it up on the next live pull, and completion posts automatically when the bake finishes.';
                     } else {

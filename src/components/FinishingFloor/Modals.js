@@ -102,11 +102,13 @@ export const MixModal = ({ color, paintProfiles, setMixModal, writeLog, user, se
 export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrders }) => {
     const [good, setGood] = useState(qcModal.parts || 0);
     const [scrap, setScrap] = useState(0);
+    const [busy, setBusy] = useState(false); // STOP MECHANISM: double-tap on CONFIRM must not run twice (onPassed advances the recipe!)
 
     const wo = workOrders.find(w => w.id === qcModal.id);
 
     const handleSubmit = async () => {
-        if (!wo) return;
+        if (!wo || busy) return;
+        setBusy(true);
 
         const isCustomSalesOrder = wo.orderType === 'sales' || (wo.orderType !== 'stock' && (wo.soId || wo.salesOrderId));
 
@@ -168,7 +170,7 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
                     </div>
                 </div>
 
-                <button onClick={handleSubmit} style={{ ...btnStyle, width: '100%', background: '#333', color: '#fff' }}>CONFIRM & LOGOUT</button>
+                <button onClick={handleSubmit} disabled={busy} style={{ ...btnStyle, width: '100%', background: busy ? '#999' : '#333', color: '#fff', cursor: busy ? 'wait' : 'pointer' }}>{busy ? 'SAVING…' : 'CONFIRM & LOGOUT'}</button>
                 <button onClick={() => setQcModal(null)} style={{ background: 'none', border: 'none', color: '#888', marginTop: '15px', cursor: 'pointer', width: '100%' }}>Cancel</button>
             </div>
         </div>

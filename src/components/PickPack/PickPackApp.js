@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -711,12 +711,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             }
         } catch (e) { alert('Scrap report failed: ' + (e.message || e)); }
     };
+    const packCompletingRef = useRef(false); // STOP MECHANISM: double-tap must not complete/queue twice
     const completePacking = async (job) => {
+        if (packCompletingRef.current) return;
+        if (job.packStatus === 'Packed') return alert('This order is already packed.');
         const lines = packLinesOf(job);
         const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
         if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
         if (!(job.packPhotos || []).length) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
         if (!window.confirm(`Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\nSmall parts box: ${packBoxSel.SMALL || '—'}\nPole box: ${packBoxSel.POLE || '—'}`)) return;
+        packCompletingRef.current = true;
         try {
             await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packBoxes: packBoxSel });
             writeLog(`Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
@@ -749,6 +753,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             setPackOrderId(null);
             alert(`📦 ${packRef(job)} packed.${nsNote}`);
         } catch (e) { alert('Could not complete packing: ' + (e.message || e)); }
+        finally { packCompletingRef.current = false; }
     };
     // FULFILLED → BACK INTO THE APP: pull the SO's Item Fulfillment(s) from NetSuite and stamp
     // status + tracking #(s) onto the sales order (and the fin doc for custom orders).
