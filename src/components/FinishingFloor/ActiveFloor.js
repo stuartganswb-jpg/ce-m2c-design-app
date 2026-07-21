@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { finishingDb as db } from '../../firebase';
-import { doc, updateDoc } from "firebase/firestore";
+import { doc, updateDoc, addDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveRecipe } from '../Shared/finishingTime';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
@@ -52,7 +52,7 @@ const computeLayout = (redWO, blueWO, activeWOs) => {
 // The oven is fixed on the LEFT over the cure spot; the two sleds shuffle between the left (under-
 // oven) spot and the right (setup/spray) spot. The oven only slides further left, over the pole
 // rack, when poles bake. All derived from task state, so it animates as operators run each step.
-const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear }) => {
+const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear, onStation }) => {
     const { redAct, blueAct, redPos, bluePos, ovenMode, polesBaking, ovenRunning } = computeLayout(redWO, blueWO, activeWOs);
     const spotLeft = (pos) => pos === 'LEFT' ? '36%' : '58%';   // left = oven/cure, right = setup/spray
     const ovenLeft = ovenMode === 'POLES' ? '2%' : '33%';       // over pole rack vs over the left sled
@@ -61,7 +61,7 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear }) => {
     const Sled = ({ color, wo, act, pos }) => {
         const accent = color === 'RED' ? 'var(--ink)' : 'var(--brass)';
         return (
-            <div style={{ position: 'absolute', top: '42px', left: spotLeft(pos), width: '14%', height: '88px', background: '#fff', border: `2px solid ${accent}`, borderRadius: '2px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px', zIndex: 10, transition: 'left 1.5s ease-in-out', boxShadow: act.running ? '0 0 0 3px rgba(176,141,87,0.30)' : '0 4px 12px rgba(0,0,0,0.06)' }}>
+            <div onClick={() => onStation && onStation(color)} title={`Tap for manual controls — ${color} sled`} style={{ position: 'absolute', top: '42px', left: spotLeft(pos), width: '14%', height: '88px', background: '#fff', border: `2px solid ${accent}`, borderRadius: '2px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px', zIndex: 10, transition: 'left 1.5s ease-in-out', boxShadow: act.running ? '0 0 0 3px rgba(176,141,87,0.30)' : '0 4px 12px rgba(0,0,0,0.06)', cursor: onStation ? 'pointer' : 'default' }}>
                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: accent, fontWeight: 600 }}>{color}</span>
                 <span style={{ fontSize: '0.72rem', color: 'var(--ink)', marginTop: '3px' }}>{act.label}</span>
                 {wo && <span title={wo.id} style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '2px' }}>{woRef(wo)}</span>}
@@ -90,7 +90,7 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear }) => {
                 <div style={{ position: 'absolute', left: '34%', right: '4%', top: '86px', height: '4px', background: 'var(--line)' }} />
 
                 {/* POLE RACK (far left — the oven slides over here for poles) */}
-                <div style={{ position: 'absolute', left: '2%', top: '34px', width: '28%', height: '104px', border: `1px solid ${polesBaking ? 'var(--brass)' : 'var(--line)'}`, background: polesBaking ? 'rgba(176,141,87,0.06)' : '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '8px' }}>
+                <div onClick={() => onStation && onStation('POLES')} title="Tap for manual controls — pole rack" style={{ position: 'absolute', left: '2%', top: '34px', width: '24%', height: '104px', border: `1px solid ${polesBaking ? 'var(--brass)' : 'var(--line)'}`, background: polesBaking ? 'rgba(176,141,87,0.06)' : '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '8px', cursor: onStation ? 'pointer' : 'default', zIndex: 7 }}>
                     <div style={{ width: '80%', height: '2px', background: 'var(--line)' }} />
                     <div style={{ width: '80%', height: '2px', background: 'var(--line)' }} />
                     <span style={{ color: polesBaking ? 'var(--brass)' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{polesBaking ? 'Poles curing' : 'Pole Rack'}</span>
@@ -98,9 +98,15 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear }) => {
 
                 {/* OVEN — fixed over the left sled spot (a translucent hood the sled sits inside); slides
                     further left over the pole rack for poles. Behind the sleds so they show "inside" it. */}
-                <div style={{ position: 'absolute', top: '12px', left: ovenLeft, width: '22%', height: '150px', background: ovenRunning ? 'rgba(176,141,87,0.12)' : 'rgba(176,141,87,0.04)', border: '2px solid var(--brass)', boxShadow: ovenRunning ? 'inset 0 0 26px rgba(176,141,87,0.35)' : 'none', transition: 'left 1.6s ease-in-out', zIndex: 6, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '8px' }}>
+                <div onClick={() => onStation && onStation('OVEN')} title="Tap for manual controls — oven" style={{ position: 'absolute', top: '12px', left: ovenLeft, width: '22%', height: '150px', background: ovenRunning ? 'rgba(176,141,87,0.12)' : 'rgba(176,141,87,0.04)', border: '2px solid var(--brass)', boxShadow: ovenRunning ? 'inset 0 0 26px rgba(176,141,87,0.35)' : 'none', transition: 'left 1.6s ease-in-out', zIndex: 6, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: '8px', cursor: onStation ? 'pointer' : 'default' }}>
                     <span style={{ color: '#fff', background: 'var(--brass)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Oven</span>
                 </div>
+
+                {/* HAND FINISH zone (far right — off-track bench work) */}
+                {(() => { const n = activeWOs.filter(w => w.tasks?.hand?.status === 'Running').length; return (
+                <div onClick={() => onStation && onStation('HAND')} title="Tap for manual controls — hand finish bench" style={{ position: 'absolute', right: '1%', top: '34px', width: '16%', height: '104px', border: `1px solid ${n ? 'var(--brass)' : 'var(--line)'}`, background: n ? 'rgba(176,141,87,0.06)' : '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '8px', cursor: onStation ? 'pointer' : 'default', zIndex: 7 }}>
+                    <span style={{ color: n ? 'var(--brass)' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', textAlign: 'center' }}>Hand Finish{n ? ` · ${n} running` : ''}</span>
+                </div>); })()}
 
                 <Sled color="RED" wo={redWO} act={redAct} pos={redPos} />
                 <Sled color="BLUE" wo={blueWO} act={blueAct} pos={bluePos} />
@@ -220,6 +226,70 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       } catch (e) { alert('Force clear failed: ' + (e.message || e)); }
   };
 
+  // ===== MANUAL STATION CONTROLS (Stuart 2026-07-20) =====
+  // The machines aren't fully dialed in yet, so operators need direct start/stop/complete on
+  // whatever job sits at a station — tap the RED/BLUE sled, the OVEN, the POLE RACK or the HAND
+  // zone on the twin. EVERY tap is logged to fin_logs (cat 'manual') with station, task, WO,
+  // operator and — on stop/complete — the measured elapsed minutes, so real step timings can be
+  // learned from this period and fed back into the time matrix.
+  const [stationCtl, setStationCtl] = useState(null);   // 'RED' | 'BLUE' | 'OVEN' | 'POLES' | 'HAND'
+  const [manualRecent, setManualRecent] = useState([]);
+  const loadManualRecent = async () => {
+      try {
+          // Only manual entries carry the numeric `at` field, so orderBy('at') returns exactly them.
+          const s = await getDocs(query(collection(db, 'fin_logs'), orderBy('at', 'desc'), limit(40)));
+          setManualRecent(s.docs.map(d => d.data()).filter(x => x.cat === 'manual').slice(0, 12));
+      } catch (e) { setManualRecent([]); }
+  };
+  const openStation = (st) => { setStationCtl(st); loadManualRecent(); };
+  const logManual = async (entry) => {
+      try {
+          await addDoc(collection(db, 'fin_logs'), { u: user?.name || 'Floor', cat: 'manual', t: serverTimestamp(), at: Date.now(), ...entry });
+      } catch (e) { console.warn('manual log failed', e); }
+  };
+  const manualTask = async (wo, taskKey, action) => {
+      const t = (wo.tasks || {})[taskKey] || {};
+      const startedMs = t.startTime || null;
+      const elapsedMs = (action !== 'START' && t.status === 'Running' && startedMs) ? (Date.now() - startedMs) : null;
+      const updates = { [`tasks.${taskKey}.manual`]: true };
+      if (action === 'START') {
+          updates[`tasks.${taskKey}.status`] = 'Running';
+          updates[`tasks.${taskKey}.startTime`] = Date.now();
+          updates[`tasks.${taskKey}.assignedTo`] = t.assignedTo || user?.name || 'Manual';
+      } else if (action === 'STOP') {
+          updates[`tasks.${taskKey}.status`] = 'Pending';
+      } else if (action === 'COMPLETE') {
+          updates[`tasks.${taskKey}.status`] = 'Complete';
+          updates[`tasks.${taskKey}.completedAt`] = Date.now();
+      }
+      try {
+          await updateDoc(doc(db, 'fin_workorders', wo.id), updates);
+          await logManual({
+              msg: `MANUAL ${action} · ${taskKey} · ${woRef(wo)} @ ${stationCtl || 'floor'}${elapsedMs != null ? ` · ran ${(elapsedMs / 60000).toFixed(1)}m` : ''}`,
+              action, station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey,
+              recipe: wo.recipe || '', stepIndex: wo.currentStepIndex || 0, poleStepIndex: poleIdxOf(wo),
+              elapsedMs, startedAtMs: startedMs
+          });
+          loadManualRecent();
+      } catch (e) { alert('Manual update failed: ' + (e.message || e)); }
+  };
+  // Which WO tasks a station's panel controls.
+  const stationTargets = (st) => {
+      const out = [];
+      const pushT = (wo, key, label) => { if (wo && wo.tasks && wo.tasks[key]) out.push({ wo, key, label }); };
+      if (st === 'RED' || st === 'BLUE') {
+          const wo = st === 'RED' ? redWO : blueWO;
+          pushT(wo, 'spinSetup', 'Sled Setup'); pushT(wo, 'spinSpray', 'Spray Coat'); pushT(wo, 'spinBake', 'Bake (oven)');
+      } else if (st === 'OVEN') {
+          activeWOs.forEach(wo => { pushT(wo, 'spinBake', 'Sled Bake'); if (woHasPoles(wo)) pushT(wo, 'poleBake', 'Pole Bake'); });
+      } else if (st === 'POLES') {
+          activeWOs.filter(woHasPoles).forEach(wo => { pushT(wo, 'poleSpray', 'Pole Spray'); pushT(wo, 'poleBake', 'Pole Bake'); });
+      } else if (st === 'HAND') {
+          activeWOs.forEach(wo => pushT(wo, 'hand', 'Hand Finish'));
+      }
+      return out;
+  };
+
   const colorGroups = {};
   activeWOs.forEach(wo => {
       const r = resolveRecipe(recipes, wo.recipe);
@@ -273,7 +343,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       
       {/* LEFT: PIPELINE */}
       <div>
-        <DigitalTwinSCADA redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} onForceClear={forceOvenClear} />
+        <DigitalTwinSCADA redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} onForceClear={forceOvenClear} onStation={openStation} />
 
         {redlineWOs.length > 0 && (
             <div style={{ background: '#fdf2f2', border: '1px solid #d9534f', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
@@ -500,6 +570,68 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               )}
           </div>
       </div>
+
+      {/* 🎛 MANUAL STATION CONTROLS — tap a twin zone; every action is logged with timings. */}
+      {stationCtl && (() => {
+          const targets = stationTargets(stationCtl);
+          const stTitle = { RED: 'RED Sled', BLUE: 'BLUE Sled', OVEN: 'Oven', POLES: 'Pole Rack', HAND: 'Hand Finish Bench' }[stationCtl] || stationCtl;
+          const stChip = (st) => (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', fontWeight: 600, padding: '3px 8px', border: '1px solid var(--line)', color: st === 'Complete' ? '#3a7d44' : (st === 'Running' ? 'var(--brass)' : 'var(--ink-soft)'), background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>{st || 'Pending'}</span>
+          );
+          const btn = (label, onClick, dark) => (
+              <button onClick={onClick} style={{ padding: '9px 14px', background: dark ? 'var(--ink)' : 'transparent', color: dark ? '#fff' : 'var(--ink)', border: dark ? 'none' : '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{label}</button>
+          );
+          return (
+              <div onClick={() => setStationCtl(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '680px', maxWidth: '96vw', maxHeight: '92vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 12px 48px rgba(0,0,0,0.2)' }}>
+                      <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                          <div>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Manual controls · every action is logged with times</span>
+                              <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: 'var(--ink)' }}>🎛 {stTitle}</span>
+                          </div>
+                          <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                              {stationCtl === 'OVEN' && <button onClick={() => { setStationCtl(null); forceOvenClear(); }} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', background: 'transparent', border: '1px solid #d9534f', padding: '6px 10px', cursor: 'pointer' }}>⚠ Force Oven Clear</button>}
+                              <button onClick={() => setStationCtl(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                          </span>
+                      </div>
+                      <div style={{ padding: '18px 26px' }}>
+                          {targets.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.1rem' }}>Nothing at this station right now.</div>}
+                          {targets.map(({ wo, key, label }) => {
+                              const t = (wo.tasks || {})[key] || {};
+                              const running = t.status === 'Running';
+                              const elapsed = running && t.startTime ? Math.floor((now - t.startTime) / 60000) : null;
+                              return (
+                                  <div key={wo.id + key} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderTop: '1px solid var(--paper-2)', flexWrap: 'wrap' }}>
+                                      <div style={{ flex: 1, minWidth: '160px' }}>
+                                          <div style={{ fontFamily: 'var(--mono)', fontSize: '0.9rem', fontWeight: 600, color: 'var(--ink)' }}>{woRef(wo)}</div>
+                                          <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{label} · {wo.stockErpId || wo.type || ''} · {wo.recipe || ''}{t.assignedTo ? ` · ${t.assignedTo}` : ''}</div>
+                                      </div>
+                                      {stChip(t.status)}
+                                      {elapsed !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}>{elapsed}m</span>}
+                                      <span style={{ display: 'flex', gap: '8px' }}>
+                                          {t.status !== 'Running' && t.status !== 'Complete' && btn('▶ Start', () => manualTask(wo, key, 'START'), true)}
+                                          {running && btn('⏸ Stop', () => manualTask(wo, key, 'STOP'))}
+                                          {t.status !== 'Complete' && btn('✓ Complete', () => manualTask(wo, key, 'COMPLETE'))}
+                                          {t.status === 'Complete' && btn('↩ Reopen', () => manualTask(wo, key, 'STOP'))}
+                                      </span>
+                                  </div>
+                              );
+                          })}
+                          {manualRecent.length > 0 && (
+                              <div style={{ marginTop: '20px' }}>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '8px' }}>Recent manual actions (fin log · cat "manual")</div>
+                                  {manualRecent.map((m, i) => (
+                                      <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', padding: '3px 0' }}>
+                                          {m.at ? new Date(m.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · {m.u || ''} · {m.msg || ''}
+                                      </div>
+                                  ))}
+                              </div>
+                          )}
+                      </div>
+                  </div>
+              </div>
+          );
+      })()}
 
       {/* 📋 ORDER DETAILS — read-only view+confirm popup; tap any job window to open. */}
       {viewWo && (() => {
