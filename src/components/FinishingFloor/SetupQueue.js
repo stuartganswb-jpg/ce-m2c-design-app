@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc } from "firebase/firestore";
+import { doc, updateDoc, setDoc, getDocs, query, where, collection } from "firebase/firestore";
 import { btnStyle, cardStyle } from './finishingStyles';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { nsProxyFetch } from '../Shared/nsProxy';
+import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
@@ -245,6 +246,66 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
       finally { setConvPosting(false); }
   };
 
+  // ⟲ SCRAP RE-MAKE (Stuart 2026-07-20): when final QC reports scrap, the manager re-orders the
+  // scrapped pieces RIGHT HERE — creates the same RTG-parked stock WO the snapshot generates
+  // (control gate kept; Route A NetSuite WO fires at release), flagged remake:true and logged
+  // so scrap → re-order stays accountable and watchable.
+  const [rmOpen, setRmOpen] = useState(false);
+  const [rmCode, setRmCode] = useState('');
+  const [rmQty, setRmQty] = useState('');
+  const [rmNote, setRmNote] = useState('Scrap replacement');
+  const [rmBusy, setRmBusy] = useState(false);
+  const createRemake = async () => {
+      const code = rmCode.trim().toUpperCase();
+      const qty = parseInt(rmQty) || 0;
+      if (!code) return alert('Enter the finished item # (e.g. HCUMLB410/SG).');
+      if (qty <= 0) return alert('Enter how many pieces to re-make.');
+      setRmBusy(true);
+      try {
+          const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', code)));
+          const part = snap.docs.map(d => ({ id: d.id, ...d.data() }))[0] || null;
+          if (!part) { alert(`"${code}" is not in the Master Library — check the item #.`); setRmBusy(false); return; }
+          const specs = part.manufacturingSpecs || {};
+          const cut = code.lastIndexOf('/');
+          const recipe = cut > 0 ? code.slice(cut + 1).split('-')[0] : 'PENDING-RECIPE';
+          const isPole = String(specs.productType || '').toUpperCase().includes('POLE');
+          const size = String(specs.paintSize || '').toUpperCase() || null;
+          const woId = `WO-STK-${part.netSuiteInternalId || 'RM'}-${Date.now()}`;
+          const reqDate = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+          const paintSizes = (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null;
+          const finPayload = {
+              id: woId, orderKey: woId, quoteId: null, salesOrderId: null, estimateId: null,
+              orderType: 'stock', soId: null, soNum: null,
+              customerId: null, customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
+              recipe, reqDate, type: code, totalParts: qty,
+              stockErpId: code, stockInternalId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null,
+              paintSize: isPole ? null : size, productType: String(specs.productType || '').toUpperCase() || null, paintSizes,
+              ...(isPole ? { poles: { qty, type: String(specs.productType || 'POLE').toUpperCase() }, totalPoles: qty } : {}),
+              note: `⟲ SCRAP RE-MAKE · ${rmNote || ''}`.trim(),
+              remake: true,
+              cpqSpecs: {}, imageUrl: part.finalImageUrl || null,
+              dimensions: { length: 0, width: 0, height: 0 }, partsList: [],
+              currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
+              tasks: makeFullTasks(),
+              machineAssigned: null, redlineAlert: false,
+              sentToPickPack: false, pickStatus: 'Pending',
+              shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
+              brand: String(part.brandId || 'ce'), createdAt: Date.now(), updatedAt: Date.now(), createdBy: 'Setup Queue'
+          };
+          await setDoc(doc(db, 'hq_work_orders', woId), {
+              id: woId, woId, brand: String(part.brandId || 'ce'), type: 'Stock', status: 'Approved',
+              source: 'SETUP_QUEUE_REMAKE', routeTo: 'FINISHING', finPayload, remake: true, remakeReason: rmNote || '',
+              erpId: code, recipe, qty, totalParts: qty, reqDate,
+              paintSize: size, customer: 'Internal Stock',
+              createdAt: Date.now(), createdBy: 'Setup Queue'
+          }, { merge: true });
+          if (writeLog) writeLog(`⟲ Scrap re-make WO created: ${qty} × ${code} (${recipe}) — parked in RTG Dispatch`, 'setup');
+          alert(`⟲ Re-make order created: ${qty} × ${code} (${recipe}).\n\nPARKED in RTG Dispatch (same control gate as snapshot builds) — Push to Finishing there releases it back to this queue and queues the real NetSuite work order.`);
+          setRmCode(''); setRmQty(''); setRmNote('Scrap replacement');
+      } catch (e) { alert('Re-make failed: ' + (e.message || e)); }
+      finally { setRmBusy(false); }
+  };
+
   return (
     <div style={{ padding: '30px', fontFamily: 'var(--sans)' }}>
 
@@ -320,6 +381,22 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
                 )}
               </div>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* ⟲ SCRAP RE-MAKE — manager's quick stock re-order for scrapped pieces */}
+      <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', marginBottom: '24px' }}>
+        <div onClick={() => setRmOpen(!rmOpen)} style={{ padding: '14px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', background: 'var(--paper-2)', gap: '10px', flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>⟲ Scrap Re-make / New Stock Order</span>
+          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>QC reported scrap? re-order the pieces here — parks in RTG like a snapshot build {rmOpen ? '▾' : '▸'}</span>
+        </div>
+        {rmOpen && (
+          <div style={{ padding: '20px 24px', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <input type="text" placeholder="Finished item # (e.g. HCUMLB410/SG)" value={rmCode} onChange={e => setRmCode(e.target.value)} style={{ flex: 2, minWidth: '220px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '0.9rem', outline: 'none' }} />
+            <input type="number" min="1" placeholder="Qty" value={rmQty} onChange={e => setRmQty(e.target.value)} style={{ width: '90px', padding: '10px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '1rem', outline: 'none' }} />
+            <input type="text" placeholder="Reason" value={rmNote} onChange={e => setRmNote(e.target.value)} style={{ flex: 1, minWidth: '160px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
+            <button onClick={createRemake} disabled={rmBusy} style={{ ...btnStyle, background: '#3a7d44', color: '#fff', opacity: rmBusy ? 0.6 : 1 }}>{rmBusy ? '⏳ Creating…' : '⟲ Create Re-make WO'}</button>
           </div>
         )}
       </div>

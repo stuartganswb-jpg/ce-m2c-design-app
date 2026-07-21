@@ -108,7 +108,7 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
     const handleSubmit = async () => {
         if (!wo) return;
 
-        const isCustomSalesOrder = wo.orderType === 'sales' || wo.soId;
+        const isCustomSalesOrder = wo.orderType === 'sales' || (wo.orderType !== 'stock' && (wo.soId || wo.salesOrderId));
 
         // THE REDLINE BLOCKER
         if (isCustomSalesOrder && Number(scrap) > 0) {
@@ -123,13 +123,14 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
             return;
         }
 
-        // Normal Completion Processing
+        // Normal Completion Processing (taskType null = the FINAL-STEP order QC gate — no task
+        // to stamp, the caller's onPassed finishes the order once the counts are recorded).
         const updates = {
-            [`tasks.${qcModal.taskType}.status`]: 'Complete',
             completedParts: Number(good),
             scrapReported: Number(scrap) // §10: name Summary actually reads (was scrapParts)
         };
-        
+        if (qcModal.taskType) updates[`tasks.${qcModal.taskType}.status`] = 'Complete';
+
         // Move to oven if required by station
         if (qcModal.needsOven) {
             updates.stepStatus = "Oven";
@@ -137,8 +138,14 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
         }
 
         await updateDoc(doc(db, "fin_workorders", wo.id), updates);
-        writeLog(`Completed ${qcModal.taskType} on ${wo.id}`, 'production');
-        
+        writeLog(`QC ${qcModal.taskType || 'final'} on ${wo.id} — ${Number(good)} good · ${Number(scrap)} scrap`, 'production');
+        if (Number(scrap) > 0) writeLog(`⚠ SCRAP: ${Number(scrap)} pc(s) on ${wo.id} (${wo.stockErpId || wo.type || ''}) — re-make from the Setup Queue ⟲ panel`, 'alert');
+
+        // Final-gate caller (ActiveFloor last-step completion) proceeds only after QC passes.
+        if (typeof qcModal.onPassed === 'function') {
+            try { await qcModal.onPassed({ good: Number(good), scrap: Number(scrap) }); } catch (e) { console.error('QC onPassed failed', e); }
+        }
+
         // Auto Logout Standard Users on successful completion
         if (user.role !== 'admin' && user.role !== 'floor_manager') setUser(null);
         setQcModal(null);

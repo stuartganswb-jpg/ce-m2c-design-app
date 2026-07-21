@@ -170,7 +170,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // Advance the SMALL-PARTS stream one coat. Pole tasks are untouched — they belong to the pole
   // stream. When BOTH streams are past the last step, the order completes (currentPhase Complete
   // → it enters the WMS packing queue) and the sled frees either way.
-  const handleCompleteRecipeStep = async (wo) => {
+  const finalizePartsAdvance = async (wo) => {
       const len = recipeLen(wo);
       const nextParts = (wo.currentStepIndex || 0) + 1;
       const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= len;
@@ -188,10 +188,24 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       }
       await updateDoc(doc(db,"fin_workorders", wo.id), updates);
   };
+  // FINAL-STEP QC GATE (Stuart 2026-07-20 — restored): completing the order's LAST step first
+  // asks good-vs-scrap (QcModal): stock builds record completedParts/scrapReported (the NetSuite
+  // completion posts the GOOD count), and a custom sales order with ANY scrap is redline-BLOCKED
+  // with the supervisor alerted. The order only completes after QC passes.
+  const handleCompleteRecipeStep = async (wo) => {
+      const len = recipeLen(wo);
+      const nextParts = (wo.currentStepIndex || 0) + 1;
+      const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= len;
+      if (nextParts >= len && polesFinished && setQcModal) {
+          setQcModal({ id: wo.id, parts: wo.totalParts || 0, taskType: null, onPassed: () => finalizePartsAdvance(wo) });
+          return;
+      }
+      await finalizePartsAdvance(wo);
+  };
 
   // Advance the POLE stream one coat (its own pointer). Completes the order when parts are
-  // already done too.
-  const handleCompletePoleStep = async (wo) => {
+  // already done too — through the same final QC gate.
+  const finalizePoleAdvance = async (wo) => {
       const len = recipeLen(wo);
       const next = poleIdxOf(wo) + 1;
       const partsFinished = (wo.currentStepIndex || 0) >= len;
@@ -203,6 +217,16 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       };
       if (next >= len && partsFinished) { updates.currentPhase = 'Complete'; updates.stepStatus = 'Complete'; updates.completedAt = Date.now(); }
       await updateDoc(doc(db,"fin_workorders", wo.id), updates);
+  };
+  const handleCompletePoleStep = async (wo) => {
+      const len = recipeLen(wo);
+      const next = poleIdxOf(wo) + 1;
+      const partsFinished = (wo.currentStepIndex || 0) >= len;
+      if (next >= len && partsFinished && setQcModal) {
+          setQcModal({ id: wo.id, parts: wo.totalParts || 0, taskType: null, onPassed: () => finalizePoleAdvance(wo) });
+          return;
+      }
+      await finalizePoleAdvance(wo);
   };
 
   // FORCE OVEN CLEAR (Stuart 2026-07-20): a bake left 'Running' (often on a ghost WO whose cards
