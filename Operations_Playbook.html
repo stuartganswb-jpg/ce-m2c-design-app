@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>4CO Work Center — Operations Playbook & Teaching Guide</title>
+<style>
+  :root { --ink:#1c1a16; --soft:#524e46; --brass:#b08d57; --line:#d9d4ca; --paper:#faf8f4; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: var(--ink); margin: 0; padding: 40px 48px; line-height: 1.5; }
+  header { border-bottom: 3px solid var(--ink); padding-bottom: 14px; margin-bottom: 26px; }
+  h1 { font-size: 26px; margin: 0; font-weight: 600; }
+  .sub { font-family: 'Courier New', monospace; font-size: 11px; color: var(--soft); text-transform: uppercase; letter-spacing: .12em; margin-top: 6px; }
+  h2 { font-size: 17px; margin: 26px 0 8px; padding: 6px 10px; background: var(--ink); color: #fff; page-break-after: avoid; }
+  h3 { font-size: 13.5px; margin: 14px 0 4px; color: var(--ink); page-break-after: avoid; }
+  p, li { font-size: 12.5px; margin: 4px 0; }
+  ul { margin: 4px 0 8px; padding-left: 20px; }
+  .why { font-size: 11.5px; color: var(--soft); font-style: italic; margin: 2px 0 10px; }
+  .rule { background: var(--paper); border-left: 4px solid var(--brass); padding: 8px 12px; margin: 8px 0; font-size: 12.5px; }
+  .steps { counter-reset: step; margin: 6px 0 10px; padding-left: 0; list-style: none; }
+  .steps li { counter-increment: step; padding-left: 26px; position: relative; margin: 3px 0; }
+  .steps li::before { content: counter(step); position: absolute; left: 0; top: 1px; width: 17px; height: 17px; background: var(--brass); color: #fff; border-radius: 50%; font-size: 10.5px; text-align: center; line-height: 17px; font-family: Arial, sans-serif; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin: 8px 0 14px; }
+  th { text-align: left; font-family: 'Courier New', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--soft); border-bottom: 2px solid var(--ink); padding: 5px 8px; }
+  td { border-bottom: 1px solid var(--line); padding: 5px 8px; vertical-align: top; }
+  code, .mono { font-family: 'Courier New', monospace; font-size: 11.5px; }
+  .section { page-break-inside: avoid; }
+  .pagebreak { page-break-before: always; }
+  @media print { body { padding: 0.35in 0.45in; } h2 { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .steps li::before, .rule { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>4CO Work Center — Operations Playbook</h1>
+  <div class="sub">Reminder &amp; teaching guide · scenarios → screens → what happens behind the curtain · current as of July 21, 2026</div>
+</header>
+
+<div class="section">
+<h2>0 · One rule for order numbers</h2>
+<div class="rule"><b>Whoever issues the document owns the number.</b> Work orders, sales orders and invoices lead with the <b>NetSuite number</b> (WO11312, SO59176, invoice #) the moment it exists — the long app id shows only until then, and stays available on hover. <b>Purchase orders and quotes keep the app's short numbers</b> (PO-1044, QUOTE-…) because the app is the source for those.</div>
+<p class="why">If a screen shows a long WO-STK-… string, the NetSuite work order simply hasn't posted yet (~1 minute after RTG release).</p>
+</div>
+
+<div class="section">
+<h2>1 · Sales Snapshot (HQ 12.5) — planning &amp; ordering</h2>
+<h3>Reading the grid</h3>
+<ul>
+  <li><b>Min OH rules:</b> OUT (outsourced: vendor, no assembly) = 6 months of demand. ASM (in-house assembly) = 6 weeks (3wk finishing lead + 3wk safety). <b>ROP</b> column overrides Min OH when set — ⬆ Save pushes it to the Master Library.</li>
+  <li><b>Raw Cores (BOM) view:</b> demand rolled up to the raw base behind the finish variants — set core ROPs here so finishing never runs out of metal. Ordering always happens from the Finished view.</li>
+  <li><b>Ring packs:</b> the <span class="mono">-EA</span> single row carries ALL demand (each-buyers + packs). Pack rows (-7/-10/-12) are analysis-only — order the single, packs build themselves at pick.</li>
+  <li><b>Sort: Item # / Finish</b> — Finish groups /SG · /N25 · … together so you can issue all same-finish work orders in one pass (they arrive at the Setup Queue already batched).</li>
+</ul>
+<h3>Ordering</h3>
+<ol class="steps">
+  <li>Enter Order quantities (Rec is guidance, never auto-filled).</li>
+  <li><b>⚙ Generate Orders</b>: bought items → ONE PO per vendor; made items → work orders <b>parked in RTG</b> (nothing reaches the floor unreviewed).</li>
+  <li>Short on raw cores? Tap the row's <b>⇄</b> to attach a <i>convert suggestion</i> (pick a sister finish with shelf stock + qty). It rides the WO to the Setup Queue — the floor executes it, the snapshot never posts anything.</li>
+  <li><b>✂ on 8-ft rods</b> — cut orders route to WMS ROD CUTS and post the 2-line NetSuite adjustment at scan.</li>
+</ol>
+<h3>📋 Open WOs (cleanup panel)</h3>
+<p>Button in the snapshot toolbar. Every not-closed WO with floor phase + coat, task mini-status, NetSuite WO/BUILD state, pack status.</p>
+<ul>
+  <li><b>↩ Reset → Setup</b> — rewinds a floor order to "picked, ready for setup" and clears completion/pack/NetSuite-build stamps. Use after deleting a wrong Assembly Build in NetSuite: the real completion will re-post. Never touches the NetSuite work order.</li>
+  <li><b>✕ Close</b> — soft-closes app docs and queues the NetSuite WO close when safe.</li>
+</ul>
+</div>
+
+<div class="section pagebreak">
+<h2>2 · RTG Dispatch — the control gate + NetSuite window</h2>
+<ul>
+  <li><b>Push to Finishing</b> releases the pre-built floor doc verbatim AND creates the <b>real NetSuite work order</b> (staged write). One NetSuite WO per app WO, ever — re-releasing an already-dispatched order needs a second scary confirm and never duplicates the WO.</li>
+  <li><b>NetSuite Transmit Log</b> (bottom of RTG): every staged write with live status. <b>Click a row</b> → CALLED (exact REST path), SENT (payload summary), NETSUITE SAID (the real error text). <b>↻ Re-queue</b> retries with known fixes applied. Red banner = the queue worker isn't running → Cloud Shell deploy.</li>
+  <li>Full queue with Retry/Cancel lives in <b>11.1 → NetSuite Sync Queue</b>. Retries keep the attempt count so the worker first checks NetSuite for an already-posted copy — <b>hammering Retry can never double-post</b>.</li>
+  <li><b>Finding old duplicates in NetSuite:</b> true twins share the same memo marker (<span class="mono">[app push 07/20/26, 2:32 PM #aVNdVI]</span>). Global-search the marker; every hit past the first is a twin to delete.</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>3 · Finishing — Setup Queue</h2>
+<ul>
+  <li>Orders group <b>by finish</b> (dark headers) — run each batch together, earliest section first.</li>
+  <li><b>▶ Start Setup releases the parts pick to WMS.</b> Custom orders send their BOM small parts; stock builds send the <b>raw base pull</b> (finish suffix stripped, qty = build count). The card chip tracks it: awaiting release → in pick queue → picked.</li>
+  <li><b>⇄ Convert Finished → Raw</b> (top of screen): out of raw cores? Enter the raw #, Find Stock shows the raw + every finished variant with live per-bin counts, pick a donor + qty + bins, ⚡ Convert posts the 2-line NetSuite adjustment immediately. Packs excluded — unbuild packs in WMS first.</li>
+  <li><b>⟲ Scrap Re-make</b>: item # + qty + reason → creates the same RTG-parked stock WO the snapshot makes (flagged remake). Use it the moment QC reports scrap.</li>
+  <li>Brass strip on a card = the planner's convert suggestion — run it with the ⇄ tool above.</li>
+  <li><b>✕ per card</b> = safe close (queues the NetSuite WO close when one exists un-built).</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>4 · Finishing — Active Floor</h2>
+<div class="rule"><b>Poles and small parts move on their own tracks.</b> Painting them together is the ideal — the app suggests, never blocks. Parts advance by "Unload Parts"; poles advance by "Next Pole Coat" on their own pointer. An order completes only when BOTH tracks pass the last coat.</div>
+<ul>
+  <li><b>Tap any job window</b> (task card title, pole card, pipeline row) → read-only details: NetSuite WO, item, qty, parts coat n/m, poles coat n/m, task grid, notes.</li>
+  <li><b>Tap a station on the twin</b> — RED sled, BLUE sled, OVEN, POLE RACK, HAND FINISH — for 🎛 manual controls: ▶ Start / ⏸ Stop / ✓ Complete / ↩ Reopen per task, bypassing every gate (paint mix, roles, interlocks). <b>Every tap is logged with times</b> — that log becomes the real step-time data for the scheduler.</li>
+  <li><b>⚠ Force Oven Clear</b> (twin header or the oven panel): resets every Running bake to Pending — un-jams a locked oven; nothing gets marked complete.</li>
+  <li><b>Final-step QC gate:</b> completing the last coat asks GOOD vs SCRAP.
+    <ul>
+      <li><b>Stock builds:</b> the good count is what posts to NetSuite (the WO's assembly build receives GOOD pcs into the home bin).</li>
+      <li><b>Custom sales orders:</b> ANY scrap blocks completion, red-flags the supervisor, logs the operator out. Customs can never quietly ship short.</li>
+      <li>Scrap &gt; 0 writes an ⚠ SCRAP log entry pointing at the Setup Queue's ⟲ Re-make panel.</li>
+    </ul>
+  </li>
+</ul>
+</div>
+
+<div class="section pagebreak">
+<h2>5 · WMS — Pick Queue</h2>
+<ul>
+  <li>Cards appear when finishing hits ▶ Start Setup. <b>Tap anywhere but START PICKING</b> to expand the parts table (item · bin · qty).</li>
+  <li><b>Bins are LIVE</b>: pulled from NetSuite when a card expands or picking starts (⟳ Live re-pulls). The big BIN readout shows the top-stock bin plus the other live bins — <b>scanning any bin that actually holds the item passes validation</b>.</li>
+  <li><b>⤼ Skip This Item</b> when a line can't be picked (phantom splices etc.) — the order completes with a ⚠ skip flag to fix at the end.</li>
+  <li>Staging Handshake: scan the small-parts label (+ the custom shop label when the order has one) — both must resolve to the same order before it stages for the floor.</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>6 · WMS — Packing Station (two stations in one tab)</h2>
+<p>The queue holds every finished order: custom (finishing Complete), Quick Ship (Marked Picked), stock builds (STOCK → BIN chip). Tap a chip to open; confirm each line as you physically handle it — pieces move left → right with who/when stamped.</p>
+<table>
+  <tr><th></th><th>STOCK builds (put-away)</th><th>CUSTOM + QUICK SHIP (customer packing)</th></tr>
+  <tr><td><b>Goal</b></td><td>Finished goods back to the shelf</td><td>Boxed for the customer</td></tr>
+  <tr><td><b>Photo</b></td><td>Optional</td><td><b>Required</b> — Complete stays locked without one</td></tr>
+  <tr><td><b>Boxes / bin</b></td><td>Scan the <b>put-away bin</b> (defaults to home bin; warns if the scan isn't where NetSuite holds it)</td><td>Small parts box + pole box pickers (from HQ Packaging tab 15); pack order: brackets → rings → finials → plates → smalls, poles last</td></tr>
+  <tr><td><b>Button</b></td><td>✓ Put Away to Bin</td><td>✓ Complete Packing</td></tr>
+  <tr><td><b>After</b></td><td>Done — the NetSuite build already received the goods</td><td>NetSuite <b>Item Fulfillment queues automatically</b>; shipping finishes it in NetSuite; <b>⤓ Tracking</b> pulls status + tracking # back onto the sales order</td></tr>
+</table>
+<ul>
+  <li><b>⚠ Report Scrap</b> (workspace + Recently Packed rows, finishing-produced orders only): stock → counts recorded + a −qty finished-goods adjustment queues to NetSuite; custom → supervisor red-flag. Both point at ⟲ Scrap Re-make.</li>
+  <li>Quick Ship: Mark Shipped warns if the order never went through packing.</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>7 · Plating — two front doors, one weekly shipment</h2>
+<h3>Stock pulls (as today)</h3>
+<p>"Needs Plating" cards → Pull &amp; Plate moves stock from its bin to plating WIP (bin transfer, status WIP-Plating) and stages the line.</p>
+<h3>📥 OB Plating — custom outgoing</h3>
+<ol class="steps">
+  <li>Shop completes a custom order with a <b>/MEP, /EP or /P25</b> finish → operator carries the pieces to the <b>OB PLATING bin</b> (label printed).</li>
+  <li>WMS → Plating → 📥 OB Plating section: <b>scan the shop WO label</b> (or tap 📥 Into OB Plating) — the piece stages in the bin, plating tag prints, vendor resolves from the finish.</li>
+  <li>Pieces accumulate all week; the section lists what's riding.</li>
+  <li><b>Weekly 📦 Ship</b>: ONE plater PO (every piece itemized in the description) + packing list + pallet label — customs and stock pulls together. Set the plating $ on custom lines via the ship modal's cost override. Mixed vendors ship separately.</li>
+</ol>
+</div>
+
+<div class="section pagebreak">
+<h2>8 · Shop Floor — custom fabrication</h2>
+<ul>
+  <li><b>Staged → Active:</b> one active order at a time; ▶ Start brings a staged order over.</li>
+  <li>Multi-configuration orders: per-config checkboxes with 🔍 <b>View Item</b> (open → view → make → check).</li>
+  <li><b>In-house finish orders</b>: "Parts Require Phosphate" checkboxes ride the router — Complete warns if unchecked.</li>
+  <li><b>Outsourced finish orders (/MEP //EP //P25)</b>: Complete = "send to OB PLATING" (see §7). Once-only — undo/re-complete can't duplicate the queue entry.</li>
+  <li><b>Reprint Label</b> on Recently Completed when the printer eats one; <b>UNDO — Back to Production</b> reverses an accidental Complete and re-blocks staging.</li>
+  <li><b>SOPs:</b> built in 1.6's dedicated SOP slot → annotated pages in Tab .6 → viewable from BOM Engine + the floor (📋 button), 3D or PDF.</li>
+  <li><b>Routings tab:</b> base assemblies only (nothing with a "/"), Classical Elements + M2C only.</li>
+  <li><b>Programs tab:</b> ⚙ Step-by-Step on each program card = the machine-start data sheet (labels + exact control values + machine-screen photos), built in the program editor.</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>9 · Quick Ship (HQ tab 7)</h2>
+<ul>
+  <li>Pattern kits: one kit per pattern; the customer's finish picks the /CODE variants at add time. Kits filed in collections (tap a collection to open).</li>
+  <li>Kit pricing: base + per-customer overrides; the cart reprices live; kit price distributes across NetSuite lines (accounting stays itemized).</li>
+  <li>Invoices: customer pays against <b>kit # + kit price</b>; components print as unpriced sub-lines. "Match NS Invoice #" ties the NetSuite invoice number on; print/email from the CRM card.</li>
+  <li>Flow discipline: <b>Pick (STOCK tab) → Pack (PACKING tab, photo) → Ship</b> — ring-pack lines pull singles ("→ pull N × …-EA") and the pack assembly builds post at Mark Picked.</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>10 · NetSuite sync — how writes travel &amp; how to read trouble</h2>
+<ul>
+  <li>Writes don't fire live — they stage into a queue drained <b>about once a minute</b>, serial, with automatic retries. This is what keeps 40 users from tripping NetSuite's ~5-connection limit.</li>
+  <li><b>Memo marker</b> <span class="mono">[app push 07/20/26, 2:32 PM #aVNdVI]</span>: shows when the app pushed a transaction and doubles as the anti-duplicate token.</li>
+  <li>Learned payload rules (already automatic): WO creation uses <span class="mono">assemblyItem</span>; non-WIP work orders complete via the <b>WO-linked Assembly Build</b> (= NetSuite's Create Build button); receive bins are a single bin.</li>
+  <li>If a build 400s with "configure the inventory detail in line 1 of the component list": the raw component needs a <b>preferred bin</b> in NetSuite → set it → ↻ Retry.</li>
+  <li><b>Functions never auto-deploy.</b> Server-side changes go live only via Cloud Shell:<br><span class="mono">cd ~/ce-m2c-design-app && git pull && firebase deploy --only functions --project ce-m2c-design-collab</span></li>
+</ul>
+</div>
+
+<div class="section pagebreak">
+<h2>11 · When something's stuck — quick playbook</h2>
+<table>
+  <tr><th>Symptom</th><th>Where to look</th><th>Action</th></tr>
+  <tr><td>Queued NetSuite write not posting</td><td>RTG Transmit Log / 11.1</td><td>PENDING + 0 tries + red banner → Cloud Shell functions deploy. FAILED → click the row, read NETSUITE SAID, then ↻ Retry (it self-heals known issues).</td></tr>
+  <tr><td>Oven locked / stations blocked</td><td>Active Floor twin</td><td>⚠ Force Oven Clear (resets Running bakes to Pending — nothing marked complete).</td></tr>
+  <tr><td>Order fully baked but no button to advance</td><td>Active Floor stations</td><td>Both stations now show <b>Unload Parts</b> when everything's complete — tap it. Or open the station's 🎛 manual panel.</td></tr>
+  <tr><td>Work order "disappeared"</td><td>WMS → PACKING</td><td>Finished orders live there until packed/put away. Also 12.5 → 📋 Open WOs shows everything not closed.</td></tr>
+  <tr><td>NetSuite shows a build that shouldn't exist</td><td>NetSuite + 12.5</td><td>Delete the build in NetSuite → 📋 Open WOs → ↩ Reset → Setup (clears the flags so the real completion re-posts).</td></tr>
+  <tr><td>Duplicate transactions in NetSuite</td><td>NetSuite global search</td><td>Search the memo marker (#ref) — hits past the first are twins to delete. New duplicates can't happen (retries recover instead of re-posting).</td></tr>
+  <tr><td>Pick shows UNASSIGNED / no stock but NetSuite has it</td><td>WMS pick card</td><td>⟳ Live — bins pull straight from NetSuite; scan whichever live bin you pull from.</td></tr>
+  <tr><td>Out of raw cores for a stock build</td><td>Setup Queue</td><td>⇄ Convert Finished → Raw (live bins, posts the adjustment). Planner can pre-suggest the donor from the snapshot's ⇄.</td></tr>
+  <tr><td>Scrap found (floor or packing)</td><td>QC modal / ⚠ Report Scrap</td><td>Counts + NetSuite adjust handled automatically → re-order via Setup Queue ⟲ Scrap Re-make.</td></tr>
+  <tr><td>Custom plated pole finished fab</td><td>Shop Complete → OB PLATING bin</td><td>Scan in at WMS → Plating → 📥 OB Plating; weekly 📦 Ship builds the plater PO.</td></tr>
+  <tr><td>Bad accidental Complete on shop custom</td><td>Shop → Recently Completed</td><td>UNDO — Back to Production (re-blocks staging until completed again).</td></tr>
+</table>
+<p class="why">Printed copies go stale — the app is the truth. Reprint from Operations_Playbook.html in the repo after major changes.</p>
+</div>
+
+</body>
+</html>
