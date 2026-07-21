@@ -1351,6 +1351,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                     {openObId === o.id && (
                                         <div style={{ padding: '10px 24px 14px 24px', background: 'var(--paper)', fontFamily: 'var(--mono)', fontSize: '11px', lineHeight: 1.7, color: 'var(--ink)', userSelect: 'text' }}>
+                                            <div style={{ color: 'var(--ink-soft)', overflowWrap: 'anywhere' }}>CALLED: {String(o.targetUrl || '').split('/services/rest/')[1] || o.targetUrl || '—'}</div>
                                             {payloadSummary(o) && <div style={{ color: 'var(--ink-soft)' }}>SENT: {payloadSummary(o)}</div>}
                                             {o.lastError && <div style={{ color: '#d9534f', overflowWrap: 'anywhere', marginTop: '4px' }}>NETSUITE SAID: {errDetail(o.lastError)}</div>}
                                             {o.lastError && errDetail(o.lastError) !== String(o.lastError) && <div style={{ color: 'var(--ink-soft)', overflowWrap: 'anywhere', marginTop: '4px', fontSize: '10px' }}>RAW: {String(o.lastError)}</div>}
