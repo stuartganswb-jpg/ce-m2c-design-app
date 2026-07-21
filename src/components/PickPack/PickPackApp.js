@@ -722,6 +722,44 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Scrap report failed: ' + (e.message || e)); }
     };
     const packCompletingRef = useRef(false); // STOP MECHANISM: double-tap must not complete/queue twice
+    // ===== 📥 OB PLATING — custom outgoing staging (Stuart 2026-07-21) =====
+    // Custom-fabricated pieces ordered in /MEP, /EP or /P25 finishes arrive here at random times
+    // as the shop completes them. Scanning one into the OB PLATING bin stages it as a normal
+    // plating_shipments line (status 'staged', bin OB PLATING) — so the existing weekly
+    // 📦 Ship button bundles customs + stock pulls into ONE plater PO + packing list. No NetSuite
+    // bin transfer here: custom fab isn't stocked inventory, the pole just physically moves.
+    const [obScan, setObScan] = useState('');
+    const stageObDemand = async (d) => {
+        if (!window.confirm(`📥 Scan ${d.woNum || d.targetErpId} into OB PLATING?\n\n${d.qty} pc(s) · ${d.baseErpId} → ${d.targetErpId} · finish ${d.finishCode}\n\nIt joins the staged plating lines and rides the next weekly shipment/PO.`)) return;
+        try {
+            const fin = outsourceFinishes.find(f => finishCodeOf(f) === String(d.finishCode || '').toUpperCase());
+            const vendorCrmId = (fin && fin.vendorCrmId) || '';
+            const nsVendorId = /^VEND-(\d+)$/.test(vendorCrmId) ? vendorCrmId.replace('VEND-', '') : '';
+            await addDoc(collection(db, 'plating_shipments'), {
+                brandId: activeBrand, status: 'staged', custom: true,
+                itemId: null, netSuiteInternalId: null, erpId: d.baseErpId || 'CUSTOM',
+                itemName: `CUSTOM ${d.finishName || d.finishCode || ''}${d.note ? ` — ${d.note}` : ''}`.trim(),
+                finishCode: d.finishCode || '', finishName: d.finishName || '', targetErpId: d.targetErpId || '',
+                vendorCrmId, nsVendorId, vendorName: (fin && fin.vendor) || '',
+                qty: Number(d.qty) || 1, fromBin: 'CUSTOM FAB', platingBin: 'OB PLATING', woNum: d.woNum || '',
+                operator: operator?.name || 'Unknown', createdAt: serverTimestamp()
+            });
+            printPlatingLabel({ erpId: d.baseErpId || 'CUSTOM', itemName: d.finishName || 'Custom plated part', qty: Number(d.qty) || 1, woNum: d.woNum || '', platingBin: 'OB PLATING', finishCode: d.finishCode || '', finishName: d.finishName || '', targetErpId: d.targetErpId || '' });
+            await deleteDoc(doc(db, 'plating_demand', d.id)).catch(() => {});
+            writeLog(`OB Plating scan-in: ${d.qty} × ${d.baseErpId} (${d.finishCode}) WO ${d.woNum} → OB PLATING`, 'wms');
+            alert(`✅ ${d.woNum || d.baseErpId} staged in OB PLATING — it rides the next weekly plating shipment/PO.`);
+        } catch (e) { alert('OB scan-in failed: ' + (e.message || e)); }
+    };
+    const obScanSubmit = () => {
+        const s = obScan.trim().toUpperCase();
+        if (!s) return;
+        const hit = platingDemands.find(d => d.custom && (String(d.woNum || '').toUpperCase() === s || String(d.woNum || '').toUpperCase().includes(s) || String(d.id).toUpperCase() === s));
+        setObScan('');
+        if (!hit) return alert(`No custom outgoing piece matches "${s}" — check the WO # on the shop label.`);
+        stageObDemand(hit);
+    };
+    // ===== END OB PLATING =====
+
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');
@@ -3125,12 +3163,46 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {activeTab === 'PLATING' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
 
+                        {/* 📥 OB PLATING — custom outgoing staging: /MEP //EP //P25 pieces arrive here as the
+                            shop completes them; scan-in stages the piece (bin OB PLATING) so the weekly
+                            📦 Ship button below bundles customs + stock pulls into ONE plater PO. */}
+                        {!platingBase && (() => {
+                            const obDemands = platingDemands.filter(d => d.custom);
+                            const obStaged = (platingStaged || []).filter(l => l.platingBin === 'OB PLATING');
+                            if (!obDemands.length && !obStaged.length) return null;
+                            const obPcs = obStaged.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
+                            return (
+                                <div style={{ background: '#fff', border: `1px solid ${theme.brass}`, padding: '20px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', marginBottom: '12px' }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, textTransform: 'uppercase', letterSpacing: '.1em' }}>📥 OB Plating — custom outgoing · {obDemands.length} awaiting scan-in · {obStaged.length} line{obStaged.length === 1 ? '' : 's'} in bin ({obPcs} pcs)</div>
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                            <input value={obScan} onChange={e => setObScan(e.target.value)} onKeyDown={e => e.key === 'Enter' && obScanSubmit()} placeholder="Scan shop WO label…" style={{ padding: '9px 12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '0.85rem', outline: 'none', width: '200px' }} />
+                                            <button onClick={obScanSubmit} style={{ padding: '9px 14px', background: theme.brass, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>📥 Scan In</button>
+                                        </div>
+                                    </div>
+                                    {obDemands.map(d => (
+                                        <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderBottom: `1px solid ${theme.line}`, padding: '6px 0' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
+                                                {d.woNum ? `${d.woNum} · ` : ''}{d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs · finish {d.finishCode}{d.note ? <span style={{ color: theme.inkSoft }}> · {d.note}</span> : null}
+                                            </div>
+                                            <button onClick={() => stageObDemand(d)} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.brass}`, color: theme.brass, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>📥 Into OB Plating</button>
+                                        </div>
+                                    ))}
+                                    {obStaged.length > 0 && (
+                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '10px' }}>
+                                            In the bin, riding the next weekly shipment: {obStaged.map(l => `${l.woNum || l.erpId} ×${l.qty}`).join(' · ')} — ship with the weekly 📦 button below (one PO covers customs + stock pulls).
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
+
                         {/* NEEDS PLATING — to-dos routed from the Library WO tool (base in stock → plate it) */}
-                        {!platingBase && platingDemands.length > 0 && (
+                        {!platingBase && platingDemands.filter(d => !d.custom).length > 0 && (
                             <div style={{ background: '#fff', border: `1px solid #7d9a6f`, padding: '20px' }}>
-                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Needs Plating · {platingDemands.length} item{platingDemands.length === 1 ? '' : 's'} routed from HQ</div>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Needs Plating · {platingDemands.filter(d => !d.custom).length} item{platingDemands.filter(d => !d.custom).length === 1 ? '' : 's'} routed from HQ</div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    {platingDemands.map(d => (
+                                    {platingDemands.filter(d => !d.custom).map(d => (
                                         <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderBottom: `1px solid ${theme.line}`, paddingBottom: '8px' }}>
                                             <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
                                                 {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs · finish {d.finishCode}{d.woNum ? ` · WO ${d.woNum}` : ''}{d.createdBy ? ` · ${d.createdBy}` : ''}

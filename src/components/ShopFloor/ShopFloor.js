@@ -1001,27 +1001,30 @@ const ShopFloor = () => {
             };
 
             const handleCompleteWithLabel = async () => {
-                const actionText = order.isOutsourced ? 'complete and send to PLATING DISPATCH' : 'complete and print Zebra label';
+                // Outsourced-finish detection: the RTG flag OR any /MEP //EP //P25 code in the
+                // recipe (MEP added 2026-07-21 — Brimar bronze-patina family plates out too).
+                const toPlating = order.isOutsourced || /(MEP\d*|EP[1-6]|P25)\b/i.test(String(order.finishRecipe || ''));
+                const actionText = toPlating ? 'complete and send to OB PLATING (outgoing prep)' : 'complete and print Zebra label';
                 if (!window.confirm(`Mark ${order.woNum} ${actionText}?`)) return;
                 // Reminder only (doesn't block): in-house finish parts should be phosphated
                 // at the adjacent station and checked off before Complete.
                 if (!allPhosDone && !window.confirm(`⚠ ${order.woNum} — parts are NOT marked PHOSPHATED.\n\nThis order has an in-house finish (${order.finishRecipe || 'recipe pending'}). Parts require phosphate at the adjacent station before finishing.\n\nComplete anyway?`)) return;
 
                 printZebraLabel(order);
-                const finalStatus = order.isOutsourced ? 'Sent to Plating' : 'Completed';
+                const finalStatus = toPlating ? 'Sent to Plating' : 'Completed';
                 await updateDoc(doc(db, "shop_custom_orders", order.id), { status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name });
                 // §5: custom fabrication is done from the finishing floor's perspective.
                 await mirrorCustomStatusToSibling(order, 'Complete');
 
-                if (order.isOutsourced) {
+                if (toPlating) {
                     // OUTGOING PREP → WMS PLATING (Stuart 2026-07-21): any custom item configured
-                    // with an /EP or /P25 finish goes to the outgoing bin the moment custom fab
-                    // completes — a plating_demand entry queues it on the WMS Plating tab, where
-                    // it's scanned onto the weekly plating-service PO. Once-only (undo → re-complete
-                    // must not duplicate the demand card).
+                    // with a /MEP, /EP or /P25 finish goes to the OB PLATING bin the moment custom
+                    // fab completes — a plating_demand entry queues it on WMS → Plating (📥 OB
+                    // Plating), where scanning it in stages it for the weekly plater PO. Once-only
+                    // (undo → re-complete must not duplicate the demand card).
                     if (!order.platingDemandCreated) {
                         const finText = String(order.finishRecipe || '');
-                        const codeMatch = finText.match(/(EP[1-6]|P25)/i);
+                        const codeMatch = finText.match(/(MEP\d*|EP[1-6]|P25)/i);
                         const finishCode = codeMatch ? codeMatch[1].toUpperCase() : 'EP';
                         const baseErp = String(order.partNum || order.item || 'CUSTOM').toUpperCase();
                         const demandId = `PLD-CUSTOM-${String(order.id).replace(/[^A-Za-z0-9-]/g, '')}`;
@@ -1034,9 +1037,9 @@ const ShopFloor = () => {
                             createdBy: user?.name || 'Shop', createdAt: Date.now()
                         }, { merge: true });
                         await updateDoc(doc(db, "shop_custom_orders", order.id), { platingDemandCreated: true, platingDemandId: demandId });
-                        alert(`🚚 ${order.woNum}: take the pieces to the PLATING OUTGOING bin.\n\nAdded to WMS → Plating (Needs Plating) — it gets scanned onto the weekly plating PO from there.`);
+                        alert(`🚚 ${order.woNum}: take the pieces to the OB PLATING bin.\n\nScan them in on WMS → Plating (📥 OB Plating) — they ride the next weekly plater PO from there.`);
                     }
-                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `🚚 OUTGOING PLATING: Custom parts for ${order.woNum} (${order.finishRecipe || 'EP'}) are at the outgoing bin — scan onto the weekly plating PO (WMS → Plating).`, t: serverTimestamp(), isSystem: true });
+                    await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `🚚 OB PLATING: Custom parts for ${order.woNum} (${order.finishRecipe || 'EP'}) are headed to the OB PLATING bin — scan them in on WMS → Plating (📥 OB Plating) for the weekly plater PO.`, t: serverTimestamp(), isSystem: true });
                 } else {
                     await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `STAGING ALERT: Custom parts for order ${order.orderKey || order.woNum} are arriving at staging.`, t: serverTimestamp(), isSystem: true });
                 }
