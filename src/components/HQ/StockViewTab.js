@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteField } from "firebase/firestore";
+import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
@@ -64,6 +65,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [snapSort, setSnapSort] = useState('item');   // 'item' (load order) | 'finish' (/SG · /N25 grouped — batch same-finish WOs)
     const [convSugFor, setConvSugFor] = useState(null); // row itemid with the ⇄ donor picker open
     const [convSugMap, setConvSugMap] = useState({});   // itemid → { from, qty } — rides onto the WO as a SUGGESTION (Setup Queue converts)
+    const [openWos, setOpenWos] = useState(null);       // 📋 Open WOs cleanup panel { loading, rows, error }
     const [rawStock, setRawStock] = useState(null);     // { loading, availById, inboundById } — raw cores' NetSuite stock, fetched on first RAW toggle
     const [ropEdits, setRopEdits] = useState({});       // erp(base) -> edited ROP (pushed to Master Library manufacturingSpecs.reorderPoint)
     const [ropSaving, setRopSaving] = useState(false);
@@ -1019,6 +1021,84 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         return n;
     };
+    // ===== 📋 OPEN WORK ORDERS — cleanup panel (Stuart 2026-07-21) =====
+    // One place to see every WO that isn't closed — RTG-parked + on the floor — with its floor
+    // phase, NetSuite WO/build state and pack status, plus the two repair actions the early
+    // out-of-sync mess needs: RESET back to the Setup Queue (picked) after a wrong NetSuite
+    // build was deleted, and soft-CLOSE (queues the NetSuite WO close when one exists).
+    const loadOpenWos = async () => {
+        setOpenWos({ loading: true, rows: [] });
+        try {
+            const [hqSnap, finSnap] = await Promise.all([
+                getDocs(collection(db, 'hq_work_orders')),
+                getDocs(collection(db, 'fin_workorders')),
+            ]);
+            const finById = {};
+            finSnap.docs.forEach(d => { finById[d.id] = { id: d.id, ...d.data() }; });
+            const seenFin = new Set();
+            const rows = [];
+            hqSnap.docs.forEach(d => {
+                const hq = { id: d.id, ...d.data() };
+                if (['Closed', 'Cancelled', 'Done'].includes(hq.status)) return;
+                const fin = finById[(hq.finPayload && hq.finPayload.id) || hq.id] || null;
+                if (fin) seenFin.add(fin.id);
+                if (fin && fin.currentPhase === 'Closed') return;
+                if (fin && fin.packStatus === 'Packed') return; // done + put away = not open
+                rows.push({ hq, fin });
+            });
+            finSnap.docs.forEach(d => {
+                const fin = { id: d.id, ...d.data() };
+                if (seenFin.has(fin.id) || fin.currentPhase === 'Closed' || fin.packStatus === 'Packed') return;
+                rows.push({ hq: null, fin });
+            });
+            rows.sort((a, b) => (((b.fin && b.fin.createdAt) || (b.hq && b.hq.createdAt) || 0) - (((a.fin && a.fin.createdAt) || (a.hq && a.hq.createdAt) || 0))));
+            setOpenWos({ loading: false, rows });
+        } catch (e) { setOpenWos({ loading: false, rows: [], error: e.message || String(e) }); }
+    };
+    const woRowRef = (row) => (row.fin && (row.fin.nsWoTran || row.fin.displayId || row.fin.id)) || (row.hq && (row.hq.nsWoTran || row.hq.woNo || row.hq.id)) || '';
+    const resetWoToSetup = async (row) => {
+        const fin = row.fin;
+        if (!fin) return alert('This WO is still parked in RTG (never released to the floor) — nothing to reset.');
+        const ref = woRowRef(row);
+        if (!window.confirm(`↩ RESET ${ref} back to the Setup Queue (picked, ready to start)?\n\n• Floor phase → Setup · coat 1 · all tasks Pending\n• Completion / pack / scrap stamps cleared\n• NetSuite BUILD flags cleared, so the real completion posts again when it happens\n\nThe NetSuite WORK ORDER itself is untouched (use this after deleting a wrong Assembly Build in NetSuite).`)) return;
+        try {
+            await updateDoc(doc(db, 'fin_workorders', fin.id), {
+                currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
+                poleStepIndex: deleteField(), machineAssigned: null,
+                tasks: makeFullTasks(),
+                completedAt: deleteField(), completedParts: deleteField(), scrapReported: deleteField(),
+                packStatus: deleteField(), packedLines: deleteField(), packPhotos: deleteField(), packBoxes: deleteField(), packedAt: deleteField(), packedBy: deleteField(),
+                nsCompletionQueued: deleteField(), nsWoCompletionPosted: deleteField(), nsWoCompletionId: deleteField(), nsWoCompletionTran: deleteField(),
+                nsFulfillQueued: deleteField(), nsIfId: deleteField(), nsIfTran: deleteField(),
+                redlineAlert: false, resetAt: Date.now(), resetBy: currentUser || ''
+            });
+            if (row.hq) await updateDoc(doc(db, 'hq_work_orders', row.hq.id), { status: 'Dispatched' }).catch(() => {});
+            addLog(`↩ ${ref} reset to Setup (picked) — NetSuite build flags cleared.`, 'success');
+            loadOpenWos();
+        } catch (e) { alert('Reset failed: ' + (e.message || e)); }
+    };
+    const closeWoRow = async (row) => {
+        const fin = row.fin, hq = row.hq;
+        const ref = woRowRef(row);
+        const nsNote = (fin && fin.nsWoId && !fin.nsWoClosed && !fin.nsWoCompletionPosted) ? `\n\nIts NetSuite work order (${fin.nsWoTran || fin.nsWoId}) gets a CLOSE queued too.` : '';
+        if (!window.confirm(`✕ CLOSE ${ref}?\n\nIt leaves every queue (docs kept for history).${nsNote}`)) return;
+        try {
+            if (fin) await updateDoc(doc(db, 'fin_workorders', fin.id), { currentPhase: 'Closed', stepStatus: 'Closed', closedAt: Date.now(), closedBy: currentUser || 'StockView' });
+            if (hq) await updateDoc(doc(db, 'hq_work_orders', hq.id), { status: 'Closed', closedAt: Date.now() }).catch(() => {});
+            if (fin && fin.nsWoId && !fin.nsWoClosed && !fin.nsWoCompletionPosted) {
+                await enqueueNsWrite({
+                    kind: 'workorderclose', label: `Close NS WO ${fin.nsWoTran || fin.nsWoId} — ${fin.stockErpId || fin.id}`,
+                    sourceApp: 'STOCKVIEW', createdBy: currentUser || '',
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${fin.nsWoId}/!transform/workorderclose`,
+                    method: 'POST', payload: { memo: `Closed from Open WOs cleanup (app WO ${fin.id})` },
+                    writeBack: { collection: 'fin_workorders', docId: fin.id, patch: { nsWoClosed: true } }
+                });
+            }
+            addLog(`✕ Closed ${ref}.`, 'info');
+            loadOpenWos();
+        } catch (e) { alert('Close failed: ' + (e.message || e)); }
+    };
+
     // NetSuite vendor alignment: library vendor NAMES ↔ the synced CRM vendor records
     // (crm_records VEND-<netsuite id>, from 11.1 "Sync Active Vendors"). The vendor's INTERNAL id
     // is stamped on the PO at CREATION, so the NetSuite push can never mis-resolve — an unmatched
@@ -1344,6 +1424,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <button onClick={() => setSnapSort('item')} style={{ padding: '9px 14px', background: snapSort === 'item' ? 'var(--ink)' : '#fff', color: snapSort === 'item' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Item #</button>
                                     <button onClick={() => setSnapSort('finish')} style={{ padding: '9px 14px', background: snapSort === 'finish' ? 'var(--ink)' : '#fff', color: snapSort === 'finish' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Finish</button>
                                 </div>
+                                <button onClick={loadOpenWos} title="Every work order not closed — floor phase, NetSuite WO/build state, pack status — with repair actions (↩ reset to Setup after deleting a wrong NetSuite build, ✕ close)" style={{ padding: '9px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>📋 Open WOs</button>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${snapView === 'RAW' ? rawRows.length : rows.length} item${(snapView === 'RAW' ? rawRows.length : rows.length) === 1 ? '' : 's'}`}</span>
                                 {Object.keys(ropEdits).length > 0 && (
                                     <button onClick={saveRops} disabled={ropSaving} title="Write the edited re-order points to the Master Library (manufacturingSpecs.reorderPoint)" style={{ padding: '9px 16px', background: ropSaving ? 'var(--paper-2)' : 'var(--brass)', color: ropSaving ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: ropSaving ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{ropSaving ? 'Saving…' : `⬆ Save ${Object.keys(ropEdits).length} ROP(s)`}</button>
@@ -1516,6 +1597,71 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     </div>
                 );
             })()}
+
+            {/* 📋 OPEN WORK ORDERS — cleanup panel with repair actions */}
+            {openWos && (
+                <div onClick={() => setOpenWos(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 230, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '1200px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                        <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cleanup · repair actions never touch the NetSuite work order itself</span>
+                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: 'var(--ink)' }}>📋 Open Work Orders {openWos.loading ? '…' : `(${openWos.rows.length})`}</span>
+                            </div>
+                            <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                <button onClick={loadOpenWos} style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>⟳ Refresh</button>
+                                <button onClick={() => setOpenWos(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                            </span>
+                        </div>
+                        <div style={{ overflow: 'auto', flex: 1 }}>
+                            {openWos.loading ? (
+                                <div style={{ padding: '40px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>Loading work orders…</div>
+                            ) : openWos.error ? (
+                                <div style={{ padding: '30px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '12px' }}>Failed: {openWos.error}</div>
+                            ) : openWos.rows.length === 0 ? (
+                                <div style={{ padding: '40px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>No open work orders — everything is closed or packed.</div>
+                            ) : (
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                                    <thead>
+                                        <tr style={{ background: 'var(--paper)', borderBottom: '2px solid var(--ink)' }}>
+                                            {['WO', 'Item', 'Where', 'Tasks S·P·B·H', 'NetSuite', 'Pack', ''].map(h => <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', position: 'sticky', top: 0, background: 'var(--paper)' }}>{h}</th>)}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {openWos.rows.map((row, i) => {
+                                            const fin = row.fin, hq = row.hq;
+                                            const t = (fin && fin.tasks) || {};
+                                            const mini = ['spinSetup', 'spinSpray', 'spinBake', 'hand'].map(k => t[k]?.status === 'Complete' ? '✓' : (t[k]?.status === 'Running' ? '▶' : '·')).join(' ');
+                                            const where = !fin ? `RTG · ${hq.status}${hq.pushedToFinishing ? ' (dispatched?)' : ' (parked)'}` : `${fin.currentPhase || '—'}${fin.currentPhase !== 'Complete' ? ` · coat ${(fin.currentStepIndex || 0) + 1}` : ''}${fin.redlineAlert ? ' · ⚠ redline' : ''}`;
+                                            const nsBits = [];
+                                            if (fin?.nsWoTran || hq?.nsWoTran) nsBits.push(`WO ${fin?.nsWoTran || hq?.nsWoTran}`);
+                                            if (fin?.nsWoCompletionTran) nsBits.push(`BUILD ${fin.nsWoCompletionTran}`);
+                                            else if (fin?.nsCompletionQueued) nsBits.push('build queued…');
+                                            if (fin?.nsWoClosed) nsBits.push('closed');
+                                            return (
+                                                <tr key={(fin && fin.id) || (hq && hq.id) || i} style={{ borderBottom: '1px solid var(--paper-2)' }}>
+                                                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink)' }}>{woRowRef(row)}</div>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{(fin && fin.id) || (hq && hq.id)}</div>
+                                                    </td>
+                                                    <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{(fin && (fin.stockErpId || fin.type)) || (hq && (hq.erpId || hq.type)) || '—'} ×{(fin && fin.totalParts) || (hq && (hq.totalParts || hq.qty)) || '?'}</td>
+                                                    <td style={{ padding: '9px 14px', fontSize: '0.8rem', color: 'var(--ink)' }}>{where}</td>
+                                                    <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{fin ? mini : '—'}</td>
+                                                    <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '10px', color: nsBits.length ? 'var(--ink)' : 'var(--line)' }}>{nsBits.join(' · ') || '—'}</td>
+                                                    <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{(fin && fin.packStatus) || '—'}</td>
+                                                    <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                                                        {fin && <button onClick={() => resetWoToSetup(row)} title="Back to the Setup Queue (picked) — clears completion/pack/NetSuite-build stamps; use after deleting a wrong Assembly Build in NetSuite" style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', marginRight: '8px' }}>↩ Reset → Setup</button>}
+                                                        <button onClick={() => closeWoRow(row)} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>✕ Close</button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* 🚚 INBOUND DETAIL — the open POs / work orders behind a snapshot "On Ord" number */}
             {onOrdModal && (

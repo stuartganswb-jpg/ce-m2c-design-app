@@ -570,6 +570,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [packOrderId, setPackOrderId] = useState(null);
     const [packUploading, setPackUploading] = useState(false);
     const [packBoxSel, setPackBoxSel] = useState({ SMALL: '', POLE: '' });
+    // TWO STATIONS IN ONE TAB (Stuart 2026-07-21): STOCK builds just get PUT AWAY — confirm the
+    // pieces, scan the destination bin, done (no photo, no boxes). CUSTOM/QS orders are real
+    // customer packing — photo required, small/large box flow.
+    const [putawayBin, setPutawayBin] = useState('');
     // Two order sources share this station: custom finishing WOs (fin_workorders) and Quick Ship
     // stocked sales orders from HQ tab 7 (hq_sales_orders, orderClass QUICKSHIP — queue once
     // Picked off the shelf). Writes land on whichever doc the order came from.
@@ -636,6 +640,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             SMALL: (job.packBoxes && job.packBoxes.SMALL) || (small ? small.name : ''),
             POLE: (job.packBoxes && job.packBoxes.POLE) || (large ? large.name : '')
         });
+        if (job.orderType === 'stock') {
+            const erp = String(job.stockErpId || job.type || '').toUpperCase();
+            const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
+            setPutawayBin(String((part && (part.binLocation || part.manufacturingSpecs?.binLocation)) || '').split(',')[0].trim().toUpperCase());
+            fetchLiveBins([erp]);
+        } else setPutawayBin('');
     };
     const confirmPackLine = async (job, line) => {
         try { await updateDoc(packDocOf(job), { [`packedLines.${line.key}`]: { at: Date.now(), by: operator?.name || 'Packer' } }); }
@@ -718,17 +728,34 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const lines = packLinesOf(job);
         const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
         if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
-        if (!(job.packPhotos || []).length) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
-        if (!window.confirm(`Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\nSmall parts box: ${packBoxSel.SMALL || '—'}\nPole box: ${packBoxSel.POLE || '—'}`)) return;
+        const isStockPutaway = job.orderType === 'stock';
+        if (!(job.packPhotos || []).length && !isStockPutaway) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
+        const bin = putawayBin.trim().toUpperCase();
+        if (isStockPutaway) {
+            if (!bin) return alert('Scan/enter the put-away bin — stocked goods go straight to the shelf.');
+            const lv = liveBins[String(job.stockErpId || job.type || '').toUpperCase()];
+            if (lv && lv.bins.length && !lv.bins.some(x => x.bin === bin) && !window.confirm(`Bin ${bin} isn't where NetSuite holds this item today (${lv.bins.slice(0, 3).map(x => x.bin).join(', ')}).\n\nPut away to ${bin} anyway? (Recorded as the physical location — no NetSuite move.)`)) return;
+        }
+        const confirmMsg = isStockPutaway
+            ? `Put away ${packRef(job)} to bin ${bin}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} confirmed · stocked goods to the shelf (no customer packing).`
+            : `Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\nSmall parts box: ${packBoxSel.SMALL || '—'}\nPole box: ${packBoxSel.POLE || '—'}`;
+        if (!window.confirm(confirmMsg)) return;
         packCompletingRef.current = true;
         try {
-            await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packBoxes: packBoxSel });
-            writeLog(`Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
+            await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY' } : { packBoxes: packBoxSel }) });
+            writeLog(isStockPutaway ? `Put away ${packRef(job)} → bin ${bin} (${lines.length} lines)` : `Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
             // PACKED → NETSUITE (Stuart 2026-07-18): transform the NetSuite SO into an Item
             // Fulfillment at status Packed (staged via the outbox — serial, retried, visible in
             // the RTG transmit log + 11.1). Shipping then executes/ships it IN NetSuite; the
             // ⤓ Tracking pull below brings the tracking # back onto the sales order.
             let nsNote = '';
+            if (isStockPutaway) {
+                // Stock put-away: the NetSuite assembly build already received the finished goods
+                // at completion — no sales order, no fulfillment. Shelf and done.
+                setPackOrderId(null);
+                alert(`📦 ${packRef(job)} put away → bin ${bin}.`);
+                return;
+            }
             try {
                 const soDoc = isQsOrder(job) ? job : (soIndex[String(job.salesOrderId || '')] || null);
                 const nsSoId = String((isQsOrder(job) ? (job.nsInternalId || job.soId) : (soDoc && soDoc.nsInternalId)) || '');
@@ -2347,7 +2374,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const toPack = packJob ? lines.filter(l => !isPacked(l)) : [];
                     const packed = packJob ? lines.filter(isPacked) : [];
                     const photos = packJob ? (packJob.packPhotos || []) : [];
-                    const canComplete = packJob && toPack.length === 0 && photos.length > 0;
+                    const isStockJob = !!(packJob && packJob.orderType === 'stock');
+                    const canComplete = packJob && toPack.length === 0 && (isStockJob ? !!putawayBin.trim() : photos.length > 0);
                     const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
                     const boxSelect = (slot, label) => (
                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>
@@ -2415,9 +2443,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{packRef(packJob)}</span>
                                         <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{packJob.customerName || packJob.clientName || packJob.customer || ''}{packJob.recipe ? ` · ${packJob.recipe}` : ''}</span>
                                         {Number(packJob.packScrap) > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', border: '1px solid #d9534f', padding: '3px 8px' }}>⚠ {packJob.packScrap} scrap reported</span>}
-                                        <span style={{ marginLeft: 'auto', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                                            {boxSelect('SMALL', 'Small parts box')}
-                                            {boxSelect('POLE', 'Pole box')}
+                                        <span style={{ marginLeft: 'auto', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                            {isStockJob ? (
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>
+                                                    Put-away bin
+                                                    <input value={putawayBin} onChange={e => setPutawayBin(e.target.value)} placeholder="scan / enter bin" style={{ padding: '9px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '0.9rem', outline: 'none', width: '160px' }} />
+                                                    {(() => { const lv = liveBins[String(packJob.stockErpId || packJob.type || '').toUpperCase()]; return lv && lv.bins.length ? <span style={{ color: '#3a7d44', textTransform: 'none' }}>live: {lv.bins.slice(0, 2).map(b => `${b.bin} ×${b.qty}`).join(' · ')}</span> : null; })()}
+                                                </label>
+                                            ) : (<>
+                                                {boxSelect('SMALL', 'Small parts box')}
+                                                {boxSelect('POLE', 'Pole box')}
+                                            </>)}
                                         </span>
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', alignItems: 'start' }}>
@@ -2434,18 +2470,19 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {/* REQUIRED PHOTOS + COMPLETE */}
                                     <div style={{ marginTop: '20px', border: `1px solid ${theme.line}`, background: theme.paper, padding: '16px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
                                         <label style={{ cursor: 'pointer', border: `1px solid ${theme.line}`, background: '#fff', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
-                                            {packUploading ? '⏳ Uploading…' : '📷 Add Photo (required)'}
+                                            {packUploading ? '⏳ Uploading…' : (isStockJob ? '📷 Add Photo (optional)' : '📷 Add Photo (required)')}
                                             <input type="file" accept="image/*" capture="environment" multiple style={{ display: 'none' }} onChange={e => { uploadPackPhotos(packJob, e.target.files); e.target.value = ''; }} />
                                         </label>
                                         {photos.map((u, i) => <img key={i} src={u} alt={`packed ${i + 1}`} onClick={() => window.open(u, '_blank')} style={{ height: '54px', width: '76px', objectFit: 'cover', border: `1px solid ${theme.line}`, cursor: 'zoom-in' }} />)}
-                                        {photos.length === 0 && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>No photo yet — a photo of the packaged parts is required.</span>}
+                                        {photos.length === 0 && !isStockJob && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>No photo yet — a photo of the packaged parts is required.</span>}
+                                        {isStockJob && !putawayBin.trim() && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>Scan the put-away bin — stocked goods go straight to the shelf.</span>}
                                         {!isQsOrder(packJob) && (
                                             <button onClick={() => reportPackScrap(packJob)} title="Found bad pieces while bagging? Record scrap — stock builds queue the −qty NetSuite adjustment, customs red-flag the finishing supervisor" style={{ marginLeft: 'auto', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', padding: '14px 18px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
                                                 ⚠ Report Scrap
                                             </button>
                                         )}
                                         <button onClick={() => completePacking(packJob)} disabled={!canComplete} style={{ marginLeft: isQsOrder(packJob) ? 'auto' : '0', background: canComplete ? theme.ink : theme.paper2, color: canComplete ? '#fff' : theme.inkSoft, border: `1px solid ${canComplete ? theme.ink : theme.line}`, padding: '14px 26px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: canComplete ? 'pointer' : 'default' }}>
-                                            ✓ Complete Packing
+                                            {isStockJob ? '✓ Put Away to Bin' : '✓ Complete Packing'}
                                         </button>
                                     </div>
                                 </>

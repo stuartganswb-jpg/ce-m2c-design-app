@@ -426,6 +426,22 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                     return <TaskCard key={item.wo.id+"spinSetup"} titleOverride="1. Setup Parts" wo={item.wo} type="spinSetup" step={item.step} user={user} estTime={cfg.spinSetupMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSetup')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} />
                                 } else if (!isSprayComplete) {
                                     return <TaskCard key={item.wo.id+"spinSpray"} titleOverride="2. Spray Coat" wo={item.wo} type="spinSpray" step={item.step} user={user} setQcModal={setQcModal} estTime={cfg.spinPaintMins} activePots={activePots} onViewWo={setViewWo} now={now} aiRec={getAiRecommendation('spinSpray')} users={users} activeWOs={activeWOs} cfg={cfg} sled={item.wo.machineAssigned} blockReason={blockSpray ? "Waiting on Station 2 Oven" : null} />
+                                } else if (item.wo.tasks?.spinBake?.status === 'Complete') {
+                                    // Fully baked but parked at the RIGHT spot (manual completes can do
+                                    // this) — without this card the WO dead-ends on "Ready for track
+                                    // cycle" with no way to advance (WO11311, 2026-07-21).
+                                    return (
+                                        <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center' }}>
+                                            <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '16px' }}>Coat Complete</div>
+                                            <button onClick={() => {
+                                                if (!woHasPoles(item.wo)) return handleCompleteRecipeStep(item.wo);
+                                                const len = recipeLen(item.wo);
+                                                const pIdx = poleIdxOf(item.wo);
+                                                const polesCaughtUp = pIdx >= len || pIdx > item.wo.currentStepIndex || (pIdx === item.wo.currentStepIndex && item.wo.tasks?.poleBake?.status === 'Complete');
+                                                if (polesCaughtUp || window.confirm(`Poles for this order are still on coat ${pIdx + 1} of ${len}.\n\nAdvance the SMALL PARTS anyway? Poles keep moving on their own track.`)) handleCompleteRecipeStep(item.wo);
+                                            }} style={{ width: '100%', padding: '12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Unload Parts</button>
+                                        </div>
+                                    );
                                 } else {
                                     return <div key={item.wo.id} style={{ ...cardStyle, background: 'var(--paper-2)', textAlign: 'center', fontSize: '0.9rem', color: 'var(--ink)', fontFamily: 'var(--sans)' }}>Ready for track cycle</div>
                                 }
