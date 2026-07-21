@@ -662,6 +662,55 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Photo upload failed: ' + (e.message || e)); }
         finally { setPackUploading(false); }
     };
+    // ⚠ PACKING SCRAP OUTLET (Stuart 2026-07-20): bad pieces found while bagging — same QC
+    // semantics as the finishing floor's final gate, for orders that already passed it. Stock
+    // builds: scrap counts recorded AND a −qty finished-goods adjustment queues to NetSuite
+    // (the QC good-count already posted at completion). Customs: redline alert to the finishing
+    // supervisor — a custom order can't quietly ship short. Fin-sourced orders only (not QS).
+    const reportPackScrap = async (job) => {
+        if (isQsOrder(job)) return;
+        const n = parseInt(window.prompt(`How many pieces are BAD (scrap) on ${packRef(job)}?`, '1')) || 0;
+        if (n <= 0) return;
+        const note = window.prompt('What happened? (short reason for the log)', 'Damage found at packing') || 'Damage found at packing';
+        const isStock = job.orderType === 'stock';
+        try {
+            const patch = {
+                scrapReported: (Number(job.scrapReported) || 0) + n,
+                packScrap: (Number(job.packScrap) || 0) + n,
+                packScrapNote: note, packScrapAt: Date.now(), packScrapBy: operator?.name || ''
+            };
+            if (isStock) patch.completedParts = Math.max(0, (Number(job.completedParts) || Number(job.totalParts) || 0) - n);
+            else patch.redlineAlert = `${operator?.name || 'Packer'} found ${n} bad piece(s) at PACKING on ${packRef(job)} — ${note}. Short-ship blocked until resolved.`;
+            await updateDoc(packDocOf(job), patch);
+            writeLog(`⚠ PACKING SCRAP: ${n} pc(s) on ${packRef(job)} (${job.stockErpId || job.type || ''}) — ${note}`, 'alert');
+            if (isStock) {
+                const erp = String(job.stockErpId || job.type || '').toUpperCase();
+                const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
+                const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
+                const bin = part ? String(part.binLocation || part.manufacturingSpecs?.binLocation || '').toUpperCase() : '';
+                if (part?.netSuiteInternalId) {
+                    await enqueueNsWrite({
+                        kind: 'inventoryadjustment',
+                        label: `Pack scrap −${n} × ${erp} (${packRef(job)})`,
+                        sourceApp: 'WMS', createdBy: operator?.name || '',
+                        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                        method: 'POST',
+                        payload: {
+                            account: { id: "254" }, subsidiary: { id: nsCfg.subsidiary },
+                            memo: `Packing scrap ${packRef(job)}: ${note}`,
+                            inventory: { items: [{ item: { id: String(part.netSuiteInternalId) }, location: { id: nsCfg.location }, adjustQtyBy: -n, ...((bin && bin !== 'UNASSIGNED') ? { inventoryDetail: { quantity: -n, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: -n }] } } } : {}) }] }
+                        },
+                        writeBack: { collection: 'fin_workorders', docId: job.id, patch: { packScrapAdjPosted: true }, idField: 'packScrapAdjId', tranField: 'packScrapAdjTran' }
+                    });
+                    alert(`⚠ ${n} scrap recorded on ${packRef(job)}.\n\n− ${n} × ${erp} finished-goods adjustment queued to NetSuite (11.1 / transmit log).\n\nRe-make: Finishing → Setup Queue → ⟲ Scrap Re-make.`);
+                } else {
+                    alert(`⚠ ${n} scrap recorded on ${packRef(job)} — no NetSuite id on ${erp || 'the item'}, adjust finished goods manually.\n\nRe-make: Finishing → Setup Queue → ⟲ Scrap Re-make.`);
+                }
+            } else {
+                alert(`⚠ ${n} bad piece(s) recorded — the finishing supervisor has been red-flagged (custom orders can't ship short).`);
+            }
+        } catch (e) { alert('Scrap report failed: ' + (e.message || e)); }
+    };
     const completePacking = async (job) => {
         const lines = packLinesOf(job);
         const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
@@ -2360,6 +2409,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px', background: theme.paper2, border: `1px solid ${theme.line}`, marginBottom: '16px' }}>
                                         <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{packRef(packJob)}</span>
                                         <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{packJob.customerName || packJob.clientName || packJob.customer || ''}{packJob.recipe ? ` · ${packJob.recipe}` : ''}</span>
+                                        {Number(packJob.packScrap) > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', border: '1px solid #d9534f', padding: '3px 8px' }}>⚠ {packJob.packScrap} scrap reported</span>}
                                         <span style={{ marginLeft: 'auto', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
                                             {boxSelect('SMALL', 'Small parts box')}
                                             {boxSelect('POLE', 'Pole box')}
@@ -2384,7 +2434,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         </label>
                                         {photos.map((u, i) => <img key={i} src={u} alt={`packed ${i + 1}`} onClick={() => window.open(u, '_blank')} style={{ height: '54px', width: '76px', objectFit: 'cover', border: `1px solid ${theme.line}`, cursor: 'zoom-in' }} />)}
                                         {photos.length === 0 && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>No photo yet — a photo of the packaged parts is required.</span>}
-                                        <button onClick={() => completePacking(packJob)} disabled={!canComplete} style={{ marginLeft: 'auto', background: canComplete ? theme.ink : theme.paper2, color: canComplete ? '#fff' : theme.inkSoft, border: `1px solid ${canComplete ? theme.ink : theme.line}`, padding: '14px 26px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: canComplete ? 'pointer' : 'default' }}>
+                                        {!isQsOrder(packJob) && (
+                                            <button onClick={() => reportPackScrap(packJob)} title="Found bad pieces while bagging? Record scrap — stock builds queue the −qty NetSuite adjustment, customs red-flag the finishing supervisor" style={{ marginLeft: 'auto', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', padding: '14px 18px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
+                                                ⚠ Report Scrap
+                                            </button>
+                                        )}
+                                        <button onClick={() => completePacking(packJob)} disabled={!canComplete} style={{ marginLeft: isQsOrder(packJob) ? 'auto' : '0', background: canComplete ? theme.ink : theme.paper2, color: canComplete ? '#fff' : theme.inkSoft, border: `1px solid ${canComplete ? theme.ink : theme.line}`, padding: '14px 26px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: canComplete ? 'pointer' : 'default' }}>
                                             ✓ Complete Packing
                                         </button>
                                     </div>
@@ -2408,6 +2463,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px' }}>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px' }}>{j.packedBy || ''} · {j.packedAt ? new Date(j.packedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''} · {(j.packPhotos || []).length} 📷</span>
                                                 <button onClick={() => pullFulfillment(j)} title="Pull fulfillment status + tracking # from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⤓ Tracking</button>
+                                                {!isQsOrder(j) && <button onClick={() => reportPackScrap(j)} title="Bad pieces found after packing — record scrap" style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⚠ Scrap</button>}
                                             </span>
                                         </div>
                                     ))}
