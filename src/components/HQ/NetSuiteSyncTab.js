@@ -20,6 +20,9 @@ const nsErrDetail = (raw) => {
 // Heal known payload-shape mistakes before a retry, so Retry isn't a guaranteed repeat failure:
 // workorder creation must use `assemblyItem`; workordercompletion receive bins must be ONE bin
 // (the library home-bin field is a comma-joined list from the item sync — invalid as a refName).
+// Non-WIP work orders can't take workordercompletion — retries flip the transform to the
+// WO-linked assemblyBuild (the UI's "Create Build"), which IS valid for them.
+const healOutboxUrl = (o) => String(o.targetUrl || '').replace('/!transform/workordercompletion', '/!transform/assemblyBuild');
 const healOutboxPayload = (o) => {
     const p = o.payload ? JSON.parse(JSON.stringify(o.payload)) : {};
     if (o.kind === 'workorder' && p.item && !p.assemblyItem) { p.assemblyItem = p.item; delete p.item; }
@@ -876,7 +879,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink)' }} title={o.lastError || ''}>{o.label || o.kind}{o.nsTran ? ` → ${o.nsTran}` : ''}{o.status === 'FAILED' && o.lastError ? ` — ${nsErrDetail(o.lastError).slice(0, 140)}` : ''}</span>
                                 <span title={String(o.targetUrl || '')} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.createdBy || ''}{o.createdAt ? ` · ${new Date(o.createdAt).toLocaleTimeString()}` : ''}{o.attempts ? ` · try ${o.attempts}` : ''}</span>
                                 {(o.status === 'FAILED' || o.status === 'CANCELLED') && (
-                                    <button onClick={() => updateDoc(doc(db, 'ns_outbox', o.id), { payload: healOutboxPayload(o), status: 'PENDING', attempts: 0, lastError: null, nextAttemptAt: Date.now() })} title="Retries with known payload fixes applied (assemblyItem rename, single receive bin)" style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>↻ Retry</button>
+                                    <button onClick={() => updateDoc(doc(db, 'ns_outbox', o.id), { payload: healOutboxPayload(o), targetUrl: healOutboxUrl(o), status: 'PENDING', attempts: 0, lastError: null, nextAttemptAt: Date.now() })} title="Retries with known fixes applied (assemblyItem rename, single receive bin, non-WIP completion → WO-linked assembly build)" style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>↻ Retry</button>
                                 )}
                                 {(o.status === 'PENDING' || o.status === 'FAILED') && (
                                     <button onClick={() => { if (window.confirm(`Cancel "${o.label || o.kind}"? It will NOT be posted to NetSuite.`)) updateDoc(doc(db, 'ns_outbox', o.id), { status: 'CANCELLED' }); }} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>✕</button>

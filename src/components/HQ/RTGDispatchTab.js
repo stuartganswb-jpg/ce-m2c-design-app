@@ -62,7 +62,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 if (!firstBin || firstBin === 'UNASSIGNED') delete p.inventoryDetail;
                 else p.inventoryDetail = { quantity: q0, inventoryAssignment: { items: [{ binNumber: { refName: firstBin }, quantity: q0 }] } };
             }
-            await updateDoc(doc(db, 'ns_outbox', o.id), { payload: p, status: 'PENDING', attempts: 0, nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
+            // Non-WIP WOs can't take workordercompletion — flip the transform to the WO-linked
+            // assemblyBuild (the UI's "Create Build"), which IS how these complete (2026-07-21).
+            const fixedUrl = String(o.targetUrl || '').replace('/!transform/workordercompletion', '/!transform/assemblyBuild');
+            await updateDoc(doc(db, 'ns_outbox', o.id), { payload: p, targetUrl: fixedUrl, status: 'PENDING', attempts: 0, nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
             addLog(`↻ Re-queued ${o.label || o.id}.`, 'info');
         } catch (e) { alert(`Re-queue failed: ${e.message}`); }
     };

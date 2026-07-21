@@ -566,10 +566,13 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
 
     const obRef = fdb.collection('ns_outbox').doc();
     await obRef.set({
+        // NON-WIP work orders (CE's are) complete via a WO-LINKED ASSEMBLY BUILD — the record
+        // the UI's "Create Build" button makes. workordercompletion is WIP-only and 400s with
+        // "invalid work order" on these (learned 2026-07-21, WO11308-12).
         id: obRef.id, kind: 'workordercompletion',
-        label: `Complete NS WO ${after.nsWoTran || after.nsWoId} — ${after.stockErpId || woDocId} ×${qty}`,
+        label: `Build NS WO ${after.nsWoTran || after.nsWoId} — ${after.stockErpId || woDocId} ×${qty}`,
         sourceApp: 'FINISHING', createdBy: 'auto (bake complete)',
-        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${after.nsWoId}/!transform/workordercompletion`,
+        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${after.nsWoId}/!transform/assemblyBuild`,
         method: 'POST',
         payload: {
             quantity: qty,
