@@ -50,9 +50,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!window.confirm(`Re-queue "${o.label || o.id}" to NetSuite?\n\nThe worker will retry it within ~1 minute.`)) return;
         try {
             // Heal known payload-shape mistakes before resending, so a retry isn't a guaranteed
-            // repeat failure: workorder creation must use `assemblyItem`, not `item` (2026-07-17).
-            const p = { ...(o.payload || {}) };
+            // repeat failure: workorder creation must use `assemblyItem`, not `item` (2026-07-17);
+            // workordercompletion receive bins must be ONE bin — the library home-bin field is a
+            // comma-joined list from the item sync, invalid as a refName (2026-07-20).
+            const p = o.payload ? JSON.parse(JSON.stringify(o.payload)) : {};
             if (o.kind === 'workorder' && p.item && !p.assemblyItem) { p.assemblyItem = p.item; delete p.item; }
+            if (o.kind === 'workordercompletion' && p.inventoryDetail) {
+                const q0 = p.inventoryDetail.quantity;
+                const rawBin = String(p.inventoryDetail?.inventoryAssignment?.items?.[0]?.binNumber?.refName || '');
+                const firstBin = rawBin.split(',')[0].trim().toUpperCase();
+                if (!firstBin || firstBin === 'UNASSIGNED') delete p.inventoryDetail;
+                else p.inventoryDetail = { quantity: q0, inventoryAssignment: { items: [{ binNumber: { refName: firstBin }, quantity: q0 }] } };
+            }
             await updateDoc(doc(db, 'ns_outbox', o.id), { payload: p, status: 'PENDING', attempts: 0, nextAttemptAt: Date.now(), lastError: '', requeuedAt: Date.now(), requeuedBy: currentUser || '' });
             addLog(`↻ Re-queued ${o.label || o.id}.`, 'info');
         } catch (e) { alert(`Re-queue failed: ${e.message}`); }

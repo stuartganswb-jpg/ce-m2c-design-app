@@ -556,7 +556,10 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
     try {
         if (after.stockErpId) {
             const q = await fdb.collection('Approved_Designs').where('legacyErpId', '==', after.stockErpId).limit(1).get();
-            if (!q.empty) bin = String((q.docs[0].data().manufacturingSpecs || {}).binLocation || '').trim().toUpperCase();
+            // binLocation is the item sync's mergedBins — a COMMA-JOINED list of every bin the
+            // item has balance rows in ("U S19-E2L-R4, M E5R-N16-R1"). A refName must be ONE
+            // bin: take the first (2026-07-20 — the raw string 400'd every completion).
+            if (!q.empty) bin = String((q.docs[0].data().manufacturingSpecs || {}).binLocation || '').split(',')[0].trim().toUpperCase();
             if (bin === 'UNASSIGNED') bin = '';
         }
     } catch (e) { /* bin optional — the queue entry fails visibly if NetSuite insists */ }

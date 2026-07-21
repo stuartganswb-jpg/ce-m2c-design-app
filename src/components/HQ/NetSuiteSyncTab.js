@@ -11,6 +11,28 @@ const BRAND_NETSUITE_MAP = {
     'leyla': { subsidiary: "5", location: "18" }
 };
 
+// NetSuite errors arrive as an RFC-9110 envelope — surface o:errorDetails[].detail, not the boilerplate.
+const nsErrDetail = (raw) => {
+    const s = String(raw || '');
+    const m = [...s.matchAll(/"detail"\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(x => x[1].replace(/\\"/g, '"'));
+    return m.length ? m.join(' · ') : s;
+};
+// Heal known payload-shape mistakes before a retry, so Retry isn't a guaranteed repeat failure:
+// workorder creation must use `assemblyItem`; workordercompletion receive bins must be ONE bin
+// (the library home-bin field is a comma-joined list from the item sync — invalid as a refName).
+const healOutboxPayload = (o) => {
+    const p = o.payload ? JSON.parse(JSON.stringify(o.payload)) : {};
+    if (o.kind === 'workorder' && p.item && !p.assemblyItem) { p.assemblyItem = p.item; delete p.item; }
+    if (o.kind === 'workordercompletion' && p.inventoryDetail) {
+        const q0 = p.inventoryDetail.quantity;
+        const raw = String(p.inventoryDetail?.inventoryAssignment?.items?.[0]?.binNumber?.refName || '');
+        const first = raw.split(',')[0].trim().toUpperCase();
+        if (!first || first === 'UNASSIGNED') delete p.inventoryDetail;
+        else p.inventoryDetail = { quantity: q0, inventoryAssignment: { items: [{ binNumber: { refName: first }, quantity: q0 }] } };
+    }
+    return p;
+};
+
 const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3");
     const [isSyncing, setIsSyncing] = useState(false);
@@ -851,10 +873,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         {outbox.map(o => (
                             <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '8px 24px', borderTop: '1px solid var(--paper-2)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '3px 8px', whiteSpace: 'nowrap', border: '1px solid', borderColor: o.status === 'POSTED' ? '#3a7d44' : o.status === 'FAILED' ? '#d9534f' : 'var(--brass)', color: o.status === 'POSTED' ? '#3a7d44' : o.status === 'FAILED' ? '#d9534f' : 'var(--brass)' }}>{o.status}</span>
-                                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink)' }} title={o.lastError || ''}>{o.label || o.kind}{o.nsTran ? ` → ${o.nsTran}` : ''}{o.status === 'FAILED' && o.lastError ? ` — ${String(o.lastError).slice(0, 90)}` : ''}</span>
+                                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--ink)' }} title={o.lastError || ''}>{o.label || o.kind}{o.nsTran ? ` → ${o.nsTran}` : ''}{o.status === 'FAILED' && o.lastError ? ` — ${nsErrDetail(o.lastError).slice(0, 140)}` : ''}</span>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{o.createdBy || ''}{o.createdAt ? ` · ${new Date(o.createdAt).toLocaleTimeString()}` : ''}{o.attempts ? ` · try ${o.attempts}` : ''}</span>
                                 {(o.status === 'FAILED' || o.status === 'CANCELLED') && (
-                                    <button onClick={() => updateDoc(doc(db, 'ns_outbox', o.id), { status: 'PENDING', attempts: 0, lastError: null, nextAttemptAt: Date.now() })} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>↻ Retry</button>
+                                    <button onClick={() => updateDoc(doc(db, 'ns_outbox', o.id), { payload: healOutboxPayload(o), status: 'PENDING', attempts: 0, lastError: null, nextAttemptAt: Date.now() })} title="Retries with known payload fixes applied (assemblyItem rename, single receive bin)" style={{ padding: '4px 10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>↻ Retry</button>
                                 )}
                                 {(o.status === 'PENDING' || o.status === 'FAILED') && (
                                     <button onClick={() => { if (window.confirm(`Cancel "${o.label || o.kind}"? It will NOT be posted to NetSuite.`)) updateDoc(doc(db, 'ns_outbox', o.id), { status: 'CANCELLED' }); }} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>✕</button>
