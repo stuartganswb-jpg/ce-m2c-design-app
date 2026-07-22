@@ -690,6 +690,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       if (inlineish) e.inlineOnly = true;
                       if (p.isBasic) e.isBasic = true;
                       if (p.usesReturnPlates || cl.usesReturnPlates) e.usesReturnPlates = true;
+                      // CUSTOMER-ONLY choice (1.6 cust gate): the option carries the restriction —
+                      // CPQ + the portal show it only when that customer is selected / logged in.
+                      if (Array.isArray(p.customerIds) && p.customerIds.length) { e.customerIds = p.customerIds; e.customerNames = p.customerNames || []; }
                   });
                   return;
               }
@@ -715,6 +718,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   if (feeish) { e.isFee = true; e.partName = `${pin.partName || 'Charge'} (fee)`; }
                   if (pin.isBasic) e.isBasic = true;
                   if (pin.usesReturnPlates || cl.usesReturnPlates) e.usesReturnPlates = true;
+                  if (Array.isArray(pin.customerIds) && pin.customerIds.length) { e.customerIds = pin.customerIds; e.customerNames = pin.customerNames || []; }
               } else if (clusterReturnish && !cl.inlineOnly) {
                   e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns (unless flagged INLINE)
               }
@@ -722,7 +726,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (!pin && cl.inlineOnly) e.inlineOnly = true;
               if (!pin && cl.usesReturnPlates) e.usesReturnPlates = true;
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}) }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 

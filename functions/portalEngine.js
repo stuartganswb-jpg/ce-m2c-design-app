@@ -386,12 +386,21 @@ function resolveStepOptions(ctx) {
     return Number.isFinite(p) ? p : 0;
   };
 
+  // CUSTOMER-ONLY options (1.6 cust gate): an option carrying customerIds belongs to specific
+  // customers — for anyone else it is DROPPED here, server-side, so a restricted choice never
+  // even reaches another customer's browser (same leak-safe posture as pricing).
+  const custVisible = (o) => {
+    if (!(Array.isArray(o && o.customerIds) && o.customerIds.length)) return true;
+    if (!custKeys || !custKeys.size) return false;
+    return o.customerIds.some((id) => custKeys.has(String(id || '').trim().toUpperCase()));
+  };
   (flow.steps || []).forEach((step) => {
     if (step.type === SIZE_STEP_TYPE) return;
     const options = {};
-    (step.styleOptions || []).forEach((o) => { const id = o.optId || o.partId; if (id) { const d = displayFor(o); options[id] = { name: d.name, desc: d.desc, price: priceFor(o, step) }; } });
+    (step.styleOptions || []).forEach((o) => { if (!custVisible(o)) return; const id = o.optId || o.partId; if (id) { const d = displayFor(o); options[id] = { name: d.name, desc: d.desc, price: priceFor(o, step) }; } });
     const subOptions = {};
     (step.subOptions || []).forEach((o) => {
+      if (!custVisible(o)) return;
       const id = o.optId || o.partId;
       if (!id) return;
       const d = displayFor(o);

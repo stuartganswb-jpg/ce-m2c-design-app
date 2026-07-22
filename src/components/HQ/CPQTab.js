@@ -725,14 +725,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               !o.isFee && !isReturnOption(o) && String(o.endTreatment || '').toUpperCase() !== 'INSIDE_MOUNT');
           steps.forEach(step => {
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
-                  if (!next[step.id]) { const id = firstGeom(seedable(step.styleOptions), step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
+                  if (!next[step.id]) { const id = firstGeom(seedable((step.styleOptions || []).filter(optCustomerOk)), step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
                   // Secondary chooser in the same step (e.g. the backplate paired with the bracket),
                   // seeded to a plate whose location matches the chosen bracket's mount.
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
                       const mainOpt = step.styleOptions.find(o => (o.optId || o.partId) === next[step.id]);
                       const loc = mainOpt?.location;
-                      const cands = loc ? step.subOptions.filter(o => !o.location || o.location === loc) : step.subOptions;
-                      const sid = firstGeom(cands.length ? cands : step.subOptions, step.subGeometryMap);
+                      const pool0 = (step.subOptions || []).filter(optCustomerOk);
+                      const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
+                      const sid = firstGeom(cands.length ? cands : pool0, step.subGeometryMap);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
                   }
               } else if (step.mountSelector && !next[step.id]) {
@@ -821,7 +822,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // Identify each option by optId (unique per instance) so a part repeated at
           // multiple positions stays distinct; fall back to partId for legacy flows. Also resolve the
           // underlying part's human description so the choice shows more than the bare ERP id.
-          let opts = step.styleOptions || [];
+          let opts = (step.styleOptions || []).filter(optCustomerOk);
           // Size-matrix rules (Fabricut H1): french/miter returns aren't made at the 3-5/8"
           // projection (finials + inside mounts stay); size-native extras (1-3/8" wood/acrylic
           // rods, finials, wood brackets) show only at their own diameter.
@@ -1267,6 +1268,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           return changed ? next : prev;
       });
   }, [dynamicConfigParams, activeFlow]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // CUSTOMER-ONLY options (1.6 cust gate): an option carrying customerIds is visible only while
+  // one of those customers is selected on the quote — unrestricted options (poles, rings, common
+  // parts) show for everyone. The portal applies the same rule server-side for its customer.
+  const optCustomerOk = (o) => {
+      if (!(Array.isArray(o?.customerIds) && o.customerIds.length)) return true;
+      if (!jobData.customerId) return false; // restricted option, no customer picked yet
+      const rec = liveCustomers.find(c => c.id === jobData.customerId);
+      const keys = new Set([jobData.customerId, rec?.name, rec?.companyName].filter(Boolean).map(s => String(s).trim().toUpperCase()));
+      return o.customerIds.some(id => keys.has(String(id || '').trim().toUpperCase()));
+  };
 
   const handleDimensionChange = (stepId, key, value, template) => {
       setDimensionInputs(prev => {
@@ -1734,7 +1746,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (step && Array.isArray(step.subOptions) && step.subOptions.length) {
           const mainOpt = (step.styleOptions || []).find(o => (o.optId || o.partId) === value);
           const loc = mainOpt?.location;
-          const cands = loc ? step.subOptions.filter(o => !o.location || o.location === loc) : step.subOptions;
+          const pool0 = step.subOptions.filter(optCustomerOk);
+          const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
           const pick = cands.find(o => o.targetNode) || cands[0];
           next[`${stepId}__sub`] = pick ? pick.optId : '';
       }
@@ -2594,7 +2607,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // matching plates show (e.g. wall plates when a wall arm is selected).
                               const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
                               const selLoc = selMainOpt?.location;
-                              let subs = currentStep.subOptions.filter(o => !selLoc || !o.location || o.location === selLoc);
+                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(o => !selLoc || !o.location || o.location === selLoc);
                               // Return-aware scoping: the RETURN backplates show while this side's End
                               // Treatment is a return OR the selected bracket is flagged usesReturnPlates
                               // (e.g. In Line brackets share the return plates); regular plates otherwise —

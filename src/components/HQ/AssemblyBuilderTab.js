@@ -52,6 +52,12 @@ const SOP_SLOT_DEF = { id: 'sop', label: 'Shop Floor SOPs & Instructions', categ
 // sellable model and derives its choices from the scene's code-named nodes at true scale.
 const SPEC_SLOT_DEF = { id: 'spec', label: 'Spec Sheet Layout (📐)', category: 'SPEC', position: 'SHARED', location: '', desc: 'NOT part of the sellable model: the flat spec-sheet layout drawn in Fusion — one of each component, code-named nodes, true positions per pole size/projection. Saved as its own .glb; the 📐 Spec Sheet generator draws from THIS instead of the merged model.' };
 
+// Shared hardware never pins; a blank choice whose name LOOKS like a real part is a different
+// story — it PARKS (Stuart 2026-07-22: designer/IT timing — the item # doesn't exist in the
+// library yet, so the choice holds as hidden geometry until the # is assigned).
+const HARDWARE_RE = /screw|standoff|stand-off|washer|\bnut\b|bolt|rivet|spring|grommet/i;
+const looksRealPart = (label) => !HARDWARE_RE.test(String(label || '')) && /\d/.test(String(label || '')) && String(label || '').replace(/[^A-Za-z0-9]/g, '').length >= 6;
+
 const STANDARD_SLOTS = [
     { id: 'short_rod', label: 'Short Rod — center (always shown)', category: 'POLE', position: 'CENTER', location: '', desc: 'The short french-return-length rod. Always visible — it carries the return ends. Tag position CENTER.' },
     { id: 'long_left', label: 'Long Rod — LEFT half', category: 'POLE', position: 'LEFT', location: '', desc: 'Left half of the full-length rod (split at center). Auto-hidden when the LEFT end is a return, shown for a finial.' },
@@ -193,11 +199,26 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         return index;
     };
     const optionsFromIndex = (index) => index.filter(e => e.code === e.erp && !/-\d{12,}/.test(e.code)).sort((a, b) => a.code.localeCompare(b.code)); // suggestions = real ERP codes only, never app-internal itemIds
+    // CRM customers for the per-choice CUSTOMER-ONLY gate (loaded with the code index refresh).
+    const [custList, setCustList] = useState(null);
+    const ensureCustomers = async () => {
+        if (custList) return custList;
+        try {
+            const s = await getDocs(collection(db, 'crm_records'));
+            const list = s.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(c => String(c.id).startsWith('CUST-') || String(c.recordType || '').toUpperCase() === 'CUSTOMER')
+                .map(c => ({ id: c.id, name: c.name || c.companyName || c.id }))
+                .sort((a, b) => a.name.localeCompare(b.name));
+            setCustList(list);
+            return list;
+        } catch (e) { setCustList([]); return []; }
+    };
     // FRESH index on user actions (Stuart 2026-07-22): items/ALIASES created in another tab
     // mid-session never appeared in the picker because the index was cached once per session
     // (H2-1BE alias invisible to Load Choices). Slot drops + Load Choices now re-fetch.
     const refreshCodeIndex = async () => {
         codeIndexRef.current = null;
+        ensureCustomers(); // customer gate picker rides along (fire-and-forget)
         const index = await ensureCodeIndex().catch(() => null);
         if (index) setCodeOptions(optionsFromIndex(index));
         return index;
@@ -344,7 +365,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const m = index ? matchItemByName(nm, index, normalizeCategory(slot.category) || slot.category) : null;
                 if (m) hit++;
                 const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, thumb: '' };
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, custIds: [], custNames: [], thumb: '' };
             });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
@@ -421,7 +442,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const m = index ? matchItemByName(nm, index, normalizeCategory(slotDef?.category) || slotDef?.category) : null;
                     const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, thumb: '' };
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, custIds: [], custNames: [], thumb: '' };
                 }))
             }
         } : prev);
@@ -502,7 +523,6 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         // class of failure BEFORE anything is written. Warnings don't block — you confirm through them.
         const index = codeIndexRef.current?.brand === activeBrand ? codeIndexRef.current.index : await ensureCodeIndex().catch(() => null);
         const knownNorms = new Set((index || []).map(e => e.norm));
-        const HARDWARE_RE = /screw|standoff|stand-off|washer|\bnut\b|bolt|rivet|spring|grommet/i;
         const warnings = [];
         mergeSlots.forEach(slot => {
             const ch = layers[slot.id].choices || [];
@@ -586,7 +606,15 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 // follow-up pass: item / fee / hidden / basic flags + the arrow order (choiceSort).
                 (layer.choices || []).forEach((ch, idx) => {
                     const hasItem = ch.itemNo && ch.itemNo.trim();
-                    if (!hasItem && !ch.isFee && !ch.isHidden) return; // blank = shared hardware, no pin
+                    if (!hasItem && !ch.isFee && !ch.isHidden) {
+                        // Blank + hardware-looking = shared hardware, no pin. Blank + REAL-looking
+                        // = ⏸ PARK: hidden geometry pin until the item # exists (designer/IT timing).
+                        if (!looksRealPart(ch.label)) return;
+                        const slugP = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
+                        const nodeP = topMap[ch.nodeName] || ch.nodeName;
+                        pins.push({ assemblyId: asmId, clusterId, partId: `HIDDEN-${slugP}`, partName: ch.label || `HIDDEN-${slugP}`, defaultQty: 1, choiceNode: nodeP, targetNode: nodeP, choiceSort: idx, isHiddenPart: true, parked: true });
+                        return;
+                    }
                     const slug = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
                     // A hidden choice WITH an item # keeps the real id — the generator includes it in the
                     // BOM (includedParts) at its cluster's position. HIDDEN-… synthetic = geometry-only.
@@ -605,6 +633,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}),
                         ...(ch.isHidden ? { isHiddenPart: true } : {}),
                         ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}),
+                        ...(hasItem && !ch.isFee && Array.isArray(ch.custIds) && ch.custIds.length ? { customerIds: ch.custIds, customerNames: ch.custNames || [] } : {}),
                         ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {})
                     });
                 });
@@ -848,7 +877,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // 1.5 cluster flags SEED the checkboxes when the pin doesn't carry them yet (returnOnly on
                     // BACKPLATE clusters, isReturnArm on BRACKET clusters) — tagging in Node Grouping shows up
                     // here automatically; saving stamps it onto the pins so both stay in sync.
-                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), thumb: '' };
+                    // A PARKED pin reloads as a plain blank choice (⏸ hint shows) — NOT as HIDE-checked,
+                    // otherwise assigning its item # later would save it as a hidden BOM part.
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -941,7 +972,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const label = choiceLabel(nm);
                     const m = index ? matchItemByName(label, index) : null;
                     const et = normalizeCategory(r.category) === 'FINIAL' ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, thumb: '' };
+                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, custIds: [], custNames: [], thumb: '' };
                 }))
             })
         } : prev);
@@ -957,13 +988,26 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // and the next Load Choices). Fetch what exists, delete anything superseded or cleared.
             const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', assignData.asmId)));
             const byNode = {}; pinSnap.docs.forEach(d => { const p = d.data(); if (p.choiceNode) (byNode[p.choiceNode] = byNode[p.choiceNode] || []).push({ ref: d.ref, docId: d.id }); });
-            let n = 0, fees = 0, hides = 0, removed = 0;
+            let n = 0, fees = 0, hides = 0, removed = 0, parked = 0;
             for (const r of assignData.rows) {
                 for (let idx = 0; idx < r.choices.length; idx++) {
                     const ch = r.choices[idx];
                     const hasItem = ch.itemNo && ch.itemNo.trim();
                     const existing = byNode[ch.nodeName] || [];
                     if (!hasItem && !ch.isFee && !ch.isHidden) {
+                        if (looksRealPart(ch.label)) {
+                            // ⏸ PARK (Stuart 2026-07-22): a real part with no item # yet (designer ↔
+                            // IT/library timing) — held as a hidden geometry pin so the node vanishes
+                            // from the model AND the flow until the # arrives. Load Choices keeps
+                            // listing it; assigning the # later replaces this pin (true sync above).
+                            const slugP = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
+                            const partIdP = `HIDDEN-${slugP}`;
+                            const pidP = `PIN-${assignData.asmId}-${r.clusterId}-${partIdP}`.replace(/[^A-Za-z0-9-]/g, '_');
+                            for (const old of existing) { if (old.docId !== pidP) { await deleteDoc(old.ref); removed++; } }
+                            await setDoc(doc(db, 'assembly_pins', pidP), { id: pidP, assemblyId: assignData.asmId, clusterId: r.clusterId, partId: partIdP, partName: ch.label || partIdP, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, isHiddenPart: true, parked: true });
+                            parked++;
+                            continue;
+                        }
                         // Cleared back to blank (= hardware): remove any pin this node had.
                         for (const old of existing) { await deleteDoc(old.ref); removed++; }
                         continue;
@@ -977,12 +1021,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const partId = hasItem ? ch.itemNo.trim().toUpperCase() : (ch.isHidden ? `HIDDEN-${slug}` : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}), ...(hasItem && !ch.isFee && Array.isArray(ch.custIds) && ch.custIds.length ? { customerIds: ch.custIds, customerNames: ch.custNames || [] } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
-            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee, ${hides} hidden${removed ? `, ${removed} stale removed` : ''}).`, 'success');
-            alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Choices you left blank (and not fee) stay as always-on shared geometry.`);
+            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee, ${hides} hidden${parked ? `, ${parked} ⏸ parked` : ''}${removed ? `, ${removed} stale removed` : ''}).`, 'success');
+            alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}${parked ? `\n\n⏸ ${parked} choice(s) PARKED (no item # yet) — hidden from the model and the flow. When the item # lands in the library, come back, LOAD CHOICES, type it in, save, and regenerate — the part appears on the CPQ.` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Hardware left blank stays as always-on shared geometry.`);
         } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
     };
@@ -1226,6 +1270,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>
                                                 </span>
                                                 <input value={c.itemNo} list="ab-item-codes" onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds it to the BOM)' : 'item # — type to search (blank = hardware)')} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
+                                                {!(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && looksRealPart(c.label) && (
+                                                    <span title="No item # yet — on save this choice PARKS: the node hides from the model AND the flow until you assign the # (Load Choices keeps it listed here). Perfect for parts IT hasn't set up yet." style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', whiteSpace: 'nowrap' }}>⏸ parks</span>
+                                                )}
                                                 {normalizeCategory(r.category) === 'FINIAL' && (
                                                     <select value={c.endTreatment || ''} title="END TREATMENT — the explicit tag the generator + CPQ + Vision read (replaces name-sniffing). FINIAL = decorative end. FRENCH/MITER RETURN = fee, replaces this side's bracket + hides the long rod half. INSIDE MOUNT = real part, replaces the bracket." onChange={e => { const et = e.target.value; setChoicePatch(r.clusterId, c.nodeName, { endTreatment: et, ...(et === 'FRENCH_RETURN' || et === 'MITER_RETURN' ? { isFee: true, isHidden: false, isBasic: false, usesReturnPlates: false } : {}) }); }} style={{ ...inp, padding: '4px 6px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', width: '118px', borderColor: c.endTreatment && c.endTreatment !== 'FINIAL' ? 'var(--brass)' : 'var(--line)' }}>
                                                         <option value="">— end type —</option>
@@ -1241,6 +1288,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <input type="checkbox" checked={!!c.isHidden} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />
                                                         hide
                                                     </label>
+                                                    <select value={(c.custIds && c.custIds[0]) || ''} title="CUSTOMER-ONLY choice: pick a customer and this option shows on the CPQ (and their portal) ONLY when that customer is selected — everyone else never sees it. '— all —' = visible to every customer (poles, rings, common parts)." onFocus={() => ensureCustomers()} onChange={e => { const id = e.target.value; const nm = ((custList || []).find(x => x.id === id) || {}).name || ''; setChoicePatch(r.clusterId, c.nodeName, { custIds: id ? [id] : [], custNames: id ? [nm] : [] }); }} style={{ ...inp, padding: '2px 3px', fontSize: '8px', fontFamily: 'var(--mono)', width: '104px', borderColor: (c.custIds && c.custIds.length) ? 'var(--brass)' : 'var(--line)', color: (c.custIds && c.custIds.length) ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                                                        <option value="">cust: all</option>
+                                                        {(custList || []).map(cu => <option key={cu.id} value={cu.id}>{cu.name}</option>)}
+                                                        {c.custIds && c.custIds[0] && !(custList || []).some(x => x.id === c.custIds[0]) && <option value={c.custIds[0]}>{(c.custNames && c.custNames[0]) || c.custIds[0]}</option>}
+                                                    </select>
                                                     <label title="Basic bracket: takes NO backplate — when the customer selects this bracket, the backplate picker greys out and stays None. Keep the item # filled; this flag just disables the plate pairing." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                         <input type="checkbox" checked={!!c.isBasic} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />
                                                         basic
@@ -1363,6 +1415,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <label title="Force-hidden in every configuration (stray geometry that should never render)." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.isHidden} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />hide
                                                         </label>
+                                                        <select value={(c.custIds && c.custIds[0]) || ''} title="CUSTOMER-ONLY choice: shows on CPQ/portal only for this customer ('cust: all' = everyone)." onFocus={() => ensureCustomers()} onChange={e => { const id = e.target.value; const nm = ((custList || []).find(x => x.id === id) || {}).name || ''; setSlotChoicePatch(slot.id, c.nodeName, { custIds: id ? [id] : [], custNames: id ? [nm] : [] }); }} style={{ ...inp, padding: '2px 3px', fontSize: '8px', fontFamily: 'var(--mono)', width: '96px', borderColor: (c.custIds && c.custIds.length) ? 'var(--brass)' : 'var(--line)', color: (c.custIds && c.custIds.length) ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                                                            <option value="">cust: all</option>
+                                                            {(custList || []).map(cu => <option key={cu.id} value={cu.id}>{cu.name}</option>)}
+                                                        </select>
                                                         <label title="Basic bracket: takes NO backplate — the backplate picker greys to None when this bracket is selected. Keep the item # filled." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.isBasic} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer' }} />basic
                                                         </label>
