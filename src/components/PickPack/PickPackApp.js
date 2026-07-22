@@ -9,7 +9,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
-import { printItemLabel, printBinLabel } from '../Shared/labelPrint';
+import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels } from '../Shared/labelPrint';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
@@ -1903,10 +1903,19 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         setOperator(null);
     };
 
+    // SETUP LABEL (Stuart 2026-07-21 — replaces the Phase-2 stub that only console.logged):
+    // prints the 4×2 the Staging Handshake scans AND that rides the fixture into finishing.
+    // Barcode = the shared staging key (orderKey), exactly what VERIFY & STAGE resolves.
     const printZebraLabel = (job, type) => {
-        // Real ZPL printing is Phase 2. The staging handshake matches on orderKey, so for now
-        // surface it (operators can hand-key it into the staging scans during floor testing).
-        console.log(`[label:${type}] orderKey=${job.orderKey || job.id}`);
+        printSetupLabel({
+            kind: type === 'SMALL_PARTS' ? 'SETUP · SMALL PARTS' : String(type || 'SETUP').replace(/_/g, ' '),
+            woRef: packRef(job),
+            orderKey: job.orderKey || job.salesOrderId || job.soNum || job.id,
+            item: job.stockErpId || job.type || '',
+            qty: job.totalParts || '',
+            finish: job.recipe || '',
+            customer: job.customerName || job.clientName || job.customer || ''
+        });
     };
 
     // Filter Logic for cycle counting (robust search header, mirrors HQ Master Library)
@@ -2298,7 +2307,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         <div>Customer: {job.customerName || job.clientName || job.customer || '—'}{so && (so.sidemark || so.memo) ? ` · REF: ${so.sidemark || so.memo}` : ''}</div>
                                                         {job.pickHadSkips && <div style={{ color: '#d9534f' }}>⚠ picked with {(job.pickSkips || []).length} skipped line(s) — resolve before staging</div>}
                                                         {job.hasCustomSibling && <div>Shop custom parts: {job.customFabStatus || 'Pending'}</div>}
-                                                        <div style={{ fontSize: '9px', color: theme.inkSoft }}>{job.id}</div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
+                                                            <button onClick={(e) => { e.stopPropagation(); printZebraLabel(job, 'SMALL_PARTS'); }} title="Reprint the setup label — scanned at the handshake, then rides the fixture into finishing" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Setup Label</button>
+                                                            <span style={{ fontSize: '9px', color: theme.inkSoft }}>{job.id}</span>
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
@@ -2530,6 +2542,19 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         {photos.map((u, i) => <img key={i} src={u} alt={`packed ${i + 1}`} onClick={() => window.open(u, '_blank')} style={{ height: '54px', width: '76px', objectFit: 'cover', border: `1px solid ${theme.line}`, cursor: 'zoom-in' }} />)}
                                         {photos.length === 0 && !isStockJob && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>No photo yet — a photo of the packaged parts is required.</span>}
                                         {isStockJob && !putawayBin.trim() && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>Scan the put-away bin — stocked goods go straight to the shelf.</span>}
+                                        {isStockJob ? (
+                                            <button onClick={() => {
+                                                const erp = String(packJob.stockErpId || packJob.type || '').toUpperCase();
+                                                const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === erp);
+                                                const copies = parseInt(window.prompt(`How many item labels for ${erp}?\n\nEach shows the item # (text + barcode), description, UOM — and WO ${packRef(packJob)} small on the right as the BATCH #.`, '1')) || 0;
+                                                if (copies > 0) printStockItemLabels({ itemId: erp, itemName: (part && part.itemName) || '', uom: (part && part.manufacturingSpecs?.uom) || 'EA', woNum: packRef(packJob), copies });
+                                            }} title="Item labels with the WO # as batch reference" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
+                                        ) : (<>
+                                            {!isQsOrder(packJob) && (
+                                                <button onClick={() => printHandshakeLabels({ woRef: packRef(packJob), orderKey: packJob.orderKey || packJob.salesOrderId || packJob.soNum || packJob.id, item: packJob.stockErpId || packJob.type || '', qty: packJob.totalParts || '', finish: packJob.recipe || '', customer: packJob.customerName || packJob.clientName || packJob.customer || '', hasCustom: !!packJob.hasCustomSibling })} title="Reprint both staging-handshake labels (small parts + custom shop when the order has one) — same barcode key the handshake scans" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Handshake Labels</button>
+                                            )}
+                                            <button onClick={() => { const ls = packLinesOf(packJob); if (ls.length) printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); }} title="One 2×4 item label per line on this order" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Item Labels</button>
+                                        </>)}
                                         {!isQsOrder(packJob) && (
                                             <button onClick={() => reportPackScrap(packJob)} title="Found bad pieces while bagging? Record scrap — stock builds queue the −qty NetSuite adjustment, customs red-flag the finishing supervisor" style={{ marginLeft: 'auto', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', padding: '14px 18px', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>
                                                 ⚠ Report Scrap

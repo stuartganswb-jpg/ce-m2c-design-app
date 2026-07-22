@@ -69,3 +69,54 @@ export const printItemLabel = (item) => printDoc(`Item ${item?.itemId || ''}`, I
 export const printBinLabel = ({ bin }) => printDoc(`Bin ${bin || ''}`, BIN_CSS, [binLabelInner(bin)]);
 export const printItemLabels = (items = []) => printDoc(`Item labels (${items.length})`, ITEM_CSS, items.map(itemLabelInner));
 export const printBinLabels = (bins = []) => printDoc(`Bin labels (${bins.length})`, BIN_CSS, bins.map(binLabelInner));
+
+// ── SETUP / STAGING-HANDSHAKE LABELS (Stuart 2026-07-21) ──────────────────────────────────
+// Printed at pick complete (and reprintable from staging/packing). The barcode encodes the
+// order's shared staging key (orderKey) — the SAME value the Staging Handshake resolves, so
+// scanning this label verifies the pairing; the label then rides the fixture into finishing.
+const SETUP_CSS = `${PAGE_CSS}
+.l{padding:0.1in 0.16in;display:flex;flex-direction:column;}
+.hd{display:flex;justify-content:space-between;align-items:baseline;}
+.k{font-size:9pt;font-weight:800;letter-spacing:2.5px;}
+.tag{font-size:7.5pt;font-weight:700;color:#333;letter-spacing:1px;}
+.wo{font-size:22pt;font-weight:900;line-height:1.02;margin-top:1pt;word-break:break-all;}
+.ln{font-size:10.5pt;font-weight:700;margin-top:2pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sub{font-size:8.5pt;color:#222;margin-top:1pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bc{margin-top:auto;} .bc svg{width:100%;height:0.38in;display:block;} .bct{font-size:7pt;letter-spacing:1px;text-align:center;}`;
+const setupLabelInner = ({ kind, woRef, orderKey, item, qty, finish, customer }) => {
+    const key = String(orderKey || woRef || '');
+    return `<div class="l">
+  <div class="hd"><span class="k">${esc(kind || 'SETUP · SMALL PARTS')}</span><span class="tag">ATTACH TO FIXTURE</span></div>
+  <div class="wo">${esc(woRef || key)}</div>
+  <div class="ln">${esc(item || '')}${qty ? ` &nbsp;×${esc(qty)}` : ''}${finish ? ` &nbsp;·&nbsp; ${esc(finish)}` : ''}</div>
+  <div class="sub">${esc(customer || '')}</div>
+  <div class="bc">${code128BSvg(key)}<div class="bct">${esc(key)}</div></div>
+</div>`;
+};
+export const printSetupLabel = (o) => printDoc(`Setup ${o?.woRef || ''}`, SETUP_CSS, [setupLabelInner(o)]);
+// Both halves of the handshake: the small-parts label + (when the order has shop custom parts)
+// the CUSTOM label — both barcode the same orderKey, which is exactly how VERIFY & STAGE pairs them.
+export const printHandshakeLabels = (o) => printDoc(`Handshake ${o?.woRef || ''}`, SETUP_CSS, [
+    setupLabelInner({ ...o, kind: 'SETUP · SMALL PARTS' }),
+    ...(o && o.hasCustom ? [setupLabelInner({ ...o, kind: 'CUSTOM · SHOP PARTS' })] : [])
+]);
+
+// ── STOCK ITEM LABEL (put-away, Stuart 2026-07-21) ────────────────────────────────────────
+// Item id (text + barcode), description, UOM — and the WO # far right in small type as the
+// BATCH reference for the put-away run.
+const STOCK_CSS = `${PAGE_CSS}
+.l{padding:0.12in 0.16in;display:flex;flex-direction:column;}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:0.12in;}
+.id{font-size:22pt;font-weight:900;line-height:1.02;word-break:break-all;min-width:0;}
+.wo{font-size:7.5pt;font-weight:700;color:#333;text-align:right;white-space:nowrap;line-height:1.25;flex:0 0 auto;}
+.nm{font-size:10.5pt;font-weight:600;line-height:1.15;margin-top:2pt;max-height:0.36in;overflow:hidden;}
+.uom{font-size:9pt;font-weight:800;margin-top:1pt;letter-spacing:1px;}
+.bc{margin-top:auto;} .bc svg{width:100%;height:0.4in;display:block;} .bct{font-size:8pt;letter-spacing:2px;text-align:center;}`;
+const stockItemLabelInner = ({ itemId, itemName, uom, woNum }) => `<div class="l">
+  <div class="top"><div class="id">${esc(itemId || '')}</div>${woNum ? `<div class="wo">BATCH<br/>${esc(woNum)}</div>` : ''}</div>
+  <div class="nm">${esc(itemName || '')}</div>
+  <div class="uom">UOM: ${esc(uom || 'EA')}</div>
+  <div class="bc">${code128BSvg(String(itemId || ''))}<div class="bct">${esc(itemId || '')}</div></div>
+</div>`;
+export const printStockItemLabels = ({ itemId, itemName, uom, woNum, copies = 1 }) =>
+    printDoc(`Item ${itemId || ''} ×${copies}`, STOCK_CSS, Array.from({ length: Math.max(1, Math.min(50, parseInt(copies) || 1)) }, () => stockItemLabelInner({ itemId, itemName, uom, woNum })));
