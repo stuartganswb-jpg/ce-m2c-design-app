@@ -192,6 +192,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         codeIndexRef.current = { brand: activeBrand, index, byNorm };
         return index;
     };
+    const optionsFromIndex = (index) => index.filter(e => e.code === e.erp && !/-\d{12,}/.test(e.code)).sort((a, b) => a.code.localeCompare(b.code)); // suggestions = real ERP codes only, never app-internal itemIds
+    // FRESH index on user actions (Stuart 2026-07-22): items/ALIASES created in another tab
+    // mid-session never appeared in the picker because the index was cached once per session
+    // (H2-1BE alias invisible to Load Choices). Slot drops + Load Choices now re-fetch.
+    const refreshCodeIndex = async () => {
+        codeIndexRef.current = null;
+        const index = await ensureCodeIndex().catch(() => null);
+        if (index) setCodeOptions(optionsFromIndex(index));
+        return index;
+    };
     // Library-link fields for a typed/matched item # — the shape Visual Assembly writes for an
     // existing library part, so builder pins read as LINKED (not new/leftover) everywhere. partName
     // stays the ERP code (CPQ appends the description for display); partId follows VA's convention
@@ -323,8 +333,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const names = slotChoiceNames(scene);
             // Auto-prefill each choice's item # from the Master Library by node name ("<ITEM#> <POS>"
             // convention) — the designer's naming does the data entry; hardware matches nothing → blank.
-            const index = await ensureCodeIndex().catch(() => null);
-            if (index) setCodeOptions(index.filter(e => e.code === e.erp && !/-\d{12,}/.test(e.code)).sort((a, b) => a.code.localeCompare(b.code))); // suggestions = real ERP codes only, never app-internal itemIds
+            // FRESH fetch: aliases/items created since the tab loaded must be matchable.
+            const index = await refreshCodeIndex().catch(() => null);
             let hit = 0;
             // End slots (category FINIAL) seed each choice's explicit endTreatment tag from its name —
             // a one-time suggestion the user can override; other categories never carry the tag (a
@@ -792,8 +802,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             };
             // Auto-match: existing pin wins, else derive the item # from the node name against the
             // Master Library ("<ITEM#> <POSITION>" naming). Hardware matches nothing → stays blank.
-            const index = await ensureCodeIndex().catch(() => null);
-            if (index) setCodeOptions(index.filter(e => e.code === e.erp && !/-\d{12,}/.test(e.code)).sort((a, b) => a.code.localeCompare(b.code))); // suggestions = real ERP codes only, never app-internal itemIds
+            // FRESH fetch (Load Choices is a user action): a just-created alias must show up here.
+            const index = await refreshCodeIndex().catch(() => null);
             // Live translation itemId → CURRENT ERP code, so linked pins always display the record's
             // item # even when the pin's stored legacyErpId predates the code being assigned.
             const byItemId = new Map();
