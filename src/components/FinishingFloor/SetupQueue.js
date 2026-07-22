@@ -12,10 +12,8 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 const BRAND_NETSUITE_MAP = { 'ce': { subsidiary: "2", location: "17" }, 'm2c': { subsidiary: "3", location: "19" } };
 
 const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} }) => {
-  // §A4: the Active Floor only ever holds about a day's work. Cap admission by piece count
-  // (configurable in fin_config/settings -> activeFloorDailyCapacity); the rest stay "ready"
-  // here in the queue. Current load = pieces already on the floor (currentPhase 'Painting').
-  const ACTIVE_CAP = Number(sysConfig?.activeFloorDailyCapacity) || 200;
+  // Active Floor load is INFORMATIONAL ONLY (Stuart 2026-07-21: the old §A4 200-pc daily cap
+  // blocked real staging — removed; the floor manages its own pace).
   const activeFloorLoad = workOrders
     .filter(w => w.currentPhase === 'Painting')
     .reduce((sum, w) => sum + (Number(w.totalParts) || 0), 0);
@@ -107,18 +105,13 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
   };
 
   const stageToFloor = async (wo) => {
-    // §A4: respect the daily Active Floor capacity (pieces). If this order would push the
-    // floor over its cap, keep it ready here instead of admitting it.
     const pieces = Number(wo.totalParts) || 0;
-    if (activeFloorLoad + pieces > ACTIVE_CAP) {
-        return alert(`🚧 Active Floor is at capacity.\n\nOn the floor now: ${activeFloorLoad} pcs\nThis order: ${pieces} pcs\nDaily cap: ${ACTIVE_CAP} pcs\n\n"${wo.displayId || wo.id}" stays ready here until floor work clears.`);
-    }
     try {
         // Safety net: an order that went Running before the Start-Setup release fix (or was
         // never released) still gets its parts pick sent to WMS at the latest possible gate.
         const { patch, note } = releasePickPatch(wo);
         await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Staged", currentPhase: "Painting", currentStepIndex: 0, ...patch });
-        if (writeLog) writeLog(`Staged ${wo.displayId || wo.id} to Floor (${pieces} pcs; floor now ~${activeFloorLoad + pieces}/${ACTIVE_CAP})${note}`, 'production');
+        if (writeLog) writeLog(`Staged ${wo.displayId || wo.id} to Floor (${pieces} pcs; floor now ~${activeFloorLoad + pieces} pcs)${note}`, 'production');
         if (patch.sentToPickPack) alert(`📦 Parts pick released to the WMS pick app${note.replace(' — ', ': ')}.`);
     } catch (err) {
         console.error("Stage to Floor Error:", err);
@@ -312,14 +305,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
       <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', borderRadius: '2px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
             <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Work Order Queue</h2>
-            {(() => {
-                const over = activeFloorLoad >= ACTIVE_CAP;
-                return (
-                    <span title="Active Floor daily capacity (pieces). Set via fin_config/settings → activeFloorDailyCapacity." style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: '2px', color: over ? '#d9534f' : 'var(--ink-soft)', background: over ? '#fdf2f2' : '#fff' }}>
-                        Active Floor: {activeFloorLoad}/{ACTIVE_CAP} pcs{over ? ' • FULL' : ''}
-                    </span>
-                );
-            })()}
+            <span title="Pieces currently on the Active Floor (informational — no staging cap)" style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: '2px', color: 'var(--ink-soft)', background: '#fff' }}>
+                Active Floor: {activeFloorLoad} pcs
+            </span>
         </div>
         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: '2px', background: '#fff' }}>
             {finishGroups.length} finish batch{finishGroups.length === 1 ? '' : 'es'} · {pendingOrders.length} order{pendingOrders.length === 1 ? '' : 's'}

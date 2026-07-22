@@ -221,6 +221,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [validation, setValidation] = useState({ bin: '', qty: '' });
     const [pickSkips, setPickSkips] = useState([]); // lines skipped this pick (order flagged, fixed later)
     const [expandedJob, setExpandedJob] = useState(null); // awaiting-pick card whose BOM detail is open
+    const [expandedStaged, setExpandedStaged] = useState(null); // awaiting-staging row whose details are open
     // §A2: the staging handshake is a two-label verify — small-parts label + custom (shop) label.
     const [stagingSmallScan, setStagingSmallScan] = useState('');
     const [stagingCustomScan, setStagingCustomScan] = useState('');
@@ -2279,12 +2280,27 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: '15px' }}>PICKED — AWAITING STAGING:</div>
                                     {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging').map(job => {
                                         const custReady = !job.hasCustomSibling || job.customFabStatus === 'Complete';
+                                        const open = expandedStaged === job.id;
+                                        const so = soIndex[String(job.salesOrderId || '')] || soIndex[String(job.soNum || '')] || null;
                                         return (
-                                            <div key={job.id} style={{ background: theme.paper, border: `1px solid ${theme.line}`, padding: '12px', marginBottom: '8px', fontSize: '0.9rem', fontFamily: theme.mono, color: theme.ink, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <span>{job.id}</span>
-                                                <span style={{ fontSize: '0.72rem', color: custReady ? '#3a7d44' : theme.brass }}>
-                                                    {!job.hasCustomSibling ? '● small-only' : (custReady ? '● custom ready' : '○ awaiting shop')}
-                                                </span>
+                                            <div key={job.id} style={{ background: theme.paper, border: `1px solid ${theme.line}`, marginBottom: '8px' }}>
+                                                {/* Header row — tap to expand; NetSuite ref leads once posted (long id in the detail). */}
+                                                <div onClick={() => setExpandedStaged(open ? null : job.id)} title={job.id} style={{ padding: '12px', fontSize: '0.9rem', fontFamily: theme.mono, color: theme.ink, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ color: theme.inkSoft, marginRight: '6px' }}>{open ? '▾' : '▸'}</span>{packRef(job)}</span>
+                                                    <span style={{ fontSize: '0.72rem', color: custReady ? '#3a7d44' : theme.brass, whiteSpace: 'nowrap' }}>
+                                                        {!job.hasCustomSibling ? '● small-only' : (custReady ? '● custom ready' : '○ awaiting shop')}
+                                                    </span>
+                                                </div>
+                                                {open && (
+                                                    <div style={{ borderTop: `1px solid ${theme.line}`, padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, lineHeight: 1.8 }}>
+                                                        {(job.nsWoTran || job.soNum) && <div style={{ color: theme.ink }}>{job.nsWoTran ? `NetSuite WO: ${job.nsWoTran}` : ''}{job.nsWoTran && job.soNum ? ' · ' : ''}{job.soNum ? `SO: ${job.soNum}` : ''}</div>}
+                                                        <div>Item: <span style={{ color: theme.ink }}>{job.stockErpId || job.type || '—'}</span> · Qty: <span style={{ color: theme.ink }}>{job.totalParts || 0}</span>{job.recipe ? <> · Finish: <span style={{ color: theme.ink }}>{job.recipe}</span></> : null}</div>
+                                                        <div>Customer: {job.customerName || job.clientName || job.customer || '—'}{so && (so.sidemark || so.memo) ? ` · REF: ${so.sidemark || so.memo}` : ''}</div>
+                                                        {job.pickHadSkips && <div style={{ color: '#d9534f' }}>⚠ picked with {(job.pickSkips || []).length} skipped line(s) — resolve before staging</div>}
+                                                        {job.hasCustomSibling && <div>Shop custom parts: {job.customFabStatus || 'Pending'}</div>}
+                                                        <div style={{ fontSize: '9px', color: theme.inkSoft }}>{job.id}</div>
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })}
