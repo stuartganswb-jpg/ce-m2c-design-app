@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveRecipe } from '../Shared/finishingTime';
@@ -271,7 +271,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           await addDoc(collection(db, 'fin_logs'), { u: user?.name || 'Floor', cat: 'manual', t: serverTimestamp(), at: Date.now(), ...entry });
       } catch (e) { console.warn('manual log failed', e); }
   };
-  const manualTask = async (wo, taskKey, action) => {
+  const manualTask = async (wo, taskKey, action, actor) => {
       const t = (wo.tasks || {})[taskKey] || {};
       const startedMs = t.startTime || null;
       const elapsedMs = (action !== 'START' && t.status === 'Running' && startedMs) ? (Date.now() - startedMs) : null;
@@ -279,16 +279,18 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (action === 'START') {
           updates[`tasks.${taskKey}.status`] = 'Running';
           updates[`tasks.${taskKey}.startTime`] = Date.now();
-          updates[`tasks.${taskKey}.assignedTo`] = t.assignedTo || user?.name || 'Manual';
+          updates[`tasks.${taskKey}.assignedTo`] = actor || t.assignedTo || user?.name || 'Manual';
       } else if (action === 'STOP') {
           updates[`tasks.${taskKey}.status`] = 'Pending';
       } else if (action === 'COMPLETE') {
           updates[`tasks.${taskKey}.status`] = 'Complete';
           updates[`tasks.${taskKey}.completedAt`] = Date.now();
+          if (actor) updates[`tasks.${taskKey}.completedBy`] = actor;
       }
       try {
           await updateDoc(doc(db, 'fin_workorders', wo.id), updates);
           await logManual({
+              ...(actor ? { u: actor } : {}),
               msg: `MANUAL ${action} · ${taskKey} · ${woRef(wo)} @ ${stationCtl || 'floor'}${elapsedMs != null ? ` · ran ${(elapsedMs / 60000).toFixed(1)}m` : ''}`,
               action, station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey,
               recipe: wo.recipe || '', stepIndex: wo.currentStepIndex || 0, poleStepIndex: poleIdxOf(wo),
@@ -297,6 +299,93 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           loadManualRecent();
       } catch (e) { alert('Manual update failed: ' + (e.message || e)); }
   };
+
+  // ===== MANUAL MODE (Stuart 2026-07-21) =====
+  // The machines aren't online yet (only the oven), so the station-driven flow confuses the
+  // crew. Manual mode is scan-first: find the cart, SCAN THE SETUP LABEL (barcode = the
+  // staging orderKey), enter your PIN, and step through the recipe — Start/Complete per task,
+  // coat by coat. The machine view (twin + stations) collapses out of the way until real.
+  const [machineViewOpen, setMachineViewOpen] = useState(false);
+  const [manualScan, setManualScan] = useState('');
+  const [manualWoId, setManualWoId] = useState(null);
+  const manualWo = activeWOs.find(w => w.id === manualWoId) || null;
+  const finUsersRef = useRef(null);
+  // PIN check: fin_users carries the chip PINs (the directory projection is PIN-free by
+  // design). Fetched once, matched on pin/chip fields or the doc id (chip docs are often
+  // keyed by their pin).
+  const pinActor = async () => {
+      const pin = window.prompt('Enter your PIN (chip #):');
+      if (pin == null) return null;
+      const p = String(pin).trim();
+      if (!p) return null;
+      try {
+          if (!finUsersRef.current) {
+              const s = await getDocs(collection(db, 'fin_users'));
+              finUsersRef.current = s.docs.map(d => ({ id: d.id, ...d.data() }));
+          }
+      } catch (e) { finUsersRef.current = finUsersRef.current || []; }
+      const pool = [...(finUsersRef.current || []), ...(users || [])];
+      const hit = pool.find(u => [u.pin, u.chipPin, u.chip, u.id].some(v => v != null && String(v).trim() === p));
+      if (!hit) { alert('PIN not recognized — check the finishing user chips (Users tab).'); return null; }
+      return hit.name || String(hit.id);
+  };
+  const resolveManualScan = () => {
+      const s = String(manualScan || '').trim().toUpperCase();
+      if (!s) return;
+      const hit = activeWOs.find(w => [w.orderKey, w.salesOrderId, w.soNum, w.nsWoTran, w.displayId, w.woNum, w.id]
+          .some(k => k && String(k).trim().toUpperCase() === s));
+      setManualScan('');
+      if (!hit) return alert(`No ACTIVE job matches "${s}".\n\nIs the order staged to the floor yet? (Setup Queue → Stage to Floor)`);
+      setManualWoId(hit.id);
+  };
+  // The single next action for the PARTS stream on the current coat.
+  const nextPartsAction = (wo) => {
+      const r = resolveRecipe(recipes, wo.recipe);
+      const len = (r && r.steps && r.steps.length) || 0;
+      const idx = wo.currentStepIndex || 0;
+      if (!len || idx >= len) return null; // parts done (order completes when poles catch up)
+      const step = r.steps[idx];
+      const t = wo.tasks || {};
+      if (step.app === 'Hand Applied') {
+          if (t.hand?.status === 'Running') return { key: 'hand', action: 'COMPLETE', label: '✓ Complete Hand Finish', running: t.hand };
+          if (t.hand?.status !== 'Complete') return { key: 'hand', action: 'START', label: '▶ Start Hand Finish' };
+          return { advance: true, label: idx + 1 >= len ? '✓ Final Coat Done — QC & Complete' : `→ Coat Done — Advance to Coat ${idx + 2}` };
+      }
+      const seq = [['spinSetup', 'Sled Setup'], ['spinSpray', 'Spray Coat'], ['spinBake', 'Bake (oven)']];
+      for (const [key, label] of seq) {
+          const st = t[key]?.status;
+          if (st === 'Running') return { key, action: 'COMPLETE', label: `✓ Complete ${label}`, running: t[key] };
+          if (st !== 'Complete') return { key, action: 'START', label: `▶ Start ${label}` };
+      }
+      return { advance: true, label: idx + 1 >= len ? '✓ Final Coat Done — QC & Complete' : `→ Unload — Advance to Coat ${idx + 2}` };
+  };
+  const nextPoleAction = (wo) => {
+      if (!woHasPoles(wo)) return null;
+      const len = recipeLen(wo);
+      const idx = poleIdxOf(wo);
+      if (!len || idx >= len) return null;
+      const t = wo.tasks || {};
+      if (t.poleSpray?.status !== 'Complete') {
+          if (t.poleSpray?.status === 'Running') return { key: 'poleSpray', action: 'COMPLETE', label: '✓ Complete Pole Spray', running: t.poleSpray };
+          return { key: 'poleSpray', action: 'START', label: '▶ Start Pole Spray' };
+      }
+      if (t.poleBake?.status !== 'Complete') {
+          if (t.poleBake?.status === 'Running') return { key: 'poleBake', action: 'COMPLETE', label: '✓ Complete Pole Bake', running: t.poleBake };
+          return { key: 'poleBake', action: 'START', label: '▶ Start Pole Bake' };
+      }
+      return { advance: true, label: idx + 1 >= len ? '✓ Poles Finished' : `→ Poles — Next Coat ${idx + 2}` };
+  };
+  const runManualAction = async (wo, act, stream) => {
+      const actor = await pinActor();
+      if (!actor) return;
+      if (act.advance) {
+          await logManual({ u: actor, msg: `MANUAL ADVANCE (${stream}) · ${woRef(wo)} · coat ${(stream === 'poles' ? poleIdxOf(wo) : wo.currentStepIndex || 0) + 1}`, action: 'ADVANCE', station: 'MANUAL', woId: wo.id, woRefNo: woRef(wo), task: stream, recipe: wo.recipe || '' });
+          if (stream === 'poles') await handleCompletePoleStep(wo); else await handleCompleteRecipeStep(wo);
+      } else {
+          await manualTask(wo, act.key, act.action, actor);
+      }
+  };
+  // ===== END MANUAL MODE =====
   // Which WO tasks a station's panel controls.
   const stationTargets = (st) => {
       const out = [];
@@ -367,7 +456,77 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       
       {/* LEFT: PIPELINE */}
       <div>
-        <DigitalTwinSCADA redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} onForceClear={forceOvenClear} onStation={openStation} />
+        {/* 🖐 MANUAL MODE — scan-first while the machines are offline (only the oven runs). */}
+        <div style={{ background: '#fff', border: '1px solid var(--line)', marginBottom: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+            <div style={{ padding: '20px 30px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                <div>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Manual mode · find the cart → scan the setup label → PIN → run the steps</span>
+                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>🖐 Manual Floor Control</span>
+                </div>
+                <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <input autoFocus value={manualScan} onChange={e => setManualScan(e.target.value)} onKeyDown={e => e.key === 'Enter' && resolveManualScan()} placeholder="SCAN SETUP LABEL…" style={{ padding: '12px 14px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '1rem', outline: 'none', width: '260px', textTransform: 'uppercase' }} />
+                    <button onClick={resolveManualScan} style={{ padding: '12px 18px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Find Job</button>
+                </span>
+            </div>
+            {manualWo ? (() => {
+                const r = resolveRecipe(recipes, manualWo.recipe);
+                const len = (r && r.steps && r.steps.length) || 0;
+                const idx = manualWo.currentStepIndex || 0;
+                const step = len && idx < len ? r.steps[idx] : null;
+                const pAct = nextPartsAction(manualWo);
+                const poAct = nextPoleAction(manualWo);
+                const elapsedOf = (tk) => (tk && tk.startTime) ? Math.floor((now - tk.startTime) / 60000) : null;
+                const chip = (label, st) => (
+                    <span key={label} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '4px 8px', border: '1px solid var(--line)', color: st === 'Complete' ? '#3a7d44' : (st === 'Running' ? 'var(--brass)' : 'var(--ink-soft)'), background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>{label} {st === 'Complete' ? '✓' : (st === 'Running' ? '▶' : '·')}</span>
+                );
+                const t = manualWo.tasks || {};
+                return (
+                    <div style={{ padding: '20px 30px' }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                            <span onClick={() => setViewWo(manualWo)} title={`${manualWo.id} — tap for full details`} style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 600, color: 'var(--ink)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--line)' }}>{woRef(manualWo)}</span>
+                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)' }}>{manualWo.stockErpId || manualWo.type || ''} ×{manualWo.totalParts || 0} · {manualWo.recipe || ''}</span>
+                            <button onClick={() => setManualWoId(null)} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', padding: '8px 14px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>✕ Done — scan next</button>
+                        </div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '14px' }}>
+                            {step ? `COAT ${idx + 1} OF ${len} — ${step.color} (${step.app})` : `PARTS DONE (${len}/${len})`}{manualWo.customerName ? ` · ${manualWo.customerName}` : ''}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '10px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>Small parts</span>
+                            {step && step.app !== 'Hand Applied' ? [chip('Setup', t.spinSetup?.status), chip('Spray', t.spinSpray?.status), chip('Bake', t.spinBake?.status)] : (step ? chip('Hand', t.hand?.status) : null)}
+                            {pAct && pAct.running && elapsedOf(pAct.running) !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}>{elapsedOf(pAct.running)}m</span>}
+                            <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+                                {pAct && pAct.running && <button onClick={async () => { const a = await pinActor(); if (a) manualTask(manualWo, pAct.key, 'STOP', a); }} style={{ padding: '10px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>⏸ Stop</button>}
+                                {pAct ? <button onClick={() => runManualAction(manualWo, pAct, 'parts')} style={{ padding: '12px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{pAct.label}</button> : <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓ parts complete</span>}
+                            </span>
+                        </div>
+                        {woHasPoles(manualWo) && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>Poles</span>
+                                {chip('Spray', t.poleSpray?.status)}{chip('Bake', t.poleBake?.status)}
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>coat {Math.min(poleIdxOf(manualWo) + 1, len || 1)}/{len || 1}</span>
+                                <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+                                    {poAct && poAct.running && <button onClick={async () => { const a = await pinActor(); if (a) manualTask(manualWo, poAct.key, 'STOP', a); }} style={{ padding: '10px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>⏸ Stop</button>}
+                                    {poAct ? <button onClick={() => runManualAction(manualWo, poAct, 'poles')} style={{ padding: '12px 20px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{poAct.label}</button> : <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓ poles complete</span>}
+                                </span>
+                            </div>
+                        )}
+                    </div>
+                );
+            })() : (
+                <div style={{ padding: '20px 30px', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>
+                    Scan the setup label from the cart (or type the WO #) — the job opens here with its next step ready. The pipeline order is on the right.
+                </div>
+            )}
+        </div>
+
+        {/* MACHINE VIEW — collapsed while the machines are offline; the oven stays reachable. */}
+        <div style={{ marginBottom: '30px' }}>
+            <div onClick={() => setMachineViewOpen(!machineViewOpen)} style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', gap: '10px', flexWrap: 'wrap' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{machineViewOpen ? '▾' : '▸'} Machine View — twin + station cards (machines not fully online)</span>
+                <button onClick={(e) => { e.stopPropagation(); forceOvenClear(); }} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', background: 'transparent', border: '1px solid #d9534f', padding: '5px 10px', borderRadius: '2px', cursor: 'pointer' }}>⚠ Force Oven Clear</button>
+            </div>
+            {machineViewOpen && <div style={{ marginTop: '16px' }}><DigitalTwinSCADA redWO={redWO} blueWO={blueWO} activeWOs={activeWOs} onForceClear={forceOvenClear} onStation={openStation} /></div>}
+        </div>
 
         {redlineWOs.length > 0 && (
             <div style={{ background: '#fdf2f2', border: '1px solid #d9534f', padding: '24px', marginBottom: '30px', borderRadius: '2px' }}>
@@ -380,9 +539,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
             </div>
         )}
 
-        {batchColors.length === 0 && <div style={{ padding: '40px', background: 'var(--paper)', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', fontFamily: 'var(--serif)', fontSize: '1.2rem', marginBottom: '30px' }}>No batches actively painting.</div>}
+        {machineViewOpen && batchColors.length === 0 && <div style={{ padding: '40px', background: 'var(--paper)', border: '1px dashed var(--line)', color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', fontFamily: 'var(--serif)', fontSize: '1.2rem', marginBottom: '30px' }}>No batches actively painting.</div>}
 
-        {batchColors.map(color => {
+        {machineViewOpen && batchColors.map(color => {
             let potRemMins = null;
             let potBg = 'var(--ink)'; let potColor = '#fff';
             if (activePots[color]) {
