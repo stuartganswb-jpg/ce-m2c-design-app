@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
+import { fixMojibake } from '../Shared/textRepair';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
@@ -439,7 +440,10 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 out.push(cur);
                 return out;
             };
-            const rows = text.replace(/^﻿/, '').split(/\r?\n/).map(parseLine);
+            // fixMojibake: Excel round-trips can bake garbled encoding INTO the file itself
+            // (2026-07 H2 import wrote '1â€³' for '1″') — repair every incoming cell so a bad
+            // CSV self-cleans; clean cells (and all pure-ASCII codes/prices) pass through untouched.
+            const rows = text.replace(/^﻿/, '').split(/\r?\n/).map(parseLine).map(r => r.map(fixMojibake));
 
             if (rows.length < 2) throw new Error("File is empty or invalid.");
 

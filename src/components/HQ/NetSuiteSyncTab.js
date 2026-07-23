@@ -327,6 +327,18 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             // 2. Fetch NetSuite Data
             const targetSubsidiary = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || "3"; 
 
+            // ⏳ TEMP flag probe (custitem_app_temp): legacy items loaded ONLY so finishing can run
+            // 100% in-app until discontinuation — flagged here, nuked later via Master Library's
+            // "☢ Nuke temp items". The checkbox may not exist in NetSuite yet, and SuiteQL errors
+            // on unknown columns, so probe once and sync without it until it's created.
+            let hasTempField = false;
+            try {
+                await executeSuiteQL("SELECT item.custitem_app_temp AS t FROM item WHERE item.id = 0");
+                hasTempField = true;
+            } catch (probeErr) {
+                addLog(`⏳ TEMP checkbox (custitem_app_temp) not found in NetSuite — syncing without it. Create the item checkbox field with that exact ID to enable temp-item tracking.`, 'info');
+            }
+
             let allRawRecords = [];
             let lastId = 0;
             let hasMore = true;
@@ -350,6 +362,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         item.custitem27 AS is_stocked,
                         item.custitem26 AS is_inhouse,
                         item.custitem28 AS is_old,
+                        ${hasTempField ? 'item.custitem_app_temp AS is_temp,' : ''}
                         BUILTIN.DF(item.stockunit) AS uom,
                         item.averagecost AS base_cost,
                         pl1.unitprice AS base_price,
@@ -452,7 +465,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
             const records = Object.values(uniqueRecordsMap);
             let successCount = 0;
-            let stockedCount = 0, inHouseCount = 0, oldCount = 0;
+            let stockedCount = 0, inHouseCount = 0, oldCount = 0, tempCount = 0;
 
             // NetSuite checkbox custom fields come back as 'T'/'F'. custitem27 = "Stocked" (held on the
             // shelf, sold via Quick Ship); custitem26 = finished IN-HOUSE (needs a WO, not outsourced).
@@ -500,9 +513,11 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // in-house-finish flag (overrides the suffix guess when set); custitem27 marks stocked stock.
                 const isStocked = nsBool(item.is_stocked);
                 const isRetired = nsBool(item.is_old); // custitem28 = OLD/retiring → hidden from browse screens
+                const isTemp = hasTempField && nsBool(item.is_temp); // custitem_app_temp = TEMP legacy load, nukeable batch
                 if (nsHasVal(item.is_inhouse)) isInHouse = nsBool(item.is_inhouse);
                 if (isStocked) stockedCount++;
                 if (isRetired) oldCount++;
+                if (isTemp) tempCount++;
                 if (isInHouse) inHouseCount++;
 
                 // 3. Part Handling Logic (Poles vs Small Parts)
@@ -543,6 +558,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     isInHouse: isInHouse,
                     isStocked: isStocked,
                     isRetired: isRetired,
+                    ...(hasTempField ? { isTemp } : {}),
                     outsourceAction: outsourceAction,
                     partHandling: partHandling,
                     productType: item.product_type || 'Uncategorized',
@@ -630,7 +646,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             }
 
             addLog(`✅ Successfully synced and mapped ${successCount} library items. App structure preserved.`, 'success');
-            addLog(`🏷️ Flagged ${stockedCount} STOCKED (custitem27), ${inHouseCount} IN-HOUSE (custitem26), ${oldCount} OLD/hidden (custitem28) of ${successCount} items.`, stockedCount > 0 ? 'success' : 'info');
+            addLog(`🏷️ Flagged ${stockedCount} STOCKED (custitem27), ${inHouseCount} IN-HOUSE (custitem26), ${oldCount} OLD/hidden (custitem28)${hasTempField ? `, ${tempCount} ⏳TEMP (custitem_app_temp)` : ''} of ${successCount} items.`, stockedCount > 0 ? 'success' : 'info');
 
         } catch (err) {
             console.error(err);

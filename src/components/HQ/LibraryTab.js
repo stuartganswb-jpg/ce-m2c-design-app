@@ -3,6 +3,7 @@ import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc } from "firebase/firestore";
+import { fixMojibake } from '../Shared/textRepair';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 import { fabricutCodeOf } from '../Shared/priceLevels';
@@ -23,33 +24,7 @@ const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase(
 // Brand → NetSuite location id (for the base-stock check when routing outsourced finished assemblies).
 const BRAND_NS_LOCATION = { m2c: "19", uniquity: "22", ce: "17", leyla: "18" };
 
-// ===== 🔤 MOJIBAKE REPAIR (Stuart 2026-07-22: H2 import saved '1â€³' where '1″' belonged) =====
-// UTF-8 text was mis-decoded as Windows-1252 somewhere upstream and written to Firestore.
-// Reversal: re-encode the string as cp1252 bytes, then STRICT-decode as UTF-8. Only genuine
-// mojibake survives that round-trip changed — clean text (including a real ″) either isn't
-// cp1252-encodable or fails the strict decode, and comes back untouched.
-const CP1252_REV = { '€': 0x80, '‚': 0x82, 'ƒ': 0x83, '„': 0x84, '…': 0x85, '†': 0x86, '‡': 0x87, 'ˆ': 0x88, '‰': 0x89, 'Š': 0x8A, '‹': 0x8B, 'Œ': 0x8C, 'Ž': 0x8E, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95, '–': 0x96, '—': 0x97, '˜': 0x98, '™': 0x99, 'š': 0x9A, '›': 0x9B, 'œ': 0x9C, 'ž': 0x9E, 'Ÿ': 0x9F };
-const fixMojibake = (s) => {
-    if (typeof s !== 'string' || !s) return s;
-    let out = s;
-    for (let pass = 0; pass < 3; pass++) { // up to 3 passes unwinds double-encoded text too
-        const bytes = [];
-        let encodable = true;
-        for (const ch of out) {
-            const c = ch.codePointAt(0);
-            if (c <= 0xFF && !(c >= 0x80 && c <= 0x9F)) bytes.push(c);
-            else if (CP1252_REV[ch] !== undefined) bytes.push(CP1252_REV[ch]);
-            else { encodable = false; break; }
-        }
-        if (!encodable) break;
-        try {
-            const decoded = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
-            if (decoded === out) break;
-            out = decoded;
-        } catch { break; }
-    }
-    return out;
-};
+// 🔤 Mojibake repair lives in Shared/textRepair (also runs on Mass Update CSV imports).
 const MOJI_ITEM_FIELDS = ['itemName', 'description', 'itemDescription'];
 
 const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
@@ -95,6 +70,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [orphanUsedSet, setOrphanUsedSet] = useState(null); // every part id/code referenced by a BOM or flow
   const [orphanBusy, setOrphanBusy] = useState(false);
   const [mojiBusy, setMojiBusy] = useState(false);         // 🔤 garbled-text repair running
+  const [tempFilter, setTempFilter] = useState(false);     // ⏳ show only TEMP-flagged legacy items
+  const [tempBusy, setTempBusy] = useState(false);         // ☢ temp-nuke running
 
   const [pdfFile, setPdfFile] = useState(null);
   const [cadFile, setCadFile] = useState(null);
@@ -322,6 +299,50 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     finally { setMojiBusy(false); }
   };
 
+  // ☢ TEMP NUKE — the planned end-of-life for custitem_app_temp legacy items (loaded only so the
+  // finishing floor could run 100% in-app until discontinuation). Deletes every TEMP-flagged item
+  // in this brand EXCEPT any that a BOM or CPQ flow references (those are listed, never touched).
+  // NetSuite items themselves are untouched — and the confirm reminds that the sync flag must be
+  // unchecked in NetSuite too, or the next item sync re-imports them.
+  const nukeTempItems = async () => {
+    setTempBusy(true);
+    try {
+      const temps = inventory.filter(p => p.manufacturingSpecs?.isTemp === true);
+      if (!temps.length) { alert('No TEMP-flagged items in this brand.\n\n(Items gain the ⏳ flag when the 11.1 item sync sees the NetSuite checkbox custitem_app_temp checked.)'); return; }
+      // Same usage sources as the Orphans scan: any BOM pin or CPQ flow reference blocks deletion.
+      const used = new Set();
+      const addRef = (v) => { const s = String(v || '').trim().toUpperCase(); if (s && s !== 'PENDING' && s !== 'N/A') used.add(s); };
+      const pinsSnap = await getDocs(collection(db, 'assembly_pins'));
+      pinsSnap.docs.forEach(d => { const x = d.data() || {}; addRef(x.partId); addRef(x.assemblyId); });
+      const flowsSnap = await getDocs(collection(db, 'cpq_flows'));
+      flowsSnap.docs.forEach(d => {
+        const f = d.data() || {};
+        addRef(f.linkedAssemblyId);
+        (f.steps || []).forEach(s => {
+          addRef(s.linkedItemId); addRef(s.linkedPinId);
+          [...(s.styleOptions || []), ...(s.subOptions || [])].forEach(o => addRef(o && o.partId));
+          (s.includedParts || []).forEach(ip => addRef(ip && ip.partId));
+        });
+      });
+      const isRefd = (p) => used.has(String(p.id || '').toUpperCase()) || used.has(String(p.legacyErpId || p.itemId || '').toUpperCase());
+      const blocked = temps.filter(isRefd);
+      const clear = temps.filter(p => !isRefd(p));
+      const nameOf = (p) => (p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : (p.itemId || p.id));
+      if (!clear.length) { alert(`☢ Nothing deletable: all ${temps.length} TEMP item(s) are referenced by a BOM or CPQ flow:\n\n${blocked.slice(0, 12).map(nameOf).join(', ')}${blocked.length > 12 ? '…' : ''}\n\nRemove those references first.`); return; }
+      const typed = window.prompt(`☢ NUKE ${clear.length} TEMP item(s) from the app library (brand: ${activeBrand?.toUpperCase()})?\n\nSample: ${clear.slice(0, 8).map(nameOf).join(', ')}${clear.length > 8 ? '…' : ''}${blocked.length ? `\n\nSkipped (referenced by BOM/flow): ${blocked.length} — ${blocked.slice(0, 6).map(nameOf).join(', ')}${blocked.length > 6 ? '…' : ''}` : ''}\n\nNetSuite items are NOT touched. This cannot be undone.\n\nType NUKE to confirm:`);
+      if (typed !== 'NUKE') { if (typed !== null) alert('Cancelled — you must type NUKE exactly.'); return; }
+      let deleted = 0;
+      for (let i = 0; i < clear.length; i += 400) {
+        const batch = writeBatch(db);
+        clear.slice(i, i + 400).forEach(p => batch.delete(doc(db, 'Approved_Designs', p.id)));
+        await batch.commit();
+        deleted += Math.min(400, clear.length - i);
+      }
+      alert(`☢ Deleted ${deleted} TEMP item(s).${blocked.length ? ` Skipped ${blocked.length} still referenced by a BOM/flow.` : ''}\n\n⚠ FINISH THE JOB IN NETSUITE: uncheck "Sync to CPQ" (custitem_sync_to_cpq) — or mark them OLD (custitem28) — on these items, otherwise the next 11.1 item sync re-imports them.`);
+    } catch (e) { alert('Temp nuke failed: ' + (e.message || e)); }
+    finally { setTempBusy(false); }
+  };
+
   const deleteOrphans = async (list) => {
       if (!list.length) return alert('Nothing shown to delete.');
       const preview = list.slice(0, 15).map(p => `• ${p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : (p.itemId || p.id)} — ${p.itemName || ''}`).join('\n');
@@ -338,6 +359,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
   const filteredInventory = inventory.filter(part => {
     if (part.manufacturingSpecs?.isRetired === true || retiredSet.has(String(part.netSuiteInternalId || ''))) return false; // hide retired (custitem28 / locked) items from the browse list
+    if (tempFilter && part.manufacturingSpecs?.isTemp !== true) return false; // ⏳ TEMP view: only custitem_app_temp legacy items
     const term = searchTerm.toLowerCase();
     const specs = part.manufacturingSpecs || {};
 
@@ -952,6 +974,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           <button onClick={() => setAppOnlyFilter(v => !v)} title="Show only app-created parts with no NetSuite item # (legacyErpId PENDING + no internal id) — for finding residual items to clean up" style={{ padding: '10px 14px', border: `1px solid ${appOnlyFilter ? 'var(--brass)' : 'var(--line)'}`, background: appOnlyFilter ? 'var(--brass)' : '#fff', color: appOnlyFilter ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{appOnlyFilter ? '✓ App-only (no NS#)' : 'App-only (no NS#)'}</button>
           <button onClick={() => setPartClassFilter(v => v === 'FEES' ? 'ALL' : 'FEES')} title="Show ONLY fee items — matched by product type FEE, class Fee, or the CE-FEE-… code convention, so NetSuite-synced fees show too (they no longer surface under App-only)" style={{ padding: '10px 14px', border: `1px solid ${partClassFilter === 'FEES' ? 'var(--brass)' : 'var(--line)'}`, background: partClassFilter === 'FEES' ? 'var(--brass)' : '#fff', color: partClassFilter === 'FEES' ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{partClassFilter === 'FEES' ? '✓ 💲 Fees only' : '💲 Fees only'}</button>
           <button onClick={fixEncoding} disabled={mojiBusy} title="Repair garbled imported text (e.g. 1â€³ → 1″): UTF-8 that was mis-read as Windows-1252 during an import. Sweeps item names/descriptions AND the option labels baked into CPQ flows; only provably-garbled strings are changed — clean text can't be touched." style={{ padding: '10px 14px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: mojiBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{mojiBusy ? '⟳ Fixing…' : '🔤 Fix garbled text'}</button>
+          <button onClick={() => setTempFilter(v => !v)} title="Show only TEMP-flagged items — legacy NetSuite items loaded temporarily (checkbox custitem_app_temp) so finishing can run 100% in-app until they're discontinued" style={{ padding: '10px 14px', border: `1px solid ${tempFilter ? 'var(--brass)' : 'var(--line)'}`, background: tempFilter ? 'var(--brass)' : '#fff', color: tempFilter ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{tempFilter ? '✓ ⏳ Temp items' : '⏳ Temp items'}</button>
+          {tempFilter && (
+              <button onClick={nukeTempItems} disabled={tempBusy} title="Delete ALL TEMP-flagged items in this brand from the app library (items referenced by a BOM or CPQ flow are skipped and listed). NetSuite is untouched — uncheck their sync flag there too, or the next item sync brings them back. Typed confirmation required." style={{ padding: '10px 14px', border: 'none', background: '#d9534f', color: '#fff', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: tempBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{tempBusy ? '⟳ Working…' : '☢ Nuke temp items'}</button>
+          )}
           <button onClick={scanOrphans} disabled={orphanBusy} title="Scan every assembly BOM (assembly_pins) and every CPQ flow (linked assemblies/items, style & sub options, included parts), then show ONLY items with no NetSuite id that nothing references — test leftovers safe to clean out" style={{ padding: '10px 14px', border: `1px solid ${orphanMode ? '#d9534f' : 'var(--line)'}`, background: orphanMode ? '#d9534f' : '#fff', color: orphanMode ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: orphanBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{orphanBusy ? '⟳ Scanning…' : orphanMode ? '✓ 🧹 Orphans' : '🧹 Orphans (unused · no NS#)'}</button>
           {orphanMode && !orphanBusy && (
               <button onClick={() => deleteOrphans(filteredInventory)} disabled={filteredInventory.length === 0} title="Delete every item currently shown (all unreferenced + NetSuite-less). Search/filters narrow what's shown first." style={{ padding: '10px 14px', border: 'none', background: filteredInventory.length ? '#d9534f' : 'var(--paper-2)', color: filteredInventory.length ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: filteredInventory.length ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>🗑 Delete {filteredInventory.length} shown</button>
