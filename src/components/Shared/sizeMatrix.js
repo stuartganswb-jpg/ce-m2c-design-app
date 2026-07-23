@@ -40,14 +40,19 @@ export const SIZE_FAMILIES = {
         },
         proj: {
             id: 'SIZE-PROJ', title: 'Bracket Projection',
+            // Projections are DIAMETER-DEPENDENT in this collection (Stuart 2026-07-23): the small
+            // rods (1/2·3/4·1") come in 3-5/8" and 4-5/8"; the 1-3/8" rod comes in 4-5/8" and 6".
+            // `dias` lists where an option is offered — omitted = offered at every diameter.
             options: [
+                { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection', dias: ['05', '75', '1'] },
                 { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection' },
+                { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection', dias: ['138'] },
             ],
         },
-        // Simple Elegance sells French/Miter returns at its (only) projection — without this
-        // key the spec-sheet return pages prune (returnsAllowedFor treats absence as "allowed",
-        // the sheet's returnsHere gate treats it as "never": list the proj explicitly).
-        returnsMinProj: ['E'],
+        // Returns need the deeper projections (matches H1): offered at E and 6, never at S.
+        // (returnsAllowedFor treats a missing key as "allowed", the spec sheet's returnsHere
+        // gate treats it as "never" — always list explicitly.)
+        returnsMinProj: ['E', '6'],
     },
     'H1-RND': {
         label: 'Fabricut H1 Round',
@@ -95,9 +100,23 @@ export function buildSizeSteps(familyKey) {
     const mk = (axisKey, axis) => ({
         id: axis.id, title: axis.title, type: SIZE_STEP_TYPE, stepRole: 'SIZE',
         sizeAxis: axisKey, sizeFamily: familyKey,
-        styleOptions: axis.options.map(o => ({ optId: o.optId, partName: o.label, sizeValue: o.value, sizeScale: o.scale })),
+        styleOptions: axis.options.map(o => ({ optId: o.optId, partName: o.label, sizeValue: o.value, sizeScale: o.scale, ...(o.dias ? { dias: o.dias } : {}) })),
     });
     return [mk('DIA', fam.dia), mk('PROJ', fam.proj)];
+}
+
+// Whether a PROJECTION option is offered at the selected diameter. Options carry `dias` (baked
+// into regenerated flows by buildSizeSteps); flows generated BEFORE the constraint existed lack
+// it, so fall back to the registry by optId — no regenerate required for the gate to hold.
+export function projAllowedAtDia(familyKey, opt, diaValue) {
+    if (!opt || !diaValue) return true;
+    let dias = opt.dias;
+    if (!dias) {
+        const fam = SIZE_FAMILIES[familyKey];
+        const reg = fam?.proj?.options?.find(o => o.optId === (opt.optId || opt));
+        dias = reg?.dias;
+    }
+    return !dias || dias.includes(diaValue);
 }
 
 // Read the flow's size selections out of a CPQ config map (dynamicConfigParams / cart config).
@@ -116,7 +135,14 @@ export function sizeSelectionsOf(flow, config) {
         return opt || axisDef.options.find(o => o.value === dflt) || axisDef.options[0];
     };
     const d = pick('DIA', fam.dia, fam.baseDia);
-    const p = pick('PROJ', fam.proj, fam.baseProj);
+    let p = pick('PROJ', fam.proj, fam.baseProj);
+    // A stale selection can point at a projection the chosen diameter doesn't offer (dia changed
+    // after proj was picked) — heal to the first projection valid at this diameter so pricing,
+    // push, and size-swaps never resolve through an impossible dia×proj cell.
+    if (p.dias && !p.dias.includes(d.value)) {
+        p = fam.proj.options.find(o => (!o.dias || o.dias.includes(d.value)) && o.value === fam.baseProj)
+            || fam.proj.options.find(o => !o.dias || o.dias.includes(d.value)) || p;
+    }
     return {
         family: familyKey, dia: d.value, proj: p.value,
         scale: d.scale || 1, diaInches: d.inches,

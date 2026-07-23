@@ -8,7 +8,7 @@ import { OrbitControls, Bounds } from '@react-three/drei';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
 import { DynamicModel, StudioRig, buildPbrRegistry } from './cpqRender.jsx';
-import { sizeSelectionsOf, isReturnOption, returnsAllowedFor } from './shared/sizeMatrix';
+import { sizeSelectionsOf, isReturnOption, returnsAllowedFor, projAllowedAtDia } from './shared/sizeMatrix';
 
 const SIZE_TYPE = 'SIZE_SELECT';
 const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -292,9 +292,12 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
   ) : null;
 
   if (step.type === SIZE_TYPE) {
+    // Diameter-dependent projections (sizeMatrix `dias`, matches HQ): hide projections the
+    // chosen diameter doesn't offer; sizeSelectionsOf self-heals a stale invalid pick.
+    const sizeOpts = visStyleOptions.filter((o) => step.sizeAxis !== 'PROJ' || projAllowedAtDia(step.sizeFamily, o, sizeSel?.dia));
     return (
       <div className="opt-cards">
-        {visStyleOptions.map((o) => (
+        {sizeOpts.map((o) => (
           <button key={o.optId} type="button" className={`opt-card${sel === o.optId ? ' active' : ''}`} onClick={() => setParam(step.id, o.optId)}>
             {o.label || o.partName}
           </button>

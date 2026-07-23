@@ -21,6 +21,23 @@ const SIZE_FAMILIES = {
     ] },
     returnsMinProj: ['E', '6'],
   },
+  // Simple Elegance (mirrors src/components/Shared/sizeMatrix.js — keep in sync). Projections
+  // are diameter-dependent via `dias`: small rods S/E, the 1-3/8" rod E/6.
+  'H2-RND': {
+    label: 'Simple Elegance Round', baseDia: '75', baseProj: 'E',
+    dia: { id: 'SIZE-DIA', title: 'Rod Diameter', options: [
+      { optId: 'SIZE-DIA-05', value: '05', label: '1/2" Round Rod', scale: 0.667, inches: 0.5 },
+      { optId: 'SIZE-DIA-75', value: '75', label: '3/4" Round Rod', scale: 1, inches: 0.75 },
+      { optId: 'SIZE-DIA-1', value: '1', label: '1" Round Rod', scale: 1.333, inches: 1 },
+      { optId: 'SIZE-DIA-138', value: '138', label: '1-3/8" Round Rod', scale: 1.833, inches: 1.375 },
+    ] },
+    proj: { id: 'SIZE-PROJ', title: 'Bracket Projection', options: [
+      { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection', dias: ['05', '75', '1'] },
+      { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection' },
+      { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection', dias: ['138'] },
+    ] },
+    returnsMinProj: ['E', '6'],
+  },
 };
 const skOf = (p) => (p && p.manufacturingSpecs && p.manufacturingSpecs.customData && p.manufacturingSpecs.customData.sizeKey) || null;
 
@@ -37,7 +54,12 @@ function sizeSelectionsOf(flow, config) {
     return opt || axisDef.options.find((o) => o.value === dflt) || axisDef.options[0];
   };
   const d = pick('DIA', fam.dia, fam.baseDia);
-  const p = pick('PROJ', fam.proj, fam.baseProj);
+  let p = pick('PROJ', fam.proj, fam.baseProj);
+  // Heal a stale projection the chosen diameter doesn't offer (mirrors Shared/sizeMatrix.js).
+  if (p.dias && !p.dias.includes(d.value)) {
+    p = fam.proj.options.find((o) => (!o.dias || o.dias.includes(d.value)) && o.value === fam.baseProj)
+      || fam.proj.options.find((o) => !o.dias || o.dias.includes(d.value)) || p;
+  }
   return { family: familyKey, dia: d.value, proj: p.value, scale: d.scale || 1, diaInches: d.inches, isBase: d.value === fam.baseDia && p.value === fam.baseProj };
 }
 function returnsAllowedFor(sel) {

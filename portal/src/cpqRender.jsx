@@ -84,6 +84,10 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
     const applyAllOverrides = () => {
       const FASTENER_RX = /screw|bolt|washer|fastener|rivet|\bnut\b/i;
       const isFastener = (node) => { let n = node; while (n) { if (n.name && FASTENER_RX.test(n.name)) return true; n = n.parent; } return false; };
+      // 🧊 Two-part acrylic finials (ported from CPQTab): acrylic parts never take the finish —
+      // fixed clear material; the metal collar cluster still follows the finish.
+      const ACRYLIC_CODE_RX = /(ACBF|138ABF|138AFBF|138APF|138AJF|138FBF|138PF|138FJF|HTAJCBA|HTAJF|HCUAP|HRBASQ)/i;
+      const isAcrylicKeep = (node) => { let n = node; while (n) { const nm = n.name || ''; if ((/ACRYLIC/i.test(nm) && !/COLLAR|AFC/i.test(nm)) || ACRYLIC_CODE_RX.test(nm)) return true; n = n.parent; } return false; };
       clonedScene.traverse((child) => {
         if (!(child.isMesh && child.userData.originalMaterial && typeof child.userData.originalMaterial.clone === 'function')) return;
         if (isFastener(child)) { child.visible = false; return; }
@@ -100,6 +104,18 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
           if (anyShow) isVis = true; else if (anyHide) isVis = false;
         }
         child.visible = isVis;
+
+        if (isAcrylicKeep(child)) {
+          const mat = child.userData.originalMaterial.clone();
+          mat.map = null;
+          mat.color = new THREE.Color(0xe4edf2);
+          mat.transparent = true; mat.opacity = 0.45;
+          if (mat.isMeshStandardMaterial) { mat.metalness = 0; mat.roughness = 0.08; }
+          mat.envMapIntensity = 1.15;
+          mat.needsUpdate = true;
+          child.material = mat;
+          return;
+        }
 
         let matchedTexUrl = null;
         if (textureOverrides && Object.keys(textureOverrides).length > 0) {

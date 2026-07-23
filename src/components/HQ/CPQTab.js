@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
-import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
 
 const globalTextureCache = {};
@@ -157,6 +157,13 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
             // Match on the mesh OR any ancestor group name. \bnut\b is used so WALNUT isn't caught.
             const FASTENER_RX = /screw|bolt|washer|fastener|rivet|\bnut\b/i;
             const isFastener = (node) => { let n = node; while (n) { if (n.name && FASTENER_RX.test(n.name)) return true; n = n.parent; } return false; };
+            // 🧊 Two-part acrylic finials: the metal COLLAR takes the chosen finish, the acrylic
+            // part NEVER does — those meshes stay on a fixed clear material no matter what finish
+            // is selected. Matched by cluster/ancestor name (ACRYLIC-… minus the COLLAR cluster,
+            // whose item is …AFC) or the acrylic part/combined codes + raw Fusion node names from
+            // the H2-138 program (H2/H2 138 Acrylic Finial sheet).
+            const ACRYLIC_CODE_RX = /(ACBF|138ABF|138AFBF|138APF|138AJF|138FBF|138PF|138FJF|HTAJCBA|HTAJF|HCUAP|HRBASQ)/i;
+            const isAcrylicKeep = (node) => { let n = node; while (n) { const nm = n.name || ''; if ((/ACRYLIC/i.test(nm) && !/COLLAR|AFC/i.test(nm)) || ACRYLIC_CODE_RX.test(nm)) return true; n = n.parent; } return false; };
             clonedScene.traverse((child) => {
                 if (child.isMesh && child.userData.originalMaterial && typeof child.userData.originalMaterial.clone === 'function') {
                     if (isFastener(child)) { child.visible = false; return; }
@@ -185,6 +192,20 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         else if (anyHide) isVis = false;
                     }
                     child.visible = isVis;
+
+                    // Acrylic meshes keep clear glass EVERY frame (visibility above still governs
+                    // which choice shows) — the finish texture below must never reach them.
+                    if (isAcrylicKeep(child)) {
+                        const mat = child.userData.originalMaterial.clone();
+                        mat.map = null;
+                        mat.color = new THREE.Color(0xe4edf2);
+                        mat.transparent = true; mat.opacity = 0.45;
+                        if (mat.isMeshStandardMaterial) { mat.metalness = 0; mat.roughness = 0.08; }
+                        mat.envMapIntensity = 1.15;
+                        mat.needsUpdate = true;
+                        child.material = mat;
+                        return;
+                    }
 
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
@@ -2599,9 +2620,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           {/* Size-matrix selector (Rod Diameter / Bracket Projection): big card
                               choices; the selection re-resolves every configured part to that size
                               at pricing/push time — geometry and all other selections stay put. */}
-                          {currentStep.type === SIZE_STEP_TYPE && (
-                              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max((currentStep.styleOptions || []).length, 1)}, 1fr)`, gap: '14px', marginBottom: '20px' }}>
-                                  {(currentStep.styleOptions || []).map(o => {
+                          {currentStep.type === SIZE_STEP_TYPE && (() => {
+                              // Projections are diameter-dependent (sizeMatrix `dias`): H2's 1-3/8" rod
+                              // offers 4-5/8"/6" while the smaller rods offer 3-5/8"/4-5/8" — hide what
+                              // the chosen diameter doesn't sell. Stale invalid picks self-heal in
+                              // sizeSelectionsOf, so pricing/push never use an impossible cell.
+                              const selNow = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+                              const sizeOpts = (currentStep.styleOptions || []).filter(o => currentStep.sizeAxis !== 'PROJ' || projAllowedAtDia(currentStep.sizeFamily, o, selNow?.dia));
+                              return (
+                              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(sizeOpts.length, 1)}, 1fr)`, gap: '14px', marginBottom: '20px' }}>
+                                  {sizeOpts.map(o => {
                                       const on = dynamicConfigParams[currentStep.id] === o.optId;
                                       return (
                                           <div key={o.optId} onClick={() => handleParamChange(currentStep.id, o.optId)} style={{ border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}`, background: on ? 'var(--paper-2)' : '#fff', padding: '20px 12px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.15s' }}>
@@ -2610,7 +2638,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                       );
                                   })}
                               </div>
-                          )}
+                              );
+                          })()}
 
                           {(currentStep.type === 'VISUAL_GRID' || currentStep.type === 'VISUAL_DIMENSIONS') && (
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>

@@ -9,7 +9,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { doc, getDoc, setDoc, updateDoc, getDocs, query, collection, where, deleteField } from 'firebase/firestore';
 import { db, storage } from '../../firebase';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { SIZE_FAMILIES, buildSizeIndex, sizeVariantOf } from '../Shared/sizeMatrix';
+import { SIZE_FAMILIES, buildSizeIndex, sizeVariantOf, projAllowedAtDia } from '../Shared/sizeMatrix';
 import { loadGLBScene } from '../Shared/componentExport';
 import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
 import {
@@ -972,7 +972,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
                 {sizeFam.dia.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
               <select value={sizeSel.proj} onChange={e => { setSizeSel(s => ({ ...s, proj: e.target.value })); setPageIndex(0); }} style={{ padding: '5px', fontSize: '0.8rem' }}>
-                {sizeFam.proj.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                {sizeFam.proj.options.filter(o => projAllowedAtDia(sizeFamilyKey, o, sizeSel?.dia)).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
               {!isBaseCell && srcState.assembly && (
                 <span style={{ fontSize: '0.72rem', color: '#2e7d4f', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Geometry source: ${srcState.assembly.itemName || srcState.assembly.id}`}>
