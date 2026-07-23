@@ -762,6 +762,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // CUSTOMER-ONLY choice (1.6 cust gate): the option carries the restriction —
                       // CPQ + the portal show it only when that customer is selected / logged in.
                       if (Array.isArray(p.customerIds) && p.customerIds.length) { e.customerIds = p.customerIds; e.customerNames = p.customerNames || []; }
+                      // Two-part finial pairing (1.6 COLLAR checkbox + collar: dropdown) rides the
+                      // options exactly like customerIds — the pairing pass below reads these.
+                      if (p.isCollar) e.isCollar = true;
+                      if (p.requiresCollar && String(p.requiresCollar).trim()) e.requiresCollar = String(p.requiresCollar).trim();
                   });
                   return;
               }
@@ -788,6 +792,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   if (pin.isBasic) e.isBasic = true;
                   if (pin.usesReturnPlates || cl.usesReturnPlates) e.usesReturnPlates = true;
                   if (Array.isArray(pin.customerIds) && pin.customerIds.length) { e.customerIds = pin.customerIds; e.customerNames = pin.customerNames || []; }
+                  if (pin.isCollar) e.isCollar = true;
+                  if (pin.requiresCollar && String(pin.requiresCollar).trim()) e.requiresCollar = String(pin.requiresCollar).trim();
               } else if (clusterReturnish && !cl.inlineOnly) {
                   e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns (unless flagged INLINE)
               }
@@ -795,25 +801,41 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (!pin && cl.inlineOnly) e.inlineOnly = true;
               if (!pin && cl.usesReturnPlates) e.usesReturnPlates = true;
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}) }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 
       const pole = groupPlacements('POLE');
-      // 🧊 Two-part acrylic finials: a COLLAR cluster is NOT a customer choice — it's companion
-      // geometry that renders WITH every same-side acrylic-top choice. Collars leave the option
-      // pool; their nodes are APPENDED to each acrylic option's geometry (so top+collar show and
-      // the step's metal finish lands on the collar), and the option remembers its pre-merge top
+      // 🧊 Two-part acrylic finials: a COLLAR choice is NOT a customer choice — it's companion
+      // geometry that renders WITH the top choices paired to it. Collars leave the option pool;
+      // their nodes are APPENDED to each paired option's geometry (so top+collar show and the
+      // step's metal finish lands on the collar), and the option remembers its pre-merge top
       // nodes (acrylicTopNodes) so the AC master-finish chip override targets ONLY the acrylic.
+      // Detection is EXPLICIT (1.6 COLLAR checkbox → pin.isCollar): partName holds the bare item
+      // code (H2-138AFC), so a text heuristic alone can't see "acrylic"/"collar" — the old
+      // name-only detection failed exactly there. AFC-coded / "acrylic collar"-named options stay
+      // as a fallback for unflagged legacy pins.
+      // Pairing is EXPLICIT too (1.6 collar: dropdown → pin.requiresCollar = the collar's item #):
+      // that option gets THAT collar's nodes (matched by partId/partName — linked pins carry the
+      // ERP code as partName — preferring the same position). Options WITHOUT requiresCollar keep
+      // the legacy same-side append ONLY when the pool has exactly one collar (unambiguous).
       const finialAll = groupPlacements('FINIAL');
       const optTxt = (o) => `${o.partName || ''} ${o.partId || ''}`;
-      const isAcrylicCollar = (o) => /ACRYLIC/i.test(optTxt(o)) && /COLLAR|(^|[^A-Z])AFC([^A-Z]|$)/i.test(optTxt(o));
-      const acrylicCollars = finialAll.filter(isAcrylicCollar);
-      const finial = finialAll.filter(o => !isAcrylicCollar(o));
-      if (acrylicCollars.length) {
+      const isCollarOpt = (o) => !!o.isCollar || /(^|[^A-Z])AFC([^A-Z]|$)/i.test(optTxt(o)) || (/ACRYLIC/i.test(optTxt(o)) && /COLLAR/i.test(optTxt(o)));
+      const collarPool = finialAll.filter(isCollarOpt);
+      const finial = finialAll.filter(o => !isCollarOpt(o));
+      if (collarPool.length) {
+          const normId = (v) => String(v || '').trim().toUpperCase();
           finial.forEach(o => {
-              if (!/ACRYLIC/i.test(optTxt(o))) return;
-              const mates = acrylicCollars.filter(c => (c.position || '') === (o.position || ''));
+              let mates = [];
+              if (o.requiresCollar) {
+                  const want = normId(o.requiresCollar);
+                  const byId = collarPool.filter(c => normId(c.partId) === want || normId(c.partName) === want);
+                  const samePos = byId.filter(c => (c.position || '') === (o.position || ''));
+                  mates = samePos.length ? samePos : byId.slice(0, 1);
+              } else if (collarPool.length === 1 && /ACRYLIC/i.test(optTxt(o))) {
+                  mates = collarPool.filter(c => (c.position || '') === (o.position || ''));
+              }
               const extra = mates.map(c => c.targetNode).filter(Boolean).join(', ');
               if (!extra) return;
               o.acrylicTopNodes = o.targetNode || '';

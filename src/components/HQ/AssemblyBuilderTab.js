@@ -237,6 +237,20 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         const erp = (e.erp && e.erp !== 'PENDING') ? e.erp : e.code;
         return { partId: e.itemId || e.code, partName: erp, legacyErpId: erp, isExistingLibraryPart: true, status: 'SPECS_LOCKED' };
     };
+    // Two-part finials: the collar: pairing dropdown lists THIS assembly's COLLAR-flagged,
+    // item-numbered choices (deduped — a LEFT+RIGHT pair of the same collar lists once). The
+    // stored value is the collar's item # exactly as assigned; the flow generator matches it
+    // against the collar option's partId/partName to append that collar's geometry.
+    const collarCodesOf = (allChoices) => {
+        const seen = new Set(); const out = [];
+        (allChoices || []).forEach(c => {
+            const code = String(c?.itemNo || '').trim();
+            if (!c?.isCollar || !code) return;
+            const k = code.toUpperCase();
+            if (!seen.has(k)) { seen.add(k); out.push(code); }
+        });
+        return out;
+    };
 
     const addLog = (m, t = 'info') => setLog(p => [{ t: new Date().toLocaleTimeString(), m, type: t }, ...p].slice(0, 40));
 
@@ -365,7 +379,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const m = index ? matchItemByName(nm, index, normalizeCategory(slot.category) || slot.category) : null;
                 if (m) hit++;
                 const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, custIds: [], custNames: [], thumb: '' };
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', custIds: [], custNames: [], thumb: '' };
             });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
@@ -442,7 +456,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const m = index ? matchItemByName(nm, index, normalizeCategory(slotDef?.category) || slotDef?.category) : null;
                     const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, custIds: [], custNames: [], thumb: '' };
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', custIds: [], custNames: [], thumb: '' };
                 }))
             }
         } : prev);
@@ -634,6 +648,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         ...(ch.isHidden ? { isHiddenPart: true } : {}),
                         ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}),
                         ...(hasItem && !ch.isFee && Array.isArray(ch.custIds) && ch.custIds.length ? { customerIds: ch.custIds, customerNames: ch.custNames || [] } : {}),
+                        // Two-part finial pairing (COLLAR checkbox / collar: dropdown) — persisted
+                        // exactly like customerIds so the generator pairs tops to their collar.
+                        ...(hasItem && !ch.isFee && ch.isCollar ? { isCollar: true } : {}),
+                        ...(hasItem && !ch.isFee && !ch.isCollar && String(ch.requiresCollar || '').trim() ? { requiresCollar: String(ch.requiresCollar).trim() } : {}),
                         ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {})
                     });
                 });
@@ -879,7 +897,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // here automatically; saving stamps it onto the pins so both stay in sync.
                     // A PARKED pin reloads as a plain blank choice (⏸ hint shows) — NOT as HIDE-checked,
                     // otherwise assigning its item # later would save it as a hidden BOM part.
-                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], thumb: '' };
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), isCollar: !!pin?.isCollar, requiresCollar: pin?.requiresCollar || '', custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -972,7 +990,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const label = choiceLabel(nm);
                     const m = index ? matchItemByName(label, index) : null;
                     const et = normalizeCategory(r.category) === 'FINIAL' ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, custIds: [], custNames: [], thumb: '' };
+                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', custIds: [], custNames: [], thumb: '' };
                 }))
             })
         } : prev);
@@ -1021,7 +1039,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const partId = hasItem ? ch.itemNo.trim().toUpperCase() : (ch.isHidden ? `HIDDEN-${slug}` : `FEE-${slug}`);
                     const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}), ...(hasItem && !ch.isFee && Array.isArray(ch.custIds) && ch.custIds.length ? { customerIds: ch.custIds, customerNames: ch.custNames || [] } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
+                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}), ...(hasItem && !ch.isFee && Array.isArray(ch.custIds) && ch.custIds.length ? { customerIds: ch.custIds, customerNames: ch.custNames || [] } : {}), ...(hasItem && !ch.isFee && ch.isCollar ? { isCollar: true } : {}), ...(hasItem && !ch.isFee && !ch.isCollar && String(ch.requiresCollar || '').trim() ? { requiresCollar: String(ch.requiresCollar).trim() } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -1300,6 +1318,19 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <input type="checkbox" checked={!!c.usesReturnPlates} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { usesReturnPlates: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />
                                                         inl-bkt
                                                     </label>
+                                                    {normalizeCategory(r.category) === 'FINIAL' && (
+                                                        <label title="COLLAR — this choice is the metal collar of a TWO-PART finial: companion geometry, never offered as its own option. Pair each top to it via the tops' collar: dropdown; on regenerate the collar renders WITH those tops (the step's metal finish lands on the collar; the AC chip keeps an acrylic top clear)." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isCollar ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                            <input type="checkbox" checked={!!c.isCollar} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isCollar: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, requiresCollar: '' } : {}) })} style={{ cursor: 'pointer' }} />
+                                                            collar
+                                                        </label>
+                                                    )}
+                                                    {normalizeCategory(r.category) === 'FINIAL' && !c.isCollar && (() => { const codes = collarCodesOf(assignData.rows.flatMap(rr => rr.choices)); return (
+                                                        <select value={c.requiresCollar || ''} title="PAIR WITH COLLAR (two-part finial top): pick the COLLAR-flagged choice (its item #) this top renders WITH — the generated option shows top+collar together, same side preferred. '— none —' = a one-piece finial." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { requiresCollar: e.target.value })} style={{ ...inp, padding: '1px 2px', fontSize: '7.5px', fontFamily: 'var(--mono)', width: '82px', maxWidth: '82px', borderColor: c.requiresCollar ? 'var(--brass)' : 'var(--line)', color: c.requiresCollar ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                                                            <option value="">collar: — none —</option>
+                                                            {codes.map(code => <option key={code} value={code}>{code}</option>)}
+                                                            {c.requiresCollar && !codes.some(code => code.toUpperCase() === String(c.requiresCollar).toUpperCase()) && <option value={c.requiresCollar}>{c.requiresCollar}</option>}
+                                                        </select>
+                                                    ); })()}
                                                     {normalizeCategory(r.category) === 'BRACKET' && (
                                                         <label title="END RETURN ARM (Flat Iron pattern): this bracket IS the end treatment — selecting it greys that side's finial / inside-mount step; its backplate stays choosable (unless basic). Auto-detected when the library part is flagged isReturnBracket; check here to force it." style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isReturnArm ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.isReturnArm} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isReturnArm: e.target.checked })} style={{ cursor: 'pointer' }} />
@@ -1424,6 +1455,18 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <label title="INLINE BRACKET (the bracket-side sibling of the basic tag): while this In Line arm is the selected bracket, the plate picker shows the INLINE plates (inl-only copies) — or the RETURN plates when the flow has no inline copies. This tag is how the system knows a bracket is In Line." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.usesReturnPlates ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.usesReturnPlates} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { usesReturnPlates: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer' }} />inl-bkt
                                                         </label>
+                                                        {normalizeCategory(slot.category) === 'FINIAL' && (
+                                                            <label title="COLLAR — this choice is the metal collar of a TWO-PART finial: companion geometry, never its own option. Pair each top via the tops' collar: dropdown." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isCollar ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                                <input type="checkbox" checked={!!c.isCollar} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isCollar: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, requiresCollar: '' } : {}) })} style={{ cursor: 'pointer' }} />collar
+                                                            </label>
+                                                        )}
+                                                        {normalizeCategory(slot.category) === 'FINIAL' && !c.isCollar && (() => { const codes = collarCodesOf(Object.values(layers).flatMap(l => l.choices || [])); return (
+                                                            <select value={c.requiresCollar || ''} title="PAIR WITH COLLAR (two-part finial top): pick the COLLAR-flagged choice (its item #) this top renders WITH. '— none —' = a one-piece finial." onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { requiresCollar: e.target.value })} style={{ ...inp, padding: '1px 2px', fontSize: '7.5px', fontFamily: 'var(--mono)', width: '82px', maxWidth: '82px', borderColor: c.requiresCollar ? 'var(--brass)' : 'var(--line)', color: c.requiresCollar ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                                                                <option value="">collar: — none —</option>
+                                                                {codes.map(code => <option key={code} value={code}>{code}</option>)}
+                                                                {c.requiresCollar && !codes.some(code => code.toUpperCase() === String(c.requiresCollar).toUpperCase()) && <option value={c.requiresCollar}>{c.requiresCollar}</option>}
+                                                            </select>
+                                                        ); })()}
                                                         {normalizeCategory(slot.category) === 'BRACKET' && (
                                                             <label title="END RETURN ARM (Flat Iron pattern): this bracket IS the end treatment — greys that side's finial / inside-mount step; backplate stays choosable (unless basic)." style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: c.isReturnArm ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                                 <input type="checkbox" checked={!!c.isReturnArm} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isReturnArm: e.target.checked })} style={{ cursor: 'pointer' }} />end-arm
