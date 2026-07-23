@@ -17,6 +17,8 @@ git push origin main
 ```
 After deploy, the user must **hard-refresh** (⌘⇧R) to clear the cached bundle.
 
+**Stale-build trap (2026-07-22 incident):** a deploy can show "Ready" with a fresh `version.json` stamp yet serve OLD compiled code (poisoned Vercel-restored webpack cache — prod even regressed to earlier commits). Guard in place: `"prebuild": "rm -rf node_modules/.cache"` forces cold builds — do not remove it without clearing Vercel's build cache. If a shipped change "does nothing" on prod, grep the live bundle for a marker string BEFORE debugging the feature: `curl -sL https://www.4cosworkcenter.com/ | grep -o 'static/js/main\.[a-z0-9]*\.js'`, download that file, `LC_ALL=C grep -c '<unique new string>'`. See memory `vercel-deploy-pipeline`.
+
 **MULTI-SESSION GIT SAFETY — multiple Claude sessions often work this repo at once:**
 - **NEVER switch branches in the shared checkout** (`git checkout <branch>` races the other session's in-flight files — this once landed a commit on main unintentionally). Commit small changes directly on main (fix-forward, as above); use an isolated **`git worktree`** for bigger multi-commit work.
 - Stage ONLY files you changed (never `git add -A` — the other session's work may be sitting in the tree).
