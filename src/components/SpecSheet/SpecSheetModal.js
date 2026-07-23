@@ -21,9 +21,11 @@ import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from '.
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 
 // Wall-mount plate meshes are children of each backplate choice node in the merged GLB
-// (Fabricut H1 convention: item codes like H1-CPWP2/P). Extend here if a collection names
-// its wall plates differently.
-const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP)/i;
+// (item codes like H1-CPWP2/P, H2-75CPWP1/P — any family). Fragment match: the classic
+// H1 trios plus the generic "WP<digit>" token so new collections work without edits here.
+const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP|WP\d)/i;
+// Full wall-plate code inside a mesh path — family-agnostic (was hardcoded H1-).
+const WALL_CODE_RX = /[A-Z]+\d*-[A-Z0-9]*WP\d+(\s*\/?\s*P)?/i;
 const SCREW_MATCH = /screw/i;
 
 // Plate FAMILY = part code minus the shape suffix (H1-75RCP-S → H1-75RCP). A page is one
@@ -493,6 +495,21 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       scene.traverse(o => { if (o.isMesh && /pole|rod/i.test(o.name || '') && !/finial|bracket|plate|ring|screw/i.test(o.name || '')) nameHits.push(o.name); });
       if (nameHits.length) pole = extractWorldMeshes(scene, nameHits);
     }
+    if (!pole.length) {
+      // Last resort (1.6 merged GLBs name top nodes by ITEM CODE, e.g. H2-75RD8): any
+      // top-level code-named node whose LIBRARY part classifies as a pole/rod/track is
+      // the rod — works for families whose clusters aren't POLE-tagged yet.
+      const poleNames = [];
+      (scene.children || []).forEach(top => {
+        const nm = top.name || '';
+        const leaf = String(nm).split('__').pop().replace(/^\d+_?/, '').trim();
+        const code = leaf.replace(/\s+(LEFT|RIGHT|CENTER|CTR|L|R)$/i, '').replace(/[\s_]v\d+.*$/i, '').replace(/\.\d{3}$/, '').trim().toUpperCase();
+        if (!code) return;
+        const part = (libraryParts || []).find(p => String(p.legacyErpId || '').toUpperCase() === code || String(p.itemId || '').toUpperCase() === code);
+        if (part && /POLE|ROD|TRACK/i.test(String(part.manufacturingSpecs?.productType || part.productType || ''))) poleNames.push(nm);
+      });
+      if (poleNames.length) pole = extractWorldMeshes(scene, poleNames);
+    }
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
@@ -665,7 +682,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const wallPlate = plateAll.filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
       const cover = plateAll.filter(m => !WALL_PLATE_MATCH.test(m.name + m.path) && !SCREW_MATCH.test(m.name + m.path));
       // merged GLBs may drop the "/" from item codes ("H1-CPWP2P") — normalize back to ".../P"
-      const wallCodeMatch = (wallPlate[0] ? (wallPlate[0].path + '/' + wallPlate[0].name) : '').match(/H1-[A-Z]*WP\d+(\s*\/?\s*P)?/i);
+      const wallCodeMatch = (wallPlate[0] ? (wallPlate[0].path + '/' + wallPlate[0].name) : '').match(WALL_CODE_RX);
       const wallCode = wallCodeMatch ? wallCodeMatch[0].toUpperCase().replace(/\s*\/?\s*P$/, '/P') : (wallPlate.length ? 'WALL PLATE' : '');
       // park the ring past THIS row's plate edge — wide -H plates push it further out
       const plateHalfAlong = (cb0.max[axes.poleAxis] - cb0.min[axes.poleAxis]) / 2;
@@ -716,7 +733,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, ringItems };
-  }, [nodesFor, wallCfg, choicesFor, legacyChoicesFor]);
+  }, [nodesFor, wallCfg, choicesFor, legacyChoicesFor, libraryParts]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
@@ -731,7 +748,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     for (const p of allPlatePins) {
       const meshes = extractWorldMeshes(scene, [p.choiceNode]).filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
       if (!meshes.length) continue;
-      const codeM = (meshes[0].path + '/' + meshes[0].name).match(/H1-[A-Z]*WP\d+(\s*\/?\s*P)?/i);
+      const codeM = (meshes[0].path + '/' + meshes[0].name).match(WALL_CODE_RX);
       const code = codeM ? codeM[0].toUpperCase().replace(/\s*\/?\s*P$/, '/P') : `WALL PLATE (${p.partName})`;
       if (seen.has(code) || !pole.length) continue;
       const axes = inferAxes(pole, meshes);
@@ -1045,7 +1062,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           </div>
         )}
         <div style={{ padding: '8px 16px', fontSize: '0.8rem', color: '#555', minHeight: '20px' }}>
-          {error ? <span style={{ color: '#b00020' }}>⚠ {error}</span> : (status || (dimTool ? 'Manual dim: click two points on a drawing, then enter the value.' : ''))}
+          {error ? <span style={{ color: '#b00020' }}>⚠ {error}</span>
+            : status ? status
+            : dimTool ? 'Manual dim: click two points on a drawing, then enter the value.'
+            : (assembly && !assembly.manufacturingSpecs?.specCadUrl) ? <span style={{ color: '#8a6d1a' }}>📐 Drawing from the merged sales model — pages can misdraw or come up empty (that's why H1 got dedicated spec layouts). For clean sheets: upload this assembly's "Spec Sheet Layout (📐)" in 1.6 (the Spec · true m export), or register a per-size spec GLB via the size pickers above.</span>
+            : ''}
         </div>
         <div ref={svgHostRef} onClick={handleSvgClick}
           style={{ flex: 1, overflow: 'auto', padding: '0 16px 16px', cursor: dimTool ? 'crosshair' : 'default' }}>

@@ -44,6 +44,10 @@ export const SIZE_FAMILIES = {
                 { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection' },
             ],
         },
+        // Simple Elegance sells French/Miter returns at its (only) projection — without this
+        // key the spec-sheet return pages prune (returnsAllowedFor treats absence as "allowed",
+        // the sheet's returnsHere gate treats it as "never": list the proj explicitly).
+        returnsMinProj: ['E'],
     },
     'H1-RND': {
         label: 'Fabricut H1 Round',
