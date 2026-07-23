@@ -1480,6 +1480,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               }
 
               let multiplier = 1.0;
+              let wmPair = null; // 🔩 wall-mount pairing off the resolved plate part (partObj is block-scoped below)
               let itemName = step.title;
               // Fee/labor lines are excluded from the trade-discount base (items only).
               let lineIsFee = step.type === 'STATIC_FEE';
@@ -1600,6 +1601,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (partObj && partObj.multiplier && parseFloat(partObj.multiplier) > 1.0) {
                       multiplier = parseFloat(partObj.multiplier);
                   }
+                  // 🔩 Backplate/cover-plate wall-mount pairing: finish variants don't carry it, so
+                  // fall back to the pre-variant (sized base) doc. Emitted after the main line below.
+                  wmPair = partObj?.manufacturingSpecs?.wallMount || preVariantObj?.manufacturingSpecs?.wallMount || null;
+                  if (wmPair && !wmPair.partId) wmPair = null;
               }
 
               // MULTI-MATERIAL POLE PRICING: a Length step (calculator, no linked item, no own
@@ -1655,6 +1660,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       cutLength: cutLength,
                       dimensions: dimInput ? { length: dimInput.length || null, wallA: dimInput.wallA || null, wallB: dimInput.wallB || null, wallC: dimInput.wallC || null } : null
                   });
+                  // 🔩 Paired wall mount: one per plate, priced like any BOM item (usually $0 hardware).
+                  if (wmPair) {
+                      const wmPart = findLibPart(wmPair.partId);
+                      const wmPrice = wmPart ? (parseFloat(wmPart.manufacturingSpecs?.basePrice ?? wmPart.basePrice) || 0) : 0;
+                      breakdown.push({
+                          name: `Wall Mount — ${wmPair.desc || wmPair.partId}`,
+                          qty: qty, price: wmPrice, total: wmPrice * qty,
+                          partHandling: wmPart?.manufacturingSpecs?.partHandling || step.partHandling || '',
+                          partId: wmPart?.itemId || wmPart?.id || wmPair.partId,
+                          legacyErpId: wmPart?.legacyErpId || wmPart?.itemId || wmPair.partId
+                      });
+                      total += wmPrice * qty;
+                  }
               }
 
               total += lineTotal;
@@ -1693,6 +1711,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       legacyErpId: subPart?.legacyErpId || subPart?.itemId || null
                   });
                   total += subPrice * qty;
+                  // 🔩 Paired wall mount for the backplate sub-line (chain: finished → sized base → raw base —
+                  // pairing lives on base docs; enter it per-size when a size needs a different mount).
+                  const subWm = subPart?.manufacturingSpecs?.wallMount || subBase?.manufacturingSpecs?.wallMount || subBase0?.manufacturingSpecs?.wallMount;
+                  if (subWm && subWm.partId) {
+                      const swmPart = findLibPart(subWm.partId);
+                      const swmPrice = swmPart ? (parseFloat(swmPart.manufacturingSpecs?.basePrice ?? swmPart.basePrice) || 0) : 0;
+                      breakdown.push({
+                          name: `Wall Mount — ${subWm.desc || subWm.partId}`,
+                          qty: qty, price: swmPrice, total: swmPrice * qty,
+                          partHandling: swmPart?.manufacturingSpecs?.partHandling || step.partHandling || '',
+                          partId: swmPart?.itemId || swmPart?.id || subWm.partId,
+                          legacyErpId: swmPart?.legacyErpId || swmPart?.itemId || subWm.partId
+                      });
+                      total += swmPrice * qty;
+                  }
               }
           }
       });

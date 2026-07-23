@@ -6,6 +6,7 @@ import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
 import { validateAssemblyAlignment } from '../Shared/assemblyTags';
+import { SIZE_FAMILIES, buildSizeIndex } from '../Shared/sizeMatrix';
 
 // Fabricut-style spec-sheet generator (hidden-line drawings from the working GLB) — lazy so
 // the drawing engine only loads when opened.
@@ -195,8 +196,12 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   // Sequential so we never hold many offscreen WebGL contexts at once (snapshotPNG releases each after).
   const handleBulkThumbnails = async () => {
       const targets = filteredAssemblies.filter(a => a.manufacturingSpecs?.cadUrl && !a.finalImageUrl);
-      if (!targets.length) return alert('Every assembly matching the current filters already has a thumbnail. Adjust the filters, or use the per-assembly Re-capture button on one that has an image.');
-      if (!window.confirm(`Generate thumbnails from the .glb for ${targets.length} assembly(ies) missing an image?\n\nEach is rendered offscreen — this can take a little while for a large batch. You can keep working; leaving the tab cancels it.`)) return;
+      // Size-variant siblings (CPQ scales the base geometry — H2-1BE etc.) have no .glb of their
+      // own, so the render pass can't reach them; same part, different size → the BASE item's
+      // thumbnail is still valid for part verification, so those get a copy pass instead.
+      const sibCandidates = filteredAssemblies.filter(a => !a.manufacturingSpecs?.cadUrl && !a.finalImageUrl && a.manufacturingSpecs?.customData?.sizeKey);
+      if (!targets.length && !sibCandidates.length) return alert('Every assembly matching the current filters already has a thumbnail. Adjust the filters, or use the per-assembly Re-capture button on one that has an image.');
+      if (!window.confirm(`Thumbnails for ${targets.length + sibCandidates.length} assembly(ies) missing an image:\n\n• ${targets.length} rendered offscreen from their .glb\n• ${sibCandidates.length} size-variants copied from their base-size sibling's image\n\nThis can take a little while for a large render batch. You can keep working; leaving the tab cancels it.`)) return;
       setBulkThumb({ running: true, done: 0, total: targets.length });
       let ok = 0, fail = 0;
       for (let i = 0; i < targets.length; i++) {
@@ -211,8 +216,23 @@ const BOMTab = ({ currentUser, activeBrand }) => {
           } catch (e) { console.error('Bulk thumbnail failed for', a.itemId, e); fail++; }
           setBulkThumb({ running: true, done: i + 1, total: targets.length });
       }
+      // Copy pass: size siblings inherit the base-diameter item's image (same geometry, scaled).
+      let copied = 0, noBase = 0;
+      try {
+          const idx = buildSizeIndex(assemblies);
+          for (const s of sibCandidates) {
+              const sk = s.manufacturingSpecs.customData.sizeKey;
+              const fam = SIZE_FAMILIES[sk.family];
+              if (!fam) { noBase++; continue; }
+              const base = idx.get(`${sk.family}|${fam.baseDia}|${sk.style}|${sk.projLetter || ''}`);
+              const img = base && base.id !== s.id ? (base.finalImageUrl || base.componentImageUrl) : null;
+              if (!img) { noBase++; continue; }
+              await updateDoc(doc(db, "Approved_Designs", s.id), { finalImageUrl: img });
+              copied++;
+          }
+      } catch (e) { console.error('Size-sibling thumbnail pass failed', e); }
       setBulkThumb({ running: false, done: 0, total: 0 });
-      alert(`✅ Thumbnails: ${ok} generated${fail ? ` · ${fail} failed (see console — usually a missing/invalid .glb)` : ''}.`);
+      alert(`✅ Thumbnails: ${ok} generated${copied ? ` · ${copied} copied from base-size siblings` : ''}${fail ? ` · ${fail} failed (see console — usually a missing/invalid .glb)` : ''}${noBase ? ` · ${noBase} size-variant(s) skipped (their base-size item has no image yet — generate the base first, then run again)` : ''}.`);
   };
 
   useEffect(() => {

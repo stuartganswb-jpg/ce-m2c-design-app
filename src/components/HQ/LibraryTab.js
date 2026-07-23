@@ -446,7 +446,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         watchList: currentWatchList,
         isProjectManaged: baseSpecs.isProjectManaged || false,
         partHandling: baseSpecs.partHandling || "",
-        weight: baseSpecs.weight || ""
+        weight: baseSpecs.weight || "",
+        wallMount: baseSpecs.wallMount || { partId: "", desc: "" }
     });
   };
 
@@ -1403,6 +1404,19 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                            </select>
                        </div>
                    )}
+
+                   {/* 🔩 Backplates/cover plates typically (not always) need a wall mount — pair it here
+                       and CPQ auto-adds one per plate to the BOM (cart line + NetSuite push). */}
+                   {/PLATE/i.test(String(editSpecs.productType || '')) && (<>
+                       <div>
+                           <label style={labelStyle}>Wall Mount Part #</label>
+                           <input value={editSpecs.wallMount?.partId || ''} onChange={e => setEditSpecs(prev => ({ ...prev, wallMount: { ...(prev.wallMount || {}), partId: e.target.value.toUpperCase() } }))} placeholder="blank = none" title="Item # of the matching wall mount. When set, every CPQ order of this plate includes one mount per plate — in the cart breakdown and the NetSuite push." style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                       </div>
+                       <div>
+                           <label style={labelStyle}>Wall Mount Description</label>
+                           <input value={editSpecs.wallMount?.desc || ''} onChange={e => setEditSpecs(prev => ({ ...prev, wallMount: { ...(prev.wallMount || {}), desc: e.target.value } }))} placeholder="e.g. Toggle anchor kit" style={fieldStyle} />
+                       </div>
+                   </>)}
 
                    <div>
                        <label style={labelStyle}>{activePart.partClass === 'Inventory' ? 'Inventory Category' : 'Routing Classification'}</label>

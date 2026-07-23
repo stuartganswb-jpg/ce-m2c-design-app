@@ -200,6 +200,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               if (aliasId) { const real = matchPart(aliasId); if (real) masterPart = real; }
               // SIZE-MATRIX swap: the configured diameter/projection picks the actual item (return
               // plates collapse to standard plates at 1"/1-3/8" per the resolver's RBP→BP rule).
+              const preSizeMaster = masterPart; // wall-mount pairing may live only on the base-size doc
               masterPart = sizeBundle.swap(masterPart);
               // Fee/Charge entities price the quote (their charge rides the rollup item's price) but are
               // NOT physical NetSuite BOM components — skip instead of pushing an UNMAPPED item line.
@@ -282,6 +283,26 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   partCategory: masterPart.manufacturingSpecs?.partHandling || '',
                   projection: cart.dimensions?.[dimStepId]?.length || ''
               });
+              // 🔩 Paired wall mount (backplates/cover plates): one per plate rides the push like a
+              // BOM component — mirrors the cart line CPQTab adds. Aggregator below merges duplicates.
+              const wmPair = masterPart.manufacturingSpecs?.wallMount || preSizeMaster.manufacturingSpecs?.wallMount;
+              if (wmPair && wmPair.partId) {
+                  const wmPart = matchPart(wmPair.partId);
+                  if (wmPart) {
+                      rawLines.push({
+                          stepId: `${stepId}__wallmount`,
+                          masterPart: wmPart,
+                          qty: lineQty,
+                          nsId: wmPart.netSuiteInternalId || wmPart.legacyErpId || wmPart.itemId || 'UNMAPPED',
+                          finishedErpId: '',
+                          finishUnmapped: '',
+                          partCategory: wmPart.manufacturingSpecs?.partHandling || 'Small Parts',
+                          projection: ''
+                      });
+                  } else {
+                      result.unresolved.push({ stepTitle: `${step?.title || stepId} — wall mount`, partId: wmPair.partId });
+                  }
+              }
           });
       });
 
