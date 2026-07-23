@@ -19,6 +19,32 @@
 export const SIZE_STEP_TYPE = 'SIZE_SELECT';
 
 export const SIZE_FAMILIES = {
+    // SIMPLE ELEGANCE (Stuart 2026-07-22): H2-05 / H2-75 / H2-1 / H2-138 collapse into ONE flow.
+    // The code grammar carries the matrix — H2-<dia><style> (longest dia token first: 138 before
+    // 1) — so sizeKeys are stamped by rule (System Admin → 🧬 Size-Family Stamper), no importer
+    // needed. Single projection today (4-5/8"); brackets carry no projection letter, so the PROJ
+    // answer is recorded but never changes the item — add lettered options when 6" bracket codes
+    // exist. Master geometry = the H2-75 assembly (generate the flow from it, like Fabricut's ¾").
+    'H2-RND': {
+        label: 'Simple Elegance Round',
+        baseDia: '75',
+        baseProj: 'E',
+        dia: {
+            id: 'SIZE-DIA', title: 'Rod Diameter',
+            options: [
+                { optId: 'SIZE-DIA-05', value: '05', label: '1/2" Round Rod', scale: 0.667, inches: 0.5 },
+                { optId: 'SIZE-DIA-75', value: '75', label: '3/4" Round Rod', scale: 1, inches: 0.75 },
+                { optId: 'SIZE-DIA-1', value: '1', label: '1" Round Rod', scale: 1.333, inches: 1 },
+                { optId: 'SIZE-DIA-138', value: '138', label: '1-3/8" Round Rod', scale: 1.833, inches: 1.375 },
+            ],
+        },
+        proj: {
+            id: 'SIZE-PROJ', title: 'Bracket Projection',
+            options: [
+                { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection' },
+            ],
+        },
+    },
     'H1-RND': {
         label: 'Fabricut H1 Round',
         baseDia: '75',

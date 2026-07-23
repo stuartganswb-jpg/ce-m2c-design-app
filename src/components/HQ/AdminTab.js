@@ -50,7 +50,62 @@ const NS_ROLLUP_INCOME_ACCT = "249";
 // Tax schedule for rollup items: "No Taxable", NetSuite id 2.
 const NS_ROLLUP_TAX_SCHEDULE = "2";
 
+// Code-grammar rules for size families whose sizeKeys stamp by RULE (no importer needed):
+// dia tokens are LONGEST-FIRST so H2-138… never parses as dia '1'. Style = the remainder,
+// which is identical across sizes by the naming convention (H2-05BE / H2-75BE / … all 'BE').
+const SIZE_STAMP_RULES = {
+    'H2-RND': { rx: /^H2-(138|75|05|1)([A-Z].*)$/, note: 'H2-<dia><style> · dia 05 / 75 / 1 / 138 · Simple Elegance' },
+};
+
 const AdminTab = ({ currentUser, activeBrand, TABS }) => {
+    // ===== 🧬 SIZE-FAMILY STAMPER (Stuart 2026-07-22) =====
+    // Stamps manufacturingSpecs.customData.sizeKey onto every item matching the family's code
+    // grammar — the ONLY missing piece for combining sibling assemblies (H2-05/75/1/138) into
+    // ONE flow: once stamped, generating from the ¾" master auto-injects the Rod Diameter +
+    // Projection steps (line ~935) and every option resolves to the selected diameter's item.
+    const [stampFam, setStampFam] = useState('H2-RND');
+    const [stampBusy, setStampBusy] = useState(false);
+    const [stampPreview, setStampPreview] = useState(null);
+    const scanSizeStamps = async () => {
+        const rule = SIZE_STAMP_RULES[stampFam];
+        if (!rule) return;
+        setStampBusy(true);
+        try {
+            const snap = await getDocs(collection(db, 'Approved_Designs'));
+            const parts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)));
+            const rows = []; const byDia = {}; let already = 0;
+            parts.forEach(p => {
+                const code = String((p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId) || '').toUpperCase();
+                if (!code || code.includes('/')) return; // finish variants never carry sizeKeys
+                const m = code.match(rule.rx);
+                if (!m) return;
+                const dia = m[1], style = m[2];
+                const sk = p.manufacturingSpecs?.customData?.sizeKey;
+                if (sk && sk.family === stampFam && sk.dia === dia && sk.style === style) { already++; return; }
+                rows.push({ id: p.id, code, dia, style });
+                byDia[dia] = (byDia[dia] || 0) + 1;
+            });
+            setStampPreview({ rows, byDia, already });
+        } catch (e) { alert('Scan failed: ' + (e.message || e)); }
+        finally { setStampBusy(false); }
+    };
+    const applySizeStamps = async () => {
+        if (!stampPreview || !stampPreview.rows.length) return;
+        if (!window.confirm(`🧬 Stamp ${stampFam} size keys onto ${stampPreview.rows.length} item(s)?\n\n${Object.entries(stampPreview.byDia).map(([d, n]) => `dia ${d}: ${n}`).join(' · ')}${stampPreview.already ? `\n(${stampPreview.already} already stamped — skipped)` : ''}\n\nThis is what lets ONE flow cover every diameter. Afterwards: generate the flow from the ¾" master assembly.`)) return;
+        setStampBusy(true);
+        try {
+            let n = 0;
+            for (const r of stampPreview.rows) {
+                await updateDoc(doc(db, 'Approved_Designs', r.id), { 'manufacturingSpecs.customData.sizeKey': { family: stampFam, dia: r.dia, style: r.style, projLetter: '' } });
+                n++;
+            }
+            alert(`✅ Stamped ${n} item(s) with ${stampFam} size keys.\n\nNOW: pick the ¾" master (H2-75) under "assembly to generate from" and Generate — the Rod Diameter + Projection steps inject automatically, options native to one size scope to it, and missing size variants fall back to the base item.`);
+            setStampPreview(null);
+        } catch (e) { alert('Stamping failed: ' + (e.message || e)); }
+        finally { setStampBusy(false); }
+    };
+    // ===== END SIZE-FAMILY STAMPER =====
   const [activeSection, setActiveSection] = useState("CPQ_FLOWS"); 
   
   const [users, setUsers] = useState([]);
@@ -1368,6 +1423,25 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                     <div style={{ display: 'flex', gap: '8px' }}>
                         <button onClick={handleExportFlow} title="Download the selected flow as JSON (back up / copy to another collection)" style={{ flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Export Flow</button>
                         <label title="Create a fresh flow from a JSON file (for review before use)" style={{ flex: 1, textAlign: 'center', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Import Flow<input type="file" accept="application/json,.json" onChange={handleImportFlow} style={{ display: 'none' }} /></label>
+                    </div>
+                    {/* 🧬 SIZE-FAMILY STAMPER — combine sibling assemblies (H2-05/75/1/138) into ONE flow */}
+                    <div style={{ border: '1px solid var(--brass)', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)' }}>🧬 Size-Family Stamper — one flow per family</div>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            <select value={stampFam} onChange={e => { setStampFam(e.target.value); setStampPreview(null); }} title={SIZE_STAMP_RULES[stampFam]?.note || ''} style={{ flex: 1, padding: '7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '0.75rem', outline: 'none', background: '#fff' }}>
+                                {Object.keys(SIZE_STAMP_RULES).map(f => <option key={f} value={f}>{f} — {SIZE_STAMP_RULES[f].note}</option>)}
+                            </select>
+                            <button onClick={scanSizeStamps} disabled={stampBusy} style={{ padding: '7px 12px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: stampBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{stampBusy ? '⟳…' : '🔍 Scan'}</button>
+                        </div>
+                        {stampPreview && (
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', lineHeight: 1.6 }}>
+                                {stampPreview.rows.length
+                                    ? <>To stamp: {Object.entries(stampPreview.byDia).map(([d, n]) => `dia ${d} × ${n}`).join(' · ')}{stampPreview.already ? ` · ${stampPreview.already} already stamped` : ''}
+                                        <button onClick={applySizeStamps} disabled={stampBusy} style={{ marginLeft: '8px', padding: '6px 12px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: stampBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{stampBusy ? '⟳ Stamping…' : `✓ Stamp ${stampPreview.rows.length}`}</button></>
+                                    : <span style={{ color: 'var(--ink-soft)' }}>Nothing new to stamp{stampPreview.already ? ` — all ${stampPreview.already} matching items already carry ${stampFam} keys. Generate from the ¾" master below.` : ' — no items match the family code grammar in this brand.'}</span>}
+                            </div>
+                        )}
+                        <div style={{ fontFamily: 'var(--sans)', fontSize: '0.72rem', color: 'var(--ink-soft)' }}>Stamp once → pick the ¾" master (H2-75) below → Generate. Diameter + Projection steps inject automatically; every option resolves to the chosen size.</div>
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         <select value={generateAsmId} onChange={e => setGenerateAsmId(e.target.value)} title="Master Assembly to build the flow from" style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.82rem', outline: 'none', background: '#fff' }}>
