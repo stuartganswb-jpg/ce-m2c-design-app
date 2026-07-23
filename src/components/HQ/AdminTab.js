@@ -1440,9 +1440,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                     </div>
                     {/* 🧬 SIZE-FAMILY STAMPER — combine sibling assemblies (H2-05/75/1/138) into ONE flow */}
                     <div style={{ border: '1px solid var(--brass)', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)' }}>🧬 Size-Family Stamper v3 — one flow per family</div>
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                            <select value={stampFam} onChange={e => { setStampFam(e.target.value); setStampPreview(null); }} title={SIZE_STAMP_RULES[stampFam]?.note || ''} style={{ flex: 1, padding: '7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '0.75rem', outline: 'none', background: '#fff' }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)' }}>🧬 Size-Family Stamper v4 — one flow per family</div>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', minWidth: 0 }}>
+                            {/* minWidth:0 everywhere: a <select> with long option text refuses to shrink in flex
+                                (min-width:auto), overflowed the 350px column, and pushed the Scan button UNDER
+                                the right-hand pane — visible but click-dead. */}
+                            <select value={stampFam} onChange={e => { setStampFam(e.target.value); setStampPreview(null); }} title={SIZE_STAMP_RULES[stampFam]?.note || ''} style={{ flex: 1, minWidth: 0, maxWidth: '100%', padding: '7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '0.75rem', outline: 'none', background: '#fff' }}>
                                 {Object.keys(SIZE_STAMP_RULES).map(f => <option key={f} value={f}>{f} — {SIZE_STAMP_RULES[f].note}</option>)}
                             </select>
                             <button onClick={scanSizeStamps} disabled={stampBusy} style={{ padding: '7px 12px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: stampBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{stampBusy ? '⟳…' : '🔍 Scan'}</button>
