@@ -193,9 +193,22 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                     }
                     child.visible = isVis;
 
-                    // Acrylic meshes keep clear glass EVERY frame (visibility above still governs
-                    // which choice shows) — the finish texture below must never reach them.
-                    if (isAcrylicKeep(child)) {
+                    let matchedTexUrl = null;
+                    if (textureOverrides && Object.keys(textureOverrides).length > 0) {
+                        for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
+                            const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+                            if (targets.some(hitTarget)) {
+                                matchedTexUrl = texUrl;
+                            }
+                        }
+                    }
+
+                    // 🧊 Acrylic fallback: normally the AC master-finish chip is routed onto these
+                    // meshes by the textureOverrides builder (appended last, so it wins) and they
+                    // take the AC texture through the standard path below. If NOTHING matched
+                    // (AC chip missing / pre-AC flow), pin a synthetic clear so an acrylic part
+                    // never renders as raw grey steel.
+                    if (isAcrylicKeep(child) && !(matchedTexUrl && texMap[matchedTexUrl])) {
                         const mat = child.userData.originalMaterial.clone();
                         mat.map = null;
                         mat.color = new THREE.Color(0xe4edf2);
@@ -205,16 +218,6 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         mat.needsUpdate = true;
                         child.material = mat;
                         return;
-                    }
-
-                    let matchedTexUrl = null;
-                    if (textureOverrides && Object.keys(textureOverrides).length > 0) {
-                        for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
-                            const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                            if (targets.some(hitTarget)) {
-                                matchedTexUrl = texUrl;
-                            }
-                        }
                     }
 
                     if (matchedTexUrl && texMap[matchedTexUrl]) {
@@ -2354,6 +2357,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               }
           }
       });
+      // 🧊 ACRYLIC TOPS render from the AC (clear acrylic) chip in MASTER FINISHES — data, not
+      // hardcoded — so this same seam serves Fabricut's acrylic-or-wood tops later (Phase B adds
+      // a top-scoped finish selector; when a step gains one, skip this append for that step).
+      // Appended LAST deliberately: the renderer's override loop is last-match-wins, so the AC
+      // chip beats the step's metal finish routed onto the selected top's node above.
+      const acPool = [...globalFinishes, ...outsourceFinishes];
+      const acChip = acPool.find(f => String(f.code || '').toUpperCase() === 'AC')
+          || acPool.find(f => /clear\s*acrylic|^acrylic\b/i.test(String(f.name || '')));
+      if (acChip?.textureUrl) {
+          (activeFlow.steps || []).forEach(step => {
+              const t = String(step.title || '');
+              if (/ACRYLIC/i.test(t) && !/COLLAR/i.test(t) && step.targetNodes) overrides[step.targetNodes] = acChip.textureUrl;
+          });
+      }
       return overrides;
   }, [dynamicConfigParams, activeFlow, globalFinishes, outsourceFinishes, dynamicAssets]);
 

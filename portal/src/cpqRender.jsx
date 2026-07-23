@@ -105,7 +105,17 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
         }
         child.visible = isVis;
 
-        if (isAcrylicKeep(child)) {
+        let matchedTexUrl = null;
+        if (textureOverrides && Object.keys(textureOverrides).length > 0) {
+          for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
+            const targets = targetStr.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+            if (targets.some(hitTarget)) matchedTexUrl = texUrl;
+          }
+        }
+
+        // Acrylic fallback (ported from CPQTab): the AC chip override normally wins above; if
+        // nothing matched, pin synthetic clear so acrylic never renders as raw steel.
+        if (isAcrylicKeep(child) && !(matchedTexUrl && texMap[matchedTexUrl])) {
           const mat = child.userData.originalMaterial.clone();
           mat.map = null;
           mat.color = new THREE.Color(0xe4edf2);
@@ -115,14 +125,6 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
           mat.needsUpdate = true;
           child.material = mat;
           return;
-        }
-
-        let matchedTexUrl = null;
-        if (textureOverrides && Object.keys(textureOverrides).length > 0) {
-          for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
-            const targets = targetStr.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
-            if (targets.some(hitTarget)) matchedTexUrl = texUrl;
-          }
         }
 
         if (matchedTexUrl && texMap[matchedTexUrl]) {

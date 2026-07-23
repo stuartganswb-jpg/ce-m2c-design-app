@@ -62,6 +62,17 @@ function buildTextureOverrides(steps, params, finishes) {
       }
     }
   }
+  // 🧊 Acrylic tops take the AC (clear acrylic) master-finish chip — appended LAST so it wins the
+  // renderer's last-match-wins loop over the step's metal finish (ported from CPQTab; Phase B's
+  // top-scoped finish selector will exempt steps that carry one).
+  const acChip = (finishes || []).find((f) => String(f.code || '').toUpperCase() === 'AC')
+    || (finishes || []).find((f) => /clear\s*acrylic|^acrylic\b/i.test(String(f.name || '')));
+  if (acChip && acChip.textureUrl) {
+    for (const step of steps) {
+      const t = String(step.title || '');
+      if (/ACRYLIC/i.test(t) && !/COLLAR/i.test(t) && step.targetNodes) overrides[step.targetNodes] = acChip.textureUrl;
+    }
+  }
   return overrides;
 }
 
