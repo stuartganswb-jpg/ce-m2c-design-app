@@ -25,6 +25,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
+    "prebuild": "rm -rf node_modules/.cache",
     "build": "react-scripts build",
     "postbuild": "node scripts/stampVersion.js",
     "test": "react-scripts test",
