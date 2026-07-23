@@ -800,7 +800,26 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 
       const pole = groupPlacements('POLE');
-      const finial = groupPlacements('FINIAL');
+      // 🧊 Two-part acrylic finials: a COLLAR cluster is NOT a customer choice — it's companion
+      // geometry that renders WITH every same-side acrylic-top choice. Collars leave the option
+      // pool; their nodes are APPENDED to each acrylic option's geometry (so top+collar show and
+      // the step's metal finish lands on the collar), and the option remembers its pre-merge top
+      // nodes (acrylicTopNodes) so the AC master-finish chip override targets ONLY the acrylic.
+      const finialAll = groupPlacements('FINIAL');
+      const optTxt = (o) => `${o.partName || ''} ${o.partId || ''}`;
+      const isAcrylicCollar = (o) => /ACRYLIC/i.test(optTxt(o)) && /COLLAR|(^|[^A-Z])AFC([^A-Z]|$)/i.test(optTxt(o));
+      const acrylicCollars = finialAll.filter(isAcrylicCollar);
+      const finial = finialAll.filter(o => !isAcrylicCollar(o));
+      if (acrylicCollars.length) {
+          finial.forEach(o => {
+              if (!/ACRYLIC/i.test(optTxt(o))) return;
+              const mates = acrylicCollars.filter(c => (c.position || '') === (o.position || ''));
+              const extra = mates.map(c => c.targetNode).filter(Boolean).join(', ');
+              if (!extra) return;
+              o.acrylicTopNodes = o.targetNode || '';
+              o.targetNode = o.targetNode ? `${o.targetNode}, ${extra}` : extra;
+          });
+      }
       const brackets = groupPlacements('BRACKET');
       const backplates = groupPlacements('BACKPLATE');
       // Split the pole: LEFT/RIGHT-tagged segments are END-POLE (bend vs straight) that must follow

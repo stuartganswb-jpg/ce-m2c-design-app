@@ -2369,6 +2369,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           (activeFlow.steps || []).forEach(step => {
               const t = String(step.title || '');
               if (/ACRYLIC/i.test(t) && !/COLLAR/i.test(t) && step.targetNodes) overrides[step.targetNodes] = acChip.textureUrl;
+              // Acrylic-top OPTIONS inside ordinary steps (End Treatment): target the option's
+              // pre-merge top nodes (acrylicTopNodes — the collar companion nodes appended after
+              // them keep the step's metal finish), falling back to its full geometry for flows
+              // generated before the companion-collar mechanic.
+              (step.styleOptions || []).forEach(o => {
+                  const txt = `${o.partName || ''} ${o.partId || ''}`;
+                  if (!/ACRYLIC/i.test(txt) || /COLLAR|(^|[^A-Z])AFC([^A-Z]|$)/i.test(txt)) return;
+                  const nodes = o.acrylicTopNodes || o.targetNode || (step.geometryMap || {})[o.optId] || '';
+                  if (nodes) overrides[nodes] = acChip.textureUrl;
+              });
           });
       }
       return overrides;
