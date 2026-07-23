@@ -46,23 +46,46 @@ const binLabelInner = (bin) => {
     return `<div class="l"><div class="k">BIN</div><div class="b" style="font-size:${fs}pt">${esc(b)}</div><div class="bc">${code128BSvg(b)}<div class="bct">${esc(b)}</div></div></div>`;
 };
 
-// Render label bodies to a hidden iframe and open the print dialog (each label is its own 4x2 page).
-const printDoc = (title, css, bodies) => {
-    if (!bodies || !bodies.length) return false;
-    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${css}</style></head><body>${bodies.join('')}</body></html>`;
+// ---- print dispatch --------------------------------------------------------------------
+// Desktop: render to a hidden iframe and print it (no popup, no extra tab).
+// Android (the WMS floor tablets): Chrome CANNOT print a hidden iframe — window.print()
+// from a frame prints the PARENT tab, which is why tablets showed a full-page screenshot
+// of the app instead of a 4×2 label. There the document opens as its own blob-URL tab
+// carrying an auto-print script, so the print dialog sees ONLY the correctly @page-sized
+// label document; the tab closes itself after printing.
+const IS_ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
+export const printHtmlDocument = (docHtml, { autoPrintDelay = 400, timeout = 120000 } = {}) => {
+    if (IS_ANDROID) {
+        const printScript = `<script>window.addEventListener('load',function(){setTimeout(function(){window.focus();window.print();},${autoPrintDelay})});window.onafterprint=function(){setTimeout(function(){window.close()},300)};<\/script>`;
+        const withPrint = docHtml.includes('</body>') ? docHtml.replace('</body>', printScript + '</body>') : docHtml + printScript;
+        try {
+            const url = URL.createObjectURL(new Blob([withPrint], { type: 'text/html' }));
+            const win = window.open(url, '_blank');
+            setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) { /* gone */ } }, timeout);
+            if (!win) { console.warn('printHtmlDocument: popup blocked'); return false; }
+            return true;
+        } catch (e) { console.warn('printHtmlDocument (android) error:', e); return false; }
+    }
     try {
         const iframe = document.createElement('iframe');
         iframe.setAttribute('aria-hidden', 'true');
         iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
         document.body.appendChild(iframe);
         const cw = iframe.contentWindow;
-        cw.document.open(); cw.document.write(doc); cw.document.close();
+        cw.document.open(); cw.document.write(docHtml); cw.document.close();
         const cleanup = () => { try { if (iframe.parentNode) document.body.removeChild(iframe); } catch (e) { /* gone */ } };
         cw.onafterprint = cleanup;
-        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('label print failed:', e); } }, 400);
-        setTimeout(cleanup, 120000);
+        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('label print failed:', e); } }, autoPrintDelay);
+        setTimeout(cleanup, timeout);
         return true;
     } catch (e) { console.warn('printDoc error:', e); return false; }
+};
+
+// Each label is its own 4x2 page.
+const printDoc = (title, css, bodies) => {
+    if (!bodies || !bodies.length) return false;
+    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${css}</style></head><body>${bodies.join('')}</body></html>`;
+    return printHtmlDocument(doc, { autoPrintDelay: 400, timeout: 120000 });
 };
 
 export const printItemLabel = (item) => printDoc(`Item ${item?.itemId || ''}`, ITEM_CSS, [itemLabelInner(item)]);

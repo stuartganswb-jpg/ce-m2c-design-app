@@ -1,8 +1,9 @@
 // Shared US-Letter plating packing list — used both when a shipment is created (Pick Pack) and when
-// it's reprinted later from the vendor screen (External Co-Op). Renders to a hidden iframe and opens
-// the browser print dialog. Pass the stored `packingList` object: { shipId, brand, vendor, poLabel,
-// dateStr, operator, lines[], pcs, total, finishSummary }.
-import { code128BSvg } from './labelPrint';
+// it's reprinted later from the vendor screen (External Co-Op). Print dispatch lives in
+// labelPrint's printHtmlDocument (desktop = hidden iframe; Android tablets = blob-tab auto-print,
+// because Chrome-on-Android prints the parent page from an iframe). Pass the stored `packingList`
+// object: { shipId, brand, vendor, poLabel, dateStr, operator, lines[], pcs, total, finishSummary }.
+import { code128BSvg, printHtmlDocument } from './labelPrint';
 
 const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -50,17 +51,5 @@ tfoot td{font-weight:800;background:#f4f4f4;} .sign{margin-top:30px;display:flex
 </table>
 <div class="sign"><div>Shipped by / date</div><div>Received by plater / date</div></div>
 </body></html>`;
-    try {
-        const iframe = document.createElement('iframe');
-        iframe.setAttribute('aria-hidden', 'true');
-        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
-        document.body.appendChild(iframe);
-        const cw = iframe.contentWindow;
-        cw.document.open(); cw.document.write(docHtml); cw.document.close();
-        const cleanup = () => { try { if (iframe.parentNode) document.body.removeChild(iframe); } catch (e) { /* already gone */ } };
-        cw.onafterprint = cleanup;
-        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('Packing list print failed:', e); } }, 300);
-        setTimeout(cleanup, 60000);
-        return true;
-    } catch (e) { console.warn('printPlatingPackingList error:', e); return false; }
+    return printHtmlDocument(docHtml, { autoPrintDelay: 300, timeout: 60000 });
 };
