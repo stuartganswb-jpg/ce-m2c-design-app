@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
-import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 import { fabricutCodeOf } from '../Shared/priceLevels';
@@ -22,6 +22,35 @@ const AVAILABLE_BRANDS = [
 const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
 // Brand → NetSuite location id (for the base-stock check when routing outsourced finished assemblies).
 const BRAND_NS_LOCATION = { m2c: "19", uniquity: "22", ce: "17", leyla: "18" };
+
+// ===== 🔤 MOJIBAKE REPAIR (Stuart 2026-07-22: H2 import saved '1â€³' where '1″' belonged) =====
+// UTF-8 text was mis-decoded as Windows-1252 somewhere upstream and written to Firestore.
+// Reversal: re-encode the string as cp1252 bytes, then STRICT-decode as UTF-8. Only genuine
+// mojibake survives that round-trip changed — clean text (including a real ″) either isn't
+// cp1252-encodable or fails the strict decode, and comes back untouched.
+const CP1252_REV = { '€': 0x80, '‚': 0x82, 'ƒ': 0x83, '„': 0x84, '…': 0x85, '†': 0x86, '‡': 0x87, 'ˆ': 0x88, '‰': 0x89, 'Š': 0x8A, '‹': 0x8B, 'Œ': 0x8C, 'Ž': 0x8E, '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94, '•': 0x95, '–': 0x96, '—': 0x97, '˜': 0x98, '™': 0x99, 'š': 0x9A, '›': 0x9B, 'œ': 0x9C, 'ž': 0x9E, 'Ÿ': 0x9F };
+const fixMojibake = (s) => {
+    if (typeof s !== 'string' || !s) return s;
+    let out = s;
+    for (let pass = 0; pass < 3; pass++) { // up to 3 passes unwinds double-encoded text too
+        const bytes = [];
+        let encodable = true;
+        for (const ch of out) {
+            const c = ch.codePointAt(0);
+            if (c <= 0xFF && !(c >= 0x80 && c <= 0x9F)) bytes.push(c);
+            else if (CP1252_REV[ch] !== undefined) bytes.push(CP1252_REV[ch]);
+            else { encodable = false; break; }
+        }
+        if (!encodable) break;
+        try {
+            const decoded = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
+            if (decoded === out) break;
+            out = decoded;
+        } catch { break; }
+    }
+    return out;
+};
+const MOJI_ITEM_FIELDS = ['itemName', 'description', 'itemDescription'];
 
 const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [isAdmin] = useState(true);
@@ -65,6 +94,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [orphanMode, setOrphanMode] = useState(false);     // show only unreferenced, NS-less items
   const [orphanUsedSet, setOrphanUsedSet] = useState(null); // every part id/code referenced by a BOM or flow
   const [orphanBusy, setOrphanBusy] = useState(false);
+  const [mojiBusy, setMojiBusy] = useState(false);         // 🔤 garbled-text repair running
 
   const [pdfFile, setPdfFile] = useState(null);
   const [cadFile, setCadFile] = useState(null);
@@ -246,6 +276,52 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           if (activePart?.id === part.id) setActivePart(null);
       } catch (err) { alert('Delete failed: ' + (err.message || err)); }
   };
+  // 🔤 Repair mojibake in library item text AND the option labels already baked into CPQ flows
+  // (the generator copies itemName into styleOptions at Generate time, so both need the sweep —
+  // fixing both means no re-import and no regenerate).
+  const fixEncoding = async () => {
+    setMojiBusy(true);
+    try {
+      const itemFixes = [];
+      inventory.forEach(p => {
+        const upd = {};
+        MOJI_ITEM_FIELDS.forEach(f => { const v = p[f]; const r = fixMojibake(v); if (r !== v) upd[f] = r; });
+        if (Object.keys(upd).length) itemFixes.push({ id: p.id, upd, before: p.itemName, after: upd.itemName || p.itemName });
+      });
+      const flowSnap = await getDocs(collection(db, 'cpq_flows'));
+      const flowFixes = [];
+      flowSnap.docs.forEach(fd => {
+        const data = fd.data();
+        let changed = false;
+        const fixOpt = (o) => {
+          if (!o || typeof o !== 'object') return o;
+          const r = { ...o };
+          ['name', 'label', 'description'].forEach(k => { if (typeof r[k] === 'string') { const f = fixMojibake(r[k]); if (f !== r[k]) { r[k] = f; changed = true; } } });
+          if (Array.isArray(r.subOptions)) r.subOptions = r.subOptions.map(fixOpt);
+          if (Array.isArray(r.includedParts)) r.includedParts = r.includedParts.map(fixOpt);
+          return r;
+        };
+        const steps = (data.steps || []).map(st => {
+          const s2 = { ...st };
+          ['title', 'stepTitle', 'description'].forEach(k => { if (typeof s2[k] === 'string') { const f = fixMojibake(s2[k]); if (f !== s2[k]) { s2[k] = f; changed = true; } } });
+          if (Array.isArray(s2.styleOptions)) s2.styleOptions = s2.styleOptions.map(fixOpt);
+          if (Array.isArray(s2.includedParts)) s2.includedParts = s2.includedParts.map(fixOpt);
+          return s2;
+        });
+        const name2 = fixMojibake(data.name);
+        if (name2 !== data.name) changed = true;
+        if (changed) flowFixes.push({ id: fd.id, steps, name: name2 });
+      });
+      if (!itemFixes.length && !flowFixes.length) { alert('🔤 Scan clean — no garbled text in item names/descriptions or CPQ flow labels.'); return; }
+      const sample = itemFixes.slice(0, 5).map(x => `• ${x.before}  →  ${x.after}`).join('\n');
+      if (!window.confirm(`🔤 Fix garbled imported text (UTF-8 that was read as Windows-1252)?\n\n${itemFixes.length} library item(s) · ${flowFixes.length} CPQ flow(s)\n\n${sample}${itemFixes.length > 5 ? `\n…and ${itemFixes.length - 5} more` : ''}\n\nOnly provably-garbled strings change; clean text is untouched.`)) return;
+      for (const x of itemFixes) await updateDoc(doc(db, 'Approved_Designs', x.id), x.upd);
+      for (const f of flowFixes) await updateDoc(doc(db, 'cpq_flows', f.id), { steps: f.steps, name: f.name });
+      alert(`✅ Repaired ${itemFixes.length} item(s) + ${flowFixes.length} flow(s).\n\nCPQ options read clean immediately (no regenerate needed); 1.6 Load Choices shows clean names on its next fresh index.`);
+    } catch (e) { alert('Encoding fix failed: ' + (e.message || e)); }
+    finally { setMojiBusy(false); }
+  };
+
   const deleteOrphans = async (list) => {
       if (!list.length) return alert('Nothing shown to delete.');
       const preview = list.slice(0, 15).map(p => `• ${p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : (p.itemId || p.id)} — ${p.itemName || ''}`).join('\n');
@@ -875,6 +951,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           <input placeholder="Search Name, ERP, Bin..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
           <button onClick={() => setAppOnlyFilter(v => !v)} title="Show only app-created parts with no NetSuite item # (legacyErpId PENDING + no internal id) — for finding residual items to clean up" style={{ padding: '10px 14px', border: `1px solid ${appOnlyFilter ? 'var(--brass)' : 'var(--line)'}`, background: appOnlyFilter ? 'var(--brass)' : '#fff', color: appOnlyFilter ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{appOnlyFilter ? '✓ App-only (no NS#)' : 'App-only (no NS#)'}</button>
           <button onClick={() => setPartClassFilter(v => v === 'FEES' ? 'ALL' : 'FEES')} title="Show ONLY fee items — matched by product type FEE, class Fee, or the CE-FEE-… code convention, so NetSuite-synced fees show too (they no longer surface under App-only)" style={{ padding: '10px 14px', border: `1px solid ${partClassFilter === 'FEES' ? 'var(--brass)' : 'var(--line)'}`, background: partClassFilter === 'FEES' ? 'var(--brass)' : '#fff', color: partClassFilter === 'FEES' ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{partClassFilter === 'FEES' ? '✓ 💲 Fees only' : '💲 Fees only'}</button>
+          <button onClick={fixEncoding} disabled={mojiBusy} title="Repair garbled imported text (e.g. 1â€³ → 1″): UTF-8 that was mis-read as Windows-1252 during an import. Sweeps item names/descriptions AND the option labels baked into CPQ flows; only provably-garbled strings are changed — clean text can't be touched." style={{ padding: '10px 14px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: mojiBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{mojiBusy ? '⟳ Fixing…' : '🔤 Fix garbled text'}</button>
           <button onClick={scanOrphans} disabled={orphanBusy} title="Scan every assembly BOM (assembly_pins) and every CPQ flow (linked assemblies/items, style & sub options, included parts), then show ONLY items with no NetSuite id that nothing references — test leftovers safe to clean out" style={{ padding: '10px 14px', border: `1px solid ${orphanMode ? '#d9534f' : 'var(--line)'}`, background: orphanMode ? '#d9534f' : '#fff', color: orphanMode ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: orphanBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{orphanBusy ? '⟳ Scanning…' : orphanMode ? '✓ 🧹 Orphans' : '🧹 Orphans (unused · no NS#)'}</button>
           {orphanMode && !orphanBusy && (
               <button onClick={() => deleteOrphans(filteredInventory)} disabled={filteredInventory.length === 0} title="Delete every item currently shown (all unreferenced + NetSuite-less). Search/filters narrow what's shown first." style={{ padding: '10px 14px', border: 'none', background: filteredInventory.length ? '#d9534f' : 'var(--paper-2)', color: filteredInventory.length ? '#fff' : 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: filteredInventory.length ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>🗑 Delete {filteredInventory.length} shown</button>
