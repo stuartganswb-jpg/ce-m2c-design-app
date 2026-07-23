@@ -71,8 +71,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
         if (!rule) return;
         setStampBusy(true);
         try {
-            const snap = await getDocs(collection(db, 'Approved_Designs'));
-            const parts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            // The tab already holds a live snapshot of the whole collection — scan in memory,
+            // zero network. (Fallback fetch only if the section is opened before the load lands.)
+            let pool = allApprovedDesigns;
+            if (!pool || !pool.length) {
+                const snap = await getDocs(collection(db, 'Approved_Designs'));
+                pool = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            }
+            const parts = pool
                 .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)));
             const famPrefix = stampFam.split('-')[0]; // 'H2' — near-miss diagnostics
             const rows = []; const byDia = {}; const nearMiss = []; let already = 0;
@@ -93,6 +99,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                 byDia[dia] = (byDia[dia] || 0) + 1;
             });
             setStampPreview({ rows, byDia, already, nearMiss, scanned: parts.length });
+            // Belt & suspenders: the result also announces itself — a quiet inline line was missed once.
+            alert(`🧬 Scan complete\n\nScanned ${parts.length} item(s) in this brand\nMatched ${rows.length + already} · new to stamp ${rows.length}${already ? ` · already stamped ${already}` : ''}${rows.length ? `\n${Object.entries(byDia).map(([d, n]) => `dia ${d}: ${n}`).join(' · ')}\n\nHit ✓ Stamp in the panel to apply.` : ''}${(!rows.length && !already) ? `\n\n⚠ 0 items matched the ${stampFam} grammar.` : ''}${nearMiss.length ? `\n\nNear-misses (family prefix, wrong shape):\n${nearMiss.join(', ')}` : ''}`);
         } catch (e) { alert('Scan failed: ' + (e.message || e)); }
         finally { setStampBusy(false); }
     };
@@ -1432,7 +1440,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                     </div>
                     {/* 🧬 SIZE-FAMILY STAMPER — combine sibling assemblies (H2-05/75/1/138) into ONE flow */}
                     <div style={{ border: '1px solid var(--brass)', padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)' }}>🧬 Size-Family Stamper — one flow per family</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)' }}>🧬 Size-Family Stamper v3 — one flow per family</div>
                         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                             <select value={stampFam} onChange={e => { setStampFam(e.target.value); setStampPreview(null); }} title={SIZE_STAMP_RULES[stampFam]?.note || ''} style={{ flex: 1, padding: '7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '0.75rem', outline: 'none', background: '#fff' }}>
                                 {Object.keys(SIZE_STAMP_RULES).map(f => <option key={f} value={f}>{f} — {SIZE_STAMP_RULES[f].note}</option>)}
