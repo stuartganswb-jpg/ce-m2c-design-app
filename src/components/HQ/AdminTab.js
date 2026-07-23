@@ -74,19 +74,25 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
             const snap = await getDocs(collection(db, 'Approved_Designs'));
             const parts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                 .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)));
-            const rows = []; const byDia = {}; let already = 0;
+            const famPrefix = stampFam.split('-')[0]; // 'H2' — near-miss diagnostics
+            const rows = []; const byDia = {}; const nearMiss = []; let already = 0;
             parts.forEach(p => {
-                const code = String((p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId) || '').toUpperCase();
+                const code = String((p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId) || '').trim().toUpperCase();
                 if (!code || code.includes('/')) return; // finish variants never carry sizeKeys
                 const m = code.match(rule.rx);
-                if (!m) return;
+                if (!m) {
+                    // Anything that LOOKS family-ish but doesn't parse gets surfaced — this is how a
+                    // code-shape mismatch (space, missing dash, different prefix) names itself.
+                    if (code.startsWith(famPrefix) && nearMiss.length < 15) nearMiss.push(code);
+                    return;
+                }
                 const dia = m[1], style = m[2];
                 const sk = p.manufacturingSpecs?.customData?.sizeKey;
                 if (sk && sk.family === stampFam && sk.dia === dia && sk.style === style) { already++; return; }
                 rows.push({ id: p.id, code, dia, style });
                 byDia[dia] = (byDia[dia] || 0) + 1;
             });
-            setStampPreview({ rows, byDia, already });
+            setStampPreview({ rows, byDia, already, nearMiss, scanned: parts.length });
         } catch (e) { alert('Scan failed: ' + (e.message || e)); }
         finally { setStampBusy(false); }
     };
@@ -1434,11 +1440,18 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                             <button onClick={scanSizeStamps} disabled={stampBusy} style={{ padding: '7px 12px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: stampBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{stampBusy ? '⟳…' : '🔍 Scan'}</button>
                         </div>
                         {stampPreview && (
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', lineHeight: 1.6 }}>
-                                {stampPreview.rows.length
-                                    ? <>To stamp: {Object.entries(stampPreview.byDia).map(([d, n]) => `dia ${d} × ${n}`).join(' · ')}{stampPreview.already ? ` · ${stampPreview.already} already stamped` : ''}
-                                        <button onClick={applySizeStamps} disabled={stampBusy} style={{ marginLeft: '8px', padding: '6px 12px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: stampBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{stampBusy ? '⟳ Stamping…' : `✓ Stamp ${stampPreview.rows.length}`}</button></>
-                                    : <span style={{ color: 'var(--ink-soft)' }}>Nothing new to stamp{stampPreview.already ? ` — all ${stampPreview.already} matching items already carry ${stampFam} keys. Generate from the ¾" master below.` : ' — no items match the family code grammar in this brand.'}</span>}
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', lineHeight: 1.7, background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '8px 10px' }}>
+                                <div>Scanned {stampPreview.scanned} item{stampPreview.scanned === 1 ? '' : 's'} · matched {stampPreview.rows.length + stampPreview.already} · new to stamp {stampPreview.rows.length}{stampPreview.already ? ` · already stamped ${stampPreview.already}` : ''}</div>
+                                {stampPreview.rows.length > 0 && (
+                                    <div>To stamp: {Object.entries(stampPreview.byDia).map(([d, n]) => `dia ${d} × ${n}`).join(' · ')}
+                                        <button onClick={applySizeStamps} disabled={stampBusy} style={{ marginLeft: '8px', padding: '6px 12px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: stampBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{stampBusy ? '⟳ Stamping…' : `✓ Stamp ${stampPreview.rows.length}`}</button>
+                                    </div>
+                                )}
+                                {stampPreview.rows.length === 0 && stampPreview.already > 0 && <div style={{ color: '#3a7d44' }}>All matching items already carry {stampFam} keys — generate from the ¾" master below (regenerate if the flow predates the stamps).</div>}
+                                {stampPreview.rows.length === 0 && !stampPreview.already && <div style={{ color: '#d9534f' }}>0 items matched the {stampFam} code grammar in this brand.</div>}
+                                {stampPreview.nearMiss && stampPreview.nearMiss.length > 0 && (
+                                    <div style={{ color: '#d9534f', overflowWrap: 'anywhere' }}>Near-misses (start with the family prefix but don't parse — this is the code-shape clue): {stampPreview.nearMiss.join(', ')}</div>
+                                )}
                             </div>
                         )}
                         <div style={{ fontFamily: 'var(--sans)', fontSize: '0.72rem', color: 'var(--ink-soft)' }}>Stamp once → pick the ¾" master (H2-75) below → Generate. Diameter + Projection steps inject automatically; every option resolves to the chosen size.</div>
