@@ -2374,8 +2374,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // them keep the step's metal finish), falling back to its full geometry for flows
               // generated before the companion-collar mechanic.
               (step.styleOptions || []).forEach(o => {
+                  // acrylicTopNodes (stamped by the generator's collar pairing) is the authoritative
+                  // signal — option text is usually the bare item code with no 'ACRYLIC' in it.
                   const txt = `${o.partName || ''} ${o.partId || ''}`;
-                  if (!/ACRYLIC/i.test(txt) || /COLLAR|(^|[^A-Z])AFC([^A-Z]|$)/i.test(txt)) return;
+                  const looksAcrylic = !!o.acrylicTopNodes || /ACRYLIC/i.test(txt);
+                  if (!looksAcrylic || /COLLAR|(^|[^A-Z])AFC([^A-Z]|$)/i.test(txt)) return;
                   const nodes = o.acrylicTopNodes || o.targetNode || (step.geometryMap || {})[o.optId] || '';
                   if (nodes) overrides[nodes] = acChip.textureUrl;
               });

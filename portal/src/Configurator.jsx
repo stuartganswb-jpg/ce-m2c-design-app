@@ -73,7 +73,8 @@ function buildTextureOverrides(steps, params, finishes) {
       if (/ACRYLIC/i.test(t) && !/COLLAR/i.test(t) && step.targetNodes) overrides[step.targetNodes] = acChip.textureUrl;
       for (const o of (step.styleOptions || [])) {
         const txt = `${o.partName || ''} ${o.partId || ''}`;
-        if (!/ACRYLIC/i.test(txt) || /COLLAR|(^|[^A-Z])AFC([^A-Z]|$)/i.test(txt)) continue;
+        const looksAcrylic = !!o.acrylicTopNodes || /ACRYLIC/i.test(txt);
+        if (!looksAcrylic || /COLLAR|(^|[^A-Z])AFC([^A-Z]|$)/i.test(txt)) continue;
         const nodes = o.acrylicTopNodes || o.targetNode || (step.geometryMap || {})[o.optId] || '';
         if (nodes) overrides[nodes] = acChip.textureUrl;
       }
