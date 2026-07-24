@@ -851,6 +851,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // multiple positions stays distinct; fall back to partId for legacy flows. Also resolve the
           // underlying part's human description so the choice shows more than the bare ERP id.
           let opts = (step.styleOptions || []).filter(optCustomerOk);
+          // 🎯 Per-assembly flows have NO size steps, so the size-matrix block below never runs
+          // for them — the projection-tag gate (PROJ_SELECT pick / implied projection vs the
+          // option's proj: tag, min-semantics for returns) must apply UNCONDITIONALLY.
+          opts = opts.filter(projTagOk);
           // Size-matrix rules (Fabricut H1): french/miter returns aren't made at the 3-5/8"
           // projection (finials + inside mounts stay); size-native extras (1-3/8" wood/acrylic
           // rods, finials, wood brackets) show only at their own diameter.
@@ -872,9 +876,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       if (rtn && et !== 'INSIDE_MOUNT') return false;
                   }
                   // Explicit bracket projection (1.6 proj: select, dictionary inches — legacy
-                  // letters honored): the option shows only at its own projection.
+                  // letters honored): the option shows only at its own projection. (projTagOk
+                  // already applied unconditionally above — it must not live in this size-only block.)
                   if (!optionProjAllowed(o, sizeSel)) return false;
-                  if (!projTagOk(o)) return false;
                   return partAllowedAtSize(base, sizeSel, sizeLabelIndex);
               });
           }
@@ -1787,7 +1791,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   useEffect(() => {
       if (!activeFlow) return;
       const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
-      if (!sizeSel) return;
+      // Per-assembly flows have no size steps but DO have a projection context (PROJ_SELECT pick
+      // or implied) — the sweep must still clear selections the projection no longer offers.
+      if (!sizeSel && flowProjSel == null) return;
       const returnsOk = returnsAllowedFor(sizeSel);
       const allParts = [...libraryParts, ...liveAssemblies];
       const partOf = (o) => allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
@@ -1802,7 +1808,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (!o) return;
                   const oEt = String(o.endTreatment || '').toUpperCase();
                   const oRtn = isReturnOption(o) || (o.returnOnly && oEt !== 'INSIDE_MOUNT') || /return|miter|mitre|french|\bbend\b/i.test(String(partOf(o)?.itemName || ''));
-                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex) || !optionProjAllowed(o, sizeSel) || !projTagOk(o);
+                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex)) || !optionProjAllowed(o, sizeSel) || !projTagOk(o);
                   if (banned) { delete next[key]; changed = true; }
               };
               check(st.id, st.styleOptions);
