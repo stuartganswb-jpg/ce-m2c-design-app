@@ -539,6 +539,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
   const [productType, setProductType] = useState(''); 
   const [activeFlowId, setActiveFlowId] = useState("");
+  // 📏 Size-group landing (Stuart 2026-07-24 pivot): sibling per-assembly flows collapse into
+  // one picker entry; Rod Diameter is asked FIRST, then that assembly's own flow loads.
+  const [pendingGroup, setPendingGroup] = useState("");
+  const launchFlow = (id) => { setActiveFlowId(id); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); setAssemblyQty(1); };
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
@@ -2653,12 +2657,48 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                  <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Step 1: Select Flow</div>
                  <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     
-                    {cpqFlows.length > 0 && (
-                        <select value={activeFlowId} onChange={(e) => { setActiveFlowId(e.target.value); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); setAssemblyQty(1); }} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
-                            <option value="">-- Launch Custom CPQ Flow --</option>
-                            {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                        </select>
-                    )}
+                    {cpqFlows.length > 0 && (() => {
+                        // Flows stamped sizeGroupLabel/sizeGroupChoice (single-assembly generator)
+                        // collapse into ONE entry — picking it shows Rod Diameter cards first; each
+                        // card loads that assembly's OWN flow. No cross-size logic anywhere.
+                        const groups = {};
+                        cpqFlows.forEach(f => { if (f.sizeGroupLabel) (groups[f.sizeGroupLabel] = groups[f.sizeGroupLabel] || []).push(f); });
+                        Object.values(groups).forEach(list => list.sort((a, b) => (a.sizeGroupSort ?? 99) - (b.sizeGroupSort ?? 99)));
+                        const flat = cpqFlows.filter(f => !f.sizeGroupLabel);
+                        const activeGrouped = activeFlow?.sizeGroupLabel;
+                        return (
+                            <>
+                                <select value={activeFlowId || (pendingGroup ? `GROUP::${pendingGroup}` : '')} onChange={(e) => {
+                                    const v = e.target.value;
+                                    if (v.startsWith('GROUP::')) { setPendingGroup(v.slice(7)); launchFlow(''); return; }
+                                    setPendingGroup('');
+                                    launchFlow(v);
+                                }} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }}>
+                                    <option value="">-- Launch Custom CPQ Flow --</option>
+                                    {Object.keys(groups).sort().map(g => <option key={`GROUP::${g}`} value={`GROUP::${g}`}>{g} — pick rod diameter…</option>)}
+                                    {activeGrouped && <option value={activeFlowId}>{activeFlow.name}</option>}
+                                    {flat.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                                </select>
+                                {(pendingGroup && groups[pendingGroup] && !activeFlowId) && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(groups[pendingGroup].length, 4)}, 1fr)`, gap: '10px' }}>
+                                        {groups[pendingGroup].map(f => (
+                                            <div key={f.id} onClick={() => launchFlow(f.id)} style={{ border: '1px solid var(--line)', background: '#fff', padding: '18px 10px', textAlign: 'center', cursor: 'pointer' }}>
+                                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1rem', color: 'var(--ink)' }}>{f.sizeGroupChoice || f.name}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                {activeGrouped && (
+                                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                        {(groups[activeFlow.sizeGroupLabel] || []).map(f => {
+                                            const on = f.id === activeFlowId;
+                                            return <button key={f.id} onClick={() => !on && launchFlow(f.id)} style={{ padding: '6px 10px', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}`, background: on ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', cursor: on ? 'default' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{f.sizeGroupChoice || f.name}</button>;
+                                        })}
+                                    </div>
+                                )}
+                            </>
+                        );
+                    })()}
 
                     {!activeFlowId && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
