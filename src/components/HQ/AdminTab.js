@@ -706,15 +706,20 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // no nodes in the master GLB: they price/BOM correctly; the render shows that end without
       // the mesh until the designer adds the shape to the master file. Families without a
       // codeRx (Fabricut H1) never union — those flows are byte-identical to before.
+      const unionReport = [];
       try {
           const famKey = sizeFamilyOfParts(pins.map(p => partsById[p.partId]).filter(Boolean));
           const fam = famKey ? SIZE_FAMILIES[famKey] : null;
           const bareRx = fam?.codeRx ? new RegExp(fam.codeRx.source.replace('([A-Z].*)$', '$')) : null;
           if (bareRx) {
+              // Assemblies may carry their family code in legacyErpId, itemId OR just itemName
+              // (1.6-built assemblies often have PENDING erp ids) — accept any of the three.
               const codeU = (d) => String((d?.legacyErpId && d.legacyErpId !== 'PENDING' ? d.legacyErpId : d?.itemId) || '').trim().toUpperCase();
+              const asmMatches = (a) => bareRx.test(codeU(a)) || bareRx.test(String(a.itemName || '').trim().toUpperCase());
               const siblings = allApprovedDesigns.filter(a =>
-                  a.id !== asm.id && bareRx.test(codeU(a)) && Array.isArray(a.nodeClusters) && a.nodeClusters.length &&
+                  a.id !== asm.id && asmMatches(a) && Array.isArray(a.nodeClusters) && a.nodeClusters.length &&
                   (a.brandId === asm.brandId || (Array.isArray(a.sharedBrands) && a.sharedBrands.includes(asm.brandId))));
+              if (!siblings.length) unionReport.push(`no sibling assemblies matched ${bareRx} in this brand`);
               // Identity of a choice = family STYLE (stamped or code-parsed) at a position+category;
               // non-family parts (return/miter fees, shared hardware) key by part id instead.
               const keyFor = (partId, partName, pos, cat) => {
@@ -729,6 +734,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               for (const sib of siblings) {
                   let sibPins = [];
                   try { const s = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", sib.itemId))); sibPins = s.docs.map(d => d.data()); } catch (e) { console.warn('union pin load failed', sib.itemId, e); }
+                  const addedCodes = [];
                   const byCl = {};
                   sibPins.forEach(p => { if (p.clusterId) (byCl[p.clusterId] = byCl[p.clusterId] || []).push(p); });
                   (sib.nodeClusters || []).filter(c => !c.hidden).forEach(cl => {
@@ -752,10 +758,17 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       clusters.push({ ...cl, id: nsId, nodes: fresh.map(p => String(p.choiceNode).trim()) });
                       pinsByCluster[nsId] = fresh;
                       pinByCluster[nsId] = fresh[0];
+                      fresh.forEach(p => addedCodes.push(p.partId));
                   });
+                  unionReport.push(`${sib.itemName || sib.itemId}: ${sibPins.length} pin(s) → +${addedCodes.length}${addedCodes.length ? ` (${addedCodes.join(', ')})` : ''}`);
               }
+          } else {
+              unionReport.push('no size family / no codeRx — union skipped (expected for H1)');
           }
-      } catch (e) { console.warn('family union skipped:', e); }
+      } catch (e) { unionReport.push(`⚠ FAILED: ${e.message || e}`); console.warn('family union skipped:', e); }
+      // The union names what it did on every generate — a missing sibling option (H2-05FDB
+      // invisible at ½") must be diagnosable from this alert alone, never a silent skip.
+      if (unionReport.length) alert(`🧬 Family union:\n\n${unionReport.join('\n')}\n\n(+N = choices added from that sibling; styles the master already carries are deduped and resolve per-diameter automatically.)`);
       // De-union: every option is CLUSTER-scoped (see both paths in groupPlacements) — each cluster
       // placement is its own option with its own flags/geometry, so position splits and same-part
       // regular-vs-RETURN plate copies are never merged back together.
