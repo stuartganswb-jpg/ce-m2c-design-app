@@ -108,6 +108,9 @@ const virtualSkOf = (p) => {
     return null;
 };
 const skOf = (p) => p?.manufacturingSpecs?.customData?.sizeKey || virtualSkOf(p);
+// Public accessor (generator's family-union pass keys sibling choices by style): stamped key
+// first, virtual code-parse fallback — identical to every internal consumer.
+export const sizeKeyOf = skOf;
 
 // First size family found among the given parts (array). Used by the generator to decide whether a
 // flow gets the SIZE steps at all.

@@ -857,6 +857,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (!returnsAllowedFor(sizeSel) && isReturnOption(o)) return false;
                   const base = allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
                       || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName)));
+                  // Explicit bracket projection (option.projLetter from the 1.6 proj: select):
+                  // the option shows only while its projection is the selected one.
+                  if (o.projLetter && o.projLetter !== sizeSel.proj) return false;
                   return partAllowedAtSize(base, sizeSel, sizeLabelIndex);
               });
           }
@@ -1276,6 +1279,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   const sizeOk2 = (x) => {
                       if (!sizeSel2) return true;
                       const ap = [...libraryParts, ...liveAssemblies];
+                      if (x.projLetter && x.projLetter !== sizeSel2.proj) return false;
                       return partAllowedAtSize(
                           ap.find(y => y.id === x.partId || y.itemId === x.partId || y.legacyErpId === x.partId
                               || (x.partName && (y.itemName === x.partName || y.legacyErpId === x.partName || y.itemId === x.partName))),
@@ -1780,7 +1784,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (!next[key]) return;
                   const o = (pool || []).find(x => (x.optId || x.partId) === next[key]);
                   if (!o) return;
-                  const banned = (!returnsOk && isReturnOption(o)) || !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex);
+                  const banned = (!returnsOk && isReturnOption(o)) || !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex) || (o.projLetter && sizeSel && o.projLetter !== sizeSel.proj);
                   if (banned) { delete next[key]; changed = true; }
               };
               check(st.id, st.styleOptions);
@@ -2714,6 +2718,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               const subSizeOk = (o) => {
                                   if (!subSizeSel) return true;
                                   const ap = [...libraryParts, ...liveAssemblies];
+                                  if (o.projLetter && o.projLetter !== subSizeSel.proj) return false;
                                   return partAllowedAtSize(
                                       ap.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
                                           || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName))),

@@ -6,7 +6,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
-import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES } from '../Shared/sizeMatrix';
+import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES, sizeKeyOf } from '../Shared/sizeMatrix';
 import { nsProxyFetch } from "../Shared/nsProxy";
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
@@ -696,6 +696,66 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
       const clusters = (asm.nodeClusters || []).filter(c => catOf(c) && !c.hidden);
       if (!clusters.length) return alert("No usable clusters — none have a Category tag or a classifiable part. Tag them in Node Grouping first (or set the parts' Product Type).");
+
+      // 🧬 FAMILY UNION (Stuart 2026-07-24: "this finial in the .05 is not being shown") — the
+      // combined flow offers what's pinned on ANY sibling assembly of the master's size family,
+      // not just the master's own pins. A style existing only at one diameter (H2-05FDB) joins
+      // as its OWN option: native to its dia, partAllowedAtSize hides it at the others, and
+      // sizeVariantOf still swaps per-dia where siblings exist. Styles the master already
+      // carries are SKIPPED — master options own the render geometry. Sibling-only options have
+      // no nodes in the master GLB: they price/BOM correctly; the render shows that end without
+      // the mesh until the designer adds the shape to the master file. Families without a
+      // codeRx (Fabricut H1) never union — those flows are byte-identical to before.
+      try {
+          const famKey = sizeFamilyOfParts(pins.map(p => partsById[p.partId]).filter(Boolean));
+          const fam = famKey ? SIZE_FAMILIES[famKey] : null;
+          const bareRx = fam?.codeRx ? new RegExp(fam.codeRx.source.replace('([A-Z].*)$', '$')) : null;
+          if (bareRx) {
+              const codeU = (d) => String((d?.legacyErpId && d.legacyErpId !== 'PENDING' ? d.legacyErpId : d?.itemId) || '').trim().toUpperCase();
+              const siblings = allApprovedDesigns.filter(a =>
+                  a.id !== asm.id && bareRx.test(codeU(a)) && Array.isArray(a.nodeClusters) && a.nodeClusters.length &&
+                  (a.brandId === asm.brandId || (Array.isArray(a.sharedBrands) && a.sharedBrands.includes(asm.brandId))));
+              // Identity of a choice = family STYLE (stamped or code-parsed) at a position+category;
+              // non-family parts (return/miter fees, shared hardware) key by part id instead.
+              const keyFor = (partId, partName, pos, cat) => {
+                  const sk = sizeKeyOf(partsById[partId]) || sizeKeyOf({ legacyErpId: partId });
+                  return `${sk ? `S:${sk.style}` : `P:${String(partId || partName || '').toUpperCase()}`}|${pos}|${cat}`;
+              };
+              const seenKeys = new Set();
+              clusters.forEach(cl => {
+                  const cat = catOf(cl); const pos = (cl.position || '').toUpperCase();
+                  (pinsByCluster[cl.id] || []).forEach(p => { if (!p.isHiddenPart && p.partId) seenKeys.add(keyFor(p.partId, p.partName, pos, cat)); });
+              });
+              for (const sib of siblings) {
+                  let sibPins = [];
+                  try { const s = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", sib.itemId))); sibPins = s.docs.map(d => d.data()); } catch (e) { console.warn('union pin load failed', sib.itemId, e); }
+                  const byCl = {};
+                  sibPins.forEach(p => { if (p.clusterId) (byCl[p.clusterId] = byCl[p.clusterId] || []).push(p); });
+                  (sib.nodeClusters || []).filter(c => !c.hidden).forEach(cl => {
+                      const pos = (cl.position || '').toUpperCase();
+                      const catGuess = cl.category ? String(cl.category).toUpperCase() : '';
+                      const fresh = (byCl[cl.id] || [])
+                          .filter(p => p.choiceNode && String(p.choiceNode).trim() && p.partId && !p.isHiddenPart && !String(p.partId).startsWith('HIDDEN-'))
+                          .filter(p => {
+                              const cat = catGuess || classifyCat(partsById[p.partId]?.manufacturingSpecs?.productType || partsById[p.partId]?.productType);
+                              if (!cat) return false;
+                              const k = keyFor(p.partId, p.partName, pos, cat);
+                              if (seenKeys.has(k)) return false;
+                              seenKeys.add(k);
+                              return true;
+                          });
+                      if (!fresh.length) return;
+                      const nsId = `UNION-${sib.itemId}-${cl.id}`;
+                      // nodes restricted to the fresh choices' own subtrees — the single-choice
+                      // path reads cl.nodes, and the clone must never drag duplicate choices'
+                      // node names along.
+                      clusters.push({ ...cl, id: nsId, nodes: fresh.map(p => String(p.choiceNode).trim()) });
+                      pinsByCluster[nsId] = fresh;
+                      pinByCluster[nsId] = fresh[0];
+                  });
+              }
+          }
+      } catch (e) { console.warn('family union skipped:', e); }
       // De-union: every option is CLUSTER-scoped (see both paths in groupPlacements) — each cluster
       // placement is its own option with its own flags/geometry, so position splits and same-part
       // regular-vs-RETURN plate copies are never merged back together.
@@ -768,6 +828,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // options exactly like customerIds — the pairing pass below reads these.
                       if (p.isCollar) e.isCollar = true;
                       if (p.requiresCollar && String(p.requiresCollar).trim()) e.requiresCollar = String(p.requiresCollar).trim();
+                      // Explicit bracket projection (1.6 proj: select): the option shows only at
+                      // its projection — entered data, never code-grammar guessing.
+                      if (p.projLetter && String(p.projLetter).trim()) e.projLetter = String(p.projLetter).trim().toUpperCase();
                   });
                   return;
               }
@@ -796,6 +859,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   if (Array.isArray(pin.customerIds) && pin.customerIds.length) { e.customerIds = pin.customerIds; e.customerNames = pin.customerNames || []; }
                   if (pin.isCollar) e.isCollar = true;
                   if (pin.requiresCollar && String(pin.requiresCollar).trim()) e.requiresCollar = String(pin.requiresCollar).trim();
+                  if (pin.projLetter && String(pin.projLetter).trim()) e.projLetter = String(pin.projLetter).trim().toUpperCase();
               } else if (clusterReturnish && !cl.inlineOnly) {
                   e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns (unless flagged INLINE)
               }
@@ -803,7 +867,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (!pin && cl.inlineOnly) e.inlineOnly = true;
               if (!pin && cl.usesReturnPlates) e.usesReturnPlates = true;
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}) }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 
