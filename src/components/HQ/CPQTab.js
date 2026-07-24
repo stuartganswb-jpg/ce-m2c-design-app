@@ -2443,7 +2443,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const projTagOk = (o) => {
       if (flowProjSel == null || !o?.projInches) return true;
       const f = parseFloat(String(o.projInches).replace(/[^0-9.]/g, ''));
-      return !Number.isFinite(f) || Math.abs(f - flowProjSel) < 0.01;
+      if (!Number.isFinite(f)) return true;
+      // RETURN-type options (french/miter/bent fees) read their proj: tag as a MINIMUM —
+      // a return needs at least that much depth, so tagging them 4-5/8" hides them at
+      // .75"/3-5/8" and shows them at 4-5/8" AND 6". Brackets read the tag as the exact
+      // projection the physical item IS.
+      const et = String(o.endTreatment || '').toUpperCase();
+      const returnish = et === 'FRENCH_RETURN' || et === 'MITER_RETURN'
+          || (o.isFee && /return|miter|mitre|french|bend/i.test(String(o.partName || '')));
+      return returnish ? (flowProjSel >= f - 0.01) : (Math.abs(f - flowProjSel) < 0.01);
   };
 
   const visibilityOverrides = useMemo(() => {
@@ -2711,6 +2719,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                             const on = f.id === activeFlowId;
                                             return <button key={f.id} onClick={() => !on && launchFlow(f.id)} style={{ padding: '6px 10px', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}`, background: on ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', cursor: on ? 'default' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{f.sizeGroupChoice || f.name}</button>;
                                         })}
+                                        <button onClick={() => launchFlow(activeFlowId)} title="Clear every selection on this flow and start the configuration fresh (same diameter)." style={{ padding: '6px 10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>↺ Reset</button>
                                     </div>
                                 )}
                             </>
