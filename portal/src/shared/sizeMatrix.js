@@ -49,9 +49,10 @@ export const SIZE_FAMILIES = {
             // rods (1/2·3/4·1") come in 3-5/8" and 4-5/8"; the 1-3/8" rod comes in 4-5/8" and 6".
             // `dias` lists where an option is offered — omitted = offered at every diameter.
             options: [
-                { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection', dias: ['05', '75', '1'] },
-                { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection' },
-                { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection', dias: ['138'] },
+                { optId: 'SIZE-PROJ-P75', value: 'P75', label: '.75" Projection', dias: ['05'], inches: 0.75 },
+                { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection', dias: ['05', '75', '1'], inches: 3.625 },
+                { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection', inches: 4.625 },
+                { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection', dias: ['138'], inches: 6 },
             ],
         },
         // Returns need the deeper projections (matches H1): offered at E and 6, never at S.
@@ -74,9 +75,9 @@ export const SIZE_FAMILIES = {
         proj: {
             id: 'SIZE-PROJ', title: 'Bracket Projection',
             options: [
-                { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection' },
-                { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection' },
-                { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection' },
+                { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection', inches: 3.625 },
+                { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection', inches: 4.625 },
+                { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection', inches: 6 },
             ],
         },
         // Fabricut's french/miter returns are built at the 4-5/8" standard (6" available); there is
@@ -147,6 +148,30 @@ export function projAllowedAtDia(familyKey, opt, diaValue) {
         dias = reg?.dias;
     }
     return !dias || dias.includes(diaValue);
+}
+
+// Inches of the currently-selected projection (null when unknown — treat as "no gate").
+export function projInchesOfSel(sel) {
+    const fam = SIZE_FAMILIES[sel?.family];
+    const o = fam?.proj?.options?.find(x => x.value === sel?.proj);
+    return (o && Number.isFinite(o.inches)) ? o.inches : null;
+}
+
+// Whether an OPTION is offered at the selected projection (Stuart 2026-07-24: explicit +
+// dictionary-driven). option.projInches carries the 4.5 Master-Dictionary value ('.75',
+// '4.625', '6.00'…) entered on the 1.6 proj: select — numeric compare against the selected
+// SIZE-PROJ option's inches, so the dictionary and the size matrix can use different
+// spellings of the same measurement. Legacy option.projLetter (letter match) still honored.
+export function optionProjAllowed(opt, sel) {
+    const selIn = projInchesOfSel(sel);
+    if (selIn == null) return true;
+    const raw = String(opt?.projInches ?? '').trim();
+    if (raw) {
+        const f = parseFloat(raw.replace(/[^0-9.]/g, ''));
+        return !Number.isFinite(f) || Math.abs(f - selIn) < 0.01;
+    }
+    if (opt?.projLetter) return String(opt.projLetter).trim().toUpperCase() === String(sel?.proj || '').trim().toUpperCase();
+    return true;
 }
 
 // Read the flow's size selections out of a CPQ config map (dynamicConfigParams / cart config).

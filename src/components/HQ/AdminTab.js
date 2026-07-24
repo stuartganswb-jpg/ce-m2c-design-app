@@ -828,9 +828,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // options exactly like customerIds — the pairing pass below reads these.
                       if (p.isCollar) e.isCollar = true;
                       if (p.requiresCollar && String(p.requiresCollar).trim()) e.requiresCollar = String(p.requiresCollar).trim();
-                      // Explicit bracket projection (1.6 proj: select): the option shows only at
-                      // its projection — entered data, never code-grammar guessing.
+                      // Explicit bracket projection (1.6 proj: select, 4.5-dictionary inches value):
+                      // the option shows only at its projection — entered data, never code guessing.
+                      if (p.projInches && String(p.projInches).trim()) e.projInches = String(p.projInches).trim().toUpperCase();
                       if (p.projLetter && String(p.projLetter).trim()) e.projLetter = String(p.projLetter).trim().toUpperCase();
+                      if (p.mountType && String(p.mountType).trim()) e.mountType = String(p.mountType).trim().toUpperCase();
                   });
                   return;
               }
@@ -859,7 +861,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   if (Array.isArray(pin.customerIds) && pin.customerIds.length) { e.customerIds = pin.customerIds; e.customerNames = pin.customerNames || []; }
                   if (pin.isCollar) e.isCollar = true;
                   if (pin.requiresCollar && String(pin.requiresCollar).trim()) e.requiresCollar = String(pin.requiresCollar).trim();
+                  if (pin.projInches && String(pin.projInches).trim()) e.projInches = String(pin.projInches).trim().toUpperCase();
                   if (pin.projLetter && String(pin.projLetter).trim()) e.projLetter = String(pin.projLetter).trim().toUpperCase();
+                  if (pin.mountType && String(pin.mountType).trim()) e.mountType = String(pin.mountType).trim().toUpperCase();
               } else if (clusterReturnish && !cl.inlineOnly) {
                   e.returnOnly = true; // unpinned cluster named …RETURN… still scopes to returns (unless flagged INLINE)
               }
@@ -867,7 +871,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (!pin && cl.inlineOnly) e.inlineOnly = true;
               if (!pin && cl.usesReturnPlates) e.usesReturnPlates = true;
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}) }));
+          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}) }));
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 

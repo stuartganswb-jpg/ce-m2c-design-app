@@ -32,9 +32,10 @@ const SIZE_FAMILIES = {
       { optId: 'SIZE-DIA-138', value: '138', label: '1-3/8" Round Rod', scale: 1.833, inches: 1.375 },
     ] },
     proj: { id: 'SIZE-PROJ', title: 'Bracket Projection', options: [
-      { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection', dias: ['05', '75', '1'] },
-      { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection' },
-      { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection', dias: ['138'] },
+      { optId: 'SIZE-PROJ-P75', value: 'P75', label: '.75" Projection', dias: ['05'], inches: 0.75 },
+      { optId: 'SIZE-PROJ-S', value: 'S', label: '3-5/8" Projection', dias: ['05', '75', '1'], inches: 3.625 },
+      { optId: 'SIZE-PROJ-E', value: 'E', label: '4-5/8" Projection', inches: 4.625 },
+      { optId: 'SIZE-PROJ-6', value: '6', label: '6" Projection', dias: ['138'], inches: 6 },
     ] },
     returnsMinProj: ['E', '6'],
   },
