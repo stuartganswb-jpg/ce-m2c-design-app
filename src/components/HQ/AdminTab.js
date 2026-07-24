@@ -178,6 +178,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
   const [zoomImg, setZoomImg] = useState(null);   // {url,label} for the cluster-image lightbox
+  // 🔍 Generate-time REVIEW GATE payload — non-null renders the review modal, whose buttons call
+  // payload.resolve(...) to resume the generator awaiting inside handleGenerateHardwareFlow.
+  const [flowReview, setFlowReview] = useState(null);
   const [isCreatingRollup, setIsCreatingRollup] = useState(false);
 
 
@@ -697,6 +700,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const clusters = (asm.nodeClusters || []).filter(c => catOf(c) && !c.hidden);
       if (!clusters.length) return alert("No usable clusters — none have a Category tag or a classifiable part. Tag them in Node Grouping first (or set the parts' Product Type).");
 
+      // 🔍 Review provenance: which SOURCE assembly each cluster's options came from — master
+      // clusters stamped here, union clones stamped as they're pushed (below). The review modal
+      // groups its checklist by this label, so Stuart sees exactly what each sibling contributed.
+      const masterSrcLabel = `${asm.itemName || asm.itemId} (master)`;
+      const srcByCluster = {};
+      clusters.forEach(cl => { srcByCluster[cl.id] = masterSrcLabel; });
+
       // 🧬 FAMILY UNION (Stuart 2026-07-24: "this finial in the .05 is not being shown") — the
       // combined flow offers what's pinned on ANY sibling assembly of the master's size family,
       // not just the master's own pins. A style existing only at one diameter (H2-05FDB) joins
@@ -715,9 +725,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           return `${sk ? `S:${sk.style}` : `P:${String(partId || partName || '').toUpperCase()}`}|${pos}|${cat}`;
       };
       const unionReport = [];
+      // Family identity is needed OUTSIDE the union try too: the review gate below opens for every
+      // codeRx family even when the union pass itself failed, so the ⚠ FAILED line lands inside
+      // the modal instead of a lost alert. (sizeFamilyOfParts is pure — nothing here can throw.)
+      const famKey = sizeFamilyOfParts(pins.map(p => partsById[p.partId]).filter(Boolean));
+      const fam = famKey ? SIZE_FAMILIES[famKey] : null;
       try {
-          const famKey = sizeFamilyOfParts(pins.map(p => partsById[p.partId]).filter(Boolean));
-          const fam = famKey ? SIZE_FAMILIES[famKey] : null;
           const bareRx = fam?.codeRx ? new RegExp(fam.codeRx.source.replace('([A-Z].*)$', '$')) : null;
           if (bareRx) {
               // Assemblies may carry their family code in legacyErpId, itemId OR just itemName
@@ -783,6 +796,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       clusters.push({ ...cl, id: nsId, nodes: fresh.map(p => String(p.choiceNode).trim()) });
                       pinsByCluster[nsId] = fresh;
                       pinByCluster[nsId] = fresh[0];
+                      srcByCluster[nsId] = sib.itemName || sib.itemId; // review modal groups by contributing sibling
                       fresh.forEach(p => addedCodes.push(p.partId));
                   });
                   unionReport.push(`${sib.itemName || sib.itemId}: ${sibPins.length} pin(s) → +${addedCodes.length}${addedCodes.length ? ` (${addedCodes.join(', ')})` : ''}${skippedIds.length ? ` · skipped ${skippedIds.length} not-in-library (${[...new Set(skippedIds)].join(', ')})` : ''}`);
@@ -792,8 +806,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           }
       } catch (e) { unionReport.push(`⚠ FAILED: ${e.message || e}`); console.warn('family union skipped:', e); }
       // The union names what it did on every generate — a missing sibling option (H2-05FDB
-      // invisible at ½") must be diagnosable from this alert alone, never a silent skip.
-      if (unionReport.length) alert(`🧬 Family union:\n\n${unionReport.join('\n')}\n\n(+N = choices added from that sibling; styles the master already carries are deduped and resolve per-diameter automatically.)`);
+      // invisible at ½") must be diagnosable from this report alone, never a silent skip. For
+      // codeRx families the report now renders INSIDE the review modal (below) instead of an
+      // alert; the alert remains for the bypass paths (H1 / no family), which see no modal.
+      if (unionReport.length && !fam?.codeRx) alert(`🧬 Family union:\n\n${unionReport.join('\n')}\n\n(+N = choices added from that sibling; styles the master already carries are deduped and resolve per-diameter automatically.)`);
       // De-union: every option is CLUSTER-scoped (see both paths in groupPlacements) — each cluster
       // placement is its own option with its own flags/geometry, so position splits and same-part
       // regular-vs-RETURN plate copies are never merged back together.
@@ -850,7 +866,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // name regexes are the legacy fallback (flagsFor).
                       const { et, returnish, feeish, returnArm, inlineish } = flagsFor(p);
                       const key = [cl.id, pid, position, location].join('|');
-                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}) };
+                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, _srcName: srcByCluster[cl.id], nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
                       // Fee choice: geometry + selection kept, bills as a fee (entity-priced when the
                       // partId is a Fee-class entity like CE-FEE-4594); ERP push never BOMs it.
@@ -885,7 +901,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const pid = pin?.partId || cl.name;
               const cshortL = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
               const keyL = [cl.id, pid, position, location].join('|');
-              const e = map[keyL] = map[keyL] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshortL}`, partId: pid, partName: pin?.partName || cl.name, position, location, nodes: new Set() };
+              const e = map[keyL] = map[keyL] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshortL}`, partId: pid, partName: pin?.partName || cl.name, position, location, _srcName: srcByCluster[cl.id], nodes: new Set() };
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
               if (pin) {
                   const { et, returnish, feeish, returnArm, inlineish } = flagsFor(pin);
@@ -911,12 +927,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           });
           return Object.values(map).map(e => {
               const tags = tagsByStyle[styleKeyFor(e.partId, e.partName, e.position, cat)];
-              return { optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}), ...(tags && Object.keys(tags.projByDia).length ? { projByDia: tags.projByDia } : {}), ...(tags && Object.keys(tags.mountByDia).length ? { mountByDia: tags.mountByDia } : {}) };
+              return { optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}), ...(tags && Object.keys(tags.projByDia).length ? { projByDia: tags.projByDia } : {}), ...(tags && Object.keys(tags.mountByDia).length ? { mountByDia: tags.mountByDia } : {}), ...(e._srcName ? { _srcName: e._srcName } : {}) };
           });
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 
-      const pole = groupPlacements('POLE');
+      let pole = groupPlacements('POLE');
       // 🧊 Two-part acrylic finials: a COLLAR choice is NOT a customer choice — it's companion
       // geometry that renders WITH the top choices paired to it. Collars leave the option pool;
       // their nodes are APPENDED to each paired option's geometry (so top+collar show and the
@@ -934,7 +950,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const optTxt = (o) => `${o.partName || ''} ${o.partId || ''}`;
       const isCollarOpt = (o) => !!o.isCollar || /(^|[^A-Z])AFC([^A-Z]|$)/i.test(optTxt(o)) || (/ACRYLIC/i.test(optTxt(o)) && /COLLAR/i.test(optTxt(o)));
       const collarPool = finialAll.filter(isCollarOpt);
-      const finial = finialAll.filter(o => !isCollarOpt(o));
+      let finial = finialAll.filter(o => !isCollarOpt(o));
       if (collarPool.length) {
           const normId = (v) => String(v || '').trim().toUpperCase();
           finial.forEach(o => {
@@ -953,8 +969,102 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               o.targetNode = o.targetNode ? `${o.targetNode}, ${extra}` : extra;
           });
       }
-      const brackets = groupPlacements('BRACKET');
-      const backplates = groupPlacements('BACKPLATE');
+      let brackets = groupPlacements('BRACKET');
+      let backplates = groupPlacements('BACKPLATE');
+      let rings = groupPlacements('RING');
+
+      // ── 🔍 GENERATE-TIME REVIEW GATE (Stuart 2026-07-24: explicit control over heuristics) ──
+      // For codeRx families (the ones the union runs on — H2 today; H1 has no codeRx and
+      // bypasses this entirely), STOP here with every option pool computed but NOTHING written,
+      // and open the review modal: a per-source-assembly checklist of every option about to be
+      // emitted + the diameter × projection matrix, pre-checked to exactly what the current
+      // tags/dias logic would do (or to the flow's last stored review on regenerate). The
+      // generator resumes only on "Generate with checked" — unchecked options are dropped from
+      // the pools below, and the checked matrix is baked into the SIZE-PROJ step's dias arrays
+      // + persisted as flow.reviewExclusions (whose projMatrix taggedProjInchesAtDia serves to
+      // the CPQ cards, so tags can never resurface an unchecked projection).
+      // Identity of a reviewable option = partId|position|category — optIds embed the cluster
+      // id (changes on re-import), this survives regenerates, so exclusions stay sticky.
+      const reviewKeyOf = (o, cat) => `${String(o.partId || o.partName || '').trim().toUpperCase()}|${String(o.position || '').toUpperCase()}|${cat}`;
+      let review = null;
+      if (fam?.codeRx) {
+          const persisted = (inPlaceFlowId && oldFlow?.reviewExclusions) || null;
+          const exSeed = new Set(Array.isArray(persisted?.optionKeys) ? persisted.optionKeys : []);
+          // Sections per source assembly, master first, in pool order (pole → finial → bracket →
+          // backplate → ring). Junk options — partId resolving to nothing or to a name-less doc
+          // (the H205IMLEFT/H205IMRIGHT class) — flag ⚠ and start UNCHECKED, always: even a
+          // previously-generated junk option must be re-ticked deliberately to survive a review.
+          const sections = [];
+          const bySrc = new Map();
+          const sectionFor = (src) => { if (!bySrc.has(src)) { const s = { src, options: [] }; bySrc.set(src, s); sections.push(s); } return bySrc.get(src); };
+          sectionFor(masterSrcLabel);
+          const pushPool = (cat, list) => list.forEach(o => {
+              const lib = partsById[o.partId];
+              const junk = !lib || !String(lib.itemName || '').trim();
+              const key = reviewKeyOf(o, cat);
+              const sec = sectionFor(o._srcName || masterSrcLabel);
+              const dup = sec.options.find(x => x.key === key);
+              if (dup) { dup.copies += 1; return; } // same part+position+category in 2 clusters (regular vs RETURN copy) = ONE checkbox controlling both
+              sec.options.push({
+                  key, cat, junk, copies: 1,
+                  position: o.position || '',
+                  name: junk ? String(o.partName || o.partId || '?') : String(lib.itemName || o.partName),
+                  itemNo: lib ? String((lib.legacyErpId && lib.legacyErpId !== 'PENDING' ? lib.legacyErpId : lib.itemId) || lib.id || '') : String(o.partId || ''),
+                  flags: [o.isFee && 'fee', o.returnOnly && 'return', o.inlineOnly && 'inline', o.isCollar && 'collar'].filter(Boolean),
+                  checked: junk ? false : !exSeed.has(key),
+              });
+          });
+          pushPool('POLE', pole); pushPool('FINIAL', finial); pushPool('BRACKET', brackets); pushPool('BACKPLATE', backplates); pushPool('RING', rings);
+          // Matrix seed — "current behavior" per diameter: the union's tag map when any pins are
+          // tagged there (what the CPQ cards would offer), else the family's static dias[]
+          // defaults. A stored review (regenerate) wins over both, per dia row it covers.
+          const rnd = (n) => Math.round(n * 1000) / 1000;
+          const tagInchesByDia = {};
+          Object.values(tagsByStyle).forEach(t => Object.entries(t.projByDia || {}).forEach(([d, v]) => {
+              const f = parseFloat(String(v).replace(/[^0-9.]/g, ''));
+              if (Number.isFinite(f)) (tagInchesByDia[d] = tagInchesByDia[d] || new Set()).add(rnd(f));
+          }));
+          const cellDefault = (diaVal, po) => {
+              const set = tagInchesByDia[diaVal];
+              if (set && set.size) return Number.isFinite(po.inches) && set.has(rnd(po.inches));
+              return !po.dias || po.dias.includes(diaVal);
+          };
+          const cellPersisted = (diaVal, po) => {
+              const arr = persisted?.projMatrix?.[diaVal];
+              if (!Array.isArray(arr)) return null;
+              return Number.isFinite(po.inches) && arr.some(v => Math.abs(parseFloat(v) - po.inches) < 0.01);
+          };
+          const cellSeed = [];
+          fam.dia.options.forEach(d => fam.proj.options.forEach(po => {
+              const p = cellPersisted(d.value, po);
+              if (p == null ? cellDefault(d.value, po) : p) cellSeed.push(`${d.value}|${po.optId}`);
+          }));
+          // Tag measurements with no family projection option can never be offered — name them so
+          // a "missing" projection is diagnosable (add the one-line family option, regenerate).
+          const strayTags = [];
+          Object.entries(tagInchesByDia).forEach(([d, set]) => [...set].forEach(i => {
+              if (!fam.proj.options.some(po => Number.isFinite(po.inches) && Math.abs(po.inches - i) < 0.01))
+                  strayTags.push(`${i}" @ ${fam.dia.options.find(x => x.value === d)?.label || d}`);
+          }));
+          review = await new Promise((resolve) => setFlowReview({
+              famLabel: fam.label, asmName: asm.itemName || asm.itemId,
+              flowName: oldFlow?.name || null, isRegen: !!inPlaceFlowId, hadPersisted: !!persisted,
+              unionReport: [...unionReport], sections,
+              diaOptions: fam.dia.options.map(d => ({ value: d.value, label: d.label })),
+              projOptions: fam.proj.options.map(po => ({ optId: po.optId, label: po.label })),
+              cellSeed, strayTags, resolve,
+          }));
+          setFlowReview(null);
+          if (!review) return; // ✋ cancelled — nothing written, nothing changed
+      }
+      // Drop what the review unchecked (no review = keep-all) and strip the _srcName helper, so
+      // bypass families (H1) emit options byte-identical to the pre-review generator.
+      const scrub = (list, cat) => list
+          .filter(o => !review || !review.excludedKeys.has(reviewKeyOf(o, cat)))
+          .map(({ _srcName, ...rest }) => rest);
+      pole = scrub(pole, 'POLE'); finial = scrub(finial, 'FINIAL');
+      brackets = scrub(brackets, 'BRACKET'); backplates = scrub(backplates, 'BACKPLATE'); rings = scrub(rings, 'RING');
+
       // Split the pole: LEFT/RIGHT-tagged segments are END-POLE (bend vs straight) that must follow
       // that end's End Treatment selection; everything else (CENTER / untagged / shared) is the main
       // run that's always shown. This is what lets a french-return end and a finial end coexist —
@@ -964,7 +1074,6 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const centerPole = pole.filter(o => !isEndPos(o));
       const endPole = pole.filter(o => isEndPos(o));
       const poleNodes = centerPole.map(o => o.targetNode).filter(Boolean).join(', ');
-      const rings = groupPlacements('RING');
       const ringNodes = rings.map(o => o.targetNode).filter(Boolean).join(', ');
 
       // Backplates ride as a SECOND chooser on their position's bracket step, so you pick the
@@ -1150,7 +1259,33 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // push and Vision resolve every configured part through Shared/sizeMatrix at quote time.
       const usedParts = [...new Set(pins.map(p => p.partId).filter(Boolean))].map(pid => partsById[pid]).filter(Boolean);
       const sizeFamily = sizeFamilyOfParts(usedParts);
-      if (sizeFamily) steps.unshift(...buildSizeSteps(sizeFamily));
+      // 🔍 Reviewed matrix → baked + persisted. The SIZE-PROJ step's per-option dias arrays
+      // become EXACTLY the checked diameters (explicit even when they match the registry, so the
+      // registry fallback can never resurrect an unchecked diameter; a projection checked
+      // nowhere is dropped outright). reviewExclusions rides the flow doc: optionKeys re-seed
+      // the next review, projMatrix is what taggedProjInchesAtDia serves to the CPQ cards.
+      let reviewExclusions = null;
+      if (review && fam) {
+          const projMatrix = {}; const diasByOpt = {};
+          fam.dia.options.forEach(d => {
+              projMatrix[d.value] = [];
+              fam.proj.options.forEach(po => {
+                  if (!review.cells.has(`${d.value}|${po.optId}`)) return;
+                  (diasByOpt[po.optId] = diasByOpt[po.optId] || []).push(d.value);
+                  if (Number.isFinite(po.inches)) projMatrix[d.value].push(po.inches);
+              });
+          });
+          review.diasByOpt = diasByOpt;
+          reviewExclusions = { optionKeys: [...review.excludedKeys].sort(), projMatrix, reviewedAt: ts };
+      }
+      if (sizeFamily) {
+          const sizeSteps = buildSizeSteps(sizeFamily);
+          if (review?.diasByOpt) {
+              const ps = sizeSteps.find(s => s.sizeAxis === 'PROJ');
+              if (ps) ps.styleOptions = ps.styleOptions.map(o => ({ ...o, dias: review.diasByOpt[o.optId] || [] })).filter(o => o.dias.length);
+          }
+          steps.unshift(...sizeSteps);
+      }
 
       // Force-hidden meshes = every cluster tagged hidden (e.g. bushings), by cluster id — the runtime
       // + the flow-settings hidden-clusters editor both key on cluster ids. (BOM inclusion of those
@@ -1218,8 +1353,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               return next;
           });
           try {
-              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig, sizeFamily: sizeFamily || oldFlow.sizeFamily || null }));
-              alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
+              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig, sizeFamily: sizeFamily || oldFlow.sizeFamily || null, ...(reviewExclusions ? { reviewExclusions } : {}) }));
+              alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.${reviewExclusions ? `\n\n🔍 Review applied — ${reviewExclusions.optionKeys.length} option(s) excluded, projection matrix baked into the SIZE steps. Saved on the flow: the next regenerate pre-checks from this review.` : ''}\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
           } catch (err) { console.error("Regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
           return;
       }
@@ -1230,12 +1365,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
               legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id, bayConfig: bayConfigKey || genBayConfig,
               fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [],
-              hiddenClusters: newHidden, hiddenNodes, steps, sizeFamily: sizeFamily || null
+              hiddenClusters: newHidden, hiddenNodes, steps, sizeFamily: sizeFamily || null,
+              ...(reviewExclusions ? { reviewExclusions } : {})
           }));
           setActiveFlowId(flowId);
           const posCount = (arr) => new Set(arr.map(o => o.position || '')).size;
           const bayLabel = { STRAIGHT: 'Straight Pole', FRENCH_RETURN: '1" French Return', MITERED: 'Mitered Bay', BOW: 'Curved Bay' }[genBayConfig] || genBayConfig;
-          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Bay configuration: ${bayLabel} → fabShape ${bay.fabShape} + ${bay.calc}\n• Pole materials (center run): ${centerPole.length}${endPole.length ? `\n• End-pole segments: ${endPole.length} → wired into the L/R End Treatment steps (bend vs straight follows each end's pick)` : ''}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment always emitted — carries the Miter/Bend/Flush return options)\n\n${centerPole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}fabShape + pole calculator are kept in sync so Vision Hardware math matches. Review + set prices/projection, then test. Nothing was deleted.\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
+          alert(`Generated "${String(asm.itemName || 'HARDWARE')} — GENERATED" from your tags:\n• Bay configuration: ${bayLabel} → fabShape ${bay.fabShape} + ${bay.calc}\n• Pole materials (center run): ${centerPole.length}${endPole.length ? `\n• End-pole segments: ${endPole.length} → wired into the L/R End Treatment steps (bend vs straight follows each end's pick)` : ''}\n• Bracket+mount options: ${brackets.length} across ${posCount(brackets)} position step(s)\n• Backplates: ${backplates.length} (each position's plates are a 2nd chooser on its bracket step; ${looseBackplates.length} standalone)\n• Finials: ${finial.length} (End Treatment always emitted — carries the Miter/Bend/Flush return options)\n\n${centerPole.length <= 1 ? 'Single pole material → material + length/finish combined into ONE step. ' : ''}fabShape + pole calculator are kept in sync so Vision Hardware math matches. Review + set prices/projection, then test. Nothing was deleted.${reviewExclusions ? `\n\n🔍 Review applied — ${reviewExclusions.optionKeys.length} option(s) excluded, projection matrix baked into the SIZE steps. Saved on the flow: the next regenerate pre-checks from this review.` : ''}\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
       } catch (err) { console.error("Generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
   };
 
@@ -2954,6 +3090,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
         </div>
       </div>
 
+      {flowReview && <FlowReviewModal review={flowReview} />}
+
       {zoomImg && (
         <div onClick={() => setZoomImg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.75)', zIndex: 11000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px', cursor: 'zoom-out' }}>
           <img src={zoomImg.url} alt={zoomImg.label} style={{ maxWidth: '70vw', maxHeight: '75vh', objectFit: 'contain', background: '#fff', border: '1px solid var(--line)', padding: '12px' }} />
@@ -2962,6 +3100,103 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       )}
     </div>
   );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// 🔍 FLOW REVIEW MODAL — the generate-time gate handleGenerateHardwareFlow awaits on (codeRx
+// families only; H1 bypasses). Pure checkbox state over the payload the generator computed:
+// per-source-assembly option checklist + the diameter × projection matrix + the union report.
+// Cancel resolves null (nothing written); "Generate with checked" resolves the exclusion sets
+// and the awaiting generator resumes. Junk options (⚠ partId not in the library, or a name-less
+// doc) always arrive pre-unchecked — surviving a review takes a deliberate tick.
+const FlowReviewModal = ({ review }) => {
+    const [excluded, setExcluded] = useState(() => new Set(review.sections.flatMap(s => s.options.filter(o => !o.checked).map(o => o.key))));
+    const [cells, setCells] = useState(() => new Set(review.cellSeed));
+    const toggleOpt = (key) => setExcluded(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+    const toggleCell = (id) => setCells(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    const totalOpts = review.sections.reduce((s, x) => s + x.options.length, 0);
+    const keptOpts = totalOpts - excluded.size;
+    const mono = { fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.08em' };
+    const th = { ...mono, fontSize: '9.5px', color: 'var(--ink-soft)', padding: '8px 12px', textAlign: 'center', background: 'var(--paper-2)' };
+    const btn = { padding: '10px 18px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' };
+    return (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.75)', zIndex: 12000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+            <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', width: 'min(900px, 96vw)', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.35)' }}>
+                <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--line)' }}>
+                    <div style={{ ...mono, fontSize: '12px', color: 'var(--brass)' }}>🔍 Review before generate — {review.famLabel}</div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px', fontFamily: 'var(--sans)' }}>
+                        {review.isRegen
+                            ? <>Regenerating <b style={{ color: 'var(--ink)' }}>{review.flowName || 'flow'}</b> from <b style={{ color: 'var(--ink)' }}>{review.asmName}</b> — nothing is written until “Generate with checked”. </>
+                            : <>New flow from <b style={{ color: 'var(--ink)' }}>{review.asmName}</b> — nothing is written until “Generate with checked”. </>}
+                        {review.hadPersisted ? 'Pre-checked from this flow’s last review (new arrivals follow the current tags/dias).' : 'Pre-checked to the current tags/dias behavior.'}
+                    </div>
+                </div>
+                <div style={{ overflowY: 'auto', padding: '18px 24px', flex: 1 }}>
+                    <div style={{ ...mono, fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '6px' }}>🧬 Family union</div>
+                    <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '10px 12px', fontFamily: 'var(--mono)', fontSize: '10.5px', lineHeight: 1.6, color: 'var(--ink)', whiteSpace: 'pre-wrap', marginBottom: '18px' }}>
+                        {(review.unionReport.length ? review.unionReport.join('\n') : '— nothing to report —')
+                            + '\n\n(+N = choices added from that sibling; styles the master already carries are deduped and resolve per-diameter automatically.)'}
+                    </div>
+                    <div style={{ ...mono, fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '6px' }}>📏 Diameter × Projection — checked = offered on the Bracket Projection cards at that diameter</div>
+                    <div style={{ border: '1px solid var(--line)', marginBottom: '8px', overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', fontFamily: 'var(--sans)' }}>
+                            <thead><tr>
+                                <th style={{ ...th, textAlign: 'left' }}>Rod Diameter</th>
+                                {review.projOptions.map(po => <th key={po.optId} style={th}>{po.label}</th>)}
+                            </tr></thead>
+                            <tbody>
+                                {review.diaOptions.map(d => {
+                                    const rowCount = review.projOptions.filter(po => cells.has(`${d.value}|${po.optId}`)).length;
+                                    return (
+                                        <tr key={d.value} style={{ borderTop: '1px solid var(--line)' }}>
+                                            <td style={{ padding: '8px 12px', color: rowCount ? 'var(--ink)' : '#b23b2e', fontWeight: 500 }}>{d.label}{rowCount ? '' : ' — no projections offered!'}</td>
+                                            {review.projOptions.map(po => {
+                                                const id = `${d.value}|${po.optId}`;
+                                                return (
+                                                    <td key={po.optId} style={{ padding: '8px 12px', textAlign: 'center' }}>
+                                                        <input type="checkbox" checked={cells.has(id)} onChange={() => toggleCell(id)} style={{ accentColor: 'var(--brass)', width: '15px', height: '15px', cursor: 'pointer' }} />
+                                                    </td>
+                                                );
+                                            })}
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                    {review.strayTags.length > 0 && (
+                        <div style={{ fontSize: '0.78rem', color: '#b23b2e', marginBottom: '10px', fontFamily: 'var(--sans)' }}>
+                            ⚠ Tagged on pins but not offerable — no matching family projection option: {review.strayTags.join(' · ')}. Add the one-line option to SIZE_FAMILIES, then regenerate.
+                        </div>
+                    )}
+                    <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', marginBottom: '18px', fontFamily: 'var(--sans)' }}>
+                        Unchecked projections are baked out of the flow (SIZE-PROJ dias + stored review matrix) — brackets tagged only at an unchecked projection stop appearing at that diameter.
+                    </div>
+                    {review.sections.filter(s => s.options.length).map(sec => (
+                        <div key={sec.src} style={{ marginBottom: '16px' }}>
+                            <div style={{ ...mono, fontSize: '10px', color: 'var(--brass)', borderBottom: '1px solid var(--line)', paddingBottom: '5px', marginBottom: '4px' }}>{sec.src} · {sec.options.length} option(s)</div>
+                            {sec.options.map(o => (
+                                <label key={o.key} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 4px', cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={!excluded.has(o.key)} onChange={() => toggleOpt(o.key)} style={{ accentColor: 'var(--brass)', width: '15px', height: '15px', cursor: 'pointer', flexShrink: 0 }} />
+                                    <span style={{ fontSize: '0.85rem', fontFamily: 'var(--sans)', color: o.junk ? '#b23b2e' : 'var(--ink)', textDecoration: excluded.has(o.key) ? 'line-through' : 'none', opacity: excluded.has(o.key) ? 0.55 : 1 }}>
+                                        {o.junk ? `⚠ ${o.name} (not in library)` : o.name}
+                                    </span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: 'auto', flexShrink: 0, letterSpacing: '.04em' }}>
+                                        {o.itemNo ? `${o.itemNo} · ` : ''}{o.cat}{o.position ? ` · ${o.position}` : ''}{o.copies > 1 ? ` · ×${o.copies} placements` : ''}{o.flags.length ? ` · ${o.flags.join(' ')}` : ''}
+                                    </span>
+                                </label>
+                            ))}
+                        </div>
+                    ))}
+                </div>
+                <div style={{ padding: '14px 24px', borderTop: '1px solid var(--line)', display: 'flex', gap: '12px', justifyContent: 'flex-end', alignItems: 'center', background: 'var(--paper-2)' }}>
+                    <div style={{ ...mono, fontSize: '10px', color: 'var(--ink-soft)', marginRight: 'auto' }}>{keptOpts}/{totalOpts} options · {cells.size} matrix cell(s) checked</div>
+                    <button onClick={() => review.resolve(null)} style={{ ...btn, background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)' }}>✕ Cancel — write nothing</button>
+                    <button onClick={() => review.resolve({ excludedKeys: new Set(excluded), cells: new Set(cells) })} style={{ ...btn, background: 'var(--brass)', color: '#fff', border: 'none' }}>⚙ Generate with checked</button>
+                </div>
+            </div>
+        </div>
+    );
 };
 
 // Reusable UI Components for the Admin Tab

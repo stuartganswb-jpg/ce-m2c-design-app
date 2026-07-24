@@ -188,6 +188,17 @@ export function projOptionInches(familyKey, opt) {
 // The projection tags entered at a given diameter, across a flow's options (union-merged
 // projByDia + flat projInches on dia-available options). Empty set = nothing tagged there.
 export function taggedProjInchesAtDia(flow, diaValue, isOptionAvailable) {
+    // 🔍 REVIEW OVERRIDE (AdminTab's generate-time review modal): a reviewed flow stores the
+    // exact per-diameter projection set Stuart approved (reviewExclusions.projMatrix =
+    // { dia: [allowed inches] }). That snapshot IS the offering at this diameter — a tag whose
+    // projection he unchecked must not resurface its card, and a projection he checked with no
+    // tag behind it must appear. Returning it here makes BOTH consumers (the SIZE-PROJ cards
+    // and the stale-selection sweep in CPQTab) honor the review with no gating change there.
+    // Flows without a stored review (everything pre-review, all of H1) fall through untouched.
+    const allowed = flow?.reviewExclusions?.projMatrix?.[diaValue];
+    if (Array.isArray(allowed)) {
+        return new Set(allowed.map(v => Math.round(parseFloat(v) * 1000) / 1000).filter(Number.isFinite));
+    }
     const out = new Set();
     (flow?.steps || []).forEach(st => {
         [...(st.styleOptions || []), ...(st.subOptions || [])].forEach(o => {
