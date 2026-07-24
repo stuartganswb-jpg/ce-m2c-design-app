@@ -174,6 +174,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   const [newFlowName, setNewFlowName] = useState("");
   const [linkItemSearch, setLinkItemSearch] = useState(""); // CPQ step "Link to Library Item" search box
   const [generateAsmId, setGenerateAsmId] = useState(""); // assembly the "Generate Flow from Tags" button reads
+  const [genSingleAsm, setGenSingleAsm] = useState(false); // 🎯 single-assembly mode: this assembly's tags only — no union/review/SIZE steps
   const [genBayConfig, setGenBayConfig] = useState("STRAIGHT"); // bay configuration the generated flow is stamped with (drives fabShape + the pole calculatorTemplate so Vision Hardware math matches)
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
@@ -656,6 +657,29 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const bay = BAY_CONFIGS[bayConfigKey || oldFlow?.bayConfig || genBayConfig] || BAY_CONFIGS.STRAIGHT;
       const asmId = inPlaceFlowId ? oldFlow?.linkedAssemblyId : (generateAsmId || flowSettings.linkedAssemblyId);
       const asm = masterAssemblies.find(a => a.id === asmId) || allApprovedDesigns.find(a => a.id === asmId || a.itemId === asmId);
+      // 🎯 SINGLE-ASSEMBLY MODE (Stuart 2026-07-24 pivot): this assembly's tags ONLY — no family
+      // union, no review gate, no SIZE steps. The flow gets sizeGroup* stamps instead, and the
+      // CPQ landing collapses the sibling flows into one "pick rod diameter first" entry.
+      // Regenerates keep the mode from the flow doc.
+      const singleMode = inPlaceFlowId ? !!oldFlow?.singleAssembly : genSingleAsm;
+      let groupFields = {};
+      if (singleMode && asm) {
+          const codesToTry = [
+              String((asm.legacyErpId && asm.legacyErpId !== 'PENDING' ? asm.legacyErpId : asm.itemId) || '').trim().toUpperCase(),
+              String(asm.itemName || '').trim().toUpperCase(),
+          ];
+          for (const fk of Object.keys(SIZE_FAMILIES)) {
+              const f = SIZE_FAMILIES[fk];
+              if (!f.codeRx) continue;
+              const bare = new RegExp(f.codeRx.source.replace('([A-Z].*)$', '$'));
+              const m = codesToTry.map(c => c.match(bare)).find(Boolean);
+              if (m) {
+                  const d = f.dia.options.find(o => o.value === m[1]);
+                  groupFields = { sizeGroupLabel: f.label.replace(/ Round$/i, ''), sizeGroupChoice: d?.label || m[1], sizeGroupSort: d?.inches ?? 99 };
+                  break;
+              }
+          }
+      }
       if (!asm) return alert(inPlaceFlowId
           ? "This flow has no linked assembly to regenerate from. Set its Linked Assembly in flow settings first."
           : "Pick a Master Assembly from the dropdown next to Generate, then click Generate.");
@@ -728,7 +752,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // Family identity is needed OUTSIDE the union try too: the review gate below opens for every
       // codeRx family even when the union pass itself failed, so the ⚠ FAILED line lands inside
       // the modal instead of a lost alert. (sizeFamilyOfParts is pure — nothing here can throw.)
-      const famKey = sizeFamilyOfParts(pins.map(p => partsById[p.partId]).filter(Boolean));
+      const famKey = singleMode ? null : sizeFamilyOfParts(pins.map(p => partsById[p.partId]).filter(Boolean));
       const fam = famKey ? SIZE_FAMILIES[famKey] : null;
       try {
           const bareRx = fam?.codeRx ? new RegExp(fam.codeRx.source.replace('([A-Z].*)$', '$')) : null;
@@ -809,7 +833,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // invisible at ½") must be diagnosable from this report alone, never a silent skip. For
       // codeRx families the report now renders INSIDE the review modal (below) instead of an
       // alert; the alert remains for the bypass paths (H1 / no family), which see no modal.
-      if (unionReport.length && !fam?.codeRx) alert(`🧬 Family union:\n\n${unionReport.join('\n')}\n\n(+N = choices added from that sibling; styles the master already carries are deduped and resolve per-diameter automatically.)`);
+      if (unionReport.length && !fam?.codeRx && !singleMode) alert(`🧬 Family union:\n\n${unionReport.join('\n')}\n\n(+N = choices added from that sibling; styles the master already carries are deduped and resolve per-diameter automatically.)`);
       // De-union: every option is CLUSTER-scoped (see both paths in groupPlacements) — each cluster
       // placement is its own option with its own flags/geometry, so position splits and same-part
       // regular-vs-RETURN plate copies are never merged back together.
@@ -1258,7 +1282,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // regenerates. One flow then covers the whole diameter × projection matrix: CPQ pricing, ERP
       // push and Vision resolve every configured part through Shared/sizeMatrix at quote time.
       const usedParts = [...new Set(pins.map(p => p.partId).filter(Boolean))].map(pid => partsById[pid]).filter(Boolean);
-      const sizeFamily = sizeFamilyOfParts(usedParts);
+      const sizeFamily = singleMode ? null : sizeFamilyOfParts(usedParts);
       // 🔍 Reviewed matrix → baked + persisted. The SIZE-PROJ step's per-option dias arrays
       // become EXACTLY the checked diameters (explicit even when they match the registry, so the
       // registry fallback can never resurrect an unchecked diameter; a projection checked
@@ -1353,7 +1377,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               return next;
           });
           try {
-              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig, sizeFamily: sizeFamily || oldFlow.sizeFamily || null, ...(reviewExclusions ? { reviewExclusions } : {}) }));
+              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig, sizeFamily: singleMode ? null : (sizeFamily || oldFlow.sizeFamily || null), ...(singleMode ? { singleAssembly: true, ...groupFields } : {}), ...(reviewExclusions ? { reviewExclusions } : {}) }));
               alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.${reviewExclusions ? `\n\n🔍 Review applied — ${reviewExclusions.optionKeys.length} option(s) excluded, projection matrix baked into the SIZE steps. Saved on the flow: the next regenerate pre-checks from this review.` : ''}\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
           } catch (err) { console.error("Regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
           return;
@@ -1363,6 +1387,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       try {
           await setDoc(doc(db, "cpq_flows", flowId), stripUndefined({
               id: flowId, brandId: activeBrand, name: `${String(asm.itemName || 'HARDWARE').toUpperCase()} — GENERATED`,
+              ...(singleMode ? { singleAssembly: true, ...groupFields } : {}),
               legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id, bayConfig: bayConfigKey || genBayConfig,
               fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [],
               hiddenClusters: newHidden, hiddenNodes, steps, sizeFamily: sizeFamily || null,
@@ -1760,6 +1785,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                             <option value="">— assembly to generate from —</option>
                             {masterAssemblies.map(a => <option key={a.id} value={a.id}>{a.itemName}{a.legacyErpId ? ` [${a.legacyErpId}]` : ''}</option>)}
                         </select>
+                        <label title="THIS ASSEMBLY'S TAGS ONLY (Stuart 2026-07-24): no family union, no review gate, no Rod Diameter/Projection steps — the flow contains exactly what's pinned on this one assembly. The flow is stamped with its size group (from the assembly code), so CPQ collapses the sibling flows into one 'pick rod diameter first' landing entry. Generate one flow per diameter this way." style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: genSingleAsm ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={genSingleAsm} onChange={e => setGenSingleAsm(e.target.checked)} style={{ width: '15px', height: '15px', margin: 0, cursor: 'pointer' }} />
+                            🎯 Single-assembly flow — this assembly's tags only (per-diameter; no union, no size steps)
+                        </label>
                         <select value={genBayConfig} onChange={e => setGenBayConfig(e.target.value)} title="Bay configuration the generated flow is stamped with — sets the flow's fabShape AND the pole calculator together so Vision Hardware's bay math matches the configurator. Generate once per configuration (e.g. a separate Mitered Bay / Curved Bay flow for the same assembly)." style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.82rem', outline: 'none', background: '#fff' }}>
                             <option value="STRAIGHT">Bay config: Straight Pole</option>
                             <option value="FRENCH_RETURN">Bay config: 1" French Return (bent ends)</option>
