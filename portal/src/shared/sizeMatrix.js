@@ -165,13 +165,40 @@ export function projInchesOfSel(sel) {
 export function optionProjAllowed(opt, sel) {
     const selIn = projInchesOfSel(sel);
     if (selIn == null) return true;
-    const raw = String(opt?.projInches ?? '').trim();
+    // PER-DIAMETER tag first (option.projByDia — the union merges each sibling assembly's
+    // proj: tag under its own diameter, so one merged option carries '05': '.75' from the
+    // H2-05 pin AND '138': '6.00' from the master pin); flat projInches is the fallback.
+    const perDia = opt?.projByDia && sel?.dia != null ? opt.projByDia[sel.dia] : undefined;
+    const raw = String(perDia ?? opt?.projInches ?? '').trim();
     if (raw) {
         const f = parseFloat(raw.replace(/[^0-9.]/g, ''));
         return !Number.isFinite(f) || Math.abs(f - selIn) < 0.01;
     }
     if (opt?.projLetter) return String(opt.projLetter).trim().toUpperCase() === String(sel?.proj || '').trim().toUpperCase();
     return true;
+}
+
+// Inches of a SIZE-PROJ card option (registry lookup by optId/value — labels never parsed).
+export function projOptionInches(familyKey, opt) {
+    const fam = SIZE_FAMILIES[familyKey];
+    const reg = fam?.proj?.options?.find(x => x.optId === (opt?.optId || opt) || (opt?.sizeValue != null && x.value === opt.sizeValue));
+    return (reg && Number.isFinite(reg.inches)) ? reg.inches : null;
+}
+
+// The projection tags entered at a given diameter, across a flow's options (union-merged
+// projByDia + flat projInches on dia-available options). Empty set = nothing tagged there.
+export function taggedProjInchesAtDia(flow, diaValue, isOptionAvailable) {
+    const out = new Set();
+    (flow?.steps || []).forEach(st => {
+        [...(st.styleOptions || []), ...(st.subOptions || [])].forEach(o => {
+            const tag = (o?.projByDia && o.projByDia[diaValue]) ?? o?.projInches;
+            if (!tag) return;
+            if (isOptionAvailable && !isOptionAvailable(o)) return;
+            const f = parseFloat(String(tag).replace(/[^0-9.]/g, ''));
+            if (Number.isFinite(f)) out.add(Math.round(f * 1000) / 1000);
+        });
+    });
+    return out;
 }
 
 // Read the flow's size selections out of a CPQ config map (dynamicConfigParams / cart config).

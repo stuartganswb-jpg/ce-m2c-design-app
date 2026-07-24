@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
-import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
 
 const globalTextureCache = {};
@@ -854,9 +854,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           if (sizeSel) {
               const allParts = [...libraryParts, ...liveAssemblies];
               opts = opts.filter(o => {
-                  if (!returnsAllowedFor(sizeSel) && isReturnOption(o)) return false;
                   const base = allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
                       || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName)));
+                  // Returns banned at this projection: catch modeled/fee returns (isReturnOption),
+                  // return-scoped options (returnOnly — but never INSIDE_MOUNT, which shares the
+                  // flag), and parts whose LIBRARY name says return (option partName is often just
+                  // the bare code, e.g. H2-RBP "Mounting Base for French Return").
+                  if (!returnsAllowedFor(sizeSel)) {
+                      const et = String(o.endTreatment || '').toUpperCase();
+                      const rtn = isReturnOption(o)
+                          || (o.returnOnly && et !== 'INSIDE_MOUNT')
+                          || /return|miter|mitre|french|\bbend\b/i.test(String(base?.itemName || ''));
+                      if (rtn && et !== 'INSIDE_MOUNT') return false;
+                  }
                   // Explicit bracket projection (1.6 proj: select, dictionary inches — legacy
                   // letters honored): the option shows only at its own projection.
                   if (!optionProjAllowed(o, sizeSel)) return false;
@@ -1784,7 +1794,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (!next[key]) return;
                   const o = (pool || []).find(x => (x.optId || x.partId) === next[key]);
                   if (!o) return;
-                  const banned = (!returnsOk && isReturnOption(o)) || !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex) || !optionProjAllowed(o, sizeSel);
+                  const oEt = String(o.endTreatment || '').toUpperCase();
+                  const oRtn = isReturnOption(o) || (o.returnOnly && oEt !== 'INSIDE_MOUNT') || /return|miter|mitre|french|\bbend\b/i.test(String(partOf(o)?.itemName || ''));
+                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex) || !optionProjAllowed(o, sizeSel);
                   if (banned) { delete next[key]; changed = true; }
               };
               check(st.id, st.styleOptions);
@@ -2660,7 +2672,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // the chosen diameter doesn't sell. Stale invalid picks self-heal in
                               // sizeSelectionsOf, so pricing/push never use an impossible cell.
                               const selNow = sizeSelectionsOf(activeFlow, dynamicConfigParams);
-                              const sizeOpts = (currentStep.styleOptions || []).filter(o => currentStep.sizeAxis !== 'PROJ' || projAllowedAtDia(currentStep.sizeFamily, o, selNow?.dia));
+                              // "The projections offered needs to read the tags" (Stuart 2026-07-24):
+                              // when the flow's options carry proj tags AT THIS DIAMETER (per-dia
+                              // projByDia from the union, or flat projInches), the cards offer exactly
+                              // those measurements — the entered truth. No tags at this dia → fall
+                              // back to the family's static dias[] availability.
+                              const taggedHere = currentStep.sizeAxis === 'PROJ' ? taggedProjInchesAtDia(activeFlow, selNow?.dia, null) : null;
+                              const sizeOpts = (currentStep.styleOptions || []).filter(o => {
+                                  if (currentStep.sizeAxis !== 'PROJ') return true;
+                                  if (taggedHere && taggedHere.size) {
+                                      const inches = projOptionInches(currentStep.sizeFamily, o);
+                                      return inches != null && taggedHere.has(Math.round(inches * 1000) / 1000);
+                                  }
+                                  return projAllowedAtDia(currentStep.sizeFamily, o, selNow?.dia);
+                              });
                               return (
                               <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(sizeOpts.length, 1)}, 1fr)`, gap: '14px', marginBottom: '20px' }}>
                                   {sizeOpts.map(o => {

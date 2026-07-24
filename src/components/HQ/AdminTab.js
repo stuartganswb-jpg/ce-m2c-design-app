@@ -706,6 +706,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // no nodes in the master GLB: they price/BOM correctly; the render shows that end without
       // the mesh until the designer adds the shape to the master file. Families without a
       // codeRx (Fabricut H1) never union — those flows are byte-identical to before.
+      // STYLE-KEYED per-diameter tag map — filled by the union pass from EVERY family pin
+      // (master + siblings, including deduped duplicates: a deduped H2-05LB still contributes
+      // its .75 proj tag under dia '05'), read back at option emission as projByDia/mountByDia.
+      const tagsByStyle = {};
+      const styleKeyFor = (partId, partName, pos, cat) => {
+          const sk = sizeKeyOf(partsById[partId]) || sizeKeyOf({ legacyErpId: partId });
+          return `${sk ? `S:${sk.style}` : `P:${String(partId || partName || '').toUpperCase()}`}|${pos}|${cat}`;
+      };
       const unionReport = [];
       try {
           const famKey = sizeFamilyOfParts(pins.map(p => partsById[p.partId]).filter(Boolean));
@@ -722,19 +730,30 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (!siblings.length) unionReport.push(`no sibling assemblies matched ${bareRx} in this brand`);
               // Identity of a choice = family STYLE (stamped or code-parsed) at a position+category;
               // non-family parts (return/miter fees, shared hardware) key by part id instead.
-              const keyFor = (partId, partName, pos, cat) => {
-                  const sk = sizeKeyOf(partsById[partId]) || sizeKeyOf({ legacyErpId: partId });
-                  return `${sk ? `S:${sk.style}` : `P:${String(partId || partName || '').toUpperCase()}`}|${pos}|${cat}`;
-              };
+              const keyFor = styleKeyFor;
               const seenKeys = new Set();
+              // PER-DIAMETER TAG MAP (Stuart 2026-07-24: "the projections offered needs to read
+              // the tags") — a deduped sibling pin still contributes its proj:/mount: tags under
+              // ITS OWN diameter, keyed by the same style identity. Options later pick this up
+              // as projByDia, so the ½" entry of a merged LB option is the H2-05 pin's .75.
+              const diaOfPart = (partId) => (sizeKeyOf(partsById[partId]) || sizeKeyOf({ legacyErpId: partId }))?.dia || null;
+              const recordTags = (p, pos, cat) => {
+                  const d = diaOfPart(p.partId);
+                  if (!d) return;
+                  const k = keyFor(p.partId, p.partName, pos, cat);
+                  const slot = tagsByStyle[k] = tagsByStyle[k] || { projByDia: {}, mountByDia: {} };
+                  if (p.projInches && String(p.projInches).trim()) slot.projByDia[d] = String(p.projInches).trim().toUpperCase();
+                  if (p.mountType && String(p.mountType).trim()) slot.mountByDia[d] = String(p.mountType).trim().toUpperCase();
+              };
               clusters.forEach(cl => {
                   const cat = catOf(cl); const pos = (cl.position || '').toUpperCase();
-                  (pinsByCluster[cl.id] || []).forEach(p => { if (!p.isHiddenPart && p.partId) seenKeys.add(keyFor(p.partId, p.partName, pos, cat)); });
+                  (pinsByCluster[cl.id] || []).forEach(p => { if (!p.isHiddenPart && p.partId) { seenKeys.add(keyFor(p.partId, p.partName, pos, cat)); recordTags(p, pos, cat); } });
               });
               for (const sib of siblings) {
                   let sibPins = [];
                   try { const s = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", sib.itemId))); sibPins = s.docs.map(d => d.data()); } catch (e) { console.warn('union pin load failed', sib.itemId, e); }
                   const addedCodes = [];
+                  const skippedIds = [];
                   const byCl = {};
                   sibPins.forEach(p => { if (p.clusterId) (byCl[p.clusterId] = byCl[p.clusterId] || []).push(p); });
                   (sib.nodeClusters || []).filter(c => !c.hidden).forEach(cl => {
@@ -743,8 +762,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       const fresh = (byCl[cl.id] || [])
                           .filter(p => p.choiceNode && String(p.choiceNode).trim() && p.partId && !p.isHiddenPart && !String(p.partId).startsWith('HIDDEN-'))
                           .filter(p => {
+                              // Junk/stale pins whose partId isn't a real library item (raw node
+                              // names like H205IMRIGHT) never union — they'd show everywhere.
+                              if (!partsById[p.partId]) { skippedIds.push(p.partId); return false; }
                               const cat = catGuess || classifyCat(partsById[p.partId]?.manufacturingSpecs?.productType || partsById[p.partId]?.productType);
                               if (!cat) return false;
+                              // Tags ride even when the CHOICE dedupes: this diameter's proj:/mount:
+                              // land under its dia on the surviving option's projByDia/mountByDia.
+                              recordTags(p, pos, cat);
                               const k = keyFor(p.partId, p.partName, pos, cat);
                               if (seenKeys.has(k)) return false;
                               seenKeys.add(k);
@@ -760,7 +785,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       pinByCluster[nsId] = fresh[0];
                       fresh.forEach(p => addedCodes.push(p.partId));
                   });
-                  unionReport.push(`${sib.itemName || sib.itemId}: ${sibPins.length} pin(s) → +${addedCodes.length}${addedCodes.length ? ` (${addedCodes.join(', ')})` : ''}`);
+                  unionReport.push(`${sib.itemName || sib.itemId}: ${sibPins.length} pin(s) → +${addedCodes.length}${addedCodes.length ? ` (${addedCodes.join(', ')})` : ''}${skippedIds.length ? ` · skipped ${skippedIds.length} not-in-library (${[...new Set(skippedIds)].join(', ')})` : ''}`);
               }
           } else {
               unionReport.push('no size family / no codeRx — union skipped (expected for H1)');
@@ -884,7 +909,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               if (!pin && cl.inlineOnly) e.inlineOnly = true;
               if (!pin && cl.usesReturnPlates) e.usesReturnPlates = true;
           });
-          return Object.values(map).map(e => ({ optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}) }));
+          return Object.values(map).map(e => {
+              const tags = tagsByStyle[styleKeyFor(e.partId, e.partName, e.position, cat)];
+              return { optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}), ...(tags && Object.keys(tags.projByDia).length ? { projByDia: tags.projByDia } : {}), ...(tags && Object.keys(tags.mountByDia).length ? { mountByDia: tags.mountByDia } : {}) };
+          });
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 
