@@ -191,7 +191,11 @@ export function taggedProjInchesAtDia(flow, diaValue, isOptionAvailable) {
     const out = new Set();
     (flow?.steps || []).forEach(st => {
         [...(st.styleOptions || []), ...(st.subOptions || [])].forEach(o => {
-            const tag = (o?.projByDia && o.projByDia[diaValue]) ?? o?.projInches;
+            // PER-DIA entries ONLY. A flat projInches is the option's own requirement (the
+            // master pin's tag) — counting it at every diameter leaked 6" into the ½" cards
+            // (2026-07-24 regression). Flows without projByDia (pre-union-tags) contribute
+            // nothing here, so the caller falls back to the family dias[] config.
+            const tag = o?.projByDia ? o.projByDia[diaValue] : undefined;
             if (!tag) return;
             if (isOptionAvailable && !isOptionAvailable(o)) return;
             const f = parseFloat(String(tag).replace(/[^0-9.]/g, ''));
