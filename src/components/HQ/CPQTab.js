@@ -2435,7 +2435,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // proj: tags) gates tagged options — no size matrix involved. Untagged options always show.
   const flowProjSel = useMemo(() => {
       const st = (activeFlow?.steps || []).find(s => s.type === 'PROJ_SELECT');
-      if (!st) return null;
+      if (!st) {
+          // Single-projection assembly: no question asked — the generator stamps the implied
+          // projection on the flow so min-tagged returns still gate against it.
+          const imp = parseFloat(String(activeFlow?.impliedProjInches ?? ''));
+          return Number.isFinite(imp) ? imp : null;
+      }
       const o = (st.styleOptions || []).find(x => x.optId === dynamicConfigParams[st.id]);
       const f = parseFloat(String(o?.projInches ?? '').replace(/[^0-9.]/g, ''));
       return Number.isFinite(f) ? f : null;

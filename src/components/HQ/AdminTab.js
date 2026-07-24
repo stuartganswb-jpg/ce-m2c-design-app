@@ -956,6 +956,31 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
 
+      // 🏷 Per-choice CATEGORY OVERRIDE (1.6 cat: select — Stuart 2026-07-24: designer dropped the
+      // return backplate into a FINIAL slot): pins whose catOverride differs from their cluster's
+      // category re-home into a synthetic single-choice cluster of the override category (same
+      // position/location), so mis-slotted parts pool correctly without touching the file. A
+      // cluster left with zero pins is dropped so it can't emit a phantom unpinned option.
+      {
+          const emptied = new Set();
+          [...clusters].forEach(cl => {
+              const clCat = catOf(cl);
+              const list = pinsByCluster[cl.id] || [];
+              const movers = list.filter(p => p.catOverride && String(p.catOverride).toUpperCase() !== clCat);
+              if (!movers.length) return;
+              pinsByCluster[cl.id] = list.filter(p => !movers.includes(p));
+              movers.forEach((p, i) => {
+                  const cat = String(p.catOverride).toUpperCase();
+                  const nsId = `OVR-${cat}-${cl.id}-${i}`;
+                  clusters.push({ ...cl, id: nsId, category: cat, nodes: [String(p.choiceNode || '').trim()].filter(Boolean) });
+                  pinsByCluster[nsId] = [p];
+                  pinByCluster[nsId] = p;
+              });
+              if (!pinsByCluster[cl.id].length) emptied.add(cl.id);
+              else if (pinByCluster[cl.id] && movers.includes(pinByCluster[cl.id])) pinByCluster[cl.id] = pinsByCluster[cl.id][0];
+          });
+          for (let i = clusters.length - 1; i >= 0; i--) if (emptied.has(clusters[i].id)) clusters.splice(i, 1);
+      }
       let pole = groupPlacements('POLE');
       // 🧊 Two-part acrylic finials: a COLLAR choice is NOT a customer choice — it's companion
       // geometry that renders WITH the top choices paired to it. Collars leave the option pool;
@@ -1308,13 +1333,22 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           // assembly's options become a top-level PROJ_SELECT step; the pick gates tagged
           // options in CPQ (projTagOk). Zero or one distinct tag = no question needed.
           // Dedupe by PARSED inches — dictionary spellings differ ('6' vs '6.00' made two 6" cards).
+          // RETURN-type options are EXCLUDED: their tag is a minimum-depth gate, not a projection
+          // the assembly sells — counting them created phantom projection cards (a 4-5/8" card at
+          // ½" from the French Return's min tag).
           const byF = new Map();
           [...brackets, ...backplates, ...finial].forEach(o => {
               if (!o.projInches) return;
+              const et = String(o.endTreatment || '').toUpperCase();
+              if (et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || (o.isFee && /return|miter|mitre|french|bend/i.test(String(o.partName || '')))) return;
               const f = Math.round(parseFloat(String(o.projInches).replace(/[^0-9.]/g, '')) * 1000) / 1000;
               if (Number.isFinite(f) && !byF.has(f)) byF.set(f, String(o.projInches));
           });
           const tagVals = [...byF.entries()].map(([f, raw]) => ({ f, raw })).sort((a, b) => a.f - b.f);
+          // ONE distinct bracket projection = no question asked — stamp it as the flow's IMPLIED
+          // projection so min-tagged returns still gate against it (½" implies .75 → returns
+          // tagged 4-5/8 can never appear). null clears a stale implied value on regenerate.
+          groupFields.impliedProjInches = tagVals.length === 1 ? tagVals[0].f : null;
           if (tagVals.length >= 2) {
               const lbl = (f) => f === 0.75 ? '.75" Projection' : f === 3.625 ? '3-5/8" Projection' : f === 4.625 ? '4-5/8" Projection' : f === 6 ? '6" Projection' : `${f}" Projection`;
               steps.unshift({ id: 'PROJ-CHOICE', title: 'Bracket Projection', type: 'PROJ_SELECT', stepRole: 'SIZE', required: true, hideQty: true, styleOptions: tagVals.map(x => ({ optId: `PROJ-${String(x.f).replace(/\./g, '_')}`, partName: lbl(x.f), projInches: x.raw })) });
