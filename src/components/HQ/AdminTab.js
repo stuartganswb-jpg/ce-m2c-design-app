@@ -1261,7 +1261,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // that still needs its bracket/backplate (e.g. french-return backplates) keeps the step.
                   position: pos,
                   styleOptions: [...groupFilled,
-                      ...(hasOwnReturn ? [] : [
+                      // 🎯 Single-assembly flows NEVER get the built-in return fees (Stuart 2026-07-24:
+                      // "there are no returns on 1.6 for the H2-05" — these synthetic, tag-less options
+                      // were what kept showing at ½"). In that model returns exist ONLY as pinned fee
+                      // choices with their own min-projection tags.
+                      ...(hasOwnReturn || singleMode ? [] : [
                           { optId: `OPT-MITER-${sfx}`, partId: mtrFee ? mtrFee.id : '', partName: mtrFee ? (mtrFee.itemName || 'Mitered Return') : 'Mitered Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'MITER_RETURN', isFee: true },
                           { optId: `OPT-BEND-${sfx}`, partId: frFee ? frFee.id : '', partName: frFee ? (frFee.itemName || 'Bent Return') : 'Bent Return (fee — set price)', targetNode: bendNodes, price: 0, endTreatment: 'FRENCH_RETURN', isFee: true }]),
                       { optId: `OPT-FLUSH-${sfx}`, partId: '', partName: 'Flush Cut', targetNode: straightNodes, price: 0 }],
