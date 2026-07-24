@@ -1302,6 +1302,20 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           review.diasByOpt = diasByOpt;
           reviewExclusions = { optionKeys: [...review.excludedKeys].sort(), projMatrix, reviewedAt: ts };
       }
+      if (!sizeFamily && singleMode) {
+          // 🎯 Per-assembly Projection question FROM THE TAGS (Stuart 2026-07-24: "it needs to
+          // check back to the tags on the brackets") — the distinct proj: values across this
+          // assembly's options become a top-level PROJ_SELECT step; the pick gates tagged
+          // options in CPQ (projTagOk). Zero or one distinct tag = no question needed.
+          const tagVals = [...new Set([...brackets, ...backplates, ...finial].map(o => o.projInches).filter(Boolean).map(String))]
+              .map(v => ({ raw: v, f: parseFloat(String(v).replace(/[^0-9.]/g, '')) }))
+              .filter(x => Number.isFinite(x.f))
+              .sort((a, b) => a.f - b.f);
+          if (tagVals.length >= 2) {
+              const lbl = (f) => f === 0.75 ? '.75" Projection' : f === 3.625 ? '3-5/8" Projection' : f === 4.625 ? '4-5/8" Projection' : f === 6 ? '6" Projection' : `${f}" Projection`;
+              steps.unshift({ id: 'PROJ-CHOICE', title: 'Bracket Projection', type: 'PROJ_SELECT', stepRole: 'SIZE', required: true, hideQty: true, styleOptions: tagVals.map(x => ({ optId: `PROJ-${String(x.f).replace(/\./g, '_')}`, partName: lbl(x.f), projInches: x.raw })) });
+          }
+      }
       if (sizeFamily) {
           const sizeSteps = buildSizeSteps(sizeFamily);
           if (review?.diasByOpt) {

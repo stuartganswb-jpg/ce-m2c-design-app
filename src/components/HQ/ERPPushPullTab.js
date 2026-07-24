@@ -153,7 +153,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           activeStepIds.forEach(stepId => {
               if (stepId.endsWith('__finish')) return; // finishes are applied, not physical BOM components
               const step = flowSteps.find(s => s.id === stepId);
-              if (step?.type === SIZE_STEP_TYPE) return; // size selectors are not physical components
+              if (step?.type === SIZE_STEP_TYPE || step?.type === 'PROJ_SELECT') return; // size/projection selectors are not physical components
               const userSelectionId = cart.config?.[stepId];
 
               // A step's quantity. Blank/undefined = a single-select step (qty 1). An explicit 0 means the

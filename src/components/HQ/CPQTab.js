@@ -874,6 +874,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // Explicit bracket projection (1.6 proj: select, dictionary inches — legacy
                   // letters honored): the option shows only at its own projection.
                   if (!optionProjAllowed(o, sizeSel)) return false;
+                  if (!projTagOk(o)) return false;
                   return partAllowedAtSize(base, sizeSel, sizeLabelIndex);
               });
           }
@@ -963,7 +964,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // SIZE selectors: they have NO qty input, so a seeded 0 could never be corrected
                   // and zeroed their price/BOM/render. Left unseeded, they price at the implicit
                   // default (pin defaultQty || 1) once a selection is made.
-                  if (!step.hideQty && step.type !== SIZE_STEP_TYPE) newStepQuantities[step.id] = 0;
+                  if (!step.hideQty && step.type !== SIZE_STEP_TYPE && step.type !== 'PROJ_SELECT') newStepQuantities[step.id] = 0;
 
                   if (step.calculatorTemplate) {
                       newDimensionInputs[step.id] = {
@@ -1291,6 +1292,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // a return runs on the STANDARD plates, so a standard pick must NOT clear.
                   const sizeSel2 = sizeSelectionsOf(activeFlow, dynamicConfigParams);
                   const sizeOk2 = (x) => {
+                      if (!projTagOk(x)) return false;
                       if (!sizeSel2) return true;
                       const ap = [...libraryParts, ...liveAssemblies];
                       if (!optionProjAllowed(x, sizeSel2)) return false;
@@ -1489,7 +1491,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
           // SIZE steps are selectors, not products: emit an informational $0 quote line naming the
           // chosen size (so the quote reads "Rod Diameter: 1" Round Rod"), never a part or price.
-          if (step.type === SIZE_STEP_TYPE) {
+          if (step.type === SIZE_STEP_TYPE || step.type === 'PROJ_SELECT') {
               const sizeOpt = (step.styleOptions || []).find(o => o.optId === selectedValue);
               if (sizeOpt) breakdown.push({ name: `${step.title}: ${sizeOpt.partName}`, qty: 1, price: 0, total: 0, partHandling: '', partId: null, legacyErpId: null });
               return;
@@ -1800,7 +1802,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (!o) return;
                   const oEt = String(o.endTreatment || '').toUpperCase();
                   const oRtn = isReturnOption(o) || (o.returnOnly && oEt !== 'INSIDE_MOUNT') || /return|miter|mitre|french|\bbend\b/i.test(String(partOf(o)?.itemName || ''));
-                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex) || !optionProjAllowed(o, sizeSel);
+                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex) || !optionProjAllowed(o, sizeSel) || !projTagOk(o);
                   if (banned) { delete next[key]; changed = true; }
               };
               check(st.id, st.styleOptions);
@@ -2429,6 +2431,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (!ok) setDynamicConfigParams(prev => { const n = { ...prev }; delete n[projStep.id]; return n; });
   }, [dynamicConfigParams, activeFlow]);
 
+  // 🎯 Single-assembly flows: a PROJ_SELECT step (generated from the assembly's own bracket
+  // proj: tags) gates tagged options — no size matrix involved. Untagged options always show.
+  const flowProjSel = useMemo(() => {
+      const st = (activeFlow?.steps || []).find(s => s.type === 'PROJ_SELECT');
+      if (!st) return null;
+      const o = (st.styleOptions || []).find(x => x.optId === dynamicConfigParams[st.id]);
+      const f = parseFloat(String(o?.projInches ?? '').replace(/[^0-9.]/g, ''));
+      return Number.isFinite(f) ? f : null;
+  }, [activeFlow, dynamicConfigParams]);
+  const projTagOk = (o) => {
+      if (flowProjSel == null || !o?.projInches) return true;
+      const f = parseFloat(String(o.projInches).replace(/[^0-9.]/g, ''));
+      return !Number.isFinite(f) || Math.abs(f - flowProjSel) < 0.01;
+  };
+
   const visibilityOverrides = useMemo(() => {
       if (!activeFlow) return {};
       // AND across steps: a node renders only if EVERY step that lists it (in any of its options'
@@ -2728,7 +2745,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           {/* Size-matrix selector (Rod Diameter / Bracket Projection): big card
                               choices; the selection re-resolves every configured part to that size
                               at pricing/push time — geometry and all other selections stay put. */}
-                          {currentStep.type === SIZE_STEP_TYPE && (() => {
+                          {(currentStep.type === SIZE_STEP_TYPE || currentStep.type === 'PROJ_SELECT') && (() => {
                               // Projections are diameter-dependent (sizeMatrix `dias`): H2's 1-3/8" rod
                               // offers 4-5/8"/6" while the smaller rods offer 3-5/8"/4-5/8" — hide what
                               // the chosen diameter doesn't sell. Stale invalid picks self-heal in
@@ -2803,6 +2820,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // Size-native plates (if any) show only at their own diameter.
                               const subSizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
                               const subSizeOk = (o) => {
+                                  if (!projTagOk(o)) return false;
                                   if (!subSizeSel) return true;
                                   const ap = [...libraryParts, ...liveAssemblies];
                                   if (!optionProjAllowed(o, subSizeSel)) return false;
@@ -2850,7 +2868,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           {/* Never on SIZE steps: they're selectors, not parts — a finish grid here
                               (stray finishDataSource from "Apply finishes to all steps") captured
                               clicks meant for the pole step's finish and confused the pole render. */}
-                          {currentStep.finishDataSource && currentStep.type !== SIZE_STEP_TYPE && (() => {
+                          {currentStep.finishDataSource && currentStep.type !== SIZE_STEP_TYPE && currentStep.type !== 'PROJ_SELECT' && (() => {
                               const selStyleId = dynamicConfigParams[currentStep.id];
                               const selOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === selStyleId);
                               const scopedFinishes = (selOpt && Array.isArray(selOpt.finishAllowedOptions) && selOpt.finishAllowedOptions.length)
@@ -2957,7 +2975,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           )}
                       </div>
 
-                      {!currentStep.hideQty && currentStep.type !== SIZE_STEP_TYPE && (
+                      {!currentStep.hideQty && currentStep.type !== SIZE_STEP_TYPE && currentStep.type !== 'PROJ_SELECT' && (
                       <div style={{ padding: '20px 24px', background: 'var(--paper)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div style={{ color: 'var(--ink-soft)', flex: 1, paddingRight: '20px' }}>
                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink)', display: 'block', marginBottom: '4px' }}>Step Quantity</span>
