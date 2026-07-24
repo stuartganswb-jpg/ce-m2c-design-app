@@ -996,6 +996,18 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   clusters.splice(i, 1);
               }
           }
+          // PARTIAL deletes (Stuart 2026-07-24: ghost acrylic jewels on both ends — the 🗑-deleted
+          // duplicate rows' meshes): a fan-out CHOICE cluster's nodes that no surviving pin
+          // controls render permanently. Force-hide them — the renderer's show-wins rule (an
+          // explicit show from the selected option's geometry beats an incidental hide) keeps
+          // every SELECTED choice's meshes visible even when their names land in this list.
+          // Single-pin clusters (always-on poles/rings/collar companions) are never touched.
+          clusters.forEach(cl => {
+              const cps = (pinsByCluster[cl.id] || []).filter(p => p.choiceNode && String(p.choiceNode).trim() && !p.isHiddenPart);
+              if (cps.length < 2) return;
+              const controlled = new Set(cps.map(p => String(p.choiceNode).trim()));
+              (cl.nodes || []).forEach(n => { const nn = String(n).trim(); if (nn && !controlled.has(nn)) prunedClusterNodes.push(nn); });
+          });
       }
       let pole = groupPlacements('POLE');
       // 🧊 Two-part acrylic finials: a COLLAR choice is NOT a customer choice — it's companion
