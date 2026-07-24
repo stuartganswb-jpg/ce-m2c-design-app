@@ -2403,6 +2403,28 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       return overrides;
   }, [dynamicConfigParams, activeFlow, globalFinishes, outsourceFinishes, dynamicAssets]);
 
+  // Stale SIZE-PROJ clear (Stuart 2026-07-24: French Return "offered at 3-5/8"" — it wasn't:
+  // the invalid projection had silently healed to 4-5/8" for the gating math while the UI kept
+  // displaying the stale pick, so the list was 4-5/8"'s under a 3-5/8" label). When the chosen
+  // diameter makes the stored projection invalid — per that diameter's TAGS, else per dias[] —
+  // clear it visibly; sizeSelectionsOf then defaults, and the label, cards, and option gating
+  // all agree again.
+  useEffect(() => {
+      if (!activeFlow) return;
+      const projStep = (activeFlow.steps || []).find(s => s.type === SIZE_STEP_TYPE && s.sizeAxis === 'PROJ');
+      if (!projStep) return;
+      const sel = dynamicConfigParams[projStep.id];
+      if (!sel) return;
+      const opt = (projStep.styleOptions || []).find(o => o.optId === sel);
+      if (!opt) return;
+      const selNow = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+      const tagged = taggedProjInchesAtDia(activeFlow, selNow?.dia, null);
+      const ok = tagged.size
+          ? (() => { const i = projOptionInches(projStep.sizeFamily, opt); return i != null && tagged.has(Math.round(i * 1000) / 1000); })()
+          : projAllowedAtDia(projStep.sizeFamily, opt, selNow?.dia);
+      if (!ok) setDynamicConfigParams(prev => { const n = { ...prev }; delete n[projStep.id]; return n; });
+  }, [dynamicConfigParams, activeFlow]);
+
   const visibilityOverrides = useMemo(() => {
       if (!activeFlow) return {};
       // AND across steps: a node renders only if EVERY step that lists it (in any of its options'
