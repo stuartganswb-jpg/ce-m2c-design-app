@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
   // Default to TAKEOFF as Step 1
@@ -398,7 +398,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // customData.isReturnBracket) IS the end treatment — that side's End Style greys + clears.
   const armOfOpt = (o) => !!(o && (o.isReturnArm || partOfOpt(o)?.manufacturingSpecs?.customData?.isReturnBracket));
   const armChosenAt = (pos) => pos === 'LEFT' ? armOfOpt(optSel(stepBrL)) : pos === 'RIGHT' ? armOfOpt(optSel(stepBrR)) : false;
-  const basicSelAt = (step) => { const o = optSel(step); return !!(o && (o.isBasic || /basic/i.test(o.partName || ''))); };
+  // BASIC = takes no backplate. The 1.6 BASIC flag is canonical (option.isBasic); the option's
+  // raw partName AND the resolved LIBRARY part's name both backstop it — linked pins carry the
+  // bare item code as partName, so an item NAMED "Basic Bracket" must still grey the plates.
+  const basicSelAt = (step) => { const o = optSel(step); return !!(o && (o.isBasic || /basic/i.test(o.partName || '') || /basic/i.test(partOfOpt(o)?.itemName || ''))); };
   const subPoolAt = (step, pos) => {
       const subs = step?.subOptions || [];
       if (!subs.some(o => o.returnOnly || o.inlineOnly)) return subs;
@@ -415,7 +418,20 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
           : (!o.returnOnly && !o.inlineOnly)) && optAllowedAtSize(o));
   };
-  const pickStep = (stepId, optId) => setDynamicConfigParams(prev => { const next = { ...prev }; if (optId) next[stepId] = optId; else delete next[stepId]; return next; });
+  const pickStep = (stepId, optId) => setDynamicConfigParams(prev => {
+      const next = { ...prev };
+      if (optId) next[stepId] = optId; else delete next[stepId];
+      // 📏 The flow's Bracket Projection DRIVES the fabrication "Projection (in)" field (Stuart
+      // 2026-07-24) — that field feeds the parametric drawing + shop drawing, so a size pick here
+      // re-asserts it (DIA picks too: a dia change can self-heal the projection). Manual edits to
+      // the field below stay possible afterward — that's the one-off custom-bracket escape hatch.
+      const st = (activeFlow?.steps || []).find(s => s.id === stepId && s.type === SIZE_STEP_TYPE);
+      if (st) {
+          const inches = projInchesOfSel(sizeSelectionsOf(activeFlow, next));
+          if (inches != null) setTimeout(() => setEngData(pe => ({ ...pe, proj: inches })), 0);
+      }
+      return next;
+  });
 
   // Seed step selections from restored engData part ids (drafts saved before the flow-driven pickers).
   useEffect(() => {
