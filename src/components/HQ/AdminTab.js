@@ -981,6 +981,15 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           });
           for (let i = clusters.length - 1; i >= 0; i--) if (emptied.has(clusters[i].id)) clusters.splice(i, 1);
       }
+      // 🎯 Single-assembly mode: a cluster with ZERO pins emits nothing (Stuart 2026-07-24:
+      // deleted every pin on the designer's H2-05-FINIAL clusters, yet 'H2-05-FINIAL-LEFT'
+      // kept appearing — the legacy cluster-name fallback option). In the pin-era model every
+      // real choice has a pin; the fallback stays for legacy assemblies and union generates.
+      if (singleMode) {
+          for (let i = clusters.length - 1; i >= 0; i--) {
+              if (!(pinsByCluster[clusters[i].id] || []).length) clusters.splice(i, 1);
+          }
+      }
       let pole = groupPlacements('POLE');
       // 🧊 Two-part acrylic finials: a COLLAR choice is NOT a customer choice — it's companion
       // geometry that renders WITH the top choices paired to it. Collars leave the option pool;
