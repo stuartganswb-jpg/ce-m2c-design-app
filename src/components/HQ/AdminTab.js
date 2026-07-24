@@ -985,9 +985,16 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // deleted every pin on the designer's H2-05-FINIAL clusters, yet 'H2-05-FINIAL-LEFT'
       // kept appearing — the legacy cluster-name fallback option). In the pin-era model every
       // real choice has a pin; the fallback stays for legacy assemblies and union generates.
+      const prunedClusterNodes = [];
       if (singleMode) {
           for (let i = clusters.length - 1; i >= 0; i--) {
-              if (!(pinsByCluster[clusters[i].id] || []).length) clusters.splice(i, 1);
+              if (!(pinsByCluster[clusters[i].id] || []).length) {
+                  // A skipped cluster's meshes are CONTROLLED BY NOTHING — uncontrolled geometry
+                  // renders permanently (Stuart 2026-07-24: deleted FDB scale-up copies floating
+                  // on the 1-3/8" model). Force-hide every node so the geometry dies with the pins.
+                  prunedClusterNodes.push(...(clusters[i].nodes || []));
+                  clusters.splice(i, 1);
+              }
           }
       }
       let pole = groupPlacements('POLE');
@@ -1383,7 +1390,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // Per-NODE force-hides: choices marked "hide" in the Assembly Builder assign tool (pins with
       // isHiddenPart) — e.g. a stray part the designer left visible. Finer-grained than the
       // cluster-level hiddenClusters; the runtime hides these names unconditionally.
-      const hiddenNodes = pins.filter(p => p.isHiddenPart && p.choiceNode).map(p => String(p.choiceNode).trim());
+      const hiddenNodes = [...new Set([
+          ...pins.filter(p => p.isHiddenPart && p.choiceNode).map(p => String(p.choiceNode).trim()),
+          ...prunedClusterNodes.map(n => String(n).trim()).filter(Boolean),
+      ])];
 
       // Diagnostic so a lumped (un-fanned-out) choosable step is instantly explainable: per category,
       // how many clusters vs pins vs pins-carrying-a-choiceNode. Assembly-Builder fan-out needs ≥2
