@@ -961,6 +961,33 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         };
     });
 
+    // 🗑 Delete a choice = purge its PIN DOCS (Stuart 2026-07-24: a node once saved with a junk
+    // item # — e.g. partId 'H205IMRIGHT', its own node name — keeps its stale pin doc even after
+    // the row is blanked/parked on a later save, and the flow generator keeps fanning the stale
+    // pin out as a CPQ option; the designer should NOT have to re-upload the GLB). Removes EVERY
+    // assembly_pins doc for this node, matched by the SAME identity the reload (pinByNode) and
+    // the save-sync (byNode) use — assemblyId query + exact choiceNode — deliberately NOT
+    // filtered by clusterId, so a stray doc left under a re-created/old cluster id (which Load
+    // Choices would still display via pinByNode) dies too. The 3D node stays in the file; Load
+    // Choices lists it again as a blank row while the geometry exists.
+    const deleteChoice = async (clusterId, nodeName, label, itemNo) => {
+        if (!assignData || assignBusy) return;
+        if (!window.confirm(`Delete choice "${label || nodeName}"?\n\nNode: ${nodeName}\nItem #: ${itemNo && itemNo.trim() ? itemNo.trim() : '— none —'}\n\nThis removes EVERY saved pin for this node (including stale ones with junk item #s) so it can never appear in a generated flow. The 3D node stays in the file — Load Choices will list it again as a blank row if the geometry still exists.`)) return;
+        setAssignBusy(true);
+        try {
+            const snap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', assignData.asmId)));
+            const victims = snap.docs.filter(d => d.data().choiceNode === nodeName);
+            for (const v of victims) await deleteDoc(v.ref);
+            const ids = [...new Set(victims.map(v => v.data().partId).filter(Boolean))].join(', ');
+            setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.filter(c => c.nodeName !== nodeName) }) } : prev);
+            addLog(`🗑 Deleted ${victims.length} pin doc(s) for node "${nodeName}"${ids ? ` (partId: ${ids})` : ''}.`, 'success');
+            alert(victims.length
+                ? `🗑 Deleted ${victims.length} saved pin doc(s) for node "${nodeName}"${ids ? `\n(partId: ${ids})` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags") — this option disappears from the generated steps.`
+                : `No saved pin docs existed for node "${nodeName}" — nothing was in the database. The row is removed from this list; Load Choices will list it again while the geometry exists.`);
+        } catch (e) { console.error(e); addLog(`Delete choice failed: ${e.message || e}`, 'error'); alert('Delete failed:\n\n' + (e.message || e)); }
+        setAssignBusy(false);
+    };
+
     // Sequential thumbnail renderer (each snapshot opens+closes its own GL context; 448px source is
     // crisp enough for the click-to-zoom overlay at 44px display). Keyed by nodeName so in-flight
     // results land correctly even after splits; isCancelled aborts a superseded run.
@@ -1306,7 +1333,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
                                         {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>
                                     </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(r.category) === 'FINIAL' ? '48px minmax(150px,230px) 220px 122px minmax(300px,1fr) 46px' : '48px minmax(150px,230px) 220px minmax(300px,1fr) 46px', gap: '6px 12px', alignItems: 'center' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(r.category) === 'FINIAL' ? '48px minmax(150px,230px) 220px 122px minmax(300px,1fr) 72px' : '48px minmax(150px,230px) 220px minmax(300px,1fr) 72px', gap: '6px 12px', alignItems: 'center' }}>
                                         {r.choices.map((c) => (
                                             <React.Fragment key={c.nodeName}>
                                                 {c.thumb
@@ -1395,6 +1422,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                 <span style={{ display: 'flex', gap: '2px' }}>
                                                     <button onClick={() => moveChoice(r.clusterId, c.nodeName, -1)} title="Move up — order is saved and drives the option order in the configurator (match Left/Right sides)" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▲</button>
                                                     <button onClick={() => moveChoice(r.clusterId, c.nodeName, 1)} title="Move down" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▼</button>
+                                                    <button onClick={() => deleteChoice(r.clusterId, c.nodeName, c.label, c.itemNo)} title="Delete this choice — removes EVERY saved pin for this node (including stale ones with junk item #s) so it can never appear in a generated flow. The 3D node stays in the file; Load Choices will list it again as a blank row if the geometry still exists." style={{ border: '1px solid #d9534f', background: '#fff', color: '#d9534f', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>🗑</button>
                                                 </span>
                                             </React.Fragment>
                                         ))}
