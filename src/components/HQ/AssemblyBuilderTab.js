@@ -920,7 +920,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // here automatically; saving stamps it onto the pins so both stay in sync.
                     // A PARKED pin reloads as a plain blank choice (⏸ hint shows) — NOT as HIDE-checked,
                     // otherwise assigning its item # later would save it as a hidden BOM part.
-                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), isCollar: !!pin?.isCollar, requiresCollar: pin?.requiresCollar || '', projInches: pin?.projInches || pin?.projLetter || '', mountType: pin?.mountType || '', custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], thumb: '' };
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), isCollar: !!pin?.isCollar, requiresCollar: pin?.requiresCollar || '', projInches: pin?.projInches || '', mountType: pin?.mountType || '', custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -1365,14 +1365,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <select value={c.projInches || ''} title="BRACKET PROJECTION — offers the 4.5 Master-Dictionary list (BRACKET PROJECTIONS), the same vocabulary the Library editor + Vision engine use, so CPQ and Vision never drift. The option shows in CPQ only while the matching projection is selected; '— any —' = fits every projection." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { projInches: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.projInches ? 'var(--brass)' : 'var(--line)', color: c.projInches ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                             <option value="">proj: — any —</option>
                                                             {((dictLists && dictLists.projections) || []).map(p => <option key={p} value={String(p).toUpperCase()}>proj: {p}"</option>)}
-                                                            {c.projInches && !((dictLists && dictLists.projections) || []).some(p => String(p).toUpperCase() === String(c.projInches).toUpperCase()) && <option value={c.projInches}>proj: {c.projInches}</option>}
                                                         </select>
                                                     )}
                                                     {normalizeCategory(r.category) === 'BRACKET' && !c.isFee && (
                                                         <select value={c.mountType || ''} title="BRACKET MOUNT TYPE — the 4.5 Master-Dictionary list (BRACKET MOUNT TYPES); saved on the pin in the same vocabulary the Library editor + Vision engine use." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { mountType: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.mountType ? 'var(--brass)' : 'var(--line)', color: c.mountType ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                             <option value="">mount: — any —</option>
                                                             {((dictLists && dictLists.bracketMounts) || []).map(m => <option key={m} value={String(m).toUpperCase()}>mount: {m}</option>)}
-                                                            {c.mountType && !((dictLists && dictLists.bracketMounts) || []).some(m => String(m).toUpperCase() === String(c.mountType).toUpperCase()) && <option value={c.mountType}>mount: {c.mountType}</option>}
                                                         </select>
                                                     )}
                                                     {normalizeCategory(r.category) === 'BRACKET' && (
@@ -1516,14 +1514,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                             <select value={c.projInches || ''} title="BRACKET PROJECTION — the 4.5 Master-Dictionary list (BRACKET PROJECTIONS); the option shows in CPQ only while the matching projection is selected. '— any —' = fits every projection." onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { projInches: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.projInches ? 'var(--brass)' : 'var(--line)', color: c.projInches ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                                 <option value="">proj: — any —</option>
                                                                 {((dictLists && dictLists.projections) || []).map(p => <option key={p} value={String(p).toUpperCase()}>proj: {p}"</option>)}
-                                                                {c.projInches && !((dictLists && dictLists.projections) || []).some(p => String(p).toUpperCase() === String(c.projInches).toUpperCase()) && <option value={c.projInches}>proj: {c.projInches}</option>}
                                                             </select>
                                                         )}
                                                         {normalizeCategory(slot.category) === 'BRACKET' && !c.isFee && (
                                                             <select value={c.mountType || ''} title="BRACKET MOUNT TYPE — the 4.5 Master-Dictionary list (BRACKET MOUNT TYPES); saved on the pin in the Vision vocabulary." onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { mountType: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.mountType ? 'var(--brass)' : 'var(--line)', color: c.mountType ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                                 <option value="">mount: — any —</option>
                                                                 {((dictLists && dictLists.bracketMounts) || []).map(m => <option key={m} value={String(m).toUpperCase()}>mount: {m}</option>)}
-                                                                {c.mountType && !((dictLists && dictLists.bracketMounts) || []).some(m => String(m).toUpperCase() === String(c.mountType).toUpperCase()) && <option value={c.mountType}>mount: {c.mountType}</option>}
                                                             </select>
                                                         )}
                                                         {normalizeCategory(slot.category) === 'BRACKET' && (
