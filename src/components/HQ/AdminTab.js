@@ -6,7 +6,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
-import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE } from '../Shared/sizeMatrix';
+import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES } from '../Shared/sizeMatrix';
 import { nsProxyFetch } from "../Shared/nsProxy";
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
@@ -53,8 +53,10 @@ const NS_ROLLUP_TAX_SCHEDULE = "2";
 // Code-grammar rules for size families whose sizeKeys stamp by RULE (no importer needed):
 // dia tokens are LONGEST-FIRST so H2-138… never parses as dia '1'. Style = the remainder,
 // which is identical across sizes by the naming convention (H2-05BE / H2-75BE / … all 'BE').
+// rx = the registry's codeRx — ONE grammar: sizeMatrix parses the same rx into VIRTUAL sizeKeys
+// for items created after a stamp run, so the stamper and the runtime gate can never drift.
 const SIZE_STAMP_RULES = {
-    'H2-RND': { rx: /^H2-(138|75|05|1)([A-Z].*)$/, note: 'H2-<dia><style> · dia 05 / 75 / 1 / 138 · Simple Elegance' },
+    'H2-RND': { rx: SIZE_FAMILIES['H2-RND'].codeRx, note: 'H2-<dia><style> · dia 05 / 75 / 1 / 138 · Simple Elegance' },
 };
 
 const AdminTab = ({ currentUser, activeBrand, TABS }) => {

@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
-import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia } from '../Shared/sizeMatrix';
+import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
 
 const globalTextureCache = {};
@@ -2981,9 +2981,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               <StudioRig />
                               <OrbitControls makeDefault />
                               <Bounds fit clip margin={1.2}>
-                                  {/* Size-matrix visual: scale the whole model by the chosen rod
-                                      diameter (1" = +25%, 1-3/8" = +50%) — cosmetic, per Stuart. */}
-                                  <group scale={sizeSelectionsOf(activeFlow, dynamicConfigParams)?.scale || 1}>
+                                  {/* Size-matrix visual: scale the model by the chosen rod diameter
+                                      RELATIVE to the master GLB's own native dia (renderScaleOf) — the
+                                      dia the master was built at renders exactly 1.0 (H2 generates from
+                                      the 1-3/8" master → 138 = native, ¾" = 1/1.833); H1's ¾"-native
+                                      masters resolve to masterScale 1, keeping their scale unchanged. */}
+                                  <group scale={renderScaleOf(activeFlow, dynamicConfigParams, activeAssembly)}>
                                       <DynamicModel
                                           url={activeAssembly.manufacturingSpecs.cadUrl}
                                           textureOverrides={textureOverrides}

@@ -24,11 +24,16 @@ export const SIZE_FAMILIES = {
     // 1) — so sizeKeys are stamped by rule (System Admin → 🧬 Size-Family Stamper), no importer
     // needed. Single projection today (4-5/8"); brackets carry no projection letter, so the PROJ
     // answer is recorded but never changes the item — add lettered options when 6" bracket codes
-    // exist. Master geometry = the H2-75 assembly (generate the flow from it, like Fabricut's ¾").
+    // exist. Master geometry = the H2-138 assembly (the fullest — acrylic finials exist only
+    // there); the render normalizes to it via masterSizeScaleOf/renderScaleOf below.
+    // codeRx = the SAME grammar the 🧬 stamper applies (dia = capture 1, style = capture 2):
+    // items created after a stamp run parse to a VIRTUAL sizeKey (skOf) so they can never leak
+    // across diameters just because they're unstamped.
     'H2-RND': {
         label: 'Simple Elegance Round',
         baseDia: '75',
         baseProj: 'E',
+        codeRx: /^H2-(138|75|05|1)([A-Z].*)$/,
         dia: {
             id: 'SIZE-DIA', title: 'Rod Diameter',
             options: [
@@ -80,7 +85,29 @@ export const SIZE_FAMILIES = {
     },
 };
 
-const skOf = (p) => p?.manufacturingSpecs?.customData?.sizeKey || null;
+// Item code, PENDING-aware (same convention as the stamper + speciesVariantOf): a legacyErpId of
+// 'PENDING' means "no ERP code yet" — fall to itemId.
+const codeOf = (p) => String((p?.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p?.itemId) || '').trim().toUpperCase();
+
+// VIRTUAL sizeKey (Stuart 2026-07-23, the H2-138AFBF leak): an item created AFTER the last 🧬
+// stamp run carries no sizeKey, and a key-less part reads as "not family" → partAllowedAtSize
+// always allows it → a 138-only acrylic finial listed (and left selected/rendered) at ½". For
+// families whose grammar is BY RULE (codeRx — the exact rx the stamper applies), derive the key
+// from the code itself, so unstamped family items behave as if stamped: dia-gated, indexed,
+// size-swapped. Finish variants ('/' in the code) NEVER get keys, mirroring the stamper's skip.
+// A stamped key always wins (skOf tries it first), so stamped items keep identical behavior.
+const virtualSkOf = (p) => {
+    const code = codeOf(p);
+    if (!code || code.includes('/')) return null;
+    for (const famKey of Object.keys(SIZE_FAMILIES)) {
+        const rx = SIZE_FAMILIES[famKey].codeRx;
+        if (!rx) continue;
+        const m = code.match(rx);
+        if (m) return { family: famKey, dia: m[1], style: m[2], projLetter: '' };
+    }
+    return null;
+};
+const skOf = (p) => p?.manufacturingSpecs?.customData?.sizeKey || virtualSkOf(p);
 
 // First size family found among the given parts (array). Used by the generator to decide whether a
 // flow gets the SIZE steps at all.
@@ -225,11 +252,73 @@ export function speciesVariantOf(part, finishObj, findByCode) {
 // the selected one. Master-native (base-dia) parts always show: a missing variant there is a data
 // gap that falls back to the base item rather than hiding a real choice.
 export function partAllowedAtSize(part, sel, sizeIndex) {
-    const sk = part?.manufacturingSpecs?.customData?.sizeKey;
+    const sk = skOf(part); // stamped key, else the codeRx-derived virtual key (unstamped can't leak)
     if (!part || !sel || !sk || sk.family !== sel.family) return true;
     const fam = SIZE_FAMILIES[sel.family];
     if (!fam || sk.dia === sel.dia || sk.dia === fam.baseDia) return true;
     return !sizeVariantOf(part, sel, sizeIndex).missing;
+}
+
+// ---- RENDER-SCALE NORMALIZATION (Stuart 2026-07-23, H2 render screenshots) --------------------
+// sizeSelectionsOf().scale is anchored to the family baseDia (¾" = 1); the 3D canvas multiplies
+// the whole model by it. That anchor is only right when the flow's MASTER GLB is base-native
+// (Fabricut H1, built on ¾"). H2's combined flow generates from the 1-3/8" master, so the raw
+// anchor rendered the 138-proportioned geometry unscaled at ¾" and mis-scaled at every other
+// dia; the master's own selection is the one that must render at exactly 1.0 (the GLB as
+// authored and validated in 1.6). appliedScale = selectedScale / masterScale.
+// Master dia resolution, most to least authoritative:
+//   1. the rendered assembly doc's stamped sizeKey (family must match);
+//   2. that doc's code under the family codeRx, else a bare mainline code ('H2-138' has no
+//      style letter, so codeRx can't see it) matched by dia token at the end, longest-first;
+//   3. no assembly doc (the portal's whitelisted payload has no codes): the MODAL dia parsed
+//      via codeRx from the flow's own option codes — a generated flow's options carry the
+//      master assembly's pin codes;
+//   4. unresolved → the family base (masterScale 1) = exactly today's behavior, so base-native
+//      families are provably unchanged: H1-RND has no codeRx, every strategy falls through.
+export function masterSizeScaleOf(familyKey, assemblyDoc, flow) {
+    const fam = SIZE_FAMILIES[familyKey];
+    if (!fam) return 1;
+    const scaleOf = (dia) => { const o = fam.dia.options.find(x => x.value === dia); return (o && o.scale) || null; };
+    const sk = assemblyDoc?.manufacturingSpecs?.customData?.sizeKey;
+    if (sk && sk.family === familyKey) { const s = scaleOf(sk.dia); if (s) return s; }
+    if (assemblyDoc && fam.codeRx) {
+        const code = codeOf(assemblyDoc);
+        if (code && !code.includes('/')) {
+            const m = code.match(fam.codeRx);
+            if (m) { const s = scaleOf(m[1]); if (s) return s; }
+            const dias = fam.dia.options.map(o => o.value).sort((a, b) => b.length - a.length);
+            for (const d of dias) {
+                if (code.endsWith(d) && /[^A-Z0-9]/.test(code.charAt(code.length - d.length - 1) || '')) {
+                    const s = scaleOf(d); if (s) return s;
+                }
+            }
+        }
+    }
+    if (fam.codeRx && flow) {
+        const counts = {};
+        (flow.steps || []).forEach(st => {
+            if (st.type === SIZE_STEP_TYPE) return;
+            [...(st.styleOptions || []), ...(st.subOptions || [])].forEach(o => {
+                const c = String(o.partName || o.partId || '').trim().toUpperCase();
+                if (!c || c.includes('/')) return;
+                const m = c.match(fam.codeRx);
+                if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
+            });
+        });
+        const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+        if (top) { const s = scaleOf(top); if (s) return s; }
+    }
+    return scaleOf(fam.baseDia) || 1;
+}
+
+// One-call render scale for the 3D canvas (CPQTab + portal Configurator): the selected dia's
+// scale normalized to the master GLB's native dia. Identity (1) for non-size-matrix flows.
+// assemblyDoc = the doc whose GLB is on screen (HQ); the portal passes null and resolution
+// falls to the flow's own option codes.
+export function renderScaleOf(flow, config, assemblyDoc) {
+    const sel = sizeSelectionsOf(flow, config);
+    if (!sel) return 1;
+    return (sel.scale || 1) / (masterSizeScaleOf(sel.family, assemblyDoc, flow) || 1);
 }
 
 // Convenience bundle for consumers: selections + a lazy-indexed swap function. When the flow has no

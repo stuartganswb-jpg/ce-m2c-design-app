@@ -8,7 +8,7 @@ import { OrbitControls, Bounds } from '@react-three/drei';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
 import { DynamicModel, StudioRig, buildPbrRegistry } from './cpqRender.jsx';
-import { sizeSelectionsOf, isReturnOption, returnsAllowedFor, projAllowedAtDia } from './shared/sizeMatrix';
+import { sizeSelectionsOf, isReturnOption, returnsAllowedFor, projAllowedAtDia, renderScaleOf } from './shared/sizeMatrix';
 
 const SIZE_TYPE = 'SIZE_SELECT';
 const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -473,7 +473,13 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const sizeSel = useMemo(() => {
     try { return sizeSelectionsOf(data?.flow, params); } catch (e) { return null; }
   }, [data, params]);
-  const sizeScale = sizeSel?.scale || 1;
+  // Render scale normalized to the master GLB's native dia (mirrors CPQTab): raw sizeSel.scale is
+  // anchored to the family base (¾"), wrong for flows generated from a non-base master (H2's
+  // 1-3/8"). The portal payload carries no assembly codes, so renderScaleOf resolves the master
+  // dia from the flow's own option codes; base-native flows (H1) resolve to 1 = unchanged.
+  const sizeScale = useMemo(() => {
+    try { return renderScaleOf(data?.flow, params, null); } catch (e) { return 1; }
+  }, [data, params]);
 
   const safeIdx = Math.min(stepIdx, Math.max(0, steps.length - 1));
   const onReview = steps.length > 0 && stepIdx >= steps.length;
