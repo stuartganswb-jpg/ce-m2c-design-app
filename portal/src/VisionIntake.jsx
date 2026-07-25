@@ -81,7 +81,7 @@ const GENERIC_ENDS = [
 // (what the customer measured), BRASS = the pole, DASHED = bracket-center C2C, and the outer
 // span = Total System O2O. Illustrative only — the live numbers are in the readout rows below.
 const DG = { wall: '#c9c3b6', pole: '#b08d57', dim: '#8a857b', ink: '#4a463e' };
-const dgTxt = { fontFamily: 'var(--mono, monospace)', fontSize: 8.5, letterSpacing: '.06em' };
+const dgTxt = { fontFamily: 'var(--mono, monospace)', fontSize: 9.5, letterSpacing: '.06em' };
 const DimLine = ({ x1, x2, y, label, bold, dash }) => (
   <g>
     <line x1={x1} y1={y} x2={x2} y2={y} stroke={bold ? DG.ink : DG.dim} strokeWidth={bold ? 1.2 : 1} strokeDasharray={dash ? '4 3' : undefined} />
@@ -122,17 +122,19 @@ const FitDiagram = ({ shape }) => {
       </svg>
     );
   }
+  // STRAIGHT example drawn WITH FRENCH RETURNS (Stuart 2026-07-25: "the finials have less
+  // understanding problem than the french return") — the pole bends back to the wall at both
+  // ends, which is exactly the O2O confusion this page exists to settle.
   return (
-    <svg viewBox="0 0 460 168" style={{ width: '100%', display: 'block' }} aria-label="Straight rod diagram">
-      <line x1="30" y1="26" x2="430" y2="26" stroke={DG.wall} strokeWidth="3" />
-      <text x="230" y="16" textAnchor="middle" fill={DG.dim} style={dgTxt}>WALL / OPENING — YOUR MEASUREMENT</text>
-      <rect x="86" y="26" width="7" height="30" fill={DG.wall} />
-      <rect x="367" y="26" width="7" height="30" fill={DG.wall} />
-      <line x1="58" y1="60" x2="402" y2="60" stroke={DG.pole} strokeWidth="4" />
-      <circle cx="52" cy="60" r="5" fill={DG.pole} /><circle cx="408" cy="60" r="5" fill={DG.pole} />
-      <DimLine x1={89} x2={371} y={88} dash label="MAIN WALL C2C — BRACKET CENTERS" />
-      <DimLine x1={58} x2={402} y={116} label="POLE O2O (EDGE-TO-EDGE)" />
-      <DimLine x1={47} x2={413} y={148} bold label="TOTAL SYSTEM O2O (+ BRACKETS) — MUST FIT" />
+    <svg viewBox="0 0 460 170" style={{ width: '100%', display: 'block' }} aria-label="Straight rod with french returns diagram">
+      <line x1="30" y1="24" x2="430" y2="24" stroke={DG.wall} strokeWidth="3" />
+      <text x="230" y="14" textAnchor="middle" fill={DG.dim} style={dgTxt}>WALL / OPENING — YOUR MEASUREMENT</text>
+      <path d="M 62 30 Q 58 62 88 62 L 372 62 Q 402 62 398 30" fill="none" stroke={DG.pole} strokeWidth="4" strokeLinecap="round" />
+      <line x1="66" y1="34" x2="98" y2="46" stroke={DG.dim} strokeWidth="1" />
+      <text x="102" y="49" fill={DG.ink} style={dgTxt}>FRENCH RETURN — POLE BENDS BACK TO THE WALL</text>
+      <DimLine x1={88} x2={372} y={92} dash label="MAIN WALL C2C" />
+      <DimLine x1={58} x2={402} y={120} label="POLE O2O (EDGE-TO-EDGE — INCLUDES THE RETURNS)" />
+      <DimLine x1={52} x2={408} y={152} bold label="TOTAL SYSTEM O2O (+ BRACKETS) — MUST FIT" />
     </svg>
   );
 };
@@ -155,6 +157,7 @@ export default function VisionIntake() {
   const [params, setParams] = useState({});      // stepId → optId, the CPQ selection shape
   const [m, setM] = useState({ w1: '', w2: '', w3: '', bowDepth: '', proj: '', poleDiameter: '1', bracketW: '3', returnRadius: '4', gripAllowance: '8.5', insideMountDeduct: '0.25' });
   const [showAdv, setShowAdv] = useState(false);
+  const [zoomDia, setZoomDia] = useState(false); // click-to-enlarge lightbox for the fit diagram
   const [busy, setBusy] = useState(false);
   const [submitted, setSubmitted] = useState(null); // { quoteNo }
   const [subErr, setSubErr] = useState(null);
@@ -333,7 +336,9 @@ export default function VisionIntake() {
   );
 
   return (
-    <div style={{ marginTop: 24 }}>
+    // Breaks out of the 980px shell (Stuart: "i have more room left and right") — this tab only;
+    // Orders/Showroom keep the standard width.
+    <div style={{ marginTop: 24, position: 'relative', left: '50%', transform: 'translateX(-50%)', width: 'min(1320px, calc(100vw - 48px))' }}>
       <h2 className="sec">Measure &amp; Fit</h2>
       <p style={{ color: 'var(--ink-soft)', margin: '0 0 16px', fontSize: '0.92rem' }}>
         Enter your wall measurements and pick the end treatments — we show the <b>outside-edge size the finished system needs</b>, so it fits before it ships.
@@ -490,12 +495,13 @@ export default function VisionIntake() {
           </div>
 
           {/* ── the fit readouts — the point of the page ── */}
-          <div className="card" style={{ flex: '1 1 320px', padding: 20, position: 'sticky', top: 12 }}>
+          <div className="card" style={{ flex: '1 1 430px', padding: 20, position: 'sticky', top: 12 }}>
             <span className="eyebrow">Will it fit?</span>
-            <div style={{ margin: '12px 0 4px', border: '1px solid var(--line)', background: '#faf8f3', borderRadius: 2, padding: '8px 6px' }}>
+            <div onClick={() => setZoomDia(true)} title="Enlarge the diagram" style={{ margin: '12px 0 2px', border: '1px solid var(--line)', background: '#faf8f3', borderRadius: 2, padding: '8px 6px', cursor: 'zoom-in' }}>
               <FitDiagram shape={sel.shape} />
             </div>
-            <div style={{ margin: '10px 0 4px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>Total System O2O (+ brackets) — <b>the outside-edge size your opening must accommodate</b></div>
+            <div style={{ fontSize: '0.68rem', color: 'var(--ink-soft)', textAlign: 'right', margin: '0 2px 2px', fontFamily: 'var(--mono, monospace)', letterSpacing: '.06em' }}>⊕ CLICK TO ENLARGE</div>
+            <div style={{ margin: '8px 0 4px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>Total System O2O (+ brackets) — <b>the outside-edge size your opening must accommodate</b></div>
             <div style={{ fontSize: '1.9rem', fontWeight: 600, color: 'var(--ink)' }}>{both(fit.totalSystemO2O)}</div>
             <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', margin: '2px 0 14px' }}>
               = {both(fit.poleO2O)} pole + {toFrac(fit.endAddL)} left + {toFrac(fit.endAddR)} right
@@ -512,6 +518,16 @@ export default function VisionIntake() {
               Returns and inside mounts change these numbers automatically. End allowances use half your bracket width until our team confirms the exact hardware on review.
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Click-to-enlarge lightbox — the big, readable version of the current shape's diagram */}
+      {zoomDia && (
+        <div onClick={() => setZoomDia(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.72)', zIndex: 4000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, cursor: 'zoom-out', padding: 20 }}>
+          <div style={{ background: '#faf8f3', border: '1px solid var(--line)', borderRadius: 2, padding: '20px 16px', width: 'min(1100px, 96vw)' }}>
+            <FitDiagram shape={sel.shape} />
+          </div>
+          <div style={{ color: '#fff', fontFamily: 'var(--mono, monospace)', fontSize: 11, letterSpacing: '.08em' }}>CLICK ANYWHERE TO CLOSE</div>
         </div>
       )}
     </div>
