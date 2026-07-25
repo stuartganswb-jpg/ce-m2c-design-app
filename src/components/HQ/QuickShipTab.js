@@ -147,6 +147,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [scopeCollection, setScopeCollection] = useState('');
     const [kbDia, setKbDia] = useState('');
     const [kbFinish, setKbFinish] = useState('');   // '/CODE' suffix — one finish per kit
+    const [diagQuery, setDiagQuery] = useState(''); // "why isn't this item showing?" probe
     const [rushTypes, setRushTypes] = useState([]); // master list: "RUSH 3 DAY - 75"
 
     const [pushing, setPushing] = useState(false);
@@ -314,6 +315,63 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const cutItems = useMemo(() => feeItems(['CUT']), [allItems]);            // eslint-disable-line react-hooks/exhaustive-deps
     const spliceItems = useMemo(() => feeItems(['SPLICE']), [allItems]);      // eslint-disable-line react-hooks/exhaustive-deps
     const rushItems = useMemo(() => feeItems(['RUSH', 'EXPEDITE']), [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ---- "WHY ISN'T THIS ITEM SHOWING?" -------------------------------------------------------
+    // The pickers are the product of six stacked predicates (brand → stocked → collection →
+    // category → finished → diameter → finish), and when one of them rejects an item the UI just
+    // shows a shorter list — the reason is invisible. Type a code here and it walks the SAME
+    // predicates in order and names the first one that said no. Diagnosis, not a second code path:
+    // every check below is the identical expression the pools use.
+    const diagFor = (typed) => {
+        const q = String(typed || '').trim().toUpperCase();
+        if (!q) return null;
+        const hit = allItems.find(it => erpOf(it) === q)
+            || allItems.find(it => bareCode(it.itemId) === bareCode(q) || String(it.itemId || '').toUpperCase() === q)
+            || allItems.find(it => erpOf(it).startsWith(q));
+        if (!hit) return { ok: false, step: 'Not found', detail: `No item in this brand matches "${q}". Check the brand selector and the spelling — Quick Ship only loads ${activeBrand}'s parts.` };
+
+        const code = erpOf(hit);
+        const face = aliasFaceOf(hit);
+        const aka = [...aliasCodesOf(hit)].filter(c => c !== bareCode(code));
+        const trail = [`Found ${code}${aka.length ? ` (also known as ${aka.join(', ')})` : ''}`];
+
+        if (hit.manufacturingSpecs?.isStocked !== true) return { ok: false, step: 'Not stocked', detail: `${code} is not flagged Stocked. Quick Ship only sells stocked inventory — tick "Stocked" on the item, or mass-set it in 4.5.`, trail };
+        trail.push('Stocked ✓');
+
+        const cols = [...effectiveCollectionsOf(hit)];
+        if (scopeCollection && !cols.includes(scopeCollection)) {
+            return { ok: false, step: 'Collection', detail: `Scope is ${scopeCollection}, but ${code} reaches ${cols.length ? cols.join(', ') : 'no collection at all'}${aka.length ? ' (alias links included)' : ''}. Tag the item — or its alias — with ${scopeCollection}.`, trail };
+        }
+        trail.push(scopeCollection ? `In ${scopeCollection} ✓` : 'No collection scope ✓');
+
+        const cat = catOf(hit);
+        if (!['POLE', 'BRACKET', 'RING', 'FINIAL'].includes(cat)) {
+            return { ok: false, step: 'Category', detail: `Product type "${hit.manufacturingSpecs?.productType || hit.productType || '(blank)'}" reads as "${cat || 'unclassified'}", and the kit builder only has Pole / Bracket / Ring / Finial slots. Fix Prod Type in the Master Library.`, trail };
+        }
+        trail.push(`Category ${cat} ✓`);
+
+        if (!isFinished(hit)) return { ok: false, step: 'Mill part', detail: `${code} carries no "/FINISH" suffix, so it reads as a raw mill part and the kit builder hides it. The sellable variants are the /CODE ones (e.g. ${bareCode(code)}/CG). Quick Add can still reach ${code}.`, trail };
+        trail.push('Finished good ✓');
+
+        const dias = diaCandidatesFor(hit);
+        if (kbDia && !dias.includes(kbDia)) {
+            return { ok: false, step: 'Rod diameter', detail: `You have ${diaCellLabel(kbDia)} selected; ${code} answers to ${dias.length ? dias.map(diaCellLabel).join(' / ') : 'no size grammar at all'}. An item with no parseable size code only shows when the diameter is set to "Any".`, trail };
+        }
+        trail.push(kbDia ? `At ${diaCellLabel(kbDia)} ✓` : 'Any diameter ✓');
+
+        const fin = finishCodeOf(hit);
+        if (kbFinish && fin !== kbFinish) return { ok: false, step: 'Finish', detail: `You have ${kbFinish} selected and ${code} is ${fin}. Switch the Finish selector to ${fin} or to "Any finish".`, trail };
+        trail.push(kbFinish ? `Finish ${kbFinish} ✓` : 'Any finish ✓');
+
+        if (cat === 'BRACKET' && bracketPos) {
+            const isOuter = bracketIn(bracketPos.outer, hit), isCenter = bracketIn(bracketPos.center, hit);
+            if (!isOuter && !isCenter) return { ok: false, step: 'Bracket position', detail: `${code} passes every filter but no flow step tags it LEFT / RIGHT / CENTER, so it lands in neither bracket list. Its 1.6 cluster needs a position, and the flow needs regenerating after.`, trail };
+            trail.push(`${isOuter && isCenter ? 'Outer + Center' : isOuter ? 'Outer' : 'Center'} bracket ✓`);
+        }
+
+        return { ok: true, step: 'Showing', detail: `${code} passes every filter${face ? ` and sells as ${aliasCodeFor(face, hit)}` : ''}. It should be in the ${cat.toLowerCase()} picker right now.`, trail };
+    };
+    const diag = useMemo(() => diagFor(diagQuery), [diagQuery, allItems, scopeCollection, kbDia, kbFinish, bracketPos]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const itemById = (id) => allItems.find(it => it.id === id);
 
@@ -993,6 +1051,25 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 <input value={kitCollection} onChange={e => setKitCollection(e.target.value)} list="qs-collections" placeholder="Collection (e.g. TQS)" style={{ ...inp, width: '150px', flex: 'none' }} />
                                 <datalist id="qs-collections">{[...new Set(myKits.map(k => (k.collection || '').trim()).filter(Boolean))].map(c => <option key={c} value={c} />)}</datalist>
                                 <button onClick={saveKit} style={btn('var(--ink)', '#fff')}>Save as Kit</button>
+                            </div>
+
+                            {/* The pickers are six stacked filters deep; when one hides an item the
+                                list just gets shorter and the reason is invisible. Type a code and
+                                this replays the SAME predicates and names the one that said no. */}
+                            <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '12px' }}>
+                                <span style={lbl}>Item missing? Type its code</span>
+                                <input value={diagQuery} onChange={e => setDiagQuery(e.target.value)} placeholder="e.g. H1-1BE/CG or H2-1BE" style={{ ...inp, fontFamily: 'var(--mono)', fontSize: '0.8rem' }} />
+                                {diag && (
+                                    <div style={{ marginTop: '8px', padding: '10px 12px', border: `1px solid ${diag.ok ? '#bcd8c0' : '#e0c9a0'}`, background: diag.ok ? '#f2f8f3' : 'var(--paper)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: diag.ok ? '#3a7d44' : '#a05a2c', marginBottom: '4px' }}>
+                                            {diag.ok ? '✓ ' : '✗ blocked at: '}{diag.step}
+                                        </div>
+                                        <div style={{ fontSize: '0.82rem', color: 'var(--ink)', lineHeight: 1.5 }}>{diag.detail}</div>
+                                        {diag.trail && diag.trail.length > 0 && (
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em' }}>{diag.trail.join('  →  ')}</div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
