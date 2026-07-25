@@ -164,7 +164,7 @@ export default function VisionIntake() {
   const [note, setNote] = useState('');
   const [sel, setSel] = useState({ shape: 'STRAIGHT', inputMode: 'WALL', endStyle: 'FINIAL', endStyleRight: 'FINIAL', mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN' });
   const [params, setParams] = useState({});      // stepId → optId, the CPQ selection shape
-  const [m, setM] = useState({ w1: '', w2: '', w3: '', bowDepth: '', proj: '', poleDiameter: '1', bracketW: '3', returnRadius: '4', gripAllowance: '8.5', insideMountDeduct: '0.25' });
+  const [m, setM] = useState({ w1: '', w2: '', w3: '', a1: '135', a2: '135', bowDepth: '', proj: '', poleDiameter: '1', bracketW: '3', returnRadius: '4', gripAllowance: '8.5', insideMountDeduct: '0.25' });
   const [showAdv, setShowAdv] = useState(false);
   const [zoomDia, setZoomDia] = useState(false); // click-to-enlarge lightbox for the fit diagram
   const [busy, setBusy] = useState(false);
@@ -325,7 +325,7 @@ export default function VisionIntake() {
     return {
       shape: sel.shape, inputMode: sel.inputMode,
       w1: parseMeas(m.w1), w2: parseMeas(m.w2), w3: parseMeas(m.w3),
-      a1: 135, a2: 135, bowDepth: parseMeas(m.bowDepth),
+      a1: parseMeas(m.a1) || 135, a2: parseMeas(m.a2) || 135, bowDepth: parseMeas(m.bowDepth),
       mountLeft: mountL, mountRight: mountR, mountCenter: 'OPEN', mountOuter: sel.mountOuter,
       endStyle: endL, endStyleRight: endR,
       proj,
@@ -482,6 +482,13 @@ export default function VisionIntake() {
               {sel.shape === 'MITERED' && <div style={cell}><label style={lbl}>Right wall (in)</label><input style={field} value={m.w3} onChange={(e) => setMKey('w3', e.target.value)} placeholder="e.g. 30" /></div>}
               {sel.shape === 'BOW' && <div style={cell}><label style={lbl}>Bay depth (in)</label><input style={field} value={m.bowDepth} onChange={(e) => setMKey('bowDepth', e.target.value)} placeholder="e.g. 15" /></div>}
             </div>
+            {sel.shape === 'MITERED' && (
+              <div style={{ ...row, marginBottom: 14 }}>
+                <div style={cell}><label style={lbl}>Left wall angle (°)</label><input style={field} value={m.a1} onChange={(e) => setMKey('a1', e.target.value)} placeholder="e.g. 135" /></div>
+                <div style={cell}><label style={lbl}>Right wall angle (°)</label><input style={field} value={m.a2} onChange={(e) => setMKey('a2', e.target.value)} placeholder="e.g. 135" /></div>
+                <div style={{ ...cell, alignSelf: 'flex-end', fontSize: '0.72rem', color: 'var(--ink-soft)', paddingBottom: 8 }}>Most bay windows are 135°. 90° = a square return of the wall.</div>
+              </div>
+            )}
 
             {flowBusy && <div className="empty" style={{ marginBottom: 14 }}>Loading this collection's options…</div>}
 
@@ -604,7 +611,9 @@ export default function VisionIntake() {
             <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', margin: '2px 0 14px' }}>
               {measReady
                 ? <>= {both(fit.poleO2O)} pole + {toFrac(fit.endAddL)} left + {toFrac(fit.endAddR)} right</>
-                : 'Enter your measurements on the left and the numbers appear here.'}
+                : (sel.shape === 'MITERED' ? 'Enter the left, center, and right wall measurements and the numbers appear here.'
+                  : sel.shape === 'BOW' ? 'Enter the chord width and bay depth and the numbers appear here.'
+                  : 'Enter your width and the numbers appear here.')}
             </div>
             <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.9rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Pole O2O (edge-to-edge)</span><b>{measReady ? both(fit.poleO2O) : '—'}</b></div>
