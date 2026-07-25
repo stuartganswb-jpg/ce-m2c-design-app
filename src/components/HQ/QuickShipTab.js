@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 
 // Stocked / pre-finished items are sold flat — each line goes to NetSuite as its own sales-order
 // line (NO assembly/BOM rollup like the CPQ does). Quick Ship is the fast counter for that stock.
@@ -140,11 +141,18 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const miterItems = useMemo(() => feeItems(['MITER', 'RETURN']), [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const itemById = (id) => allItems.find(it => it.id === id);
+
+    // Customer identity for clientPricing lookups — SHARED with CPQ (Shared/clientPricing.js) so the
+    // same customer can't price one way here and another way in the configurator. Rows may be keyed
+    // by CRM doc id or by the customer's name, hence the key set rather than a strict id compare.
+    const custKeys = useMemo(
+        () => customerKeys(customerId, customers.find(c => c.id === customerId)),
+        [customerId, customers]
+    );
+
     const rateFor = (it) => {
-        let r = parseFloat(it.manufacturingSpecs?.basePrice || 0) || 0;
-        const cp = it.clientPricing?.find(c => c.customerId === customerId);
-        if (cp && cp.price !== undefined && cp.price !== '' && !isNaN(parseFloat(cp.price))) r = parseFloat(cp.price);
-        return r;
+        const r = parseFloat(it.manufacturingSpecs?.basePrice || 0) || 0;
+        return clientPriceFor(it.clientPricing, custKeys) ?? r;
     };
 
     const pushLine = (it, qty, note, kitMeta) => {
@@ -259,8 +267,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const effectiveKitPrice = (kitName2, kitBrand) => {
         const kit = kits.find(k => k.name === kitName2 && k.brand === kitBrand);
         if (!kit) return null;
-        const cp = (kit.clientPricing || []).find(c => c.customerId === customerId);
-        if (cp && cp.price !== '' && cp.price !== undefined && !isNaN(parseFloat(cp.price))) return parseFloat(cp.price);
+        const cust = clientPriceFor(kit.clientPricing, custKeys);
+        if (cust != null) return cust;
         const bp = parseFloat(kit.basePrice);
         return (kit.basePrice !== '' && kit.basePrice !== undefined && kit.basePrice !== null && !isNaN(bp)) ? bp : null;
     };
@@ -482,7 +490,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                         <div style={{ padding: '12px 14px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                                             {list.map(kit => {
                                                 const kp = effectiveKitPrice(kit.name, kit.brand);
-                                                const hasCust = !!customerId && (kit.clientPricing || []).some(c => c.customerId === customerId);
+                                                const hasCust = !!customerId && !!findClientPriceRow(kit.clientPricing, custKeys);
                                                 return (
                                                     <div key={kit.name} style={{ display: 'flex', alignItems: 'stretch', border: '1px solid var(--line)' }}>
                                                         <button onClick={() => addSavedKit(kit)} style={{ ...btn('var(--paper-2)', 'var(--ink)'), border: 'none', textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--sans)', fontSize: '0.9rem' }}

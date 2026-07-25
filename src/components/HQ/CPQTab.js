@@ -8,6 +8,7 @@ import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
+import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
 
 const globalTextureCache = {};
 
@@ -932,6 +933,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       let targetFlow = null;
       if (draft.category === 'PILLOW') targetFlow = cpqFlows.find(f => (f.name || '').includes("PILLOW"));
+      if (draft.category === 'LIGHTING') {
+          // Vision Lighting saves no flow id — the operator picks a MASTER ASSEMBLY there, not a flow
+          // (VisionLighting.js pushToCPQ), so resolve the flow through that assembly. A flow's
+          // linkedAssemblyId may hold the Approved_Designs doc id OR the itemId (same tolerance the
+          // BOM Engine uses), then fall back to a LIGHT-named flow. Without this branch every
+          // lighting draft hit the "Cannot resume draft" alert below and was unreachable.
+          const asm = liveAssemblies.find(a => a.id === draft.linkedAssemblyId || a.itemId === draft.linkedAssemblyId);
+          const asmIds = new Set([draft.linkedAssemblyId, asm?.id, asm?.itemId].filter(Boolean));
+          targetFlow = cpqFlows.find(f => f.id === draft.cpqFlowId || f.id === draft.flowId || f.id === draft.linkedCpqFlowId)
+                    || (asmIds.size ? cpqFlows.find(f => f.linkedAssemblyId && asmIds.has(f.linkedAssemblyId)) : null)
+                    || cpqFlows.find(f => (f.name || '').toUpperCase().includes("LIGHT"));
+      }
       if (draft.category === 'HARDWARE' || !draft.category) {
           targetFlow = cpqFlows.find(f => f.id === draft.cpqFlowId || f.id === draft.flowId || f.id === draft.linkedCpqFlowId);
           if (!targetFlow) targetFlow = cpqFlows.find(f => (f.name || '').includes("HARDWARE"));
@@ -1482,13 +1495,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           return best;
       };
       const custRec = jobData.customerId ? liveCustomers.find(c => c.id === jobData.customerId) : null;
-      const custKeys = new Set([jobData.customerId, custRec?.name, custRec?.companyName].filter(Boolean).map(s => String(s).trim().toUpperCase()));
-      const clientPriceFor = (part) => {
-          if (!jobData.customerId || !part || !Array.isArray(part.clientPricing)) return null;
-          const cp = part.clientPricing.find(c => custKeys.has(String(c.customerId || '').trim().toUpperCase()));
-          const v = cp ? parseFloat(cp.price) : NaN;
-          return Number.isFinite(v) && v > 0 ? v : null;
-      };
+      const custKeys = customerKeys(jobData.customerId, custRec);
+      const clientPriceOf = (part) => (jobData.customerId && part) ? clientPriceFor(part.clientPricing, custKeys) : null;
 
       (activeFlow.steps || []).forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
@@ -1523,7 +1531,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               
               if (step.linkedItemId && step.useClientPricing) {
                   const basePartObj = findLibPart(step.linkedItemId);
-                  const v = clientPriceFor(basePartObj);
+                  const v = clientPriceOf(basePartObj);
                   if (v != null) stepPrice = v;
               }
 
@@ -1619,7 +1627,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   }
 
                   if (step.useClientPricing) {
-                      const v = clientPriceFor(partObj) ?? clientPriceFor(preVariantObj);
+                      const v = clientPriceOf(partObj) ?? clientPriceOf(preVariantObj);
                       if (v != null) optionNativePrice = v;
                   }
 
@@ -1674,7 +1682,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           // still nothing → the material option's own authored per-foot price.
                           if (!pp && polePart) pp = parseFloat(polePart.manufacturingSpecs?.basePrice ?? polePart.basePrice) || 0;
                           if (!pp && matOpt.price !== undefined && matOpt.price !== '') pp = parseFloat(matOpt.price) || 0;
-                          if (matStep.useClientPricing) { const cv = clientPriceFor(poleFinished) ?? clientPriceFor(polePart); if (cv != null) pp = cv; }
+                          if (matStep.useClientPricing) { const cv = clientPriceOf(poleFinished) ?? clientPriceOf(polePart); if (cv != null) pp = cv; }
                           if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel, finishCodeForStep(matStep.id)); if (fp != null) pp = fp; }
                           if (stepPrice === 0 && pp > 0) stepPrice = pp;
                           resolvedPartId = poleFinished.itemId || poleFinished.id;
@@ -1743,7 +1751,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       ? parseFloat(subOpt.price)
                       : (subPart ? (parseFloat(subPart.manufacturingSpecs?.basePrice ?? subPart.basePrice) || 0) : 0);
                   if (step.useClientPricing) {
-                      const v = clientPriceFor(subPart) ?? clientPriceFor(subBase);
+                      const v = clientPriceOf(subPart) ?? clientPriceOf(subBase);
                       if (v != null) subPrice = v;
                   }
                   // Price level on plate sub-lines: BP → $0 (in the arm), CP → the flat upcharge.
@@ -2309,10 +2317,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (currentStep.useClientPricing && jobData.customerId && partObj?.clientPricing) {
           // Tolerant match (entries may store customer NAME or id) + only real prices (>0) apply.
           const rec = liveCustomers.find(c => c.id === jobData.customerId);
-          const keys = new Set([jobData.customerId, rec?.name, rec?.companyName].filter(Boolean).map(s => String(s).trim().toUpperCase()));
-          const cp = partObj.clientPricing.find(c => keys.has(String(c.customerId || '').trim().toUpperCase()));
-          const v = cp ? parseFloat(cp.price) : NaN;
-          if (Number.isFinite(v) && v > 0) nativeP = v;
+          const v = clientPriceFor(partObj.clientPricing, customerKeys(jobData.customerId, rec));
+          if (v != null) nativeP = v;
       }
 
       let upP = currentStep.priceMap?.[opt.id] ? parseFloat(currentStep.priceMap[opt.id]) : 0;
