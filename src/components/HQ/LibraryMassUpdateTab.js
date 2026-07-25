@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
+import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShipUom';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
@@ -26,7 +27,13 @@ const LIST_LABELS = {
     bins: 'WAREHOUSE BIN LOCATIONS',
     bracketMounts: 'BRACKET MOUNT TYPES',
     feeTypes: 'SERVICE / FEE TYPES',
-    backplateOrientations: 'BACKPLATE ORIENTATIONS'
+    backplateOrientations: 'BACKPLATE ORIENTATIONS',
+    // Quick Ship SELLING units. We stock rings/finials as EACH and pack them per customer, so a
+    // pack is presentation + a qty multiplier, never a separate SKU. The count is parsed from the
+    // name (7PACK→7, PAIR→2); add "- N" when the name doesn't carry it (BAKERS DOZEN - 13).
+    quickShipUom: 'QUICK SHIP UOM / PACKS (e.g. 7PACK, 10PACK, PAIR)',
+    // Rush fee menu for Quick Ship — the AMOUNT lives in the entry: "RUSH 3 DAY - 75".
+    rushFeeTypes: 'RUSH FEE TYPES (Format: Name - Amount)'
 };
 
 // Labels for the Brand Window manager — covers every system window key, including
@@ -103,6 +110,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         productType: { active: false, value: "" },
         routingType: { active: false, value: "" },
         uom: { active: false, value: "EA" },
+        quickShipUom: { active: false, value: "" },
         watchList: { active: false, value: "NONE" },
         project: { active: false, value: "" },
         isInHouse: { active: false, value: true },
@@ -141,7 +149,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         partHandling: [], collections: [], vendors: [], outsourceActions: [],
         pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [],
         projections: [], cpqRoutingTypes: [], customers: [], bins: [],
-        bracketMounts: [], feeTypes: [], backplateOrientations: []
+        bracketMounts: [], feeTypes: [], backplateOrientations: [],
+        quickShipUom: [], rushFeeTypes: []
     });
     
     const [collectionsData, setCollectionsData] = useState([]);
@@ -1134,6 +1143,21 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </select>
                         </div>
 
+                        {/* QUICK SHIP UOM — the SELLING unit on the Quick Ship counter (rings by the
+                            7/10/12-pack, finials by the pair). Stock stays EACH: the pack only
+                            multiplies qty at push and groups the line on the invoice. Blank = each. */}
+                        <div style={{ background: updates.quickShipUom.active ? theme.paper : 'transparent', border: `1px solid ${updates.quickShipUom.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.quickShipUom.active} onChange={(e) => handleUpdateChange('quickShipUom', 'active', e.target.checked)} />
+                                Set Quick Ship UOM
+                            </label>
+                            <select disabled={!updates.quickShipUom.active} value={updates.quickShipUom.value} onChange={(e) => handleUpdateChange('quickShipUom', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.quickShipUom.active ? 1 : 0.5 }}>
+                                <option value="">Each (no pack)</option>
+                                {(globalLists.quickShipUom || []).map(u => <option key={u} value={u.toUpperCase()}>{u} — {packSizeOf(u)} ea</option>)}
+                            </select>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: theme.inkSoft, marginTop: '6px', letterSpacing: '.04em' }}>Default pack for these items. A customer's CRM preference wins over it.</div>
+                        </div>
+
                         <div style={{ background: updates.vendorName.active ? theme.paper : 'transparent', border: `1px solid ${updates.vendorName.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
                                 <input type="checkbox" checked={updates.vendorName.active} onChange={(e) => handleUpdateChange('vendorName', 'active', e.target.checked)} />
@@ -1750,6 +1774,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                                         </label>
                                                                     )}
                                                                     <span>{item}</span>
+                                                                    {/* Show what the entry PARSES to, so a typo is visible here instead of
+                                                                        surfacing as a wrong price/qty on the Quick Ship counter. */}
+                                                                    {listKey === 'quickShipUom' && (
+                                                                        <span style={{ fontSize: '9px', background: 'var(--paper-2)', padding: '2px 6px', color: packSizeOf(item) > 1 ? 'var(--brass)' : '#d9534f', borderRadius: '2px', fontFamily: 'var(--mono)' }} title={packSizeOf(item) > 1 ? 'Each-count this pack contains' : 'Reads as a single each — add "- N" to set the count'}>{packSizeOf(item)} EA</span>
+                                                                    )}
+                                                                    {listKey === 'rushFeeTypes' && (
+                                                                        <span style={{ fontSize: '9px', background: 'var(--paper-2)', padding: '2px 6px', color: rushFeeAmountOf(item) === null ? '#d9534f' : 'var(--brass)', borderRadius: '2px', fontFamily: 'var(--mono)' }} title={rushFeeAmountOf(item) === null ? 'No amount found — end the entry with "- 75"' : `${rushFeeLabelOf(item)} bills at this amount`}>{rushFeeAmountOf(item) === null ? 'NO AMOUNT' : `$${rushFeeAmountOf(item).toFixed(2)}`}</span>
+                                                                    )}
                                                                     {!isDbRecord && <span style={{ fontSize: '9px', background: 'var(--paper-2)', padding: '2px 6px', color: 'var(--ink-soft)', borderRadius: '2px' }}>ERP GHOST</span>}
                                                                 </div>
                                                                 {isDbRecord ? (

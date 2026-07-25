@@ -9,6 +9,7 @@ import FormPreview from '../Shared/FormPreview';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq, reopenQuoteInVision } from '../Shared/reopenQuote';
+import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 
 const printStyles = `
   @media print {
@@ -86,6 +87,46 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
     setPriceLevel(lvl);
     try { await updateDoc(doc(db, 'crm_records', customerId), { portalPriceLevel: lvl }); }
     catch (e) { alert('Could not update price level: ' + (e.message || e)); }
+  };
+
+  // ---- COLLECTIONS + QUICK SHIP PACKS (Stuart 2026-07-25) -------------------------------------
+  // Flows entitle the CONFIGURATOR; collections entitle the CATALOG (Quick Ship stock, and the
+  // portal's stock counter once it exists). Empty = no restriction, so an existing customer's
+  // portal doesn't silently go dark the moment this field ships.
+  const [allCollections, setAllCollections] = useState([]);
+  const [packUnits, setPackUnits] = useState([]);   // master list: 7PACK, 10PACK, PAIR…
+  const [portalCollections, setPortalCollections] = useState([]);
+  const [packPrefs, setPackPrefs] = useState({});
+
+  useEffect(() => {
+    setPortalCollections(customer?.portalCollections || []);
+    const p = {};
+    PACK_PREF_FIELDS.forEach(f => { p[f.field] = customer?.[f.field] || ''; });
+    setPackPrefs(p);
+  }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const unsubCols = onSnapshot(collection(db, 'hq_collections'),
+      snap => setAllCollections(snap.docs.map(d => String(d.data().name || d.id).toUpperCase()).sort()),
+      () => setAllCollections([]));
+    const unsubLists = onSnapshot(doc(db, 'system', 'master_lists'),
+      s => setPackUnits(s.exists() ? (s.data().quickShipUom || []) : []),
+      () => setPackUnits([]));
+    return () => { unsubCols(); unsubLists(); };
+  }, []);
+
+  const toggleCollection = async (name) => {
+    const next = portalCollections.includes(name) ? portalCollections.filter(c => c !== name) : [...portalCollections, name];
+    setPortalCollections(next);
+    try { await updateDoc(doc(db, 'crm_records', customerId), { portalCollections: next }); }
+    catch (e) { setPortalCollections(portalCollections); alert('Could not update collection access: ' + (e.message || e)); }
+  };
+
+  const changePackPref = async (field, value) => {
+    const prior = packPrefs;
+    setPackPrefs({ ...packPrefs, [field]: value });
+    try { await updateDoc(doc(db, 'crm_records', customerId), { [field]: value }); }
+    catch (e) { setPackPrefs(prior); alert('Could not update pack preference: ' + (e.message || e)); }
   };
 
   const call = async (fn, args, okMsg) => {
@@ -195,6 +236,52 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
               </select>
             </div>
             <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em' }}>The customer only ever sees this level — CE→Fabricut cost is never available in the portal.</div>
+          </div>
+
+          {/* WHICH COLLECTIONS THIS CUSTOMER SEES — scopes the stock catalog (Quick Ship today,
+              the portal's stock counter next). None ticked = every collection, so turning this
+              on for one customer never darkens anybody else's portal. */}
+          <div style={{ marginTop: '22px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: 'var(--ink-soft)' }}>Available Collections</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: portalCollections.length ? 'var(--brass)' : 'var(--ink-soft)' }}>{portalCollections.length ? `${portalCollections.length} of ${allCollections.length}` : 'all collections'}</span>
+            </div>
+            {allCollections.length === 0 ? (
+              <div style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No collections defined yet (Mass Update 4.5 → Collections).</div>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {allCollections.map(c => (
+                  <label key={c} style={{ display: 'flex', alignItems: 'center', gap: '7px', fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink)', cursor: 'pointer', padding: '5px 9px', border: '1px solid var(--line)', background: portalCollections.includes(c) ? 'var(--paper)' : 'transparent' }}>
+                    <input type="checkbox" checked={portalCollections.includes(c)} onChange={() => toggleCollection(c)} style={{ accentColor: 'var(--brass)' }} />
+                    <span>{c}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em' }}>Leave every box clear to give this customer the whole catalog.</div>
+          </div>
+
+          {/* HOW THIS CUSTOMER BUYS — rings by the 7/10/12-pack, finials singly or in pairs. We
+              stock EACH and pack to order, so this only changes what the counter offers, how the
+              quote/invoice reads, and the qty multiplier. NetSuite always receives each. */}
+          <div style={{ marginTop: '22px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: 'var(--ink-soft)', marginBottom: '10px' }}>Quick Ship Pack Preferences</div>
+            {packUnits.length === 0 ? (
+              <div style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No pack units defined yet — add them in Mass Update 4.5 → “Quick Ship UOM / Packs”.</div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+                {PACK_PREF_FIELDS.map(f => (
+                  <div key={f.field}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '5px' }}>{f.label}</span>
+                    <select value={packPrefs[f.field] || ''} onChange={e => changePackPref(f.field, e.target.value)} style={{ width: '100%', boxSizing: 'border-box', padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', background: '#fff', outline: 'none' }}>
+                      <option value="">Each (no pack)</option>
+                      {packUnits.map(u => <option key={u} value={String(u).toUpperCase()}>{packLabelOf(u)} — {packSizeOf(u)} ea</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em' }}>Quantities are counted in PACKS on the quote and invoice; NetSuite and pick/pack always receive the each count.</div>
           </div>
         </>
       )}

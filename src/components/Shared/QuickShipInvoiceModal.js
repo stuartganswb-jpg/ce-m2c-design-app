@@ -94,14 +94,20 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                             </tr>
                             {(l.components || []).map((c, ci) => (
                                 <tr key={`${i}-${ci}`}>
-                                    <td colSpan={3} style={{ padding: '1px 6px 1px 26px', fontSize: '10.5px', color: '#8a857c' }}>{c.qty} × {c.erp} — {c.name}</td>
+                                    {/* Packed components read in the unit the customer ordered; loose
+                                        ones are unchanged. c.qty is always the each count. */}
+                                    <td colSpan={3} style={{ padding: '1px 6px 1px 26px', fontSize: '10.5px', color: '#8a857c' }}>{c.packs ? `${c.packs} × ${c.packUom} (${c.qty} ea) — ` : `${c.qty} × `}{c.erp} — {c.name}</td>
                                 </tr>
                             ))}
                         </React.Fragment>
                     ) : (
                         <tr key={i} style={{ borderTop: '1px solid #ddd8cf' }}>
                             <td style={{ padding: '8px 6px' }}><span style={{ fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{l.erp}</span><span style={{ fontSize: '11px', color: '#524e46' }}> — {l.name}</span></td>
-                            <td style={{ textAlign: 'center', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{l.qty}</td>
+                            {/* Sold by the pack → bill in packs ("2 × 7 PACK"), with the each count
+                                underneath so the customer can reconcile against the shipment. */}
+                            <td style={{ textAlign: 'center', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>
+                                {l.packs ? <>{l.packs} × {l.packUom}<div style={{ fontSize: '9px', color: '#8a857c' }}>{l.qty} ea</div></> : l.qty}
+                            </td>
                             <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{l.total != null ? `$${l.total.toFixed(2)}` : '—'}</td>
                         </tr>
                     ))}

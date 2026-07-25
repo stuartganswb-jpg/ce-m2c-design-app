@@ -3,6 +3,8 @@ import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
+import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
+import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 
 // Stocked / pre-finished items are sold flat — each line goes to NetSuite as its own sales-order
 // line (NO assembly/BOM rollup like the CPQ does). Quick Ship is the fast counter for that stock.
@@ -26,6 +28,26 @@ const classifyCat = (pt) => {
 };
 const erpOf = (it) => String(it.legacyErpId || it.itemId || '').toUpperCase();
 const nsIdOf = (it) => it.netSuiteInternalId || it.legacyErpId || it.itemId || '';
+
+// Collection tags on an item, uppercased — the SAME shape CPQ/Vision scope by
+// (manufacturingSpecs.collections, legacy single customData.collection).
+const collectionsOf = (it) => (it.manufacturingSpecs?.collections
+    || (it.manufacturingSpecs?.customData?.collection ? [it.manufacturingSpecs.customData.collection] : []))
+    .map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
+
+// Size identity of a STOCKED item. Stocked SKUs are pre-finished ("H2-75FB/BL") and the size-key
+// grammar deliberately skips finish variants, so read the key off the BARE code — that's the same
+// code the 🧬 stamper parses, so a stocked ring lands on exactly the diameter its master does.
+const sizeKeyOfStocked = (it) => sizeKeyOf({ legacyErpId: erpOf(it).split('/')[0] });
+const diaCellOf = (it) => { const sk = sizeKeyOfStocked(it); return sk ? `${sk.family}|${sk.dia}` : ''; };
+const diaCellLabel = (cell) => {
+    const [fam, dia] = String(cell || '').split('|');
+    const opt = SIZE_FAMILIES[fam]?.dia?.options?.find(o => o.value === dia);
+    return opt ? `${SIZE_FAMILIES[fam].label} · ${opt.label}` : cell;
+};
+
+// An inside-mount bracket takes the customer's Inside Mount pack; every other bracket sells each.
+const isInsideMount = (it) => /INSIDE/.test(String(it?.manufacturingSpecs?.customData?.bracketType || it?.manufacturingSpecs?.customData?.bracketMount || '').toUpperCase());
 
 // Compact searchable picker — shows "ITEM# — Name", sorted by item# (numeric-aware).
 const ItemSelect = ({ value, onChange, items, placeholder }) => {
@@ -68,7 +90,10 @@ const ItemSelect = ({ value, onChange, items, placeholder }) => {
     );
 };
 
-const EMPTY_KB = { poleId: '', poleQty: 1, bracketId: '', bracketQty: 2, ringId: '', ringQty: 14, finialId: '', finialQty: 2, cutId: '', cutLen: '', cutQty: 1, spliceId: '', spliceQty: 1, miterId: '', miterQty: 1 };
+const EMPTY_KB = { poleId: '', poleQty: 1, bracketId: '', bracketQty: 2, ringId: '', ringQty: 14, finialId: '', finialQty: 2, cutId: '', cutLen: '', cutQty: 1, spliceId: '', spliceQty: 1, miterId: '', miterQty: 1, rushType: '', rushId: '', rushQty: 1 };
+// A rush charge belongs to an ORDER, not to a saved kit — strip it from the stored config so
+// re-adding the kit next month doesn't quietly re-bill last month's rush.
+const KIT_CFG_KEYS = Object.keys(EMPTY_KB).filter(k => !k.startsWith('rush'));
 
 const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [allItems, setAllItems] = useState([]);     // every brand part (for fee lookup)
@@ -90,6 +115,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [openCols, setOpenCols] = useState({});     // collection accordion state
     const [finishList, setFinishList] = useState([]); // [{code, name, outsourced}] — kit finish options
     const [kitFinishPick, setKitFinishPick] = useState(null); // kit awaiting a finish choice on add
+
+    // Catalog scope (Stuart 2026-07-25): pick a COLLECTION and every picker on this tab narrows to
+    // it — the same manufacturingSpecs.collections tag CPQ/Vision scope by — then pick a ROD
+    // DIAMETER and the kit slots narrow again to that diameter's parts.
+    const [scopeCollection, setScopeCollection] = useState('');
+    const [kbDia, setKbDia] = useState('');
+    const [rushTypes, setRushTypes] = useState([]); // master list: "RUSH 3 DAY - 75"
 
     const [pushing, setPushing] = useState(false);
     const [log, setLog] = useState([]);
@@ -119,19 +151,53 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             const arr = s.docs.map(d => d.data()).filter(f => f && f.code);
             setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code).toUpperCase(), name: f.name || f.code, outsourced: true }))]);
         }, e => console.warn('Quick Ship outsource finishes listen failed', e));
-        return () => { unsubParts(); unsubCrm(); unsubKits(); unsubFin(); unsubOut(); };
+        // Rush fee menu (Mass Update 4.5 → RUSH FEE TYPES). The dollar amount rides in the entry.
+        const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (s) => {
+            setRushTypes(s.exists() ? (s.data().rushFeeTypes || []) : []);
+        }, e => console.warn('Quick Ship master lists listen failed', e));
+        return () => { unsubParts(); unsubCrm(); unsubKits(); unsubFin(); unsubOut(); unsubLists(); };
     }, [activeBrand]);
 
     // Strictly-stocked: only items flagged isStocked feed quick-add + the part dropdowns.
-    const stocked = useMemo(() => allItems.filter(it => it.manufacturingSpecs?.isStocked === true), [allItems]);
+    const allStocked = useMemo(() => allItems.filter(it => it.manufacturingSpecs?.isStocked === true), [allItems]);
+
+    // Every collection present on stocked inventory — the scope menu is data, never a hard-coded list.
+    const stockedCollections = useMemo(
+        () => [...new Set(allStocked.flatMap(collectionsOf))].sort(),
+        [allStocked]
+    );
+
+    // COLLECTION SCOPE: narrows every picker to one collection ("Simple Elegance"), matching what
+    // the CPQ/Vision flows for that collection can build. Untagged items are excluded while a scope
+    // is active — an untagged SKU leaking into a scoped list is exactly what the scope prevents.
+    const stocked = useMemo(
+        () => scopeCollection ? allStocked.filter(it => collectionsOf(it).includes(scopeCollection)) : allStocked,
+        [allStocked, scopeCollection]
+    );
+
     const catOf = (it) => classifyCat(it.manufacturingSpecs?.productType || it.productType || it.customData?.category);
     const byCat = (cat) => stocked.filter(it => catOf(it) === cat);
-    const poles = useMemo(() => byCat('POLE'), [stocked]);     // eslint-disable-line react-hooks/exhaustive-deps
-    const brackets = useMemo(() => byCat('BRACKET'), [stocked]); // eslint-disable-line react-hooks/exhaustive-deps
-    const rings = useMemo(() => byCat('RING'), [stocked]);      // eslint-disable-line react-hooks/exhaustive-deps
-    const finials = useMemo(() => byCat('FINIAL'), [stocked]);  // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Fee / billable items — matched by keyword across ALL brand parts (fees aren't usually "stocked").
+    // Rod diameters offered by the scoped stock, derived from the item codes' size grammar.
+    const diaCells = useMemo(() => {
+        const seen = new Map();
+        stocked.forEach(it => { const c = diaCellOf(it); if (c && !seen.has(c)) seen.set(c, diaCellLabel(c)); });
+        return [...seen.entries()]
+            .sort((a, b) => a[1].localeCompare(b[1], undefined, { numeric: true }))
+            .map(([cell, label]) => ({ cell, label }));
+    }, [stocked]);
+
+    // DIAMETER CASCADE: once a rod diameter is chosen, every part slot shows only that diameter's
+    // items. Parts whose code carries no size grammar are dropped while a diameter is active — the
+    // whole point is "1/2" Simple Elegance leaves very few options".
+    const atDia = (list) => kbDia ? list.filter(it => diaCellOf(it) === kbDia) : list;
+    const poles = useMemo(() => atDia(byCat('POLE')), [stocked, kbDia]);        // eslint-disable-line react-hooks/exhaustive-deps
+    const brackets = useMemo(() => atDia(byCat('BRACKET')), [stocked, kbDia]);  // eslint-disable-line react-hooks/exhaustive-deps
+    const rings = useMemo(() => atDia(byCat('RING')), [stocked, kbDia]);        // eslint-disable-line react-hooks/exhaustive-deps
+    const finials = useMemo(() => atDia(byCat('FINIAL')), [stocked, kbDia]);    // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Fee / billable items — matched by keyword across ALL brand parts (fees aren't usually
+    // "stocked"), and never narrowed by collection or diameter: a cut is a cut.
     const feeItems = (kw) => allItems.filter(it => {
         const hay = `${it.manufacturingSpecs?.productType || ''} ${it.productType || ''} ${it.itemName || ''} ${it.customData?.feeType || ''}`.toUpperCase();
         return kw.some(k => hay.includes(k));
@@ -139,6 +205,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const cutItems = useMemo(() => feeItems(['CUT']), [allItems]);            // eslint-disable-line react-hooks/exhaustive-deps
     const spliceItems = useMemo(() => feeItems(['SPLICE']), [allItems]);      // eslint-disable-line react-hooks/exhaustive-deps
     const miterItems = useMemo(() => feeItems(['MITER', 'RETURN']), [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
+    const rushItems = useMemo(() => feeItems(['RUSH', 'EXPEDITE']), [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const itemById = (id) => allItems.find(it => it.id === id);
 
@@ -149,19 +216,65 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         () => customerKeys(customerId, customers.find(c => c.id === customerId)),
         [customerId, customers]
     );
+    const selectedCustomer = customers.find(c => c.id === customerId);
+
+    // PACKS: the selling unit for a kit slot — the customer's CRM preference, else the item's own
+    // Quick Ship UOM. Brackets only take a pack when they're inside-mount (that's the preference
+    // Stuart set); poles and fees always sell each.
+    const slotOfCat = (it) => {
+        const c = catOf(it);
+        if (c === 'RING') return 'ring';
+        if (c === 'FINIAL') return 'finial';
+        if (c === 'BRACKET' && isInsideMount(it)) return 'insideMount';
+        return '';
+    };
+    const packForItem = (it) => {
+        const slot = slotOfCat(it);
+        if (!slot) return { uom: '', size: 1 };
+        const uom = packUnitFor(slot, selectedCustomer, it);
+        return isRealPack(uom) ? { uom: packLabelOf(uom), size: packSizeOf(uom) } : { uom: '', size: 1 };
+    };
+
+    // Stale-pick sweep: narrowing the collection or diameter must not leave a now-invisible part
+    // selected in the kit builder — it would silently ride into the cart at the wrong size.
+    useEffect(() => {
+        setKb(prev => {
+            const ok = (id, list) => !id || list.some(x => x.id === id);
+            if (ok(prev.poleId, poles) && ok(prev.bracketId, brackets) && ok(prev.ringId, rings) && ok(prev.finialId, finials)) return prev;
+            return {
+                ...prev,
+                poleId: ok(prev.poleId, poles) ? prev.poleId : '',
+                bracketId: ok(prev.bracketId, brackets) ? prev.bracketId : '',
+                ringId: ok(prev.ringId, rings) ? prev.ringId : '',
+                finialId: ok(prev.finialId, finials) ? prev.finialId : '',
+            };
+        });
+    }, [poles, brackets, rings, finials]);
+
+    // A diameter from a collection we just left is meaningless — clear it with the scope.
+    useEffect(() => { setKbDia(prev => (prev && !diaCells.some(d => d.cell === prev)) ? '' : prev); }, [diaCells]);
 
     const rateFor = (it) => {
         const r = parseFloat(it.manufacturingSpecs?.basePrice || 0) || 0;
         return clientPriceFor(it.clientPricing, custKeys) ?? r;
     };
 
-    const pushLine = (it, qty, note, kitMeta) => {
+    // qty is counted in PACKS; this is what the warehouse and NetSuite actually see.
+    const eachQtyOf = (l) => (parseInt(l.qty) || 0) * (l.packSize || 1);
+
+    const pushLine = (it, qty, note, kitMeta, opts) => {
         if (!it) return;
+        const pack = opts?.noPack ? { uom: '', size: 1 } : packForItem(it);
         setCart(prev => [...prev, {
             key: `${it.id}-${Date.now()}-${Math.round(prev.length)}`,
             itemId: it.id, erp: erpOf(it), nsId: nsIdOf(it), name: it.itemName || erpOf(it),
             qty: Math.max(1, parseInt(qty) || 1), note: note || '',
             bin: it.manufacturingSpecs?.homeBin || it.binLocation || '',
+            // SELLING unit. qty means packs; packSize converts to the each count we stock, pick and
+            // transmit. packUom '' / packSize 1 = a loose each line, exactly as before packs existed.
+            packUom: pack.uom, packSize: pack.size,
+            // Fees priced off a master list (rush) bill at the list amount, not the item's price.
+            rateOverride: (opts && opts.rateOverride != null) ? opts.rateOverride : null,
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
             kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
         }]);
@@ -176,23 +289,32 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     };
 
     // Resolve a kit-builder config into flat lines against CURRENT inventory (prices re-resolve live).
+    // opts.noPack marks fee lines — a cut or a rush charge is never sold by the pack.
     const resolveKb = (cfg) => {
         const out = [];
-        const add = (id, qty, note) => { const it = itemById(id); if (it && qty > 0) out.push({ it, qty: parseInt(qty) || 1, note: note || '' }); };
+        const add = (id, qty, note, opts) => { const it = itemById(id); if (it && qty > 0) out.push({ it, qty: parseInt(qty) || 1, note: note || '', opts: opts || null }); };
         add(cfg.poleId, cfg.poleQty, '');
         add(cfg.bracketId, cfg.bracketQty, '');
         add(cfg.ringId, cfg.ringQty, '');
         add(cfg.finialId, cfg.finialQty, '');
-        add(cfg.cutId, cfg.cutQty, cfg.cutLen ? `cut @ ${cfg.cutLen}` : 'cut');
-        add(cfg.spliceId, cfg.spliceQty, 'splice');
-        add(cfg.miterId, cfg.miterQty, 'miter return');
+        add(cfg.cutId, cfg.cutQty, cfg.cutLen ? `cut @ ${cfg.cutLen}` : 'cut', { noPack: true });
+        add(cfg.spliceId, cfg.spliceQty, 'splice', { noPack: true });
+        add(cfg.miterId, cfg.miterQty, 'miter return', { noPack: true });
+        // RUSH: the chosen "Rush Fee Type" sets BOTH the note and the billed rate; the item is only
+        // the vessel that carries it to NetSuite. No type chosen = no rush line.
+        if (cfg.rushType) {
+            const amt = rushFeeAmountOf(cfg.rushType);
+            add(cfg.rushId, cfg.rushQty, rushFeeLabelOf(cfg.rushType) || 'rush', { noPack: true, rateOverride: amt });
+        }
         return out;
     };
 
     const addKbToCart = () => {
+        if (kb.rushType && !kb.rushId) return alert('Pick the rush fee ITEM too — a fee needs a NetSuite item to bill against.');
+        if (kb.rushType && rushFeeAmountOf(kb.rushType) === null) return alert(`"${kb.rushType}" carries no amount. Edit it in Mass Update 4.5 → Rush Fee Types to end with the price, e.g. "RUSH 3 DAY - 75".`);
         const lines = resolveKb(kb);
         if (!lines.length) return alert('Fill at least one field in the kit builder.');
-        lines.forEach(l => pushLine(l.it, l.qty, l.note));
+        lines.forEach(l => pushLine(l.it, l.qty, l.note, null, l.opts));
         addLog(`Kit builder → ${lines.length} line(s) added`, 'success');
         setKb(EMPTY_KB);
     };
@@ -226,7 +348,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         }
         // One kitKey per ADD — adding the same kit twice makes two independently-priced groups.
         const kitKey = `${kit.name}-${Date.now()}`;
-        resolved.forEach(l => pushLine(l.it, l.qty, l.note, { kitKey, kitName: kit.name, kitBrand: kit.brand, kitFinish: finCode ? String(finCode).toUpperCase() : '' }));
+        resolved.forEach(l => pushLine(l.it, l.qty, l.note, { kitKey, kitName: kit.name, kitBrand: kit.brand, kitFinish: finCode ? String(finCode).toUpperCase() : '' }, l.opts));
         addLog(`Kit "${kit.name}"${finCode ? ` · ${finCode}` : ''} → ${resolved.length} line(s) added`, 'success');
     };
 
@@ -243,7 +365,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // Re-saving a kit's CONTENTS never wipes its filing/pricing (collection, basePrice,
             // clientPricing survive an overwrite).
             const next = [...others, {
-                name, brand: activeBrand, cfg: { ...kb },
+                name, brand: activeBrand, cfg: Object.fromEntries(KIT_CFG_KEYS.map(k => [k, kb[k]])),
                 collection: (kitCollection || '').trim() || prior?.collection || '',
                 basePrice: prior?.basePrice ?? '', clientPricing: prior?.clientPricing || [],
                 savedBy: currentUser || '', savedAt: Date.now()
@@ -292,39 +414,48 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // (item clientPricing included). A kit group with a kit price distributes it across the
     // group's lines proportionally to their standard subtotals (2dp, LAST line absorbs the
     // rounding) so the SO sums to the kit price; kits without a price bill per item.
+    //
+    // PACKS (2026-07-25): `rate` is always the price of ONE EACH, and every subtotal multiplies by
+    // the each count (qty × packSize). A 7-pack of $4 rings at qty 2 is 14 × $4 — so kit
+    // distribution, the cart total and the NetSuite rate all stay in the same unit as stock.
     const rateForId = (id) => { const it = itemById(id); return it ? rateFor(it) : 0; };
     const pricedCart = useMemo(() => {
         const rateMap = new Map();
         const byKit = {};
         cart.forEach(l => {
-            if (l.kitKey) (byKit[l.kitKey] = byKit[l.kitKey] || []).push(l);
+            // A rate-overridden line (rush fee) is priced by its master-list amount and never
+            // absorbs kit distribution — it isn't part of the kit's value.
+            if (l.rateOverride != null) rateMap.set(l.key, l.rateOverride);
+            else if (l.kitKey) (byKit[l.kitKey] = byKit[l.kitKey] || []).push(l);
             else rateMap.set(l.key, rateForId(l.itemId));
         });
         Object.values(byKit).forEach(group => {
             const kp = effectiveKitPrice(group[0].kitName, group[0].kitBrand);
-            const stds = group.map(l => ({ l, std: rateForId(l.itemId) }));
+            const stds = group.map(l => ({ l, std: rateForId(l.itemId), each: Math.max(1, eachQtyOf(l)) }));
             if (kp === null) { stds.forEach(({ l, std }) => rateMap.set(l.key, std)); return; }
-            const S = stds.reduce((s, x) => s + x.std * x.l.qty, 0);
+            const S = stds.reduce((s, x) => s + x.std * x.each, 0);
             let spent = 0;
-            stds.forEach(({ l, std }, i) => {
+            stds.forEach(({ std, l, each }, i) => {
                 let rate;
                 if (i === stds.length - 1) {
-                    rate = Math.round(((kp - spent) / Math.max(1, l.qty)) * 100) / 100; // absorbs rounding
+                    rate = Math.round(((kp - spent) / each) * 100) / 100; // absorbs rounding
                 } else {
-                    const share = S > 0 ? (kp * (std * l.qty) / S) : (kp / group.length);
-                    rate = Math.floor((share / Math.max(1, l.qty)) * 100) / 100;
+                    const share = S > 0 ? (kp * (std * each) / S) : (kp / group.length);
+                    rate = Math.floor((share / each) * 100) / 100;
                 }
                 rate = Math.max(0, rate);
-                spent += rate * l.qty;
+                spent += rate * each;
                 rateMap.set(l.key, rate);
             });
         });
-        return cart.map(l => ({ ...l, rate: rateMap.get(l.key) ?? 0 }));
+        return cart.map(l => ({ ...l, rate: rateMap.get(l.key) ?? 0, eachQty: eachQtyOf(l) }));
     }, [cart, customerId, kits, allItems]); // eslint-disable-line react-hooks/exhaustive-deps
-    const cartTotal = pricedCart.reduce((s, l) => s + l.rate * l.qty, 0);
+    const cartTotal = pricedCart.reduce((s, l) => s + l.rate * l.eachQty, 0);
 
     const myKits = kits.filter(k => k.brand === activeBrand);
-    const selectedCustomer = customers.find(c => c.id === customerId);
+    // Collections this customer is entitled to in the PORTAL (CRM → Portal Access). Surfaced here
+    // as guidance — the internal counter can still sell anything.
+    const custCollections = (selectedCustomer?.portalCollections || []).map(c => String(c).toUpperCase());
 
     const pushToNetSuite = async () => {
         if (!customerId) return alert('Select a customer first.');
@@ -349,12 +480,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 location: { id: brandMapping.location },
                 memo: memoText,
                 item: {
+                    // PACKS never reach NetSuite: we stock and transmit EACH (2 × 7-pack = 14), and
+                    // the pack only shows on the customer-facing quote/invoice. The description
+                    // still names it so the SO reads the way the customer ordered.
                     items: lines.map(l => ({
                         item: { id: l.nsId.toString() },
-                        quantity: l.qty,
+                        quantity: l.eachQty,
                         rate: parseFloat((l.rate || 0).toFixed(2)),
                         price: { id: "-1" },
-                        description: `${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`
+                        description: `${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`
                     }))
                 }
             };
@@ -376,8 +510,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 customer: selectedCustomer?.name || nsCustomerId, customerId,
                 jobName: jobName || '', memo: memoText,
                 status: 'Pending', pickStatus: 'Pending',
-                totalParts: lines.reduce((s, l) => s + l.qty, 0),
-                lines: lines.map(l => ({ erp: l.erp, name: l.name, qty: l.qty, bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '' })),
+                totalParts: lines.reduce((s, l) => s + l.eachQty, 0),
+                // PICK/PACK reads lines[].qty — it must be the EACH count the warehouse pulls off
+                // the shelf (14 rings), never the pack count. packs/packUom ride alongside so the
+                // packing station knows to bundle them 7 to a bag.
+                lines: lines.map(l => ({ erp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '' })),
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -388,12 +525,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     const out = Object.values(groups).map(g => {
                         const kp = effectiveKitPrice(g[0].kitName, g[0].kitBrand);
                         // Customer-facing kit # = pattern + finish suffix (HS0109T … - SG).
-                        return { type: 'KIT', code: `${g[0].kitName}${g[0].kitFinish ? ' - ' + g[0].kitFinish : ''}`, price: kp !== null ? kp : g.reduce((s, l) => s + l.rate * l.qty, 0), components: g.map(l => ({ erp: l.erp, name: l.name, qty: l.qty })) };
+                        return { type: 'KIT', code: `${g[0].kitName}${g[0].kitFinish ? ' - ' + g[0].kitFinish : ''}`, price: kp !== null ? kp : g.reduce((s, l) => s + l.rate * l.eachQty, 0), components: g.map(l => ({ erp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '' })) };
                     });
-                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.erp, name: l.name, qty: l.qty, rate: l.rate, total: l.rate * l.qty }));
+                    // Loose lines invoice in the unit the customer BUYS: "2 × 7 PACK" at the pack
+                    // price, with the each count kept for reference. qty stays the each count so an
+                    // older invoice reader (which knows nothing about packs) still totals correctly.
+                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty }));
                     return out;
                 })(),
-                invoiceTotal: lines.reduce((s, l) => s + l.rate * l.qty, 0),
+                invoiceTotal: lines.reduce((s, l) => s + l.rate * l.eachQty, 0),
                 createdBy: currentUser || '', createdAt: Date.now(), createdDate: new Date().toISOString()
             });
             addLog(`Recorded ${hqId} for pick/pack (Stock tab).`, 'success');
@@ -415,16 +555,36 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const qtyInp = { ...inp, width: '64px', textAlign: 'center', fontFamily: 'var(--mono)' };
     const btn = (bg, fg) => ({ padding: '11px 18px', background: bg, color: fg, border: `1px solid ${bg}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase' });
 
-    const KitSlot = ({ title, items, idKey, qtyKey, children }) => (
-        <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 64px', gap: '10px', alignItems: 'end' }}>
-            <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', paddingBottom: '8px' }}>{title}</div>
-            <div>
-                <ItemSelect value={kb[idKey]} onChange={v => setKb({ ...kb, [idKey]: v })} items={items} placeholder={`Search ${title.toLowerCase()}…`} />
-                {children}
+    // A kit slot. When the chosen item sells by the pack, the qty label says PACKS and the slot
+    // spells out what that means in each — so nobody has to remember that 2 means 14.
+    const KitSlot = ({ title, items, idKey, qtyKey, children }) => {
+        const chosen = itemById(kb[idKey]);
+        const pack = chosen ? packForItem(chosen) : { uom: '', size: 1 };
+        const packs = parseInt(kb[qtyKey]) || 0;
+        // Switching a slot from loose to packed re-bases the qty to ONE pack. The loose defaults
+        // are each-counts (14 rings), and carrying 14 over would silently order 14 SEVEN-PACKS.
+        const pickItem = (v) => {
+            const next = itemById(v);
+            const wasPacked = !!pack.uom;
+            const nowPacked = next ? !!packForItem(next).uom : false;
+            setKb({ ...kb, [idKey]: v, ...(nowPacked && !wasPacked ? { [qtyKey]: 1 } : {}) });
+        };
+        return (
+            <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 64px', gap: '10px', alignItems: 'end' }}>
+                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', paddingBottom: '8px' }}>{title}</div>
+                <div>
+                    <ItemSelect value={kb[idKey]} onChange={pickItem} items={items} placeholder={items.length ? `Search ${title.toLowerCase()}…` : `No ${title.toLowerCase()}s in this scope`} />
+                    {pack.uom && (
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginTop: '5px', letterSpacing: '.06em' }}>
+                            SOLD BY THE {pack.uom} · {packs || 0} × {pack.size} = {(packs || 0) * pack.size} EA
+                        </div>
+                    )}
+                    {children}
+                </div>
+                <div><span style={lbl}>{pack.uom ? 'Packs' : 'Qty'}</span><input type="number" min="0" value={kb[qtyKey]} onChange={e => setKb({ ...kb, [qtyKey]: e.target.value })} style={qtyInp} /></div>
             </div>
-            <div><span style={lbl}>Qty</span><input type="number" min="0" value={kb[qtyKey]} onChange={e => setKb({ ...kb, [qtyKey]: e.target.value })} style={qtyInp} /></div>
-        </div>
-    );
+        );
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontFamily: 'var(--sans)' }}>
@@ -461,6 +621,34 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     )}
                 </div>
                 <div><span style={lbl}>Job / Sidemark (optional)</span><input value={jobName} onChange={e => setJobName(e.target.value)} placeholder="e.g. Smith Residence" style={inp} /></div>
+            </div>
+
+            {/* CATALOG SCOPE — pick the collection and every picker below narrows to the parts that
+                collection's CPQ/Vision flows build from. Collections the selected customer is
+                entitled to in the portal are listed first, but staff are never blocked from the
+                rest: this is the internal counter. */}
+            <div style={{ ...card, padding: '16px 24px', display: 'grid', gridTemplateColumns: '2fr 3fr', gap: '20px', alignItems: 'center' }}>
+                <div>
+                    <span style={lbl}>Collection Scope</span>
+                    <select value={scopeCollection} onChange={e => setScopeCollection(e.target.value)} style={inp}>
+                        <option value="">All collections ({allStocked.length} items)</option>
+                        {custCollections.length > 0 && (
+                            <optgroup label={`Assigned to ${selectedCustomer?.name || 'this customer'}`}>
+                                {custCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                            </optgroup>
+                        )}
+                        <optgroup label={custCollections.length ? 'Other collections' : 'Collections'}>
+                            {stockedCollections.filter(c => !custCollections.includes(c)).map(c => <option key={c} value={c}>{c}</option>)}
+                        </optgroup>
+                    </select>
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.7 }}>
+                    {scopeCollection
+                        ? <>Scoped to <b style={{ color: 'var(--brass)' }}>{scopeCollection}</b> — {stocked.length} of {allStocked.length} stocked items{diaCells.length > 0 && <> · {diaCells.length} rod diameter{diaCells.length === 1 ? '' : 's'}</>}</>
+                        : <>Showing the whole stocked catalog. Pick a collection to work the way CPQ and Vision do.</>}
+                    {customerId && custCollections.length > 0 && <><br />Portal access: {custCollections.join(', ')}</>}
+                    {customerId && custCollections.length === 0 && <><br />No portal collection restriction on this customer — they see everything online.</>}
+                </div>
             </div>
 
             {/* PREBUILT KITS — filed under collections (Stuart 2026-07-17); click a group title to
@@ -586,6 +774,25 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     <div style={card}>
                         <div style={cardHd}>Kit Builder</div>
                         <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                            {/* ROD DIAMETER FIRST — the same first question the CPQ landing asks.
+                                Every slot below is filtered to it, so 1/2" Simple Elegance offers
+                                only the handful of parts that actually fit a 1/2" rod. */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 64px', gap: '10px', alignItems: 'end', paddingBottom: '12px', borderBottom: '1px dashed var(--line)' }}>
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', paddingBottom: '8px' }}>Rod Diameter</div>
+                                <div>
+                                    <select value={kbDia} onChange={e => setKbDia(e.target.value)} style={inp} disabled={diaCells.length === 0}>
+                                        <option value="">{diaCells.length ? 'Any diameter — all parts' : 'No sized stock in this scope'}</option>
+                                        {diaCells.map(d => <option key={d.cell} value={d.cell}>{d.label}</option>)}
+                                    </select>
+                                    {kbDia && (
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginTop: '5px', letterSpacing: '.06em' }}>
+                                            {poles.length} pole · {brackets.length} bracket · {rings.length} ring · {finials.length} finial
+                                        </div>
+                                    )}
+                                </div>
+                                <div />
+                            </div>
+
                             <KitSlot title="Pole" items={poles} idKey="poleId" qtyKey="poleQty" />
                             <KitSlot title="Bracket" items={brackets} idKey="bracketId" qtyKey="bracketQty" />
                             <KitSlot title="Ring" items={rings} idKey="ringId" qtyKey="ringQty" />
@@ -597,6 +804,33 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             </KitSlot>
                             <KitSlot title="Splice" items={spliceItems} idKey="spliceId" qtyKey="spliceQty" />
                             <KitSlot title="Miter Return" items={miterItems} idKey="miterId" qtyKey="miterQty" />
+
+                            {/* RUSH — the TYPE carries the price (Mass Update 4.5 → Rush Fee Types);
+                                the item is just the vessel that carries the charge to NetSuite.
+                                Offered to every customer, no CRM setup. */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 64px', gap: '10px', alignItems: 'end' }}>
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', paddingBottom: '8px' }}>Rush Fee</div>
+                                <div>
+                                    <select value={kb.rushType} onChange={e => setKb({ ...kb, rushType: e.target.value, rushId: kb.rushId || (rushItems.length === 1 ? rushItems[0].id : '') })} style={inp}>
+                                        <option value="">{rushTypes.length ? 'No rush' : 'No rush fee types defined (4.5)'}</option>
+                                        {rushTypes.map(t => {
+                                            const amt = rushFeeAmountOf(t);
+                                            return <option key={t} value={t}>{rushFeeLabelOf(t)}{amt === null ? ' — no amount set' : ` — $${amt.toFixed(2)}`}</option>;
+                                        })}
+                                    </select>
+                                    {kb.rushType && (
+                                        <>
+                                            <ItemSelect value={kb.rushId} onChange={v => setKb({ ...kb, rushId: v })} items={rushItems} placeholder={rushItems.length ? 'Rush fee item…' : 'No RUSH fee item in the library'} />
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: rushFeeAmountOf(kb.rushType) === null ? '#d9534f' : 'var(--brass)', marginTop: '5px', letterSpacing: '.06em' }}>
+                                                {rushFeeAmountOf(kb.rushType) === null
+                                                    ? 'This type has no amount — fix it in 4.5 (end with "- 75")'
+                                                    : `BILLS AT $${rushFeeAmountOf(kb.rushType).toFixed(2)} — overrides the item's own price`}
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                                <div><span style={lbl}>Qty</span><input type="number" min="0" value={kb.rushQty} onChange={e => setKb({ ...kb, rushQty: e.target.value })} style={qtyInp} /></div>
+                            </div>
 
                             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' }}>
                                 <button onClick={addKbToCart} style={btn('var(--brass)', '#fff')}>Add Kit to Cart</button>
@@ -623,10 +857,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             <div key={l.key} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 74px auto', gap: '10px', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.packUom && <span style={{ color: 'var(--brass)' }}> · {l.qty} × {l.packUom} = {l.eachQty} ea</span>}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
                                 </div>
-                                <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} />
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', textAlign: 'right', color: 'var(--ink)' }}>${(l.rate * l.qty).toFixed(2)}</div>
+                                <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} title={l.packUom ? `Packs of ${l.packSize}` : 'Quantity'} />
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', textAlign: 'right', color: 'var(--ink)' }}>${(l.rate * l.eachQty).toFixed(2)}</div>
                                 <button onClick={() => removeLine(l.key)} style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.1rem' }} title="Remove">×</button>
                             </div>
                         ))}
