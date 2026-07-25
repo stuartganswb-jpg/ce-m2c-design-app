@@ -5,6 +5,7 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
+import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode } from "../Shared/aliasIdentity";
 
 // Stocked / pre-finished items are sold flat — each line goes to NetSuite as its own sales-order
 // line (NO assembly/BOM rollup like the CPQ does). Quick Ship is the fast counter for that stock.
@@ -48,11 +49,9 @@ const diaCellLabel = (cell) => {
 // An inside-mount bracket takes the customer's Inside Mount pack; every other bracket sells each.
 const isInsideMount = (it) => /INSIDE/.test(String(it?.manufacturingSpecs?.customData?.bracketType || it?.manufacturingSpecs?.customData?.bracketMount || '').toUpperCase());
 
-// The bare code, i.e. everything before the finish suffix. "H2-75FB/CC" → "H2-75FB".
-const baseCodeOf = (it) => erpOf(it).split('/')[0];
-// The finish code, i.e. everything after it. "H2-75FB/CC" → "CC".
+// The finish code, i.e. everything after the suffix separator. "H2-75FB/CC" → "CC".
+// (The bare code the other way — everything BEFORE it — comes from Shared/aliasIdentity's bareCode.)
 const finishCodeOf = (it) => erpOf(it).split('/')[1] || '';
-const bareCode = (v) => String(v || '').trim().toUpperCase().split('/')[0];
 
 // SELLABLE vs MILL (Stuart 2026-07-25): a code with no "/FINISH" suffix is the raw base part we
 // buy and paint — it never goes to an end customer. Only finished variants (/CC, /WC, …) are
@@ -197,72 +196,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     //
     // Without this the aliased brackets fall out of the collection scope, the diameter cascade AND
     // the outer/center split, which is exactly the "skipping over alias items" symptom.
-    const aliasIndex = useMemo(() => {
-        const codeOf = (p) => bareCode((p.legacyErpId && p.legacyErpId !== 'PENDING') ? p.legacyErpId : p.itemId);
-        const byKey = new Map();            // any identity → doc
-        const docsByCode = new Map();       // bare code → docs carrying it
-        allItems.forEach(p => {
-            [p.id, p.itemId, p.legacyErpId].forEach(k => {
-                const kk = String(k || '').trim().toUpperCase();
-                if (kk && kk !== 'PENDING') byKey.set(kk, p);
-            });
-            const c = codeOf(p);
-            if (c) docsByCode.set(c, [...(docsByCode.get(c) || []), p]);
-        });
-        // Equivalence groups over bare codes. Merge-on-link so a chain (A→B, B→C) ends up as one set.
-        const groups = new Map();
-        const link = (a, b) => {
-            if (!a || !b || a === b) return;
-            const merged = new Set([...(groups.get(a) || [a]), ...(groups.get(b) || [b])]);
-            merged.forEach(c => groups.set(c, merged));
-        };
-        allItems.forEach(p => {
-            const target = p.aliasOf || p.manufacturingSpecs?.aliasOf;
-            if (!target) return;
-            const real = byKey.get(String(target).trim().toUpperCase());
-            link(codeOf(p), real ? codeOf(real) : bareCode(target));
-        });
-        return { groups, docsByCode };
-    }, [allItems]);
-
-    // Every code this item is known by — its own, plus anything aliased to or from it.
-    const aliasCodesOf = (it) => {
-        const out = new Set();
-        [baseCodeOf(it), bareCode(it.itemId), bareCode(it.id)].filter(Boolean).forEach(c => {
-            out.add(c);
-            (aliasIndex.groups.get(c) || []).forEach(x => out.add(x));
-        });
-        return out;
-    };
-    // Collections reachable through the alias link — the tag may live on either side of it.
-    const effectiveCollectionsOf = (it) => {
-        const cols = new Set(collectionsOf(it));
-        aliasCodesOf(it).forEach(c => (aliasIndex.docsByCode.get(c) || []).forEach(d => collectionsOf(d).forEach(x => cols.add(x))));
-        return cols;
-    };
-
-    // THE CUSTOMER-FACING IDENTITY (Stuart 2026-07-25). Selling H1-1BE inside Simple Elegance, the
-    // customer buys H2-1BE — so quotes, sales orders and invoices show the ALIAS code and the ALIAS
-    // price, while stock, picking, packing and the barcode stay on the real item. Which alias? The
-    // one carrying the collection being sold; without a scope there's no unambiguous answer, so
-    // nothing is substituted.
-    const isAliasDoc = (d) => !!(d.aliasOf || d.manufacturingSpecs?.aliasOf);
-    const aliasFaceOf = (it) => {
-        if (!scopeCollection) return null;
-        const own = baseCodeOf(it);
-        for (const c of aliasCodesOf(it)) {
-            if (c === own) continue;
-            const d = (aliasIndex.docsByCode.get(c) || []).find(x => isAliasDoc(x) && collectionsOf(x).includes(scopeCollection));
-            if (d) return d;
-        }
-        return null;
-    };
-    // The alias code wearing this variant's finish: H2-1BE + /CC → H2-1BE/CC.
-    const aliasCodeFor = (aliasDoc, it) => {
-        const base = bareCode(aliasDoc.legacyErpId && aliasDoc.legacyErpId !== 'PENDING' ? aliasDoc.legacyErpId : aliasDoc.itemId);
-        const fin = finishCodeOf(it);
-        return fin ? `${base}/${fin}` : base;
-    };
+    const aliasIndex = useMemo(() => buildAliasIndex(allItems), [allItems]);
+    const aliasCodesOf = (it) => aliasCodesIn(aliasIndex, it);
+    const effectiveCollectionsOf = (it) => effCollectionsIn(aliasIndex, it);
+    // The customer-facing doc for an item sold inside the scoped collection (null when none).
+    const aliasFaceOf = (it) => customerFaceOf(aliasIndex, it, scopeCollection);
+    const aliasCodeFor = (aliasDoc, it) => faceCodeFor(aliasDoc, it);
 
     // Every collection present on stocked inventory — the scope menu is data, never a hard-coded
     // list. Alias-reachable tags count, so a collection that only ever tags its H2-side aliases

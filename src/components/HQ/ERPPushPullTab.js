@@ -4,6 +4,7 @@ import { collection, onSnapshot, doc, updateDoc, deleteDoc, getDocs, query, wher
 import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from '../Shared/sizeMatrix';
 import { reopenQuoteInCpq } from '../Shared/reopenQuote';
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { aliasTargetIdOf } from '../Shared/aliasIdentity';
 
 // DYNAMIC BRAND MAPPING DICTIONARY
 const BRAND_NETSUITE_MAP = {
@@ -196,8 +197,12 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               }
               // ALIAS parts render as their own node but ARE the aliased real item in the BOM (e.g. two pole
               // lengths that are both the same steel pole) → resolve to the real part before building the line.
-              const aliasId = masterPart.aliasOf || masterPart.manufacturingSpecs?.aliasOf;
-              if (aliasId) { const real = matchPart(aliasId); if (real) masterPart = real; }
+              // The alias identity is KEPT (aliasFace) because an estimate is a CUSTOMER document: the app-wide
+              // rule is that customer-facing forms name the alias, never the item it refers back to
+              // (Shared/aliasIdentity.js). Only the pushed item id, stock and BOM follow the real part.
+              let aliasFace = null;
+              const aliasId = aliasTargetIdOf(masterPart);
+              if (aliasId) { const real = matchPart(aliasId); if (real) { aliasFace = masterPart; masterPart = real; } }
               // SIZE-MATRIX swap: the configured diameter/projection picks the actual item (return
               // plates collapse to standard plates at 1"/1-3/8" per the resolver's RBP→BP rule).
               const preSizeMaster = masterPart; // wall-mount pairing may live only on the base-size doc
@@ -276,6 +281,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               rawLines.push({
                   stepId,
                   masterPart,
+                  aliasFace,       // the alias doc this line was SOLD as, when it was sold under one
                   qty: lineQty,
                   nsId,
                   finishedErpId,   // non-empty when this line pushes a finished assembly (outsourced or stocked in-house)
@@ -389,9 +395,14 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       quantity: line.qty,
                       rate: parseFloat(itemRate.toFixed(2)), 
                       price: { id: "-1" },
-                      description: line.finishedErpId
-                          ? `${line.masterPart.itemName} → ${line.finishedErpId} (finished assembly, CPQ)`
-                          : `${line.masterPart.itemName} (Mapped from CPQ)`,
+                      // An estimate is a CUSTOMER document, so it reads under the alias the line was
+                      // sold as; the ITEM above stays the real part NetSuite stocks and fulfils.
+                      description: (() => {
+                          const face = line.aliasFace ? `${line.aliasFace.legacyErpId || line.aliasFace.itemId || line.aliasFace.itemName} — ` : '';
+                          return line.finishedErpId
+                              ? `${face}${line.masterPart.itemName} → ${line.finishedErpId} (finished assembly, CPQ)`
+                              : `${face}${line.masterPart.itemName} (Mapped from CPQ)`;
+                      })(),
                       custcol_part_category: line.partCategory
                   };
 
@@ -689,7 +700,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                                     {getJobLineItems(activeJob).map((line, idx) => (
                                         <tr key={idx}>
                                             <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', color: line.nsId === 'UNMAPPED' || line.nsId === 'PENDING' ? '#d9534f' : 'var(--ink)', fontFamily: 'var(--mono)' }}>{line.nsId}</td>
-                                            <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', color: 'var(--ink)' }}>{line.masterPart.itemName}{line.finishedErpId ? <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--brass)' }}> → {line.finishedErpId}</span> : null}{line.finishUnmapped ? <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', color: '#d9534f' }}> ⚠ {line.finishUnmapped} not synced — pushing base</span> : null}</td>
+                                            <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', color: 'var(--ink)' }}>{line.masterPart.itemName}{line.aliasFace ? <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: 'var(--ink-soft)' }} title="Sold under this alias — the estimate reads under it, the item pushed is the real part"> · alias {line.aliasFace.legacyErpId || line.aliasFace.itemId}</span> : null}{line.finishedErpId ? <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--brass)' }}> → {line.finishedErpId}</span> : null}{line.finishUnmapped ? <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', color: '#d9534f' }}> ⚠ {line.finishUnmapped} not synced — pushing base</span> : null}</td>
                                             <td style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontWeight: 500, color: 'var(--ink)' }}>{line.qty}</td>
                                         </tr>
                                     ))}

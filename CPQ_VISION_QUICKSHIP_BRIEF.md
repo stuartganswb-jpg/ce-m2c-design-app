@@ -88,6 +88,24 @@ Verify and then just run one full `--only functions` deploy. Known pending (newe
 
 ---
 
+## 4b. APP-WIDE RULE — alias display (Stuart 2026-07-25)
+
+> **Customer-facing forms ALWAYS show the alias, never the item it refers back to.
+> Internal / ERP / shop-floor surfaces show the REAL item, with the alias in minor form.**
+
+An Alias doc (`partClass: 'Alias'`, `aliasOf` → the real item, created in Visual Assembly) renders as its own node but IS the real item in the BOM. `H2-1BE` / `H2-1BS` alias back to `H1-1BE`: one physical part, two codes, sold under different product lines **at different prices**. The rule lives in `src/components/Shared/aliasIdentity.js` — put new alias logic there, don't re-derive it.
+
+| Surface | Shows | Note |
+|---|---|---|
+| CPQ quote / configurator | alias | free — options point at the alias doc, nothing dereferences |
+| Portal (`portalEngine`) | alias | free, same reason — no functions change was needed |
+| Quick Ship cart / SO description / invoice | alias + alias **price** | which alias = the one carrying the scoped collection; captured at add time |
+| NetSuite estimate line | alias in the **description** | item id stays the real part (ERPPushPull swaps for stock/BOM) |
+| WMS pick table / pack rows | real code, `alias …` in 9px | `printItemLabels` barcodes the REAL code — never the alias |
+| `hq_sales_orders.lines[].erp` | real code | `aliasErp` rides alongside for display |
+
+Pricing guard: an alias supplies the rate only when it actually has one (> 0); otherwise the line falls back to the real item, so an unpriced alias can never silently zero a line.
+
 ## 5. Hard constraints
 
 - **Firestore enforces App Check** → no local/Node script can read or write production data (permission-denied). Bulk data changes must be done **inside the authenticated app** — build an admin button, never a script.
