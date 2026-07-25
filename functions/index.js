@@ -837,11 +837,54 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     };
 });
 
+// ---- Collection entitlement (crm_records.portalCollections) ----------------------------------
+// The SECOND entitlement axis, alongside portalFlowIds: flows entitle the configurator, collections
+// entitle the catalog. Set in CRM → Portal Access → Available Collections.
+//
+// EMPTY / absent = no restriction. That default is load-bearing: it is why shipping this field
+// could not darken any existing customer's portal, and it also means an unrestricted customer costs
+// ZERO extra Firestore reads below.
+//
+// With a restriction set the gate is STRICT — an assembly carrying no collection tag is NOT
+// visible. An untagged assembly is precisely the case where we cannot prove the customer is
+// allowed to see it, and this is a leak-safe gate (same posture as custVisible).
+const collectionsOfAsm = (asm) => {
+    const ms = (asm && asm.manufacturingSpecs) || {};
+    const raw = Array.isArray(ms.collections)
+        ? ms.collections
+        : ((ms.customData && ms.customData.collection) ? [ms.customData.collection] : []);
+    return raw.map((c) => String(c || '').trim().toUpperCase()).filter(Boolean);
+};
+// Returns a predicate, or null when this customer has no restriction at all.
+const collectionGateOf = (crm) => {
+    const allowed = (Array.isArray(crm && crm.portalCollections) ? crm.portalCollections : [])
+        .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean);
+    if (!allowed.length) return null;
+    const set = new Set(allowed);
+    return (asm) => collectionsOfAsm(asm).some((c) => set.has(c));
+};
+// Per-flow collection check for the single-flow endpoints. Denies with the SAME message as the
+// flow-id check so a customer can never probe which flows exist by reading the error.
+const assertCollectionAllowed = async (db, crm, flow, flowId) => {
+    const gate = collectionGateOf(crm);
+    if (!gate) return; // unrestricted → no reads, no check
+    let f = flow;
+    if (!f) {
+        const s = await db.collection('cpq_flows').doc(String(flowId || '')).get();
+        f = s.exists ? s.data() : null;
+    }
+    const asmId = f && f.linkedAssemblyId;
+    const asmSnap = asmId ? await db.collection('Approved_Designs').doc(asmId).get() : null;
+    const asm = (asmSnap && asmSnap.exists) ? asmSnap.data() : null;
+    if (!gate(asm)) throw new HttpsError('permission-denied', 'This product is not enabled on your account.');
+};
+
 // The customer's showroom, driven by their ASSIGNED CPQ FLOWS (crm_records.portalFlowIds — set in
 // the CRM Portal Access panel). The flow is the entitlement unit: its linked assembly (and later,
 // that assembly's BOM) defines everything the customer may see. Each assigned flow with a linked
-// assembly + GLB becomes one showroom item. NEVER returns cost/vendor data — price shown is the
-// customer's clientSalesPrice on the assembly (fallback: item base price, else no price).
+// assembly + GLB becomes one showroom item, further narrowed to the customer's allowed collections.
+// NEVER returns cost/vendor data — price shown is the customer's clientSalesPrice on the assembly
+// (fallback: item base price, else no price).
 exports.portalCatalog = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
     const db = admin.firestore();
@@ -870,11 +913,14 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
     const asmSnaps = assemblyIds.length ? await db.getAll(...assemblyIds.map((id) => db.collection('Approved_Designs').doc(id))) : [];
     const assemblies = new Map(asmSnaps.filter((s) => s.exists).map((s) => [s.id, s.data()]));
 
+    const inCollection = collectionGateOf(crm);
     const items = [];
+    let blockedByCollection = 0;
     for (const flow of flows) {
         const asm = flow.linkedAssemblyId ? assemblies.get(flow.linkedAssemblyId) : null;
         const cadUrl = asm && asm.manufacturingSpecs && asm.manufacturingSpecs.cadUrl;
         if (!cadUrl) continue; // a flow without a renderable assembly has nothing to show (yet)
+        if (inCollection && !inCollection(asm)) { blockedByCollection++; continue; }
         const cp = Array.isArray(asm.clientPricing) ? asm.clientPricing.find(matchesCustomer) : null;
         const base = asm.manufacturingSpecs && asm.manufacturingSpecs.basePrice;
         const priceRaw = cp ? (cp.clientSalesPrice ?? cp.price ?? base) : base;
@@ -890,6 +936,9 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
     }
     items.sort((a, b) => a.name.localeCompare(b.name));
 
+    // An empty showroom because the collection filter ate everything is a SETUP mistake, not an
+    // empty account — name it so the portal can say something useful instead of "nothing here".
+    if (!items.length && blockedByCollection) return { items, finishes, reason: 'NO_COLLECTIONS' };
     return { items, finishes };
 });
 
@@ -952,6 +1001,7 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
     const flowSnap = await db.collection('cpq_flows').doc(flowId).get();
     if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
     const flow = flowSnap.data();
+    await assertCollectionAllowed(db, crm, flow, flowId);
 
     let assembly = null;
     if (flow.linkedAssemblyId) {
@@ -1052,6 +1102,7 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
     const crm = crmSnap.exists ? crmSnap.data() : {};
     const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
     if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'Not enabled on your account.');
+    await assertCollectionAllowed(db, crm, null, flowId);
 
     const email = String((request.auth.token && request.auth.token.email) || '');
     const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
@@ -1103,6 +1154,7 @@ exports.portalResolve = onCall({ cors: true }, async (request) => {
     const flowSnap = await db.collection('cpq_flows').doc(String(flowId)).get();
     if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
     const flow = flowSnap.data();
+    await assertCollectionAllowed(db, crm, flow, flowId);
     const brand = flow.brandId || crm.brandId || null;
 
     // The customer NEVER sees cost: force any non-safe level back to STANDARD server-side.
