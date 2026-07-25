@@ -146,6 +146,8 @@ Also live and adjacent: spec sheets (`SpecSheet/SpecSheetModal.js`, unit auto-no
 
 ## 8. The customer portal (the thing we tie back in next)
 
+> **Bringing Vision / Quick Ship INTO the portal? → `PORTAL_VISION_QUICKSHIP_BRIEF.md`** — written 2026-07-25 for a dedicated portal session: the six Quick Ship predicates, the pack invariant, entitlement via `portalCollections`, what rides free vs what must be mirrored, and the scope questions to settle before building.
+
 **portal.classicalelements.com** — a separate Vite app in `portal/`, its own Vercel project (root = `portal/`), auth + functions SDK only. It **never imports CPQTab**; it reads the same Firestore through BFF functions and runs **hand-ported** logic. Full contract: `PORTAL_CPQ_CONTRACT_BRIEF.md`.
 
 **The rule of thumb:** DATA rides free (flows, options, prices, finishes, items, GLBs, clientPricing, portalFlowIds). **LOGIC/SCHEMA must be mirrored** in five places:

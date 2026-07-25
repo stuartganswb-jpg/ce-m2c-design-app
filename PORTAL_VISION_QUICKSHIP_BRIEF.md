@@ -1,0 +1,140 @@
+# SESSION BRIEF — bringing VISION + QUICK SHIP into the customer portal
+
+**Written:** 2026-07-25, for a FRESH portal session · **Repo:** github.com/stuartganswb-jpg/ce-m2c-design-app · **Branch:** main
+**Mission:** give portal customers the two surfaces they don't have yet — a **stock counter** (HQ tab 7, Quick Ship) and some form of **measure/takeoff** (HQ tab 9, Client Vision) — without diverging from the internal app.
+
+**Read first:** `PORTAL_CPQ_CONTRACT_BRIEF.md` (the architecture + mirror rule) and `CPQ_VISION_QUICKSHIP_BRIEF.md` §4b + §8 (the alias rule and the standing portal gaps). This brief assumes both and only adds what's new.
+
+---
+
+## 1. The one rule that governs all of this
+
+The portal **never touches Firestore** — customer tokens are denied on every collection and Storage bucket by rules (`isAuth()` excludes `customer` claims). It only ever sees what a **BFF Cloud Function** hands it. So:
+
+- **DATA rides free** — new items, prices, flows, finishes, collections, `clientPricing`, GLBs. Nothing to do.
+- **LOGIC/SCHEMA must be mirrored**, and the mirror is the whole job. Five places:
+  1. `functions/portalEngine.js` — pricing/size/priceLevel port
+  2. `functions/index.js sanitizeStep()` — the step-field whitelist (the ONLY reason internal fields don't leak)
+  3. `portal/src/cpqRender.jsx` — DynamicModel + studioScene port
+  4. `portal/src/Configurator.jsx` — override builders + return/bracket rules
+  5. `portal/src/shared/{sizeMatrix,priceLevels}.js` — **verbatim copies**; `cp` them in the same commit and diff them
+
+**Whatever you add for stock, add it as a new BFF function + a new portal page — do not widen an existing one.** The sanitize boundary is per-function and that's what keeps leaks impossible.
+
+Portal app: `portal/` (Vite, React 19, its own Vercel project, root = `portal/`). Files today: `App.jsx`, `Showroom.jsx`, `Configurator.jsx`, `cpqRender.jsx`, `firebase.js`, `shared/`. There is **no** stock page and **no** Vision page — both are net new.
+
+---
+
+## 2. Entitlement — what a customer may see
+
+Set on the CRM card (**External Co-Op → customer → Portal Access**):
+
+| Field | Meaning | Status |
+|---|---|---|
+| `portalFlowIds: []` | the flows they may open (master gate for the configurator) | live |
+| `portalCollections: []` | the collections they may see; **empty = whole catalog** | enforced server-side in `portalCatalog` / `portalFlow` / `portalQuoteRequest` / `portalResolve` as of commit `0341e21` — **confirm the Cloud Shell deploy actually ran** |
+| `portalPriceLevel` | `STANDARD` / `FAB_WHOLESALE` / `FAB_RETAIL`; **`FAB_COST` is forced back to STANDARD server-side and must never be exposed** | live |
+| `qsRingPack` / `qsFinialPack` / `qsInsideMountPack` | preferred pack per category (see §4) | app-side only — **the portal ignores these until you port them** |
+
+`portalCollections` is the natural gate for a stock counter: it already answers "which product lines is this customer allowed to buy off the shelf?" Reuse `collectionGateOf` / `assertCollectionAllowed` in `functions/index.js` rather than writing a second gate.
+
+---
+
+## 3. Quick Ship as it stands (HQ tab 7) — what you're porting
+
+`src/components/HQ/QuickShipTab.js`. Stocked/pre-finished goods → **flat NetSuite Sales Order lines**, no BOM, no flow. Mirrored to `hq_sales_orders` with `orderClass:'QUICKSHIP'` for pick/pack.
+
+The picker is **six stacked predicates**, and porting means porting all six or the portal will show a different catalog than the counter:
+
+1. `manufacturingSpecs.isStocked === true`
+2. **collection scope** — `manufacturingSpecs.collections`, alias-linked (§5)
+3. category from `productType` → POLE / BRACKET / RING / FINIAL
+4. **finished goods only** — the code must carry a `/FINISH` suffix; a bare code is a raw mill part we paint and never sell
+5. **rod diameter** — parsed from the code's size grammar via `Shared/sizeMatrix` `sizeKeyOf`, alias-aware
+6. **finish** — the `/SUFFIX` itself; one finish per kit
+
+Plus **outer vs center brackets**, which are NOT derived from naming: the flow generator stamps `stepRole:'BRACKET'` + `position: LEFT|CENTER|RIGHT` on generated steps (`AdminTab.js` `addPerPosition`), and Quick Ship indexes `styleOptions[].partName/partId` from a brand-wide `cpq_flows` query. **`sanitizeStep()` already whitelists `stepRole` and `position`**, so a portal port can read the same thing from `portalFlow` — but a brand-wide flow query has no portal equivalent, so this likely wants its own BFF call.
+
+There's an **"Item missing? Type its code"** probe at the foot of the Kit Builder that replays all six predicates and names the one that rejected an item. Port it or not, but read `diagFor()` — it is the clearest statement of the filter chain.
+
+---
+
+## 4. Packs — the part most likely to be got wrong
+
+`src/components/Shared/quickShipUom.js`. **Verbatim-copy candidate** into `portal/src/shared/` alongside `sizeMatrix`/`priceLevels`.
+
+We **stock EACH and pack to order**. A pack is a selling unit, never a separate SKU. Some customers buy rings 7/10/12 to a pack, finials singly or in pairs.
+
+> **The invariant, which must hold identically in the portal:**
+> **qty means PACKS · `rate` is always per EACH · every subtotal multiplies by `qty × packSize` · NetSuite and pick/pack always receive the EACH count.**
+
+`2 × 7 PACK` of a $4 ring quotes as $56, shows as "2 × 7 PACK (14 ea)" on the customer's document, and transmits 14. Vocabulary is a master list (`system/master_lists.quickShipUom`, edited in Mass Update 4.5); the count is parsed from the name (`7PACK`→7, `PAIR`→2, explicit `- N` override). Per-item default on `manufacturingSpecs.quickShipUom`; the **customer's CRM preference wins over it**.
+
+Rush fees (`master_lists.rushFeeTypes`, amount parsed from `"RUSH 3 DAY - 75"`) are Quick Ship only and have **no portal exposure yet** — decide with Stuart whether customers may self-select a rush.
+
+---
+
+## 5. The alias rule — already app-wide, already free on the portal
+
+Full statement: `CPQ_VISION_QUICKSHIP_BRIEF.md` §4b. Implementation: `src/components/Shared/aliasIdentity.js`.
+
+> Customer-facing forms **always** show the alias, never the item it refers back to. Internal/ERP/shop-floor surfaces show the real item with the alias in minor form.
+
+**The portal already complies for free** — `portalEngine` resolves parts from flow `styleOptions`, and those options point at the alias doc; nothing dereferences `aliasOf`. **Don't add a dereference.** If you build a stock counter that resolves parts by code instead of through flow options, you must apply `customerFaceOf()` yourself or customers will see the wrong code.
+
+**In flight (2026-07-25):** Stuart is restructuring the stocked Simple Elegance items as **real finished assemblies** (`H2-1BE/CG`) with the mill root (`H1-1BE`) in the BOM, instead of aliasing the mill root. In that shape no alias is involved for this collection at all — the bare code `H2-1BE` matches the flow's bracket step and parses to the 1" cell directly. **Check the state of that data before building anything that depends on the alias path.**
+
+---
+
+## 6. Client Vision (HQ tab 9) — read this before promising a port
+
+`ClientVisionTab.js` → `VisionHardware.js` / `VisionPillow.js` / `VisionLighting.js`. This is a **field/takeoff + engineering board**: measure, bay math, bracket placement, saw angles, cut lengths, hanger locations, SVG capture. It writes `cpq_drafts/{draftId}` keyed by `masterQuoteId`, which CPQ picks up as "Lines Awaiting Configuration".
+
+Two honest observations:
+
+- **Most of Vision is shop engineering, not customer input.** `engineeringNotes` (raw cut lengths, miter saw angles, wall angles, bend radius) exists to drive the floor. A customer-facing Vision is realistically **the measurement intake half only** — wall dimensions, mount type, shape, bay count — with the engineering derived server-side. Scope this with Stuart before building; "port Vision" could mean a week or a month depending on which half he means.
+- **The natural output is a `cpq_drafts` doc**, exactly like the internal one, so an internal operator picks it up in CPQ and prices it. That is a much smaller and safer first version than pricing a takeoff in the portal.
+
+Vision was taught the H2 per-assembly model in commit `0fcc583` (grouped flow picker, `PROJ_SELECT` beside the SIZE steps, `flowProjSel`/`projTagOk` gating). **All of it is gated on stamps only 🎯 single-assembly flows carry**, so Fabricut/legacy behavior is identical. Keep it that way.
+
+**H2 is still HELD from the portal** until `partAllowedAtSize` / `PROJ_SELECT` / the size landing are mirrored client-side. That block applies to anything you build.
+
+---
+
+## 7. Standing portal gaps to carry in
+
+- Wall-mount auto-lines (`11ebeed`) are not in `portalEngine` → portal quotes omit those BOM lines.
+- Phase B two-part finials will need a full mirror (new mechanism).
+- `custVisible` (customer-restricted options dropped server-side) needs the Cloud Shell deploy to actually gate.
+- Portal has no deploy-refresh banner — the `version.json` stamp is CRA-only.
+- `Shared/clientPricing.js` (the unified per-customer price matcher, commit `803b063`) needs **no** mirror — the portal prices off `portalPriceLevel`, and `clientPricing` appears nowhere in `functions/` or `portal/`. Don't "helpfully" port it.
+
+---
+
+## 8. Deploy reality
+
+**Vercel does NOT deploy Cloud Functions.** Every BFF change needs Google Cloud Shell:
+
+```bash
+cd ~/ce-m2c-design-app && git pull origin main
+```
+
+```bash
+firebase deploy --only functions --project ce-m2c-design-collab
+```
+
+Decline any prompt to DELETE a function. Use `firebase login --no-localhost` if it asks for auth. Vercel builds both projects on push to `main` (CRA ~2.5 min, portal Vite ~10s).
+
+**You cannot verify in a browser preview** — HQ is PIN-gated and Firestore enforces App Check, so no local script or dev server can read production data. Verification = lint (`npx --no-install eslint <path>`, 0 errors) + `CI=false npx --no-install react-scripts build` + Stuart testing on production. When a filter hides something, build a probe rather than guessing — that is how the alias bug was finally found.
+
+**Multi-session git safety:** never `git checkout` in the shared checkout, never `git add -A`, always `git pull --rebase --autostash origin main` before push.
+
+---
+
+## 9. Decisions to confirm with Stuart before building
+
+1. **Stock counter scope** — browse + quote request (safe, mirrors the configurator's existing `portalQuoteRequest` path), or true self-service ordering that writes a NetSuite Sales Order? The second means a customer can move real inventory and needs its own approval story.
+2. **Vision scope** — measurement intake that lands as a `cpq_drafts` doc for staff to configure, or a full customer-facing engineering board?
+3. **Packs** — may a customer choose their pack, or do they only ever see the one on their CRM record?
+4. **Rush fees** — customer-selectable, or internal only?
+5. **Kits** — `system/quick_ship_kits` carries per-customer kit pricing. Do customers see kits as single sellable products (they're the nicest thing on the counter), and at which price?
