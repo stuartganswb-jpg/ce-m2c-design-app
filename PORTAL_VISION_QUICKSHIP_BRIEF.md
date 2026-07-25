@@ -86,7 +86,13 @@ Full statement: `CPQ_VISION_QUICKSHIP_BRIEF.md` §4b. Implementation: `src/compo
 
 ---
 
-## 6. Client Vision in the portal — SCOPE IS SETTLED (Stuart, 2026-07-25)
+## 6. Client Vision in the portal — SCOPE SETTLED · **V1 BUILT 2026-07-25 (needs Cloud Shell deploy)**
+
+**Shipped:** portal tab **"Measure & Fit"** (`portal/src/VisionIntake.jsx`, lazy-loaded) + BFF **`portalVisionDraft`** (`functions/index.js`). Flow: customer picks a product (portalCatalog — flow + collection entitled), enters measurements (fraction input accepted — `138 3/4` — stored decimal), shape STRAIGHT/MITERED/BOW, per-end treatment (finial / french / mitered return) + mount (wall/ceiling/inside), projection + rod dia + collapsible clearance settings; the three readouts render live off `portal/src/shared/bayMath.js` (decimal AND nearest-1/16 display) with the `= pole + L + R` breakdown. Submit mints a quote number and writes (1) a `jobs` doc — `status PORTAL_REQUEST`, `portalRequest.kind 'VISION_MEASURE'` — on the CRM pipeline, and (2) a `cpq_drafts` doc in the EXACT internal shape (`masterQuoteId` = quote no, `status 'DRAFT_FROM_PORTAL'`, `spatialData` = full whitelisted engData + empty attachments/shopNotes, engineeringNotes = client PREVIEW stamped `computedBy:'PORTAL_CLIENT'`, empty svg).
+
+**Staff loop (zero new plumbing, ZERO re-entry — Stuart's condition):** CRM card → the request row → **Reopen Vision** (existing button) → session = the quote no → Vision "Load saved line" restores the whole board from `spatialData` → staff place brackets / adjust → **Save Line re-stamps engineeringNotes + the shop-drawing SVG and flips status to DRAFT_FROM_VISION (= measurements verified)**. CPQ's "Lines Awaiting Configuration" lists the draft under the same quote (its filter is masterQuoteId-only, status-agnostic) → Configure prices it. No shop data ever renders portal-side; the drawing is REGENERATED from the data, never hauled through the portal.
+
+### (original scope notes below)
 
 `ClientVisionTab.js` → `VisionHardware.js` / `VisionPillow.js` / `VisionLighting.js`. Internally this is a field/takeoff **and** engineering board. The portal gets **the measurement-intake half only**, landing as a `cpq_drafts` doc for staff to price — the same doc the internal Vision writes, so it appears in CPQ's "Lines Awaiting Configuration" with no new plumbing.
 

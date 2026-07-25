@@ -1131,6 +1131,100 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
     return { ok: true, id: quoteNo, quoteNo };
 });
 
+// A customer submits MEASUREMENTS for a product (portal "Measure & Fit" page). Two writes:
+//  (1) a jobs doc (status PORTAL_REQUEST, portalRequest.kind 'VISION_MEASURE') so the request
+//      shows on the CRM card pipeline exactly like a configurator quote request; its id is the
+//      minted quote number, so the card's existing Reopen CPQ / Reopen Vision buttons adopt it.
+//  (2) a cpq_drafts doc in the EXACT shape the internal Vision writes (masterQuoteId = that
+//      quote number, spatialData = full engData + empty attachments/shopNotes), so CPQ lists it
+//      under "Lines Awaiting Configuration" and Vision's "Load saved line" restores the whole
+//      board with ZERO re-entry. The staff Vision pass (Load Line → Save Line) recomputes and
+//      re-stamps engineeringNotes + the shop-drawing SVG from this data — its save flips status
+//      to DRAFT_FROM_VISION, which is the "measurements verified by staff" marker.
+// The customer's readout numbers ride only as a PREVIEW (computedBy PORTAL_CLIENT, empty svg):
+// nothing prices or cuts from them — pricing is staff Configure, cut sheets come from the staff
+// Vision save. engData is WHITELISTED field-by-field: enums checked, numbers coerced, part-id
+// fields forced empty (bracket selection is engineering, not intake).
+exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const { flowId, flowName, sidemark, note, engData: rawEng, preview } = request.data || {};
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
+    if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'Not enabled on your account.');
+    const flowSnap = await db.collection('cpq_flows').doc(String(flowId)).get();
+    if (!flowSnap.exists) throw new HttpsError('permission-denied', 'Not enabled on your account.');
+    const flow = flowSnap.data();
+    await assertCollectionAllowed(db, crm, flow, flowId);
+
+    const num = (v, d) => { const f = parseFloat(v); return Number.isFinite(f) ? f : d; };
+    const oneOf = (v, list, d) => { const s = String(v || '').toUpperCase(); return list.includes(s) ? s : d; };
+    const e = rawEng || {};
+    const MOUNTS = ['OPEN', 'INSIDE', 'CEILING'];
+    const ENDS = ['FINIAL', 'RETURN_BEND', 'RETURN_MITER'];
+    const engData = {
+        shape: oneOf(e.shape, ['STRAIGHT', 'MITERED', 'BOW'], 'STRAIGHT'),
+        inputMode: oneOf(e.inputMode, ['WALL', 'ORDERING'], 'WALL'),
+        w1: num(e.w1, 0), w2: num(e.w2, 0), w3: num(e.w3, 0),
+        a1: num(e.a1, 135), a2: num(e.a2, 135), bowDepth: num(e.bowDepth, 0),
+        mountLeft: oneOf(e.mountLeft, MOUNTS, 'OPEN'), mountRight: oneOf(e.mountRight, MOUNTS, 'OPEN'),
+        mountCenter: oneOf(e.mountCenter, MOUNTS, 'OPEN'), mountOuter: oneOf(e.mountOuter, MOUNTS, 'OPEN'),
+        endStyle: oneOf(e.endStyle, ENDS, 'FINIAL'), endStyleRight: oneOf(e.endStyleRight, ENDS, ''),
+        proj: (e.proj === '' || e.proj === undefined || e.proj === null) ? '' : num(e.proj, ''),
+        bracketId: '', bracketIdRight: '', bracketIdCenter: '',
+        backplateIdLeft: '', backplateIdRight: '', backplateIdCenter: '',
+        poleDiameter: num(e.poleDiameter, 1.0), bracketW: num(e.bracketW, 3.0), finialW: num(e.finialW, 3.5),
+        bracketThickness: num(e.bracketThickness, 0.25), insideMountDeduct: num(e.insideMountDeduct, 0.25),
+        returnRadius: num(e.returnRadius, 4.0), gripAllowance: num(e.gripAllowance, 8.5),
+    };
+
+    const email = String((request.auth.token && request.auth.token.email) || '');
+    const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
+    const submitterName = (puSnap.exists && puSnap.data().name) || email;
+    const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
+    const draftId = `DRAFT-PORTAL-${Date.now()}`;
+    const brandId = flow.brandId || crm.brandId || null;
+    const cleanNote = String(note || '').slice(0, 2000);
+    const cleanSidemark = String(sidemark || '').slice(0, 120);
+    const jobName = `Measure — ${String(flowName || flow.name || 'Portal')} — ${crm.name || ''}`.trim();
+    const p = preview || {};
+    const pnum = (v) => { const f = parseFloat(v); return Number.isFinite(f) ? f : null; };
+
+    await db.collection('jobs').doc(quoteNo).set({
+        jobId: quoteNo, quoteNo, brandId,
+        status: 'PORTAL_REQUEST', source: 'PORTAL',
+        customer: { id: customerId, name: crm.name || '' },
+        jobName,
+        portalRequest: { kind: 'VISION_MEASURE', flowId: String(flowId || ''), flowName: String(flowName || flow.name || ''), note: cleanNote, byEmail: email, draftId },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        dateSaved: new Date().toISOString(),
+    });
+
+    await db.collection('cpq_drafts').doc(draftId).set({
+        id: draftId, brandId, category: 'HARDWARE', status: 'DRAFT_FROM_PORTAL',
+        jobName, sidemark: cleanSidemark,
+        customerId,
+        linkedAssemblyId: flow.linkedAssemblyId || null,
+        linkedCpqFlowId: String(flowId), flowId: String(flowId), cpqFlowId: String(flowId),
+        masterQuoteId: quoteNo,
+        specs: {
+            collection: '',
+            bracketId: '',
+            engineeringNotes: {
+                computedBy: 'PORTAL_CLIENT', shape: engData.shape,
+                poleO2O: pnum(p.poleO2O), totalSystemO2O: pnum(p.totalSystemO2O),
+                pole1: pnum(p.pole1), pole2: pnum(p.pole2), pole3: pnum(p.pole3),
+                svgString: '', customerNote: cleanNote,
+            },
+        },
+        spatialData: { ...engData, attachments: [], shopNotes: [] },
+        author: { name: `${crm.name || 'Customer'} (portal)`, email },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return { ok: true, quoteNo, draftId };
+});
+
 
 // ---- Configured pricing (server-side engine, matches HQ) -------------------------------------
 // Loads the SAME data CPQTab prices from (flow + brand's Approved_Designs parts + the assembly's

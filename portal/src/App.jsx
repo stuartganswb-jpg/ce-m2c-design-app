@@ -4,6 +4,7 @@ import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from './firebase';
 
 const Showroom = lazy(() => import('./Showroom.jsx'));
+const VisionIntake = lazy(() => import('./VisionIntake.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' :
   Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -166,6 +167,7 @@ const Orders = () => {
 const TABS = [
   { id: 'orders', label: 'Orders & Quotes' },
   { id: 'showroom', label: 'Showroom' },
+  { id: 'measure', label: 'Measure & Fit' },
 ];
 
 const Dashboard = ({ user }) => {
@@ -182,6 +184,11 @@ const Dashboard = ({ user }) => {
       {tab === 'showroom' && (
         <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading the 3D showroom…</div>}>
           <Showroom />
+        </Suspense>
+      )}
+      {tab === 'measure' && (
+        <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading Measure &amp; Fit…</div>}>
+          <VisionIntake />
         </Suspense>
       )}
       <PortalFooter />
