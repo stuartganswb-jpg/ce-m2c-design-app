@@ -75,6 +75,68 @@ const GENERIC_ENDS = [
   { id: 'FLUSH', label: 'Flush Cut' },
 ];
 
+// ——— static fit diagrams, one per shape (Stuart 2026-07-25: "put the drawings from the vision
+// board onto the portal screen as a static example showing the marked lines") ———
+// Simplified from the internal Vision board's plan view, same visual language: GREY = the wall
+// (what the customer measured), BRASS = the pole, DASHED = bracket-center C2C, and the outer
+// span = Total System O2O. Illustrative only — the live numbers are in the readout rows below.
+const DG = { wall: '#c9c3b6', pole: '#b08d57', dim: '#8a857b', ink: '#4a463e' };
+const dgTxt = { fontFamily: 'var(--mono, monospace)', fontSize: 8.5, letterSpacing: '.06em' };
+const DimLine = ({ x1, x2, y, label, bold, dash }) => (
+  <g>
+    <line x1={x1} y1={y} x2={x2} y2={y} stroke={bold ? DG.ink : DG.dim} strokeWidth={bold ? 1.2 : 1} strokeDasharray={dash ? '4 3' : undefined} />
+    <line x1={x1} y1={y - 4} x2={x1} y2={y + 4} stroke={bold ? DG.ink : DG.dim} strokeWidth={1} />
+    <line x1={x2} y1={y - 4} x2={x2} y2={y + 4} stroke={bold ? DG.ink : DG.dim} strokeWidth={1} />
+    <text x={(x1 + x2) / 2} y={y - 5} textAnchor="middle" fill={bold ? DG.ink : DG.dim} style={dgTxt} fontWeight={bold ? 700 : 400}>{label}</text>
+  </g>
+);
+const FitDiagram = ({ shape }) => {
+  if (shape === 'MITERED') {
+    return (
+      <svg viewBox="0 0 460 186" style={{ width: '100%', display: 'block' }} aria-label="Angled bay diagram">
+        <polyline points="30,148 120,42 340,42 430,148" fill="none" stroke={DG.wall} strokeWidth="3" />
+        <text x="230" y="30" textAnchor="middle" fill={DG.dim} style={dgTxt}>CENTER WALL — YOUR MEASUREMENT</text>
+        <text x="52" y="86" fill={DG.dim} style={dgTxt} transform="rotate(-50 52 86)">LEFT WALL</text>
+        <text x="418" y="78" fill={DG.dim} style={dgTxt} transform="rotate(50 418 78)">RIGHT WALL</text>
+        <polyline points="52,142 130,54 330,54 408,142" fill="none" stroke={DG.pole} strokeWidth="4" strokeLinejoin="round" />
+        <circle cx="130" cy="54" r="2.5" fill={DG.ink} /><circle cx="330" cy="54" r="2.5" fill={DG.ink} />
+        <text x="130" y="74" textAnchor="middle" fill={DG.ink} style={dgTxt}>MITER</text>
+        <text x="330" y="74" textAnchor="middle" fill={DG.ink} style={dgTxt}>MITER</text>
+        <DimLine x1={130} x2={330} y={96} dash label="CENTER WALL C2C" />
+        <DimLine x1={52} x2={408} y={170} bold label="TOTAL SYSTEM O2O (+ BRACKETS) — MUST FIT" />
+      </svg>
+    );
+  }
+  if (shape === 'BOW') {
+    return (
+      <svg viewBox="0 0 460 186" style={{ width: '100%', display: 'block' }} aria-label="Curved bay diagram">
+        <path d="M 40 132 Q 230 14 420 132" fill="none" stroke={DG.wall} strokeWidth="3" />
+        <text x="230" y="26" textAnchor="middle" fill={DG.dim} style={dgTxt}>WALL — POLE FOLLOWS THE CURVE</text>
+        <path d="M 58 130 Q 230 34 402 130" fill="none" stroke={DG.pole} strokeWidth="4" />
+        <circle cx="58" cy="130" r="4" fill={DG.pole} /><circle cx="402" cy="130" r="4" fill={DG.pole} />
+        <line x1="230" y1="140" x2="230" y2="76" stroke={DG.dim} strokeWidth="1" />
+        <line x1="226" y1="80" x2="230" y2="76" stroke={DG.dim} strokeWidth="1" /><line x1="234" y1="80" x2="230" y2="76" stroke={DG.dim} strokeWidth="1" />
+        <text x="238" y="106" fill={DG.dim} style={dgTxt}>BAY DEPTH</text>
+        <DimLine x1={40} x2={420} y={148} dash label="CHORD WIDTH — YOUR MEASUREMENT" />
+        <DimLine x1={58} x2={402} y={174} bold label="TOTAL SYSTEM O2O (+ BRACKETS) — MUST FIT" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 460 168" style={{ width: '100%', display: 'block' }} aria-label="Straight rod diagram">
+      <line x1="30" y1="26" x2="430" y2="26" stroke={DG.wall} strokeWidth="3" />
+      <text x="230" y="16" textAnchor="middle" fill={DG.dim} style={dgTxt}>WALL / OPENING — YOUR MEASUREMENT</text>
+      <rect x="86" y="26" width="7" height="30" fill={DG.wall} />
+      <rect x="367" y="26" width="7" height="30" fill={DG.wall} />
+      <line x1="58" y1="60" x2="402" y2="60" stroke={DG.pole} strokeWidth="4" />
+      <circle cx="52" cy="60" r="5" fill={DG.pole} /><circle cx="408" cy="60" r="5" fill={DG.pole} />
+      <DimLine x1={89} x2={371} y={88} dash label="MAIN WALL C2C — BRACKET CENTERS" />
+      <DimLine x1={58} x2={402} y={116} label="POLE O2O (EDGE-TO-EDGE)" />
+      <DimLine x1={47} x2={413} y={148} bold label="TOTAL SYSTEM O2O (+ BRACKETS) — MUST FIT" />
+    </svg>
+  );
+};
+
 const lbl = { fontFamily: 'var(--mono, monospace)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', margin: '0 0 6px' };
 const field = { width: '100%', padding: '10px 12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontSize: '0.95rem', outline: 'none', background: '#fff', borderRadius: 2 };
 const row = { display: 'flex', gap: 12, flexWrap: 'wrap' };
@@ -430,7 +492,10 @@ export default function VisionIntake() {
           {/* ── the fit readouts — the point of the page ── */}
           <div className="card" style={{ flex: '1 1 320px', padding: 20, position: 'sticky', top: 12 }}>
             <span className="eyebrow">Will it fit?</span>
-            <div style={{ margin: '14px 0 4px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>Total System O2O (+ brackets) — <b>the outside-edge size your opening must accommodate</b></div>
+            <div style={{ margin: '12px 0 4px', border: '1px solid var(--line)', background: '#faf8f3', borderRadius: 2, padding: '8px 6px' }}>
+              <FitDiagram shape={sel.shape} />
+            </div>
+            <div style={{ margin: '10px 0 4px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>Total System O2O (+ brackets) — <b>the outside-edge size your opening must accommodate</b></div>
             <div style={{ fontSize: '1.9rem', fontWeight: 600, color: 'var(--ink)' }}>{both(fit.totalSystemO2O)}</div>
             <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', margin: '2px 0 14px' }}>
               = {both(fit.poleO2O)} pole + {toFrac(fit.endAddL)} left + {toFrac(fit.endAddR)} right

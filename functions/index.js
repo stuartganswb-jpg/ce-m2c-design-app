@@ -948,7 +948,18 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
 // node maps, finish targeting — no pricing), the linked assembly's GLB + node clusters, and the
 // finish palette. Entitlement is enforced: the flow must be in the customer's crm_records
 // .portalFlowIds. NEVER returns cost/vendor data or internal option prices.
-const sanitizeStep = (s) => ({
+// Customer-facing option name. Fee options carry the fee ENTITY's internal id as partName
+// (CE-FEE-4594) or an authoring hint ("Mitered Return (fee — set price)") — customers must see
+// a DESCRIPTION (Stuart 2026-07-25). feeNameOf resolves the fee item's library itemName; when
+// unresolvable, the "(fee…)" suffix is stripped so at worst a readable phrase remains.
+const customerOptName = (o, feeNameOf) => {
+    const raw = String(o.partName || o.label || '');
+    const feeish = !!o.isFee || /\(fee/i.test(raw);
+    if (!feeish) return raw;
+    const resolved = (feeNameOf && o.partId) ? feeNameOf(o.partId) : '';
+    return resolved || raw.replace(/\s*\(fee[^)]*\)\s*$/i, '').trim() || raw;
+};
+const sanitizeStep = (s, feeNameOf) => ({
     id: s.id,
     title: s.title || '',
     type: s.type || '',
@@ -969,8 +980,8 @@ const sanitizeStep = (s) => ({
     hideQty: !!s.hideQty,
     isCenterClone: !!s.isCenterClone,
     styleOptions: (s.styleOptions || []).map((o) => ({
-        optId: o.optId || o.partId || '', partId: o.partId || '', partName: o.partName || o.label || '',
-        label: o.label || o.partName || '', targetNode: o.targetNode || '', finalImageUrl: o.finalImageUrl || o.imageUrl || '',
+        optId: o.optId || o.partId || '', partId: o.partId || '', partName: customerOptName(o, feeNameOf),
+        label: customerOptName({ ...o, partName: o.label || o.partName }, feeNameOf), targetNode: o.targetNode || '', finalImageUrl: o.finalImageUrl || o.imageUrl || '',
         sizeValue: o.sizeValue ?? null, sizeScale: o.sizeScale ?? null, location: o.location || '', position: o.position || '',
         finishAllowedOptions: o.finishAllowedOptions || null,
         hidesBracket: !!o.hidesBracket,
@@ -981,8 +992,8 @@ const sanitizeStep = (s) => ({
         isBasic: !!o.isBasic,
     })),
     subOptions: (s.subOptions || []).map((o) => ({
-        optId: o.optId || o.partId || '', partId: o.partId || '', partName: o.partName || o.label || '',
-        label: o.label || o.partName || '', targetNode: o.targetNode || '', location: o.location || '', position: o.position || '',
+        optId: o.optId || o.partId || '', partId: o.partId || '', partName: customerOptName(o, feeNameOf),
+        label: customerOptName({ ...o, partName: o.label || o.partName }, feeNameOf), targetNode: o.targetNode || '', location: o.location || '', position: o.position || '',
         returnOnly: !!o.returnOnly, inlineOnly: !!o.inlineOnly,
     })),
 });
@@ -1002,6 +1013,29 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
     if (!flowSnap.exists) throw new HttpsError('not-found', 'Product configuration not found.');
     const flow = flowSnap.data();
     await assertCollectionAllowed(db, crm, flow, flowId);
+
+    // Resolve FEE options' library names for customer display (see customerOptName). Fee option
+    // partIds may be the Approved_Designs doc id, the itemId, or the legacyErpId — try the doc id
+    // first (the generator links fee ITEMS by doc id), then fall back to 'in' queries on the
+    // other two spellings. Fee counts per flow are tiny, so this is at most 3 small reads.
+    const feeIds = [...new Set((flow.steps || [])
+        .flatMap((s) => [...(s.styleOptions || []), ...(s.subOptions || [])])
+        .filter((o) => o && (o.isFee || /\(fee/i.test(String(o.partName || ''))) && o.partId)
+        .map((o) => String(o.partId)))];
+    const feeNames = new Map();
+    if (feeIds.length) {
+        const snaps = await db.getAll(...feeIds.map((id) => db.collection('Approved_Designs').doc(id)));
+        snaps.forEach((s2) => { if (s2.exists) feeNames.set(s2.id, String(s2.data().itemName || '')); });
+        const unresolved = feeIds.filter((id) => !feeNames.get(id));
+        for (const fieldName of ['itemId', 'legacyErpId']) {
+            if (!unresolved.length) break;
+            for (const ids of chunk(unresolved, 30)) {
+                const qs = await db.collection('Approved_Designs').where(fieldName, 'in', ids).get();
+                qs.forEach((d) => { const it = d.data(); const key = String(it[fieldName] || ''); if (key && !feeNames.get(key)) feeNames.set(key, String(it.itemName || '')); });
+            }
+        }
+    }
+    const feeNameOf = (pid) => feeNames.get(String(pid)) || '';
 
     let assembly = null;
     if (flow.linkedAssemblyId) {
@@ -1046,7 +1080,7 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
         flow: {
             id: flowId,
             name: flow.name || 'Product',
-            steps: (flow.steps || []).map(sanitizeStep),
+            steps: (flow.steps || []).map((s) => sanitizeStep(s, feeNameOf)),
             hiddenClusters: flow.hiddenClusters || [],
             hiddenNodes: flow.hiddenNodes || [],
         },
