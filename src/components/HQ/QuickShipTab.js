@@ -101,7 +101,20 @@ const ItemSelect = ({ value, onChange, items, placeholder }) => {
 // bracketId = the OUTER (left/right) bracket — they're the same part, so one field covers both ends.
 // centerBracketId = the center/passing bracket. miterId is retained (no UI) so kits saved before
 // the Miter Return slot moved to CPQ still resolve their saved line.
-const EMPTY_KB = { poleId: '', poleQty: 1, bracketId: '', bracketQty: 2, centerBracketId: '', centerBracketQty: 1, ringId: '', ringQty: 14, finialId: '', finialQty: 2, cutId: '', cutLen: '', cutQty: 1, spliceId: '', spliceQty: 1, miterId: '', miterQty: 1, rushType: '', rushId: '', rushQty: 1 };
+// Every qty starts BLANK (Stuart 2026-07-25) — a pre-filled quantity is a quantity nobody chose,
+// and on a counter that ships stock it would go out the door. The operator types what they're
+// selling; addKbToCart refuses to silently drop a slot that has an item but no qty.
+const EMPTY_KB = { poleId: '', poleQty: '', bracketId: '', bracketQty: '', centerBracketId: '', centerBracketQty: '', ringId: '', ringQty: '', finialId: '', finialQty: '', cutId: '', cutLen: '', cutQty: '', spliceId: '', spliceQty: '', miterId: '', miterQty: '', rushType: '', rushId: '', rushQty: '' };
+// Slot label ↔ fields, for the "you picked it but gave it no quantity" check.
+const KB_SLOTS = [
+    { label: 'Pole', idKey: 'poleId', qtyKey: 'poleQty' },
+    { label: 'Outer Brackets', idKey: 'bracketId', qtyKey: 'bracketQty' },
+    { label: 'Center Brackets', idKey: 'centerBracketId', qtyKey: 'centerBracketQty' },
+    { label: 'Ring', idKey: 'ringId', qtyKey: 'ringQty' },
+    { label: 'Finial', idKey: 'finialId', qtyKey: 'finialQty' },
+    { label: 'Cut', idKey: 'cutId', qtyKey: 'cutQty' },
+    { label: 'Splice', idKey: 'spliceId', qtyKey: 'spliceQty' },
+];
 // A rush charge belongs to an ORDER, not to a saved kit — strip it from the stored config so
 // re-adding the kit next month doesn't quietly re-bill last month's rush.
 const KIT_CFG_KEYS = Object.keys(EMPTY_KB).filter(k => !k.startsWith('rush'));
@@ -118,7 +131,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
 
     const [cart, setCart] = useState([]);             // flat lines (rates resolve LIVE — see pricedCart)
     const [quickItemId, setQuickItemId] = useState('');
-    const [quickQty, setQuickQty] = useState(1);
+    const [quickQty, setQuickQty] = useState('');   // blank, like every other qty on this tab
     const [kb, setKb] = useState(EMPTY_KB);
     const [kitName, setKitName] = useState('');
     const [kitCollection, setKitCollection] = useState(''); // "file" the kit under a collection (e.g. TQS)
@@ -350,8 +363,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const addQuick = () => {
         const it = itemById(quickItemId);
         if (!it) return alert('Pick a stocked item first.');
+        if (!(parseInt(quickQty) > 0)) return alert('Enter a quantity.');
         pushLine(it, quickQty, '');
-        setQuickItemId(''); setQuickQty(1);
+        setQuickItemId(''); setQuickQty('');
         addLog(`Added ${erpOf(it)} ×${quickQty}`, 'success');
     };
 
@@ -379,6 +393,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     };
 
     const addKbToCart = () => {
+        // A slot with an item and no qty would resolve to nothing at all — say so instead.
+        const noQty = KB_SLOTS.filter(s => kb[s.idKey] && !(parseInt(kb[s.qtyKey]) > 0)).map(s => s.label);
+        if (noQty.length) return alert(`Enter a quantity for: ${noQty.join(', ')}.`);
+        if (kb.rushType && !(parseInt(kb.rushQty) > 0)) return alert('Enter a quantity for the Rush Fee.');
         if (kb.rushType && !kb.rushId) return alert('Pick the rush fee ITEM too — a fee needs a NetSuite item to bill against.');
         if (kb.rushType && rushFeeAmountOf(kb.rushType) === null) return alert(`"${kb.rushType}" carries no amount. Edit it in Mass Update 4.5 → Rush Fee Types to end with the price, e.g. "RUSH 3 DAY - 75".`);
         const lines = resolveKb(kb);
@@ -630,22 +648,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const chosen = itemById(kb[idKey]);
         const pack = chosen ? packForItem(chosen) : { uom: '', size: 1 };
         const packs = parseInt(kb[qtyKey]) || 0;
-        // Switching a slot from loose to packed re-bases the qty to ONE pack. The loose defaults
-        // are each-counts (14 rings), and carrying 14 over would silently order 14 SEVEN-PACKS.
-        const pickItem = (v) => {
-            const next = itemById(v);
-            const wasPacked = !!pack.uom;
-            const nowPacked = next ? !!packForItem(next).uom : false;
-            setKb({ ...kb, [idKey]: v, ...(nowPacked && !wasPacked ? { [qtyKey]: 1 } : {}) });
-        };
         return (
             <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 64px', gap: '10px', alignItems: 'end' }}>
                 <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', paddingBottom: '8px' }}>{title}</div>
                 <div>
-                    <ItemSelect value={kb[idKey]} onChange={pickItem} items={items} placeholder={items.length ? `Search ${title.toLowerCase()}…` : `No ${title.toLowerCase()}s in this scope`} />
+                    <ItemSelect value={kb[idKey]} onChange={v => setKb({ ...kb, [idKey]: v })} items={items} placeholder={items.length ? `Search ${title.toLowerCase()}…` : `No ${title.toLowerCase()}s in this scope`} />
                     {pack.uom && (
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginTop: '5px', letterSpacing: '.06em' }}>
-                            SOLD BY THE {pack.uom} · {packs || 0} × {pack.size} = {(packs || 0) * pack.size} EA
+                            SOLD BY THE {pack.uom} · {packs > 0 ? `${packs} × ${pack.size} = ${packs * pack.size} EA` : `${pack.size} EA PER PACK`}
                         </div>
                     )}
                     {children}
