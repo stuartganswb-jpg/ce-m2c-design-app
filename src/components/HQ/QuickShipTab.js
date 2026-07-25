@@ -38,8 +38,7 @@ const collectionsOf = (it) => (it.manufacturingSpecs?.collections
 // Size identity of a STOCKED item. Stocked SKUs are pre-finished ("H2-75FB/BL") and the size-key
 // grammar deliberately skips finish variants, so read the key off the BARE code — that's the same
 // code the 🧬 stamper parses, so a stocked ring lands on exactly the diameter its master does.
-const sizeKeyOfStocked = (it) => sizeKeyOf({ legacyErpId: erpOf(it).split('/')[0] });
-const diaCellOf = (it) => { const sk = sizeKeyOfStocked(it); return sk ? `${sk.family}|${sk.dia}` : ''; };
+// (Resolution happens in diaCandidatesFor, which also follows alias links.)
 const diaCellLabel = (cell) => {
     const [fam, dia] = String(cell || '').split('|');
     const opt = SIZE_FAMILIES[fam]?.dia?.options?.find(o => o.value === dia);
@@ -189,32 +188,103 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // Strictly-stocked: only items flagged isStocked feed quick-add + the part dropdowns.
     const allStocked = useMemo(() => allItems.filter(it => it.manufacturingSpecs?.isStocked === true), [allItems]);
 
-    // Every collection present on stocked inventory — the scope menu is data, never a hard-coded list.
+    // ---- ALIASES ---------------------------------------------------------------------------
+    // An Alias doc (partClass 'Alias', aliasOf → the real item) renders as its own node but IS the
+    // real item in the BOM: H2-1BE / H2-1BS alias back to H1-1BE. The two are ONE physical part,
+    // so everything this tab keys off a code has to see through the link — and it matters in both
+    // directions, because the H2-side alias is what carries the Simple Elegance collection tag and
+    // the H2 size grammar, while the stocked, pre-finished variant carries the H1 code.
+    //
+    // Without this the aliased brackets fall out of the collection scope, the diameter cascade AND
+    // the outer/center split, which is exactly the "skipping over alias items" symptom.
+    const aliasIndex = useMemo(() => {
+        const codeOf = (p) => bareCode((p.legacyErpId && p.legacyErpId !== 'PENDING') ? p.legacyErpId : p.itemId);
+        const byKey = new Map();            // any identity → doc
+        const docsByCode = new Map();       // bare code → docs carrying it
+        allItems.forEach(p => {
+            [p.id, p.itemId, p.legacyErpId].forEach(k => {
+                const kk = String(k || '').trim().toUpperCase();
+                if (kk && kk !== 'PENDING') byKey.set(kk, p);
+            });
+            const c = codeOf(p);
+            if (c) docsByCode.set(c, [...(docsByCode.get(c) || []), p]);
+        });
+        // Equivalence groups over bare codes. Merge-on-link so a chain (A→B, B→C) ends up as one set.
+        const groups = new Map();
+        const link = (a, b) => {
+            if (!a || !b || a === b) return;
+            const merged = new Set([...(groups.get(a) || [a]), ...(groups.get(b) || [b])]);
+            merged.forEach(c => groups.set(c, merged));
+        };
+        allItems.forEach(p => {
+            const target = p.aliasOf || p.manufacturingSpecs?.aliasOf;
+            if (!target) return;
+            const real = byKey.get(String(target).trim().toUpperCase());
+            link(codeOf(p), real ? codeOf(real) : bareCode(target));
+        });
+        return { groups, docsByCode };
+    }, [allItems]);
+
+    // Every code this item is known by — its own, plus anything aliased to or from it.
+    const aliasCodesOf = (it) => {
+        const out = new Set();
+        [baseCodeOf(it), bareCode(it.itemId), bareCode(it.id)].filter(Boolean).forEach(c => {
+            out.add(c);
+            (aliasIndex.groups.get(c) || []).forEach(x => out.add(x));
+        });
+        return out;
+    };
+    // Collections reachable through the alias link — the tag may live on either side of it.
+    const effectiveCollectionsOf = (it) => {
+        const cols = new Set(collectionsOf(it));
+        aliasCodesOf(it).forEach(c => (aliasIndex.docsByCode.get(c) || []).forEach(d => collectionsOf(d).forEach(x => cols.add(x))));
+        return cols;
+    };
+
+    // Every collection present on stocked inventory — the scope menu is data, never a hard-coded
+    // list. Alias-reachable tags count, so a collection that only ever tags its H2-side aliases
+    // still appears here.
     const stockedCollections = useMemo(
-        () => [...new Set(allStocked.flatMap(collectionsOf))].sort(),
-        [allStocked]
+        () => [...new Set(allStocked.flatMap(it => [...effectiveCollectionsOf(it)]))].sort(),
+        [allStocked, aliasIndex] // eslint-disable-line react-hooks/exhaustive-deps
     );
 
     // COLLECTION SCOPE: narrows every picker to one collection ("Simple Elegance"), matching what
     // the CPQ/Vision flows for that collection can build. Untagged items are excluded while a scope
     // is active — an untagged SKU leaking into a scoped list is exactly what the scope prevents.
     const stocked = useMemo(
-        () => scopeCollection ? allStocked.filter(it => collectionsOf(it).includes(scopeCollection)) : allStocked,
-        [allStocked, scopeCollection]
+        () => scopeCollection ? allStocked.filter(it => effectiveCollectionsOf(it).has(scopeCollection)) : allStocked,
+        [allStocked, scopeCollection, aliasIndex] // eslint-disable-line react-hooks/exhaustive-deps
     );
 
     const catOf = (it) => classifyCat(it.manufacturingSpecs?.productType || it.productType || it.customData?.category);
     // Kit-builder pools are FINISHED goods only — the raw mill parts we paint never reach a customer.
     const byCat = (cat) => stocked.filter(it => catOf(it) === cat && isFinished(it));
 
+    // Rod diameter cells an item can answer to, seen through the alias link. H1-1BE carries no H2
+    // size grammar, but its alias H2-1BE does — and that alias is the whole reason the part is in
+    // this collection. When a collection IS scoped, the identity that carries that collection wins,
+    // so an aliased bracket files under its H2 diameter rather than the code it bills as.
+    const diaCandidatesFor = (it) => {
+        const cells = [];
+        aliasCodesOf(it).forEach(c => {
+            const sk = sizeKeyOf({ legacyErpId: c });
+            if (!sk) return;
+            const inScope = !scopeCollection || (aliasIndex.docsByCode.get(c) || []).some(d => collectionsOf(d).includes(scopeCollection));
+            cells.push({ cell: `${sk.family}|${sk.dia}`, inScope });
+        });
+        const scoped = cells.filter(c => c.inScope);
+        return [...new Set((scoped.length ? scoped : cells).map(c => c.cell))];
+    };
+
     // Rod diameters offered by the scoped stock, derived from the item codes' size grammar.
     const diaCells = useMemo(() => {
         const seen = new Map();
-        stocked.forEach(it => { const c = diaCellOf(it); if (c && !seen.has(c)) seen.set(c, diaCellLabel(c)); });
+        stocked.forEach(it => diaCandidatesFor(it).forEach(c => { if (!seen.has(c)) seen.set(c, diaCellLabel(c)); }));
         return [...seen.entries()]
             .sort((a, b) => a[1].localeCompare(b[1], undefined, { numeric: true }))
             .map(([cell, label]) => ({ cell, label }));
-    }, [stocked]);
+    }, [stocked, scopeCollection, aliasIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Finish codes present on the scoped stock — the /SUFFIX on each SKU. Data-driven, so a new
     // finish appears here the moment its variants are stocked.
@@ -228,7 +298,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // narrows to that dia×finish — the operator then makes STYLE choices only, since a kit ships in
     // one finish. Parts whose code carries no size grammar drop out while a diameter is active;
     // that's the point ("1/2" Simple Elegance leaves very few options").
-    const atDia = (list) => kbDia ? list.filter(it => diaCellOf(it) === kbDia) : list;
+    const atDia = (list) => kbDia ? list.filter(it => diaCandidatesFor(it).includes(kbDia)) : list;
     const atFinish = (list) => kbFinish ? list.filter(it => finishCodeOf(it) === kbFinish) : list;
     const pool = (cat) => atFinish(atDia(byCat(cat)));
     const poles = useMemo(() => pool('POLE'), [stocked, kbDia, kbFinish]);        // eslint-disable-line react-hooks/exhaustive-deps
@@ -267,8 +337,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         return (outer.size || center.size) ? { outer, center } : null;
     }, [brandFlows]);
 
-    // A stocked variant can be identified by its ERP code, its itemId or its doc id — test all three.
-    const bracketIn = (set, it) => [baseCodeOf(it), bareCode(it.itemId), bareCode(it.id)].some(x => x && set.has(x));
+    // A stocked variant can be identified by its ERP code, its itemId, its doc id — or by any code
+    // aliased to it. The flow step names the H2 alias (H2-1BE); the stocked variant is H1-1BE/CC.
+    const bracketIn = (set, it) => [...aliasCodesOf(it)].some(x => x && set.has(x));
     const outerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketIn(bracketPos.outer, it)) : brackets, [brackets, bracketPos]); // eslint-disable-line react-hooks/exhaustive-deps
     const centerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketIn(bracketPos.center, it)) : brackets, [brackets, bracketPos]); // eslint-disable-line react-hooks/exhaustive-deps
 
