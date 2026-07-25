@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, getDoc, query, where } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
@@ -51,6 +51,9 @@ const isInsideMount = (it) => /INSIDE/.test(String(it?.manufacturingSpecs?.custo
 
 // The bare code, i.e. everything before the finish suffix. "H2-75FB/CC" → "H2-75FB".
 const baseCodeOf = (it) => erpOf(it).split('/')[0];
+// The finish code, i.e. everything after it. "H2-75FB/CC" → "CC".
+const finishCodeOf = (it) => erpOf(it).split('/')[1] || '';
+const bareCode = (v) => String(v || '').trim().toUpperCase().split('/')[0];
 
 // SELLABLE vs MILL (Stuart 2026-07-25): a code with no "/FINISH" suffix is the raw base part we
 // buy and paint — it never goes to an end customer. Only finished variants (/CC, /WC, …) are
@@ -145,6 +148,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // DIAMETER and the kit slots narrow again to that diameter's parts.
     const [scopeCollection, setScopeCollection] = useState('');
     const [kbDia, setKbDia] = useState('');
+    const [kbFinish, setKbFinish] = useState('');   // '/CODE' suffix — one finish per kit
     const [rushTypes, setRushTypes] = useState([]); // master list: "RUSH 3 DAY - 75"
 
     const [pushing, setPushing] = useState(false);
@@ -212,68 +216,61 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             .map(([cell, label]) => ({ cell, label }));
     }, [stocked]);
 
-    // DIAMETER CASCADE: once a rod diameter is chosen, every part slot shows only that diameter's
-    // items. Parts whose code carries no size grammar are dropped while a diameter is active — the
-    // whole point is "1/2" Simple Elegance leaves very few options".
+    // Finish codes present on the scoped stock — the /SUFFIX on each SKU. Data-driven, so a new
+    // finish appears here the moment its variants are stocked.
+    const stockedFinishes = useMemo(() => {
+        const seen = new Set();
+        stocked.forEach(it => { const f = finishCodeOf(it); if (f) seen.add(f); });
+        return [...seen].sort();
+    }, [stocked]);
+
+    // DIAMETER + FINISH CASCADE: pick the rod diameter and the finish once, and every part slot
+    // narrows to that dia×finish — the operator then makes STYLE choices only, since a kit ships in
+    // one finish. Parts whose code carries no size grammar drop out while a diameter is active;
+    // that's the point ("1/2" Simple Elegance leaves very few options").
     const atDia = (list) => kbDia ? list.filter(it => diaCellOf(it) === kbDia) : list;
-    const poles = useMemo(() => atDia(byCat('POLE')), [stocked, kbDia]);        // eslint-disable-line react-hooks/exhaustive-deps
-    const brackets = useMemo(() => atDia(byCat('BRACKET')), [stocked, kbDia]);  // eslint-disable-line react-hooks/exhaustive-deps
-    const rings = useMemo(() => atDia(byCat('RING')), [stocked, kbDia]);        // eslint-disable-line react-hooks/exhaustive-deps
-    const finials = useMemo(() => atDia(byCat('FINIAL')), [stocked, kbDia]);    // eslint-disable-line react-hooks/exhaustive-deps
+    const atFinish = (list) => kbFinish ? list.filter(it => finishCodeOf(it) === kbFinish) : list;
+    const pool = (cat) => atFinish(atDia(byCat(cat)));
+    const poles = useMemo(() => pool('POLE'), [stocked, kbDia, kbFinish]);        // eslint-disable-line react-hooks/exhaustive-deps
+    const brackets = useMemo(() => pool('BRACKET'), [stocked, kbDia, kbFinish]);  // eslint-disable-line react-hooks/exhaustive-deps
+    const rings = useMemo(() => pool('RING'), [stocked, kbDia, kbFinish]);        // eslint-disable-line react-hooks/exhaustive-deps
+    const finials = useMemo(() => pool('FINIAL'), [stocked, kbDia, kbFinish]);    // eslint-disable-line react-hooks/exhaustive-deps
 
-    // OUTER vs CENTER BRACKETS — 1.6 Assembly Builder is the authority. Its slots become the
-    // assembly's nodeClusters (category BRACKET + position LEFT/RIGHT/CENTER) and each cluster's
-    // assembly_pins name the item codes, so we join the two and index BASE code → position. Left
-    // and right are the same part, hence one "Outer" list.
-    //
-    // Only built when a collection is scoped: unscoped would mean a pins read per assembly across
-    // the whole brand. Unscoped therefore falls back to offering every bracket in both slots.
-    const scopedAssemblies = useMemo(() => {
-        if (!scopeCollection) return [];
-        return allItems.filter(it => {
-            const rt = String(it.routingType || '').toUpperCase();
-            const isAsm = rt === 'MAIN' || String(it.recordType || '').toUpperCase() === 'PRODUCT';
-            return isAsm && collectionsOf(it).includes(scopeCollection);
-        });
-    }, [allItems, scopeCollection]);
-
-    const [bracketPos, setBracketPos] = useState(null); // null = not indexed (fallback), else {outer:Set, center:Set}
-    // Keyed on the assembly IDS, not the array: the Approved_Designs listener re-fires on any doc
-    // change in the brand, and re-reading every assembly's pins each time would be pure waste.
-    const scopedAsmKey = scopedAssemblies.map(a => a.itemId || a.id).sort().join(',');
+    // OUTER vs CENTER BRACKETS. 1.6 is the authority, but read it through the GENERATED FLOWS
+    // rather than the pins: the generator turns each 1.6 bracket cluster into a step stamped
+    // stepRole 'BRACKET' + position LEFT/CENTER/RIGHT (AdminTab addPerPosition), so one brand-wide
+    // cpq_flows query gives the same answer as an N+1 walk of every assembly's clusters and pins —
+    // and it does NOT depend on how the assembly doc happens to be collection-tagged, which is what
+    // made the pins version come up empty. Left and right are the same part, hence one "Outer" list.
+    // Position is a property of the PART, not of the collection, so this is indexed brand-wide and
+    // works with or without a collection scope.
+    const [brandFlows, setBrandFlows] = useState([]);
     useEffect(() => {
-        if (!scopedAssemblies.length) { setBracketPos(null); return; }
-        let alive = true;
-        (async () => {
-            const outer = new Set(), center = new Set();
-            try {
-                for (const asm of scopedAssemblies) {
-                    const asmId = asm.itemId || asm.id;
-                    const clusterAt = {};
-                    (asm.nodeClusters || []).forEach(c => {
-                        clusterAt[c.id] = { cat: String(c.category || '').toUpperCase(), pos: String(c.position || '').toUpperCase() };
-                    });
-                    const snap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', asmId)));
-                    snap.docs.forEach(d => {
-                        const p = d.data();
-                        const c = clusterAt[p.clusterId];
-                        if (!c || c.cat !== 'BRACKET') return;
-                        const code = String(p.legacyErpId || p.partName || p.partId || '').trim().toUpperCase().split('/')[0];
-                        if (!code) return;
-                        if (c.pos === 'CENTER') center.add(code);
-                        else if (c.pos === 'LEFT' || c.pos === 'RIGHT') outer.add(code);
-                    });
-                }
-            } catch (e) { console.warn('Quick Ship bracket position index failed', e); if (alive) setBracketPos(null); return; }
-            // Nothing classified = the collection was never built in 1.6; fall back rather than
-            // showing two empty dropdowns.
-            if (alive) setBracketPos((outer.size || center.size) ? { outer, center } : null);
-        })();
-        return () => { alive = false; };
-    }, [scopedAsmKey]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (!activeBrand) { setBrandFlows([]); return; }
+        const unsub = onSnapshot(query(collection(db, 'cpq_flows'), where('brandId', '==', activeBrand)),
+            (snap) => setBrandFlows(snap.docs.map(d => d.data())),
+            e => { console.warn('Quick Ship flow listen failed', e); setBrandFlows([]); });
+        return unsub;
+    }, [activeBrand]);
 
-    const outerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketPos.outer.has(baseCodeOf(it))) : brackets, [brackets, bracketPos]);
-    const centerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketPos.center.has(baseCodeOf(it))) : brackets, [brackets, bracketPos]);
+    const bracketPos = useMemo(() => {
+        const outer = new Set(), center = new Set();
+        brandFlows.forEach(f => (f.steps || []).forEach(s => {
+            if (String(s.stepRole || '').toUpperCase() !== 'BRACKET') return;
+            const pos = String(s.position || '').toUpperCase();
+            const target = pos === 'CENTER' ? center : (pos === 'LEFT' || pos === 'RIGHT') ? outer : null;
+            if (!target) return;
+            // Options may name the part by ERP code or by doc/item id — index every spelling so the
+            // stocked variant matches on whichever one it carries.
+            (s.styleOptions || []).forEach(o => [o.partName, o.partId].forEach(v => { const c = bareCode(v); if (c) target.add(c); }));
+        }));
+        return (outer.size || center.size) ? { outer, center } : null;
+    }, [brandFlows]);
+
+    // A stocked variant can be identified by its ERP code, its itemId or its doc id — test all three.
+    const bracketIn = (set, it) => [baseCodeOf(it), bareCode(it.itemId), bareCode(it.id)].some(x => x && set.has(x));
+    const outerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketIn(bracketPos.outer, it)) : brackets, [brackets, bracketPos]); // eslint-disable-line react-hooks/exhaustive-deps
+    const centerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketIn(bracketPos.center, it)) : brackets, [brackets, bracketPos]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Fee / billable items — matched by keyword across ALL brand parts (fees aren't usually
     // "stocked"), and never narrowed by collection or diameter: a cut is a cut.
@@ -331,8 +328,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         });
     }, [poles, outerBrackets, centerBrackets, rings, finials]);
 
-    // A diameter from a collection we just left is meaningless — clear it with the scope.
+    // A diameter or finish from a collection we just left is meaningless — clear it with the scope.
     useEffect(() => { setKbDia(prev => (prev && !diaCells.some(d => d.cell === prev)) ? '' : prev); }, [diaCells]);
+    useEffect(() => { setKbFinish(prev => (prev && !stockedFinishes.includes(prev)) ? '' : prev); }, [stockedFinishes]);
 
     const rateFor = (it) => {
         const r = parseFloat(it.manufacturingSpecs?.basePrice || 0) || 0;
@@ -857,13 +855,30 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 Every slot below is filtered to it, so 1/2" Simple Elegance offers
                                 only the handful of parts that actually fit a 1/2" rod. */}
                             <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 64px', gap: '10px', alignItems: 'end', paddingBottom: '12px', borderBottom: '1px dashed var(--line)' }}>
-                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', paddingBottom: '8px' }}>Rod Diameter</div>
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.05rem', color: 'var(--ink)', paddingBottom: '8px' }}>Size &amp; Finish</div>
                                 <div>
-                                    <select value={kbDia} onChange={e => setKbDia(e.target.value)} style={inp} disabled={diaCells.length === 0}>
-                                        <option value="">{diaCells.length ? 'Any diameter — all parts' : 'No sized stock in this scope'}</option>
-                                        {diaCells.map(d => <option key={d.cell} value={d.cell}>{d.label}</option>)}
-                                    </select>
-                                    {kbDia && (
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                                        <div>
+                                            <span style={lbl}>Rod Diameter</span>
+                                            <select value={kbDia} onChange={e => setKbDia(e.target.value)} style={inp} disabled={diaCells.length === 0}>
+                                                <option value="">{diaCells.length ? 'Any diameter' : 'No sized stock in scope'}</option>
+                                                {diaCells.map(d => <option key={d.cell} value={d.cell}>{d.label}</option>)}
+                                            </select>
+                                        </div>
+                                        {/* One finish per kit — set it here and the style pickers below stop
+                                            repeating the same part once per colour. */}
+                                        <div>
+                                            <span style={lbl}>Finish</span>
+                                            <select value={kbFinish} onChange={e => setKbFinish(e.target.value)} style={inp} disabled={stockedFinishes.length === 0}>
+                                                <option value="">{stockedFinishes.length ? 'Any finish' : 'No finished stock in scope'}</option>
+                                                {stockedFinishes.map(f => {
+                                                    const meta = finishList.find(x => x.code === f);
+                                                    return <option key={f} value={f}>{f}{meta && meta.name && meta.name !== f ? ` — ${meta.name}` : ''}</option>;
+                                                })}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    {(kbDia || kbFinish) && (
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginTop: '5px', letterSpacing: '.06em' }}>
                                             {poles.length} pole · {outerBrackets.length} outer / {centerBrackets.length} center bracket · {rings.length} ring · {finials.length} finial
                                         </div>
@@ -877,14 +892,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 passing bracket. Split comes from 1.6, not from naming. */}
                             <KitSlot title="Outer Brackets" items={outerBrackets} idKey="bracketId" qtyKey="bracketQty" />
                             <KitSlot title="Center Brackets" items={centerBrackets} idKey="centerBracketId" qtyKey="centerBracketQty" />
-                            {scopeCollection && !bracketPos && (
+                            {!bracketPos && (
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#a05a2c', letterSpacing: '.06em', marginTop: '-6px', paddingLeft: '120px' }}>
-                                    No bracket positions found in 1.6 for {scopeCollection} — both lists show every bracket.
-                                </div>
-                            )}
-                            {!scopeCollection && (
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.06em', marginTop: '-6px', paddingLeft: '120px' }}>
-                                    Pick a collection above to split outer vs center from the 1.6 build.
+                                    No position-tagged bracket steps in this brand's flows — both lists show every bracket.
                                 </div>
                             )}
                             <KitSlot title="Ring" items={rings} idKey="ringId" qtyKey="ringQty" />
