@@ -110,10 +110,24 @@ export function computeBayMath({ engData, safeProj, libraryParts = [] }) {
     // to each return end's O2O on top of the half-backplate.
     const armThk = (id) => parseFloat(libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.armThickness) || 0;
     // An INSIDE-mounted end sits flush to the wall and adds nothing past the pole (the inside-mount
-    // deduct already trims the pole to fit). An OUTSIDE end adds either the return backplate half + arm
-    // (return bracket) or half the bracket width (passing bracket).
-    const endAddL = isLeftInside ? 0 : ((isRetBkt(engData.bracketId) && engData.backplateIdLeft) ? (bpEndHalf(engData.backplateIdLeft) + armThk(engData.bracketId)) : (engData.bracketW / 2));
-    const endAddR = isRightInside ? 0 : ((isRetBkt(o2oRightBktId) && o2oRightBpId) ? (bpEndHalf(o2oRightBpId) + armThk(o2oRightBktId)) : (engData.bracketW / 2));
+    // deduct already trims the pole to fit). An OUTSIDE end adds, in precedence order:
+    //   1. return-ARM bracket (Flat Iron pattern) + plate → half the plate's pole-axis dim + arm;
+    //   2. a RETURN end style (french/miter) with a chosen backplate (Stuart 2026-07-25: "the
+    //      backplate drives the total system o2o measurement") → half that plate's pole-axis dim
+    //      (+ any arm thickness) — the return lands on its mounting base, so the base's outer
+    //      edge is the system's outside edge. Fires only when the plate's dims resolve (> 0);
+    //   3. otherwise the legacy half-bracket-width share — so nothing changes until a real plate
+    //      with real dims is selected.
+    const returnEndL = endStyleL === 'RETURN_BEND' || endStyleL === 'RETURN_MITER';
+    const returnEndR = endStyleR === 'RETURN_BEND' || endStyleR === 'RETURN_MITER';
+    const endAddOf = (inside, isReturnEnd, bktId, bpId) => {
+        if (inside) return 0;
+        if (isRetBkt(bktId) && bpId) return bpEndHalf(bpId) + armThk(bktId);
+        if (isReturnEnd && bpId) { const h = bpEndHalf(bpId); if (h > 0) return h + armThk(bktId); }
+        return engData.bracketW / 2;
+    };
+    const endAddL = endAddOf(isLeftInside, returnEndL, engData.bracketId, engData.backplateIdLeft);
+    const endAddR = endAddOf(isRightInside, returnEndR, o2oRightBktId, o2oRightBpId);
     const totalSystemO2O = poleO2O + endAddL + endAddR;
 
     const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;

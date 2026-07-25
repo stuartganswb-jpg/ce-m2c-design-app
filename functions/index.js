@@ -863,6 +863,26 @@ const collectionGateOf = (crm) => {
     const set = new Set(allowed);
     return (asm) => collectionsOfAsm(asm).some((c) => set.has(c));
 };
+// Resolve Approved_Designs docs by ANY id spelling — doc id first, then itemId / legacyErpId 'in'
+// fallbacks — returning a Map keyed by the REQUESTED id. Shared by the portal fee-name display
+// and the Measure & Fit bracket/backplate dims.
+const partsByAnyId = async (db, ids) => {
+    const map = new Map();
+    const want = [...new Set((ids || []).map(String).filter(Boolean))];
+    if (!want.length) return map;
+    const snaps = await db.getAll(...want.map((id) => db.collection('Approved_Designs').doc(id)));
+    snaps.forEach((s2) => { if (s2.exists) map.set(s2.id, { id: s2.id, ...s2.data() }); });
+    for (const fieldName of ['itemId', 'legacyErpId']) {
+        const unresolved = want.filter((id) => !map.has(id));
+        if (!unresolved.length) break;
+        for (const ids30 of chunk(unresolved, 30)) {
+            const qs = await db.collection('Approved_Designs').where(fieldName, 'in', ids30).get();
+            qs.forEach((d) => { const it = d.data(); const key = String(it[fieldName] || ''); if (key && !map.has(key)) map.set(key, { id: d.id, ...it }); });
+        }
+    }
+    return map;
+};
+
 // Per-flow collection check for the single-flow endpoints. Denies with the SAME message as the
 // flow-id check so a customer can never probe which flows exist by reading the error.
 const assertCollectionAllowed = async (db, crm, flow, flowId) => {
@@ -1014,28 +1034,32 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
     const flow = flowSnap.data();
     await assertCollectionAllowed(db, crm, flow, flowId);
 
-    // Resolve FEE options' library names for customer display (see customerOptName). Fee option
-    // partIds may be the Approved_Designs doc id, the itemId, or the legacyErpId — try the doc id
-    // first (the generator links fee ITEMS by doc id), then fall back to 'in' queries on the
-    // other two spellings. Fee counts per flow are tiny, so this is at most 3 small reads.
+    // Customer-facing FEE names (see customerOptName) + safe DIMS for bracket/backplate options.
+    // Option partIds may be the Approved_Designs doc id, the itemId, or the legacyErpId — the
+    // partsByAnyId resolver tries all three. A handful of small reads per flow load.
     const feeIds = [...new Set((flow.steps || [])
         .flatMap((s) => [...(s.styleOptions || []), ...(s.subOptions || [])])
         .filter((o) => o && (o.isFee || /\(fee/i.test(String(o.partName || ''))) && o.partId)
         .map((o) => String(o.partId)))];
-    const feeNames = new Map();
-    if (feeIds.length) {
-        const snaps = await db.getAll(...feeIds.map((id) => db.collection('Approved_Designs').doc(id)));
-        snaps.forEach((s2) => { if (s2.exists) feeNames.set(s2.id, String(s2.data().itemName || '')); });
-        const unresolved = feeIds.filter((id) => !feeNames.get(id));
-        for (const fieldName of ['itemId', 'legacyErpId']) {
-            if (!unresolved.length) break;
-            for (const ids of chunk(unresolved, 30)) {
-                const qs = await db.collection('Approved_Designs').where(fieldName, 'in', ids).get();
-                qs.forEach((d) => { const it = d.data(); const key = String(it[fieldName] || ''); if (key && !feeNames.get(key)) feeNames.set(key, String(it.itemName || '')); });
-            }
-        }
-    }
-    const feeNameOf = (pid) => feeNames.get(String(pid)) || '';
+    const feeDocs = await partsByAnyId(db, feeIds);
+    const feeNameOf = (pid) => String((feeDocs.get(String(pid)) || {}).itemName || '');
+
+    // Bracket & backplate DIMS (physical measurements only — width/length/diameter, orientation,
+    // arm thickness, return-bracket flag): the Measure & Fit page feeds these into the shared fit
+    // math, so a chosen backplate drives Total System O2O exactly as on the internal board
+    // (bpEndHalf/armThk read the same shapes). Never cost or vendor data.
+    const isBrStep = (s) => !!s && (s.stepRole === 'BRACKET' || (/bracket/i.test(String(s.title || '')) && !/end treatment/i.test(String(s.title || ''))));
+    const dimIds = [...new Set((flow.steps || []).filter(isBrStep)
+        .flatMap((s) => [...(s.styleOptions || []), ...(s.subOptions || [])])
+        .map((o) => o && o.partId).filter(Boolean).map(String))];
+    const dimDocs = await partsByAnyId(db, dimIds);
+    const numOrNull = (v) => { const f = parseFloat(v); return Number.isFinite(f) ? f : null; };
+    const dimsOf = (pid) => {
+        const d2 = dimDocs.get(String(pid || ''));
+        if (!d2) return null;
+        const ms = d2.manufacturingSpecs || {}; const par = ms.parametric || {}; const cd = ms.customData || {};
+        return { width: numOrNull(par.width), length: numOrNull(par.length), fixedDiameter: numOrNull(par.fixedDiameter), bpOrientation: String(cd.bpOrientation || ''), armThickness: numOrNull(cd.armThickness), isReturnBracket: !!cd.isReturnBracket };
+    };
 
     let assembly = null;
     if (flow.linkedAssemblyId) {
@@ -1080,7 +1104,13 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
         flow: {
             id: flowId,
             name: flow.name || 'Product',
-            steps: (flow.steps || []).map((s) => sanitizeStep(s, feeNameOf)),
+            steps: (flow.steps || []).map((s) => {
+                const out = sanitizeStep(s, feeNameOf);
+                if (isBrStep(s)) {
+                    [...(out.styleOptions || []), ...(out.subOptions || [])].forEach((o) => { const dm = dimsOf(o.partId); if (dm) o.dims = dm; });
+                }
+                return out;
+            }),
             hiddenClusters: flow.hiddenClusters || [],
             hiddenNodes: flow.hiddenNodes || [],
         },
@@ -1237,9 +1267,12 @@ exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
     const stepParams = {};
     const stepById = new Map((flow.steps || []).map((s) => [String(s.id), s]));
     for (const [k, v] of Object.entries(rawParams || {}).slice(0, 40)) {
-        const st = stepById.get(String(k));
+        // `${stepId}__sub` = the step's backplate sub-chooser (same key convention as CPQ/Vision).
+        const isSub = /__sub$/.test(String(k));
+        const st = stepById.get(String(k).replace(/__sub$/, ''));
         if (!st) continue;
-        const opt = (st.styleOptions || []).find((o) => (o.optId || o.partId) === v);
+        const pool = isSub ? (st.subOptions || []) : (st.styleOptions || []);
+        const opt = pool.find((o) => (o.optId || o.partId) === v);
         if (opt) stepParams[String(k)] = String(v);
     }
 

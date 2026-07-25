@@ -389,12 +389,19 @@ function resolveStepOptions(ctx) {
     const doc = sized || allParts.find((x) => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
       || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName))) || null;
     const desc = (doc && doc.itemName) || o.partName || o.label || '';
-    if (isFeePart(doc, o)) return { name: desc, desc: '' };
+    // Both code spellings ride alongside `name` for surfaces that show them together (portal
+    // Measure & Fit — Stuart 2026-07-25: "show both our id and fabricuts item id"): ourCode =
+    // the size-swapped internal code, fabCode = the customer's Fabricut pattern #. `name` keeps
+    // its level-dependent meaning so the configurator renders exactly as before. Fees carry no
+    // codes — customers see the description only.
+    const rawOur = (sized ? (sized.legacyErpId || sized.itemId) : (doc && (doc.legacyErpId || doc.itemId))) || '';
+    const ourCode = rawOur === 'PENDING' ? '' : rawOur;
+    const fabCode = fabricutCodeOf(doc, findByCode) || '';
+    if (isFeePart(doc, o)) return { name: desc, desc: '', ourCode: '', fabCode: '' };
     if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') {
-      const fc = fabricutCodeOf(doc, findByCode);
-      return { name: fc || (doc && (doc.legacyErpId || doc.itemId)) || o.partName || '', desc };
+      return { name: fabCode || rawOur || o.partName || '', desc, ourCode, fabCode };
     }
-    return { name: (sized ? (sized.legacyErpId || sized.itemId) : (doc && (doc.legacyErpId || doc.itemId))) || o.partName || '', desc };
+    return { name: rawOur || o.partName || '', desc, ourCode, fabCode };
   };
   const priceFor = (o, step) => {
     const base = baseFor(o);
@@ -420,7 +427,7 @@ function resolveStepOptions(ctx) {
   (flow.steps || []).forEach((step) => {
     if (step.type === SIZE_STEP_TYPE) return;
     const options = {};
-    (step.styleOptions || []).forEach((o) => { if (!custVisible(o)) return; const id = o.optId || o.partId; if (id) { const d = displayFor(o); options[id] = { name: d.name, desc: d.desc, price: priceFor(o, step) }; } });
+    (step.styleOptions || []).forEach((o) => { if (!custVisible(o)) return; const id = o.optId || o.partId; if (id) { const d = displayFor(o); options[id] = { name: d.name, desc: d.desc, price: priceFor(o, step), ourCode: d.ourCode || '', fabCode: d.fabCode || '' }; } });
     const subOptions = {};
     (step.subOptions || []).forEach((o) => {
       if (!custVisible(o)) return;
@@ -433,7 +440,7 @@ function resolveStepOptions(ctx) {
       const cd = base && base.manufacturingSpecs && base.manufacturingSpecs.customData;
       const returnOnly = !!o.returnOnly || /^R[BC]P-/.test(baseCode) || !!(cd && cd.returnPosition);
       const location = o.location || (cd && cd.location) || '';
-      subOptions[id] = { name: d.name, desc: d.desc, price: priceFor(o, step), returnOnly, inlineOnly: !!o.inlineOnly, location };
+      subOptions[id] = { name: d.name, desc: d.desc, price: priceFor(o, step), ourCode: d.ourCode || '', fabCode: d.fabCode || '', returnOnly, inlineOnly: !!o.inlineOnly, location };
     });
     out[step.id] = { options, subOptions };
   });

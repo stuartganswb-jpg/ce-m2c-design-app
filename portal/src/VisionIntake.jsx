@@ -123,18 +123,26 @@ const FitDiagram = ({ shape }) => {
     );
   }
   // STRAIGHT example drawn WITH FRENCH RETURNS (Stuart 2026-07-25: "the finials have less
-  // understanding problem than the french return") — the pole bends back to the wall at both
-  // ends, which is exactly the O2O confusion this page exists to settle.
+  // understanding problem than the french return"), geometry per his 2nd review: the return legs
+  // run 90° STRAIGHT back to the wall (no inward curl); MAIN WALL C2C points at the CENTER of
+  // those legs (= the backplate centers); BACKPLATES sit on the wall extending just past the C2C
+  // ticks, and TOTAL SYSTEM O2O spans their OUTER edges — the backplate drives that number.
   return (
-    <svg viewBox="0 0 460 170" style={{ width: '100%', display: 'block' }} aria-label="Straight rod with french returns diagram">
+    <svg viewBox="0 0 460 178" style={{ width: '100%', display: 'block' }} aria-label="Straight rod with french returns diagram">
       <line x1="30" y1="24" x2="430" y2="24" stroke={DG.wall} strokeWidth="3" />
       <text x="230" y="14" textAnchor="middle" fill={DG.dim} style={dgTxt}>WALL / OPENING — YOUR MEASUREMENT</text>
-      <path d="M 62 30 Q 58 62 88 62 L 372 62 Q 402 62 398 30" fill="none" stroke={DG.pole} strokeWidth="4" strokeLinecap="round" />
-      <line x1="66" y1="34" x2="98" y2="46" stroke={DG.dim} strokeWidth="1" />
-      <text x="102" y="49" fill={DG.ink} style={dgTxt}>FRENCH RETURN — POLE BENDS BACK TO THE WALL</text>
-      <DimLine x1={88} x2={372} y={92} dash label="MAIN WALL C2C" />
-      <DimLine x1={58} x2={402} y={120} label="POLE O2O (EDGE-TO-EDGE — INCLUDES THE RETURNS)" />
-      <DimLine x1={52} x2={408} y={152} bold label="TOTAL SYSTEM O2O (+ BRACKETS) — MUST FIT" />
+      {/* backplates on the wall, centered on the return legs — their outer edges = the system's outside */}
+      <rect x="46" y="27" width="36" height="6" fill="#a89f8d" />
+      <rect x="378" y="27" width="36" height="6" fill="#a89f8d" />
+      <line x1="60" y1="33" x2="96" y2="41" stroke={DG.dim} strokeWidth="1" />
+      <text x="100" y="44" fill={DG.ink} style={dgTxt}>BACKPLATE ON THE WALL</text>
+      {/* pole: the returns run 90° straight back to the wall, radiused only at the elbow */}
+      <path d="M 64 34 L 64 48 Q 64 62 78 62 L 382 62 Q 396 62 396 48 L 396 34" fill="none" stroke={DG.pole} strokeWidth="4" strokeLinecap="round" />
+      <line x1="394" y1="42" x2="356" y2="54" stroke={DG.dim} strokeWidth="1" />
+      <text x="352" y="57" textAnchor="end" fill={DG.ink} style={dgTxt}>FRENCH RETURN — 90° BACK TO THE WALL</text>
+      <DimLine x1={64} x2={396} y={94} dash label="MAIN WALL C2C — CENTER OF RETURN / BACKPLATE" />
+      <DimLine x1={62} x2={398} y={122} label="POLE O2O (EDGE-TO-EDGE — INCLUDES THE RETURNS)" />
+      <DimLine x1={46} x2={414} y={154} bold label="TOTAL SYSTEM O2O — TO THE BACKPLATE OUTER EDGES" />
     </svg>
   );
 };
@@ -151,6 +159,7 @@ export default function VisionIntake() {
   const [flowId, setFlowId] = useState('');
   const [flow, setFlow] = useState(null);        // sanitized flow from portalFlow
   const [flowBusy, setFlowBusy] = useState(false);
+  const [priced, setPriced] = useState(null);    // portalResolve stepOptions — the customer's codes + prices, "just like cpq"
   const [sidemark, setSidemark] = useState('');
   const [note, setNote] = useState('');
   const [sel, setSel] = useState({ shape: 'STRAIGHT', inputMode: 'WALL', endStyle: 'FINIAL', endStyleRight: 'FINIAL', mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN' });
@@ -216,17 +225,86 @@ export default function VisionIntake() {
       || projOptsAtDia.find((o) => o.sizeValue === fam.baseProj) || projOptsAtDia[0] || null;
   }, [stepProjSz, fam, params, projOptsAtDia]);
 
+  // Per-customer option pricing + code spellings from the SAME engine the configurator uses
+  // (portalResolve → resolveStepOptions): desc, OUR code, the customer's Fabricut pattern #, and
+  // their level-priced amount. Re-fetched when the diameter changes (codes/prices size-swap).
+  useEffect(() => {
+    if (!flowId || !flow) { setPriced(null); return; }
+    let alive = true;
+    const sizeParams = {};
+    if (stepDia && diaOpt) sizeParams[stepDia.id] = diaOpt.optId;
+    if (stepProjSz && projOpt) sizeParams[stepProjSz.id] = projOpt.optId;
+    httpsCallable(functions, 'portalResolve')({ flowId, selections: { params: sizeParams, quantities: {} } })
+      .then((res) => { if (alive) setPriced(res.data?.stepOptions || null); })
+      .catch(() => { if (alive) setPriced(null); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flowId, flow, diaOpt?.optId, projOpt?.optId]);
+
+  // Dropdown text "just like cpq": DESCRIPTION — OUR code / FABRICUT code — $customer price.
+  const optionLabel = (st, o, isSub) => {
+    const fallback = o.partName || o.label || o.optId;
+    const po = st && priced?.[st.id]?.[isSub ? 'subOptions' : 'options']?.[o.optId || o.partId];
+    if (!po) return fallback;
+    const codes = [po.ourCode, po.fabCode && po.fabCode !== po.ourCode ? po.fabCode : ''].filter(Boolean).join(' / ');
+    const pr = parseFloat(po.price);
+    const price = Number.isFinite(pr) && pr > 0 ? ` — $${(Math.round(pr * 100) / 100).toLocaleString('en-US')}` : '';
+    return `${po.desc || po.name || fallback}${codes ? ` — ${codes}` : ''}${price}`;
+  };
+
   const endOptL = optOf(stepEndL, stepEndL ? params[stepEndL.id] : null);
   const endOptR = optOf(stepEndR, stepEndR ? params[stepEndR.id] : null);
   // A chosen return replaces that side's bracket when the step carries return-only plates —
   // same grey rule as the internal board ("— replaced by —").
   const brLocked = (brStep, endOpt) => !!(brStep && (brStep.subOptions || []).some((o) => o.returnOnly) && optIsReturn(endOpt));
   const brLockedL = brLocked(stepBrL, endOptL), brLockedR = brLocked(stepBrR, endOptR);
+  // Selected brackets + BACKPLATES (Stuart 2026-07-25: "the next step will be to choose the
+  // backplate, which is essential as the backplate drives the total system o2o"). Plate params
+  // ride under `${stepId}__sub` — the exact key CPQ and the internal board use.
+  const brOptL = optOf(stepBrL, stepBrL ? params[stepBrL.id] : null);
+  const brOptR = optOf(stepBrR, stepBrR ? params[stepBrR.id] : null);
+  const brOptC = optOf(stepBrC, stepBrC ? params[stepBrC.id] : null);
+  const subOf = (step, sel2) => step ? ((step.subOptions || []).find((o) => (o.optId || o.partId) === sel2) || null) : null;
+  const subL = subOf(stepBrL, stepBrL ? params[`${stepBrL.id}__sub`] : null);
+  const subR = subOf(stepBrR, stepBrR ? params[`${stepBrR.id}__sub`] : null);
+  const subC = subOf(stepBrC, stepBrC ? params[`${stepBrC.id}__sub`] : null);
+  // Plate pool per position — a chosen return scopes to the RETURN plates, otherwise the regular
+  // (non-return, non-inline) plates: the same rule as the internal board / CPQ sub-picker.
+  const subPoolFor = (st, endOpt) => {
+    const subs = st?.subOptions || [];
+    if (!subs.length) return [];
+    if (optIsReturn(endOpt) && subs.some((o) => o.returnOnly)) return subs.filter((o) => o.returnOnly);
+    return subs.filter((o) => !o.returnOnly && !o.inlineOnly);
+  };
+  const subPoolL = subPoolFor(stepBrL, endOptL), subPoolR = subPoolFor(stepBrR, endOptR), subPoolC = subPoolFor(stepBrC, null);
   useEffect(() => {
     if (brLockedL && stepBrL && params[stepBrL.id]) setParam(stepBrL.id, '');
     if (brLockedR && stepBrR && params[stepBrR.id]) setParam(stepBrR.id, '');
+    // End flip → a plate selected from the other pool (regular ↔ return) clears.
+    [[stepBrL, subPoolL], [stepBrR, subPoolR]].forEach(([st, pool]) => {
+      if (!st) return;
+      const k = `${st.id}__sub`;
+      if (params[k] && !pool.some((o) => (o.optId || o.partId) === params[k])) setParam(k, '');
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brLockedL, brLockedR]);
+  }, [brLockedL, brLockedR, endOptL, endOptR]);
+  // Synthetic parts library from the flow's attached dims (portalFlow ships width/length/
+  // orientation/arm for bracket-step options) — the VERBATIM bayMath then resolves
+  // bpEndHalf/armThk/isReturnBracket exactly as the internal board does with the real library.
+  const dimParts = useMemo(() => {
+    const out = [];
+    [stepBrL, stepBrR, stepBrC].forEach((st) => {
+      if (!st) return;
+      [...(st.styleOptions || []), ...(st.subOptions || [])].forEach((o) => {
+        if (!o?.partId || !o.dims) return;
+        out.push({ id: o.partId, manufacturingSpecs: {
+          parametric: { width: o.dims.width ?? '', length: o.dims.length ?? '', fixedDiameter: o.dims.fixedDiameter ?? '' },
+          customData: { bpOrientation: o.dims.bpOrientation || 'VERTICAL', armThickness: o.dims.armThickness ?? '', isReturnBracket: !!o.dims.isReturnBracket },
+        } });
+      });
+    });
+    return out;
+  }, [stepBrL, stepBrR, stepBrC]);
 
   const setSelKey = (k, v) => setSel((p) => ({ ...p, [k]: v }));
   const setMKey = (k, v) => setM((p) => ({ ...p, [k]: v }));
@@ -251,19 +329,26 @@ export default function VisionIntake() {
       mountLeft: mountL, mountRight: mountR, mountCenter: 'OPEN', mountOuter: sel.mountOuter,
       endStyle: endL, endStyleRight: endR,
       proj,
-      bracketId: '', bracketIdRight: '', bracketIdCenter: '', backplateIdLeft: '', backplateIdRight: '', backplateIdCenter: '',
+      bracketId: brOptL?.partId || '', bracketIdRight: brOptR?.partId || '', bracketIdCenter: brOptC?.partId || '',
+      backplateIdLeft: subL?.partId || '', backplateIdRight: subR?.partId || '', backplateIdCenter: subC?.partId || '',
       poleDiameter: dia, bracketW: parseMeas(m.bracketW) || 3, finialW: 3.5,
       bracketThickness: 0.25, insideMountDeduct: parseMeas(m.insideMountDeduct) || 0.25,
       returnRadius: parseMeas(m.returnRadius) || 4, gripAllowance: parseMeas(m.gripAllowance) || 8.5,
     };
-  }, [sel, m, stepEndL, stepEndR, endOptL, endOptR, diaOpt, projOpt, stepProjSz]);
+  }, [sel, m, stepEndL, stepEndR, endOptL, endOptR, diaOpt, projOpt, stepProjSz, brOptL, brOptR, brOptC, subL, subR, subC]);
 
-  // IDENTICAL math to the internal board (verbatim bayMath copy). No parts library on the
-  // portal → open ends use the half-bracket-width allowance; staff confirm exact hardware.
-  const fit = useMemo(() => computeBayMath({ engData, safeProj: safeProjOf(engData), libraryParts: [] }), [engData]);
+  // IDENTICAL math to the internal board (verbatim bayMath copy), fed the flow's attached
+  // bracket/backplate dims — a chosen backplate on a return end drives Total System O2O.
+  const fit = useMemo(() => computeBayMath({ engData, safeProj: safeProjOf(engData), libraryParts: dimParts }), [engData, dimParts]);
 
   const isBay = sel.shape !== 'STRAIGHT';
   const needProj = isBay && !safeProjOf(engData);
+  // Readouts stay blank until the measurements exist — a half-filled form must never show a
+  // plausible-looking wrong number (the empty-width "3-inch system" incident, 2026-07-25).
+  const measReady = engData.w2 > 0
+    && (sel.shape !== 'MITERED' || (engData.w1 > 0 && engData.w3 > 0))
+    && (sel.shape !== 'BOW' || engData.bowDepth > 0)
+    && !needProj;
   const missing =
     !flowId ? 'Pick a product first.'
     : flowBusy ? 'Loading the product’s options…'
@@ -324,14 +409,20 @@ export default function VisionIntake() {
     return (
       <select style={field} value={endOpt?.optId || ''} onChange={(e) => setParam(st.id, e.target.value)}>
         <option value="">— choose from this collection —</option>
-        {(st.styleOptions || []).map((o) => <option key={o.optId} value={o.optId}>{o.partName || o.label || o.optId}</option>)}
+        {(st.styleOptions || []).map((o) => <option key={o.optId} value={o.optId}>{optionLabel(st, o, false)}</option>)}
       </select>
     );
   };
   const bracketSelect = (st, locked) => (
     <select style={{ ...field, opacity: locked ? 0.5 : 1 }} value={locked ? '' : (params[st.id] || '')} disabled={locked} onChange={(e) => setParam(st.id, e.target.value)}>
       <option value="">{locked ? '— replaced by the return —' : '— our team can choose —'}</option>
-      {(st.styleOptions || []).map((o) => <option key={o.optId} value={o.optId}>{o.partName || o.label || o.optId}</option>)}
+      {(st.styleOptions || []).map((o) => <option key={o.optId} value={o.optId}>{optionLabel(st, o, false)}</option>)}
+    </select>
+  );
+  const plateSelect = (st, pool) => (
+    <select style={field} value={params[`${st.id}__sub`] || ''} onChange={(e) => setParam(`${st.id}__sub`, e.target.value)}>
+      <option value="">— our team can choose —</option>
+      {pool.map((o) => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optionLabel(st, o, true)}</option>)}
     </select>
   );
 
@@ -386,10 +477,10 @@ export default function VisionIntake() {
             </div>
 
             <div style={{ ...row, marginBottom: 14 }}>
-              {sel.shape === 'MITERED' && <div style={cell}><label style={lbl}>Left wall (in)</label><input style={field} value={m.w1} onChange={(e) => setMKey('w1', e.target.value)} placeholder="30" /></div>}
-              <div style={cell}><label style={lbl}>{sel.shape === 'MITERED' ? 'Center wall (in)' : 'Width (in)'}</label><input style={field} value={m.w2} onChange={(e) => setMKey('w2', e.target.value)} placeholder="138 3/4" /></div>
-              {sel.shape === 'MITERED' && <div style={cell}><label style={lbl}>Right wall (in)</label><input style={field} value={m.w3} onChange={(e) => setMKey('w3', e.target.value)} placeholder="30" /></div>}
-              {sel.shape === 'BOW' && <div style={cell}><label style={lbl}>Bay depth (in)</label><input style={field} value={m.bowDepth} onChange={(e) => setMKey('bowDepth', e.target.value)} placeholder="15" /></div>}
+              {sel.shape === 'MITERED' && <div style={cell}><label style={lbl}>Left wall (in)</label><input style={field} value={m.w1} onChange={(e) => setMKey('w1', e.target.value)} placeholder="e.g. 30" /></div>}
+              <div style={cell}><label style={lbl}>{sel.shape === 'MITERED' ? 'Center wall (in)' : 'Width (in)'}</label><input style={field} value={m.w2} onChange={(e) => setMKey('w2', e.target.value)} placeholder="e.g. 138 3/4" /></div>
+              {sel.shape === 'MITERED' && <div style={cell}><label style={lbl}>Right wall (in)</label><input style={field} value={m.w3} onChange={(e) => setMKey('w3', e.target.value)} placeholder="e.g. 30" /></div>}
+              {sel.shape === 'BOW' && <div style={cell}><label style={lbl}>Bay depth (in)</label><input style={field} value={m.bowDepth} onChange={(e) => setMKey('bowDepth', e.target.value)} placeholder="e.g. 15" /></div>}
             </div>
 
             {flowBusy && <div className="empty" style={{ marginBottom: 14 }}>Loading this collection's options…</div>}
@@ -418,8 +509,8 @@ export default function VisionIntake() {
             {/* Free inputs ONLY when the flow carries no size steps */}
             {flow && !stepDia && (
               <div style={{ ...row, marginBottom: 14 }}>
-                <div style={cell}><label style={lbl}>Rod diameter (in)</label><input style={field} value={m.poleDiameter} onChange={(e) => setMKey('poleDiameter', e.target.value)} placeholder="1 3/8" /></div>
-                {!stepProjSz && <div style={cell}><label style={lbl}>Bracket projection (in){isBay ? '' : ' — optional'}</label><input style={field} value={m.proj} onChange={(e) => setMKey('proj', e.target.value)} placeholder="4 5/8" /></div>}
+                <div style={cell}><label style={lbl}>Rod diameter (in)</label><input style={field} value={m.poleDiameter} onChange={(e) => setMKey('poleDiameter', e.target.value)} placeholder="e.g. 1 3/8" /></div>
+                {!stepProjSz && <div style={cell}><label style={lbl}>Bracket projection (in){isBay ? '' : ' — optional'}</label><input style={field} value={m.proj} onChange={(e) => setMKey('proj', e.target.value)} placeholder="e.g. 4 5/8" /></div>}
               </div>
             )}
 
@@ -439,6 +530,13 @@ export default function VisionIntake() {
                 {stepBrL && <div style={cell}><label style={lbl}>Left bracket</label>{bracketSelect(stepBrL, brLockedL)}</div>}
                 {stepBrC && <div style={cell}><label style={lbl}>Center bracket</label>{bracketSelect(stepBrC, false)}</div>}
                 {stepBrR && <div style={cell}><label style={lbl}>Right bracket</label>{bracketSelect(stepBrR, brLockedR)}</div>}
+              </div>
+            )}
+            {((stepBrL && subPoolL.length > 0) || (stepBrC && subPoolC.length > 0) || (stepBrR && subPoolR.length > 0)) && (
+              <div style={{ ...row, marginBottom: 14 }}>
+                {stepBrL && subPoolL.length > 0 && <div style={cell}><label style={lbl}>Left backplate{optIsReturn(endOptL) ? ' — for the return' : ''}</label>{plateSelect(stepBrL, subPoolL)}</div>}
+                {stepBrC && subPoolC.length > 0 && <div style={cell}><label style={lbl}>Center backplate</label>{plateSelect(stepBrC, subPoolC)}</div>}
+                {stepBrR && subPoolR.length > 0 && <div style={cell}><label style={lbl}>Right backplate{optIsReturn(endOptR) ? ' — for the return' : ''}</label>{plateSelect(stepBrR, subPoolR)}</div>}
               </div>
             )}
 
@@ -502,15 +600,17 @@ export default function VisionIntake() {
             </div>
             <div style={{ fontSize: '0.68rem', color: 'var(--ink-soft)', textAlign: 'right', margin: '0 2px 2px', fontFamily: 'var(--mono, monospace)', letterSpacing: '.06em' }}>⊕ CLICK TO ENLARGE</div>
             <div style={{ margin: '8px 0 4px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>Total System O2O (+ brackets) — <b>the outside-edge size your opening must accommodate</b></div>
-            <div style={{ fontSize: '1.9rem', fontWeight: 600, color: 'var(--ink)' }}>{both(fit.totalSystemO2O)}</div>
+            <div style={{ fontSize: '1.9rem', fontWeight: 600, color: 'var(--ink)' }}>{measReady ? both(fit.totalSystemO2O) : '—'}</div>
             <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', margin: '2px 0 14px' }}>
-              = {both(fit.poleO2O)} pole + {toFrac(fit.endAddL)} left + {toFrac(fit.endAddR)} right
+              {measReady
+                ? <>= {both(fit.poleO2O)} pole + {toFrac(fit.endAddL)} left + {toFrac(fit.endAddR)} right</>
+                : 'Enter your measurements on the left and the numbers appear here.'}
             </div>
             <div style={{ borderTop: '1px solid var(--line)', paddingTop: 12, display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.9rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Pole O2O (edge-to-edge)</span><b>{both(fit.poleO2O)}</b></div>
-              {sel.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Left wall C2C</span><b>{both(fit.pole1)}</b></div>}
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{sel.shape === 'STRAIGHT' ? 'Main wall C2C' : 'Center wall C2C'}</span><b>{both(fit.pole2)}</b></div>
-              {sel.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Right wall C2C</span><b>{both(fit.pole3)}</b></div>}
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Pole O2O (edge-to-edge)</span><b>{measReady ? both(fit.poleO2O) : '—'}</b></div>
+              {sel.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Left wall C2C</span><b>{measReady ? both(fit.pole1) : '—'}</b></div>}
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{sel.shape === 'STRAIGHT' ? 'Main wall C2C' : 'Center wall C2C'}</span><b>{measReady ? both(fit.pole2) : '—'}</b></div>
+              {sel.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Right wall C2C</span><b>{measReady ? both(fit.pole3) : '—'}</b></div>}
               <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Rod diameter</span><b>{both(engData.poleDiameter)}</b></div>
               {safeProjOf(engData) > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Projection</span><b>{both(safeProjOf(engData))}</b></div>}
             </div>
