@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, getDoc } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
@@ -49,6 +49,14 @@ const diaCellLabel = (cell) => {
 // An inside-mount bracket takes the customer's Inside Mount pack; every other bracket sells each.
 const isInsideMount = (it) => /INSIDE/.test(String(it?.manufacturingSpecs?.customData?.bracketType || it?.manufacturingSpecs?.customData?.bracketMount || '').toUpperCase());
 
+// The bare code, i.e. everything before the finish suffix. "H2-75FB/CC" → "H2-75FB".
+const baseCodeOf = (it) => erpOf(it).split('/')[0];
+
+// SELLABLE vs MILL (Stuart 2026-07-25): a code with no "/FINISH" suffix is the raw base part we
+// buy and paint — it never goes to an end customer. Only finished variants (/CC, /WC, …) are
+// offered in the kit builder. Quick Add still reaches everything, for the rare mill-stock sale.
+const isFinished = (it) => erpOf(it).includes('/');
+
 // Compact searchable picker — shows "ITEM# — Name", sorted by item# (numeric-aware).
 const ItemSelect = ({ value, onChange, items, placeholder }) => {
     const [search, setSearch] = useState('');
@@ -90,7 +98,10 @@ const ItemSelect = ({ value, onChange, items, placeholder }) => {
     );
 };
 
-const EMPTY_KB = { poleId: '', poleQty: 1, bracketId: '', bracketQty: 2, ringId: '', ringQty: 14, finialId: '', finialQty: 2, cutId: '', cutLen: '', cutQty: 1, spliceId: '', spliceQty: 1, miterId: '', miterQty: 1, rushType: '', rushId: '', rushQty: 1 };
+// bracketId = the OUTER (left/right) bracket — they're the same part, so one field covers both ends.
+// centerBracketId = the center/passing bracket. miterId is retained (no UI) so kits saved before
+// the Miter Return slot moved to CPQ still resolve their saved line.
+const EMPTY_KB = { poleId: '', poleQty: 1, bracketId: '', bracketQty: 2, centerBracketId: '', centerBracketQty: 1, ringId: '', ringQty: 14, finialId: '', finialQty: 2, cutId: '', cutLen: '', cutQty: 1, spliceId: '', spliceQty: 1, miterId: '', miterQty: 1, rushType: '', rushId: '', rushQty: 1 };
 // A rush charge belongs to an ORDER, not to a saved kit — strip it from the stored config so
 // re-adding the kit next month doesn't quietly re-bill last month's rush.
 const KIT_CFG_KEYS = Object.keys(EMPTY_KB).filter(k => !k.startsWith('rush'));
@@ -176,7 +187,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     );
 
     const catOf = (it) => classifyCat(it.manufacturingSpecs?.productType || it.productType || it.customData?.category);
-    const byCat = (cat) => stocked.filter(it => catOf(it) === cat);
+    // Kit-builder pools are FINISHED goods only — the raw mill parts we paint never reach a customer.
+    const byCat = (cat) => stocked.filter(it => catOf(it) === cat && isFinished(it));
 
     // Rod diameters offered by the scoped stock, derived from the item codes' size grammar.
     const diaCells = useMemo(() => {
@@ -196,6 +208,60 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const rings = useMemo(() => atDia(byCat('RING')), [stocked, kbDia]);        // eslint-disable-line react-hooks/exhaustive-deps
     const finials = useMemo(() => atDia(byCat('FINIAL')), [stocked, kbDia]);    // eslint-disable-line react-hooks/exhaustive-deps
 
+    // OUTER vs CENTER BRACKETS — 1.6 Assembly Builder is the authority. Its slots become the
+    // assembly's nodeClusters (category BRACKET + position LEFT/RIGHT/CENTER) and each cluster's
+    // assembly_pins name the item codes, so we join the two and index BASE code → position. Left
+    // and right are the same part, hence one "Outer" list.
+    //
+    // Only built when a collection is scoped: unscoped would mean a pins read per assembly across
+    // the whole brand. Unscoped therefore falls back to offering every bracket in both slots.
+    const scopedAssemblies = useMemo(() => {
+        if (!scopeCollection) return [];
+        return allItems.filter(it => {
+            const rt = String(it.routingType || '').toUpperCase();
+            const isAsm = rt === 'MAIN' || String(it.recordType || '').toUpperCase() === 'PRODUCT';
+            return isAsm && collectionsOf(it).includes(scopeCollection);
+        });
+    }, [allItems, scopeCollection]);
+
+    const [bracketPos, setBracketPos] = useState(null); // null = not indexed (fallback), else {outer:Set, center:Set}
+    // Keyed on the assembly IDS, not the array: the Approved_Designs listener re-fires on any doc
+    // change in the brand, and re-reading every assembly's pins each time would be pure waste.
+    const scopedAsmKey = scopedAssemblies.map(a => a.itemId || a.id).sort().join(',');
+    useEffect(() => {
+        if (!scopedAssemblies.length) { setBracketPos(null); return; }
+        let alive = true;
+        (async () => {
+            const outer = new Set(), center = new Set();
+            try {
+                for (const asm of scopedAssemblies) {
+                    const asmId = asm.itemId || asm.id;
+                    const clusterAt = {};
+                    (asm.nodeClusters || []).forEach(c => {
+                        clusterAt[c.id] = { cat: String(c.category || '').toUpperCase(), pos: String(c.position || '').toUpperCase() };
+                    });
+                    const snap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', asmId)));
+                    snap.docs.forEach(d => {
+                        const p = d.data();
+                        const c = clusterAt[p.clusterId];
+                        if (!c || c.cat !== 'BRACKET') return;
+                        const code = String(p.legacyErpId || p.partName || p.partId || '').trim().toUpperCase().split('/')[0];
+                        if (!code) return;
+                        if (c.pos === 'CENTER') center.add(code);
+                        else if (c.pos === 'LEFT' || c.pos === 'RIGHT') outer.add(code);
+                    });
+                }
+            } catch (e) { console.warn('Quick Ship bracket position index failed', e); if (alive) setBracketPos(null); return; }
+            // Nothing classified = the collection was never built in 1.6; fall back rather than
+            // showing two empty dropdowns.
+            if (alive) setBracketPos((outer.size || center.size) ? { outer, center } : null);
+        })();
+        return () => { alive = false; };
+    }, [scopedAsmKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const outerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketPos.outer.has(baseCodeOf(it))) : brackets, [brackets, bracketPos]);
+    const centerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketPos.center.has(baseCodeOf(it))) : brackets, [brackets, bracketPos]);
+
     // Fee / billable items — matched by keyword across ALL brand parts (fees aren't usually
     // "stocked"), and never narrowed by collection or diameter: a cut is a cut.
     const feeItems = (kw) => allItems.filter(it => {
@@ -204,7 +270,6 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     });
     const cutItems = useMemo(() => feeItems(['CUT']), [allItems]);            // eslint-disable-line react-hooks/exhaustive-deps
     const spliceItems = useMemo(() => feeItems(['SPLICE']), [allItems]);      // eslint-disable-line react-hooks/exhaustive-deps
-    const miterItems = useMemo(() => feeItems(['MITER', 'RETURN']), [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
     const rushItems = useMemo(() => feeItems(['RUSH', 'EXPEDITE']), [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const itemById = (id) => allItems.find(it => it.id === id);
@@ -240,16 +305,18 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     useEffect(() => {
         setKb(prev => {
             const ok = (id, list) => !id || list.some(x => x.id === id);
-            if (ok(prev.poleId, poles) && ok(prev.bracketId, brackets) && ok(prev.ringId, rings) && ok(prev.finialId, finials)) return prev;
+            if (ok(prev.poleId, poles) && ok(prev.bracketId, outerBrackets) && ok(prev.centerBracketId, centerBrackets)
+                && ok(prev.ringId, rings) && ok(prev.finialId, finials)) return prev;
             return {
                 ...prev,
                 poleId: ok(prev.poleId, poles) ? prev.poleId : '',
-                bracketId: ok(prev.bracketId, brackets) ? prev.bracketId : '',
+                bracketId: ok(prev.bracketId, outerBrackets) ? prev.bracketId : '',
+                centerBracketId: ok(prev.centerBracketId, centerBrackets) ? prev.centerBracketId : '',
                 ringId: ok(prev.ringId, rings) ? prev.ringId : '',
                 finialId: ok(prev.finialId, finials) ? prev.finialId : '',
             };
         });
-    }, [poles, brackets, rings, finials]);
+    }, [poles, outerBrackets, centerBrackets, rings, finials]);
 
     // A diameter from a collection we just left is meaningless — clear it with the scope.
     useEffect(() => { setKbDia(prev => (prev && !diaCells.some(d => d.cell === prev)) ? '' : prev); }, [diaCells]);
@@ -295,10 +362,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const add = (id, qty, note, opts) => { const it = itemById(id); if (it && qty > 0) out.push({ it, qty: parseInt(qty) || 1, note: note || '', opts: opts || null }); };
         add(cfg.poleId, cfg.poleQty, '');
         add(cfg.bracketId, cfg.bracketQty, '');
+        add(cfg.centerBracketId, cfg.centerBracketQty, 'center bracket');
         add(cfg.ringId, cfg.ringQty, '');
         add(cfg.finialId, cfg.finialQty, '');
         add(cfg.cutId, cfg.cutQty, cfg.cutLen ? `cut @ ${cfg.cutLen}` : 'cut', { noPack: true });
         add(cfg.spliceId, cfg.spliceQty, 'splice', { noPack: true });
+        // Miter returns are configured in CPQ now; kept only so pre-existing saved kits still resolve.
         add(cfg.miterId, cfg.miterQty, 'miter return', { noPack: true });
         // RUSH: the chosen "Rush Fee Type" sets BOTH the note and the billed rate; the item is only
         // the vessel that carries it to NetSuite. No type chosen = no rush line.
@@ -786,7 +855,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                     </select>
                                     {kbDia && (
                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginTop: '5px', letterSpacing: '.06em' }}>
-                                            {poles.length} pole · {brackets.length} bracket · {rings.length} ring · {finials.length} finial
+                                            {poles.length} pole · {outerBrackets.length} outer / {centerBrackets.length} center bracket · {rings.length} ring · {finials.length} finial
                                         </div>
                                     )}
                                 </div>
@@ -794,7 +863,20 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             </div>
 
                             <KitSlot title="Pole" items={poles} idKey="poleId" qtyKey="poleQty" />
-                            <KitSlot title="Bracket" items={brackets} idKey="bracketId" qtyKey="bracketQty" />
+                            {/* OUTER = the left/right bracket (one part, both ends); CENTER = the
+                                passing bracket. Split comes from 1.6, not from naming. */}
+                            <KitSlot title="Outer Brackets" items={outerBrackets} idKey="bracketId" qtyKey="bracketQty" />
+                            <KitSlot title="Center Brackets" items={centerBrackets} idKey="centerBracketId" qtyKey="centerBracketQty" />
+                            {scopeCollection && !bracketPos && (
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#a05a2c', letterSpacing: '.06em', marginTop: '-6px', paddingLeft: '120px' }}>
+                                    No bracket positions found in 1.6 for {scopeCollection} — both lists show every bracket.
+                                </div>
+                            )}
+                            {!scopeCollection && (
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.06em', marginTop: '-6px', paddingLeft: '120px' }}>
+                                    Pick a collection above to split outer vs center from the 1.6 build.
+                                </div>
+                            )}
                             <KitSlot title="Ring" items={rings} idKey="ringId" qtyKey="ringQty" />
                             <KitSlot title="Finial" items={finials} idKey="finialId" qtyKey="finialQty" />
 
@@ -803,7 +885,6 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 <input value={kb.cutLen} onChange={e => setKb({ ...kb, cutLen: e.target.value })} placeholder="Cut length (e.g. 84in)" style={{ ...inp, marginTop: '8px', fontSize: '0.8rem' }} />
                             </KitSlot>
                             <KitSlot title="Splice" items={spliceItems} idKey="spliceId" qtyKey="spliceQty" />
-                            <KitSlot title="Miter Return" items={miterItems} idKey="miterId" qtyKey="miterQty" />
 
                             {/* RUSH — the TYPE carries the price (Mass Update 4.5 → Rush Fee Types);
                                 the item is just the vessel that carries the charge to NetSuite.
