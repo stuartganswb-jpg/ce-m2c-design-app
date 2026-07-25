@@ -1,7 +1,7 @@
 # SESSION BRIEF — bringing VISION + QUICK SHIP into the customer portal
 
 **Written:** 2026-07-25, for a FRESH portal session · **Repo:** github.com/stuartganswb-jpg/ce-m2c-design-app · **Branch:** main
-**Mission:** give portal customers the two surfaces they don't have yet — a **stock counter** (HQ tab 7, Quick Ship) and some form of **measure/takeoff** (HQ tab 9, Client Vision) — without diverging from the internal app.
+**Mission:** give portal customers the two surfaces they don't have yet — a **stock counter** (HQ tab 7, Quick Ship) and a **measurement intake** (HQ tab 9, Client Vision — scope settled in §6) — without diverging from the internal app.
 
 **Read first:** `PORTAL_CPQ_CONTRACT_BRIEF.md` (the architecture + mirror rule) and `CPQ_VISION_QUICKSHIP_BRIEF.md` §4b + §8 (the alias rule and the standing portal gaps). This brief assumes both and only adds what's new.
 
@@ -86,18 +86,51 @@ Full statement: `CPQ_VISION_QUICKSHIP_BRIEF.md` §4b. Implementation: `src/compo
 
 ---
 
-## 6. Client Vision (HQ tab 9) — read this before promising a port
+## 6. Client Vision in the portal — SCOPE IS SETTLED (Stuart, 2026-07-25)
 
-`ClientVisionTab.js` → `VisionHardware.js` / `VisionPillow.js` / `VisionLighting.js`. This is a **field/takeoff + engineering board**: measure, bay math, bracket placement, saw angles, cut lengths, hanger locations, SVG capture. It writes `cpq_drafts/{draftId}` keyed by `masterQuoteId`, which CPQ picks up as "Lines Awaiting Configuration".
+`ClientVisionTab.js` → `VisionHardware.js` / `VisionPillow.js` / `VisionLighting.js`. Internally this is a field/takeoff **and** engineering board. The portal gets **the measurement-intake half only**, landing as a `cpq_drafts` doc for staff to price — the same doc the internal Vision writes, so it appears in CPQ's "Lines Awaiting Configuration" with no new plumbing.
 
-Two honest observations:
+### Why this exists (build to this, not to a feature list)
 
-- **Most of Vision is shop engineering, not customer input.** `engineeringNotes` (raw cut lengths, miter saw angles, wall angles, bend radius) exists to drive the floor. A customer-facing Vision is realistically **the measurement intake half only** — wall dimensions, mount type, shape, bay count — with the engineering derived server-side. Scope this with Stuart before building; "port Vision" could mean a week or a month depending on which half he means.
-- **The natural output is a `cpq_drafts` doc**, exactly like the internal one, so an internal operator picks it up in CPQ and prices it. That is a much smaller and safer first version than pricing a takeoff in the portal.
+> *"Every day customers are confused over the outside edge measurements and we can't afford to not have these orders fit."*
 
-Vision was taught the H2 per-assembly model in commit `0fcc583` (grouped flow picker, `PROJ_SELECT` beside the SIZE steps, `flowProjSel`/`projTagOk` gating). **All of it is gated on stamps only 🎯 single-assembly flows carry**, so Fabricut/legacy behavior is identical. Keep it that way.
+The purpose is **fit**, not self-service engineering. The customer supplies wall measurements and end treatments; the portal shows them, in their own units, the **outside-edge numbers their opening has to accommodate**. If a customer can leave without understanding how wide the finished system actually is, the page has failed regardless of how nice it looks.
 
-**H2 is still HELD from the portal** until `partAllowedAtSize` / `PROJ_SELECT` / the size landing are mirrored client-side. That block applies to anything you build.
+### IN — what the customer sees and does
+
+**Inputs**
+- Wall / opening measurements, per bay leg.
+- **Bay shape: straight, MITERED (angled bay), and BOW (curved)** — `engData.shape` is `'STRAIGHT' | 'MITERED' | 'BOW'`, seeded from `activeFlow.fabShape`. All three are in scope.
+- **French returns** — the customer picks them and sees them. End treatments are `FRENCH_RETURN` / `RETURN_MITER` / `INSIDE_MOUNT` (`endStyleL` / `endStyleR`); a return end changes the O2O math, which is precisely why they must be able to select it here.
+- Mount type per end (wall / ceiling / inside), projection.
+
+**The three readouts — these are the point of the page** (`VisionHardware.js:1785-1792`):
+
+| Label | Field | Notes |
+|---|---|---|
+| **Pole O2O (Edge-to-Edge)** | `poleO2O` | `orderL + orderC + orderR` |
+| **Total System O2O (+ Brackets)** | `totalSystemO2O` | `poleO2O + endAddL + endAddR` — **this is the number that has to fit the opening** |
+| **Main Wall C2C** | `pole2` | label is shape-dependent: `STRAIGHT` → "Main Wall C2C", otherwise "Center Wall C2C", with Left/Right Wall C2C (`pole1`/`pole3`) shown as well on `MITERED` |
+
+Show the `totalSystemO2O` breakdown line too (`= pole + L + R`) — it's what makes the number believable to a sceptical customer. Plus clearance inputs already in the model: `returnRadius` (default 4.0), `gripAllowance` (8.5), `bracketThickness` (0.25), `insideMountDeduct` (0.25).
+
+### OUT — never render to a customer
+
+Raw cut lengths (`rawLeft` / `rawCenter` / `rawRight`), miter **saw angles** (`sawAngle1` / `sawAngle2`), wall angles, bend deducts, hanger locations (`hangerLocations`), the captured **shop drawing SVG** (`svgString`), and per-part BOM quantities. These exist to drive the floor.
+
+**Compute and STORE them anyway.** The draft must carry the same `engineeringNotes` / `spatialData` shape the internal Vision writes, or staff lose the downstream cut sheet and the whole point of the draft handoff. The rule is **don't display**, not **don't derive**.
+
+### The mirror risk — read this before writing any math
+
+The O2O/C2C math lives inline in `VisionHardware.js` (~lines 615-690: `pole1/2/3`, `orderL/C/R`, `bendDeduct*`, `imDeduct*`, `endAddL/R`, `poleO2O`, `totalSystemO2O`). **A hand-ported second copy will drift**, and drift here means a quoted system that doesn't fit — the exact failure this feature exists to prevent.
+
+**Strongly recommended: extract that block to `src/components/Shared/` first**, have `VisionHardware.js` import it (no behavior change, verifiable by lint+build), then `cp` it into `portal/src/shared/` as a **verbatim copy** like `sizeMatrix.js` / `priceLevels.js`. One implementation. This is the same lesson as `Shared/clientPricing.js`, where two copies of "match a customer" silently disagreed and priced one customer two ways.
+
+### Still blocking
+
+Vision learned the H2 per-assembly model in commit `0fcc583` (grouped flow picker, `PROJ_SELECT` beside the SIZE steps, `flowProjSel`/`projTagOk` gating). **All of it is gated on stamps only 🎯 single-assembly flows carry**, so Fabricut/legacy behavior is identical — keep it that way. **H2 remains HELD from the portal** until `partAllowedAtSize` / `PROJ_SELECT` / the size landing are mirrored client-side; that block applies to anything built here.
+
+Pillow and Lighting are **not** in scope for this pass.
 
 ---
 
@@ -134,7 +167,8 @@ Decline any prompt to DELETE a function. Use `firebase login --no-localhost` if 
 ## 9. Decisions to confirm with Stuart before building
 
 1. **Stock counter scope** — browse + quote request (safe, mirrors the configurator's existing `portalQuoteRequest` path), or true self-service ordering that writes a NetSuite Sales Order? The second means a customer can move real inventory and needs its own approval story.
-2. **Vision scope** — measurement intake that lands as a `cpq_drafts` doc for staff to configure, or a full customer-facing engineering board?
+2. ~~Vision scope~~ — **SETTLED, see §6:** measurement intake + French returns + curved/mitered bays + the three O2O/C2C readouts, landing as a `cpq_drafts` doc. No cuts, no saw angles, no shop drawing.
 3. **Packs** — may a customer choose their pack, or do they only ever see the one on their CRM record?
 4. **Rush fees** — customer-selectable, or internal only?
 5. **Kits** — `system/quick_ship_kits` carries per-customer kit pricing. Do customers see kits as single sellable products (they're the nicest thing on the counter), and at which price?
+6. **Units** — the internal board works in decimal inches (`12.75"`). Customers measure in feet-and-fractions. Does the portal accept/display fractional input, and does the draft store decimal regardless? (It must, or the shop math breaks.)
