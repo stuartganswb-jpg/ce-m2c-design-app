@@ -120,11 +120,9 @@ Raw cut lengths (`rawLeft` / `rawCenter` / `rawRight`), miter **saw angles** (`s
 
 **Compute and STORE them anyway.** The draft must carry the same `engineeringNotes` / `spatialData` shape the internal Vision writes, or staff lose the downstream cut sheet and the whole point of the draft handoff. The rule is **don't display**, not **don't derive**.
 
-### The mirror risk — read this before writing any math
+### The mirror risk — ✅ EXTRACTION DONE (2026-07-25)
 
-The O2O/C2C math lives inline in `VisionHardware.js` (~lines 615-690: `pole1/2/3`, `orderL/C/R`, `bendDeduct*`, `imDeduct*`, `endAddL/R`, `poleO2O`, `totalSystemO2O`). **A hand-ported second copy will drift**, and drift here means a quoted system that doesn't fit — the exact failure this feature exists to prevent.
-
-**Strongly recommended: extract that block to `src/components/Shared/` first**, have `VisionHardware.js` import it (no behavior change, verifiable by lint+build), then `cp` it into `portal/src/shared/` as a **verbatim copy** like `sizeMatrix.js` / `priceLevels.js`. One implementation. This is the same lesson as `Shared/clientPricing.js`, where two copies of "match a customer" silently disagreed and priced one customer two ways.
+The O2O/C2C math now lives in **`src/components/Shared/bayMath.js`** (`computeBayMath({ engData, safeProj, libraryParts })` + `safeProjOf`), with `VisionHardware.js` importing it, and a **verbatim copy already at `portal/src/shared/bayMath.js`** (same convention as `sizeMatrix.js` / `priceLevels.js` — edit the app copy, `cp`, diff, same commit). Equivalence to the old inline block was **proven by harness**: 6,912 input cases (3 shapes × both input modes × end styles × mounts × return-bracket/backplate-orientation fixtures), 269k field comparisons, zero mismatches. The return object is tiered: FIT/customer-facing fields vs SHOP-ONLY fields (store on the draft, never render) — the portal page should consume it accordingly. Only remaining math to port is page-level display formatting.
 
 ### Still blocking
 
@@ -164,11 +162,12 @@ Decline any prompt to DELETE a function. Use `firebase login --no-localhost` if 
 
 ---
 
-## 9. Decisions to confirm with Stuart before building
+## 9. Decisions — SETTLED with Stuart 2026-07-25 (build to these)
 
-1. **Stock counter scope** — browse + quote request (safe, mirrors the configurator's existing `portalQuoteRequest` path), or true self-service ordering that writes a NetSuite Sales Order? The second means a customer can move real inventory and needs its own approval story.
-2. ~~Vision scope~~ — **SETTLED, see §6:** measurement intake + French returns + curved/mitered bays + the three O2O/C2C readouts, landing as a `cpq_drafts` doc. No cuts, no saw angles, no shop drawing.
-3. **Packs** — may a customer choose their pack, or do they only ever see the one on their CRM record?
-4. **Rush fees** — customer-selectable, or internal only?
-5. **Kits** — `system/quick_ship_kits` carries per-customer kit pricing. Do customers see kits as single sellable products (they're the nicest thing on the counter), and at which price?
-6. **Units** — the internal board works in decimal inches (`12.75"`). Customers measure in feet-and-fractions. Does the portal accept/display fractional input, and does the draft store decimal regardless? (It must, or the shop math breaks.)
+0. **Sequence** — **Vision measurement intake FIRST**, stock counter second.
+1. ~~Stock counter scope~~ — **Browse + quote request.** The customer builds a stock cart and submits a request; staff open it in Quick Ship (tab 7), review, and push the real NetSuite SO. No customer action ever writes a Sales Order directly.
+2. ~~Vision scope~~ — **SETTLED, see §6:** measurement intake + French returns + curved/mitered bays + the three O2O/C2C readouts, landing as a `cpq_drafts` doc. No cuts, no saw angles, no shop drawing. (Extraction done — `Shared/bayMath.js`, portal copy in place.)
+3. ~~Packs~~ — **Set on the CRM record, not chosen by the customer.** The Portal Access section already carries `portalPriceLevel` + `qsRingPack`/`qsFinialPack`/`qsInsideMountPack`; the portal SHOWS the customer their preferred pack and prices/labels with it. No pack picker.
+4. ~~Rush fees~~ — **Internal only.** No portal exposure; staff add rush in Quick Ship when reviewing the request.
+5. ~~Kits~~ — **The portal gets the Kit Builder experience "just like in the app"** (category × diameter × finish assembly of stocked items), following the pack unit rules when applicable (qty = PACKS, rate per EACH, request carries the each count). Pricing per the customer's `portalPriceLevel` / kit clientPricing, same as the app.
+6. **Units** — STILL OPEN (the one remaining question): the internal board works in decimal inches (`12.75"`). Customers measure in feet-and-fractions. Proposed default: accept both fractional and decimal input, display both, **store decimal always** (it must, or the shop math breaks). Confirm display format with Stuart at build time.

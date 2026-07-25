@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
+import { computeBayMath } from '../Shared/bayMath';
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
   // Default to TAKEOFF as Step 1
@@ -587,104 +588,27 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   }, [dynamicConfigParams, activeFlow, libraryParts]);
   // ================= END FLOW-MIRROR =================
 
-  // --- HARDWARE MATH CALCULATIONS (RESTORED) ---
+  // --- HARDWARE MATH CALCULATIONS ---
+  // The pole/wall solve + raw-cut & O2O ("does it fit?") math now lives in Shared/bayMath.js
+  // (computeBayMath) so the customer portal's measurement intake can run the IDENTICAL fit math
+  // (verbatim copy in portal/src/shared/ — same rule as sizeMatrix/priceLevels). Inputs and
+  // outputs are unchanged; only the names still read below are destructured (the module also
+  // returns the shop-only intermediates — orderL/C/R, deducts, raw adds — so the portal draft
+  // can store them). The SVG/plan-view geometry below stays component-local: drawing, not fit math.
   const rad = (deg) => (deg * Math.PI) / 180;
-  const S = 3.5; 
-  let mDeduct1=0, mDeduct2=0, wall1=engData.w1, wall2=engData.w2, wall3=engData.w3, pole1=0, pole2=0, pole3=0, sawAngle1=0, sawAngle2=0;
-  let bowCX=500, bowCY=250, bowR=0, bowHW_R=0, bowStartAngle=0, bowEndAngle=0, bowWallPath="", bowHWPath="";
+  const S = 3.5;
+  let bowCX=500, bowCY=250, bowStartAngle=0, bowEndAngle=0, bowWallPath="", bowHWPath="";
+  const {
+      isLeftInside, isRightInside, endStyleL, endStyleR,
+      mDeduct1, mDeduct2, wall1, wall2, wall3, pole1, pole2, pole3, sawAngle1, sawAngle2,
+      rawLeft, rawCenter, rawRight, poleO2O, endAddL, endAddR, totalSystemO2O,
+      poleFeetQty, qtyMiters, qtyBends, qtyMiterReturns, qtyFinials, recRings, bowR, bowHW_R,
+  } = computeBayMath({ engData, safeProj, libraryParts });
 
-  const isLeftInside = engData.shape === 'STRAIGHT' ? engData.mountLeft === 'INSIDE' : engData.mountOuter === 'INSIDE';
-  const isRightInside = engData.shape === 'STRAIGHT' ? engData.mountRight === 'INSIDE' : engData.mountOuter === 'INSIDE';
-  
-  // Per-side End Style: Left = engData.endStyle, Right = endStyleRight (falls back to Left when unset).
-  const endStyleL = engData.endStyle;
-  const endStyleR = engData.endStyleRight || engData.endStyle;
-  const bendDeductL = (!isLeftInside && endStyleL === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
-  const bendDeductR = (!isRightInside && endStyleR === 'RETURN_BEND') ? (engData.poleDiameter / 2) : 0;
-  const imDeductL = isLeftInside ? engData.insideMountDeduct : 0;
-  const imDeductR = isRightInside ? engData.insideMountDeduct : 0;
-
-  if (engData.shape === 'STRAIGHT') {
-      if (engData.inputMode === 'WALL') { 
-          wall2 = engData.w2; 
-          pole2 = wall2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
-      } else { 
-          pole2 = engData.w2 - bendDeductL - bendDeductR - imDeductL - imDeductR; 
-          wall2 = engData.w2; 
-      }
-  } else if (engData.shape === 'MITERED') {
-      mDeduct1 = engData.a1 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a1) / 2));
-      mDeduct2 = engData.a2 === 180 ? 0 : safeProj * Math.tan(rad((180 - engData.a2) / 2));
-      if (engData.inputMode === 'WALL') { 
-          wall1 = engData.w1; wall2 = engData.w2; wall3 = engData.w3;
-          pole1 = Math.max(0, wall1 - mDeduct1 - imDeductL); 
-          pole2 = Math.max(0, wall2 - mDeduct1 - mDeduct2); 
-          pole3 = Math.max(0, wall3 - mDeduct2 - imDeductR); 
-      } else { 
-          pole1 = engData.w1 - bendDeductL - imDeductL; wall1 = pole1 + mDeduct1 + imDeductL; 
-          pole2 = engData.w2; wall2 = pole2 + mDeduct1 + mDeduct2; 
-          pole3 = engData.w3 - bendDeductR - imDeductR; wall3 = pole3 + mDeduct2 + imDeductR; 
-      }
-      sawAngle1 = engData.a1 === 180 ? 0 : 90 - (engData.a1 / 2); sawAngle2 = engData.a2 === 180 ? 0 : 90 - (engData.a2 / 2);
-  } else if (engData.shape === 'BOW') {
-      const c = engData.w2; const h = engData.bowDepth;
-      if (h > 0) {
-          const rInput = (h/2) + ((c*c)/(8*h)); const theta = 2 * Math.asin(c / (2 * rInput));
-          if (engData.inputMode === 'WALL') { bowR = rInput; bowHW_R = bowR - safeProj; pole2 = Math.max(0, (bowHW_R * theta) - imDeductL - imDeductR); wall2 = c; }
-          else { bowHW_R = rInput; bowR = bowHW_R + safeProj; pole2 = (bowHW_R * theta) - imDeductL - imDeductR; wall2 = 2 * bowR * Math.sin(theta / 2); }
-      }
-  }
-
-  // --- RAW CUTS & O2O MATH ---
-  const addL_RAW = (!isLeftInside && endStyleL === 'RETURN_BEND') ? engData.gripAllowance : 0;
-  const addR_RAW = (!isRightInside && endStyleR === 'RETURN_BEND') ? engData.gripAllowance : 0;
-
-  const orderL = engData.shape === 'MITERED' ? pole1 + bendDeductL + imDeductL : 0;
-  const orderR = engData.shape === 'MITERED' ? pole3 + bendDeductR + imDeductR : 0;
-  const orderC = engData.shape === 'STRAIGHT' ? (pole2 + bendDeductL + bendDeductR + imDeductL + imDeductR) : (engData.shape === 'BOW' ? pole2 + imDeductL + imDeductR : pole2);
-
-  const rawLeft = engData.shape === 'MITERED' ? pole1 + addL_RAW : 0;
-  const rawRight = engData.shape === 'MITERED' ? pole3 + addR_RAW : 0;
-  const rawCenter = (engData.shape === 'STRAIGHT' || engData.shape === 'BOW') ? pole2 + addL_RAW + addR_RAW : pole2;
-
-  const totalPoleRawInches = rawLeft + rawCenter + rawRight;
-  const poleO2O = orderL + orderC + orderR;
-  // Per-end O2O contribution: a return end WITH a backplate adds half the backplate's pole-axis
-  // dimension — the end-return arm lands at the backplate's middle (orientation set on the backplate
-  // item: vertical→width, horizontal→length). Any other end keeps the legacy bracketW share, so a
-  // plain non-backplate job is unchanged (½·bracketW + ½·bracketW = bracketW).
-  const bpEndHalf = (id) => {
-      const p = libraryParts.find(x => x.id === id);
-      const par = p?.manufacturingSpecs?.parametric || {};
-      const o = (p?.manufacturingSpecs?.customData?.bpOrientation || 'VERTICAL').toUpperCase();
-      const dim = o.startsWith('H') ? parseFloat(par.length)                             // horizontal → length
-          : o.startsWith('R') ? (parseFloat(par.fixedDiameter) || parseFloat(par.width)) // round → diameter
-          : parseFloat(par.width);                                                       // vertical / square → width
-      return ((dim || 0)) / 2;
-  };
-  const isRetBkt = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
-  const o2oRightBktId = engData.bracketIdRight;
-  const o2oRightBpId = engData.backplateIdRight;
-  // Return-bracket arm thickness (e.g. ½" flat-iron stock) is set on the bracket item and adds
-  // to each return end's O2O on top of the half-backplate.
-  const armThk = (id) => parseFloat(libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.armThickness) || 0;
-  // An INSIDE-mounted end sits flush to the wall and adds nothing past the pole (the inside-mount
-  // deduct already trims the pole to fit). An OUTSIDE end adds either the return backplate half + arm
-  // (return bracket) or half the bracket width (passing bracket).
-  const endAddL = isLeftInside ? 0 : ((isRetBkt(engData.bracketId) && engData.backplateIdLeft) ? (bpEndHalf(engData.backplateIdLeft) + armThk(engData.bracketId)) : (engData.bracketW / 2));
-  const endAddR = isRightInside ? 0 : ((isRetBkt(o2oRightBktId) && o2oRightBpId) ? (bpEndHalf(o2oRightBpId) + armThk(o2oRightBktId)) : (engData.bracketW / 2));
-  const totalSystemO2O = poleO2O + endAddL + endAddR;
-
-  const poleFeetQty = Math.ceil(totalPoleRawInches / 12) || 0;
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
   const qtyCenterBrackets = attachments.filter(a => a.type === 'bracket' && /center/i.test(a.note || '')).length;
   const qtySplices = attachments.filter(a => a.type === 'splice').length;
-  const qtyMiters = engData.shape === 'MITERED' ? 2 : 0;
-  const qtyBends = (endStyleL === 'RETURN_BEND' && !isLeftInside ? 1 : 0) + (endStyleR === 'RETURN_BEND' && !isRightInside ? 1 : 0);
-  const qtyMiterReturns = (endStyleL === 'RETURN_MITER' && !isLeftInside ? 1 : 0) + (endStyleR === 'RETURN_MITER' && !isRightInside ? 1 : 0);
   const qtyCustomProjBrackets = isCustomProj ? qtyBrackets : 0;
-  const qtyFinials = (endStyleL === 'FINIAL' && !isLeftInside ? 1 : 0) + (endStyleR === 'FINIAL' && !isRightInside ? 1 : 0);
-  const recRings = Math.ceil(totalSystemO2O / 12) * 4;
 
   const P2 = { x: 500 - (wall2 * S)/2, y: 250 }; const P3 = { x: 500 + (wall2 * S)/2, y: 250 };
   let P1 = P2, P4 = P3, HS = {x: 0, y: 0}, HE = {x: 0, y: 0}, HC1 = {x: 0, y: 0}, HC2 = {x: 0, y: 0}, nL = {x: 0, y: -1}, nR = {x: 0, y: -1}; 
@@ -1786,7 +1710,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Total System O2O (+ Brackets):</span><strong style={{ fontWeight: 500 }}>{totalSystemO2O.toFixed(2)}"</strong></div>
                               <div style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', textAlign: 'right' }}>= {poleO2O.toFixed(2)} pole + {endAddL.toFixed(2)} L + {endAddR.toFixed(2)} R</div>
                               {(engData.backplateIdLeft || engData.backplateIdRight) && (
-                                  <div style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', textAlign: 'right' }}>Backplate · L {bpDims(engData.backplateIdLeft).l}×{bpDims(engData.backplateIdLeft).w} · R {bpDims(o2oRightBpId).l}×{bpDims(o2oRightBpId).w}</div>
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--ink-soft)', textAlign: 'right' }}>Backplate · L {bpDims(engData.backplateIdLeft).l}×{bpDims(engData.backplateIdLeft).w} · R {bpDims(engData.backplateIdRight).l}×{bpDims(engData.backplateIdRight).w}</div>
                               )}
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>Left Wall C2C:</span><strong style={{ fontWeight: 500 }}>{pole1.toFixed(2)}"</strong></div>}
                               <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{engData.shape === 'STRAIGHT' ? 'Main Wall C2C:' : 'Center Wall C2C:'}</span><strong style={{ fontWeight: 500 }}>{pole2.toFixed(2)}"</strong></div>
