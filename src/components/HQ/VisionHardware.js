@@ -145,14 +145,26 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       // projection; CPQ item/finish selections must never change fabrication). When set,
       // it seeds Vision's projection + end style and the bracket selection can't override.
       const hasPresetProj = activeFlow.fabProjection !== undefined && activeFlow.fabProjection !== '' && activeFlow.fabProjection !== null;
-      const presetProj = hasPresetProj ? parseFloat(activeFlow.fabProjection) : null;
+      // 🎯 Single-assembly flows (H2 pivot): the stamped implied projection (one proj: tag on the
+      // assembly — no Bracket Projection question generated) seeds the fab Projection like a
+      // preset, and the stamped rod diameter (the flow IS one diameter) seeds Pole Dia so the
+      // bend deduct + auto-place bracket spacing follow. Multi-tag flows leave proj to the
+      // PROJ_SELECT pick (pickStep drives it). Flows without the stamps are untouched.
+      const impliedNum = parseFloat(String(activeFlow.impliedProjInches ?? ''));
+      const hasImplied = !!activeFlow.singleAssembly && Number.isFinite(impliedNum);
+      const groupDia = parseFloat(String(activeFlow.sizeGroupSort ?? ''));
+      const hasGroupDia = !!activeFlow.singleAssembly && Number.isFinite(groupDia) && groupDia > 0 && groupDia < 90;
+      const presetProj = hasPresetProj ? parseFloat(activeFlow.fabProjection) : (hasImplied ? impliedNum : null);
       const presetEndStyle = activeFlow.fabEndStyle || null;
       const presetShape = activeFlow.fabShape || null; // bay configuration: STRAIGHT | MITERED | BOW
 
       let detectedProj = presetProj;
       let detectedEndStyle = presetEndStyle;
 
-      if (detectedProj === null || !detectedEndStyle) {
+      // Legacy pin-sniffing ("a BENT_RETURN fee pin means this whole flow is a French Return
+      // flow") predates per-assembly flows, where returns are OPTIONS — never seed an end style
+      // or projection from pins on a singleAssembly flow.
+      if ((detectedProj === null || !detectedEndStyle) && !activeFlow.singleAssembly) {
           flowPins.forEach(pin => {
               const part = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.legacyErpId);
               if (part) {
@@ -172,13 +184,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           const updates = { ...prev };
           let changed = false;
           // A flow preset wins even when a bracket is selected; detection only seeds when unset.
-          if (detectedProj !== null && prev.proj !== detectedProj && (hasPresetProj || !prev.bracketId)) { updates.proj = detectedProj; changed = true; }
+          if (detectedProj !== null && prev.proj !== detectedProj && (hasPresetProj || hasImplied || !prev.bracketId)) { updates.proj = detectedProj; changed = true; }
           if (detectedEndStyle && prev.endStyle !== detectedEndStyle) { updates.endStyle = detectedEndStyle; changed = true; }
           if (presetShape && prev.shape !== presetShape) { updates.shape = presetShape; changed = true; }
+          if (hasGroupDia && parseFloat(prev.poleDiameter) !== groupDia) { updates.poleDiameter = groupDia; changed = true; }
           return changed ? updates : prev;
       });
 
-      if (detectedProj !== null && (hasPresetProj || !engData.bracketId)) setIsCustomProj(false);
+      if (detectedProj !== null && (hasPresetProj || hasImplied || !engData.bracketId)) setIsCustomProj(false);
   }, [activeFlow, flowPins, libraryParts]);
 
   // (Old engData.bracketId → single-bracket-step sync removed: Fabrication Settings are now driven
@@ -353,12 +366,39 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // SIZED parts — engData part ids resolve through sizeSwapPart so projection + plate dims are the
   // selected size's, and poleDiameter follows the diameter answer.
   const sizeSteps = flowSteps.filter(s => s.type === SIZE_STEP_TYPE);
+  // 🎯 Single-assembly flows (H2 pivot): the generated Bracket Projection question renders with
+  // the SIZE steps; the pick gates proj-tagged options (projTagOk) and drives engData.proj.
+  const projSelectSteps = flowSteps.filter(s => s.type === 'PROJ_SELECT');
   const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
   const sizeBundle = makeSizeSwap(activeFlow, dynamicConfigParams, libraryParts);
   const sizeSwapPart = sizeBundle.swap;
   // No french/miter returns at the 3-5/8" projection, and size-native extras (1-3/8" wood/
   // acrylic) only at their own diameter — filters every flow-driven picker + auto-clear.
   const visionSizeIndex = useMemo(() => buildSizeIndex(libraryParts), [libraryParts]);
+  // 🎯 Per-assembly projection context (H2 pivot) — mirrors CPQTab exactly: the PROJ_SELECT pick
+  // (or the flow's stamped implied projection) gates proj-tagged options. A bracket's proj: tag is
+  // the exact projection the physical item IS; a return-type option's tag is a MINIMUM depth.
+  // Fabricut/legacy flows carry neither the step nor the stamp → flowProjSel null → every option
+  // passes untouched.
+  const flowProjSel = useMemo(() => {
+      const st = (activeFlow?.steps || []).find(s => s.type === 'PROJ_SELECT');
+      if (!st) {
+          const imp = parseFloat(String(activeFlow?.impliedProjInches ?? ''));
+          return Number.isFinite(imp) ? imp : null;
+      }
+      const o = (st.styleOptions || []).find(x => x.optId === dynamicConfigParams[st.id]);
+      const f = parseFloat(String(o?.projInches ?? '').replace(/[^0-9.]/g, ''));
+      return Number.isFinite(f) ? f : null;
+  }, [activeFlow, dynamicConfigParams]);
+  const projTagOk = (o) => {
+      if (flowProjSel == null || !o?.projInches) return true;
+      const f = parseFloat(String(o.projInches).replace(/[^0-9.]/g, ''));
+      if (!Number.isFinite(f)) return true;
+      const et = String(o.endTreatment || '').toUpperCase();
+      const returnish = et === 'FRENCH_RETURN' || et === 'MITER_RETURN'
+          || (o.isFee && /return|miter|mitre|french|bend/i.test(String(o.partName || '')));
+      return returnish ? (flowProjSel >= f - 0.01) : (Math.abs(f - flowProjSel) < 0.01);
+  };
   const optAllowedAtSize = (o) => {
       if (!sizeSel) return true;
       return partAllowedAtSize(partOfOpt(o), sizeSel, visionSizeIndex);
@@ -366,9 +406,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const endOptsFor = (st) => {
       let os = st?.styleOptions || [];
       if (sizeSel && !returnsAllowedFor(sizeSel)) os = os.filter(o => !isReturnOption(o));
-      return os.filter(optAllowedAtSize);
+      return os.filter(o => optAllowedAtSize(o) && projTagOk(o));
   };
-  const brOptsFor = (st) => (st?.styleOptions || []).filter(optAllowedAtSize);
+  const brOptsFor = (st) => (st?.styleOptions || []).filter(o => optAllowedAtSize(o) && projTagOk(o));
   const optOf = (step, sel) => step ? ((step.styleOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
   const optSel = (step) => optOf(step, step ? dynamicConfigParams[step.id] : null);
   const subOf = (step, sel) => step ? ((step.subOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
@@ -413,10 +453,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const hasInl = subs.some(o => o.inlineOnly);
       // Return plates exist only at their native diameter (RBP/RCP = ¾"); at 1"/1-3/8" a return
       // uses the STANDARD plates — fall back to the regular pool when none survive the size gate.
-      const retPoolLive = subs.some(o => o.returnOnly && optAllowedAtSize(o));
+      const retPoolLive = subs.some(o => o.returnOnly && optAllowedAtSize(o) && projTagOk(o));
       return subs.filter(o => (returnChosen ? (retPoolLive ? o.returnOnly : (!o.returnOnly && !o.inlineOnly))
           : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
-          : (!o.returnOnly && !o.inlineOnly)) && optAllowedAtSize(o));
+          : (!o.returnOnly && !o.inlineOnly)) && optAllowedAtSize(o) && projTagOk(o));
   };
   const pickStep = (stepId, optId) => setDynamicConfigParams(prev => {
       const next = { ...prev };
@@ -429,6 +469,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (st) {
           const inches = projInchesOfSel(sizeSelectionsOf(activeFlow, next));
           if (inches != null) setTimeout(() => setEngData(pe => ({ ...pe, proj: inches })), 0);
+      }
+      // 🎯 A Bracket Projection pick (PROJ_SELECT, single-assembly flows) drives the fab
+      // Projection field the same way a size pick does.
+      const pst = (activeFlow?.steps || []).find(s => s.id === stepId && s.type === 'PROJ_SELECT');
+      if (pst && optId) {
+          const o = (pst.styleOptions || []).find(x => (x.optId || x.partId) === optId);
+          const f = parseFloat(String(o?.projInches ?? '').replace(/[^0-9.]/g, ''));
+          if (Number.isFinite(f)) setTimeout(() => setEngData(pe => ({ ...pe, proj: f })), 0);
       }
       return next;
   });
@@ -461,6 +509,18 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                   if (!st || !next[st.id]) return;
                   const o = optOf(st, next[st.id]);
                   if (o && isReturnOption(o)) { delete next[st.id]; changed = true; }
+              });
+          }
+          // 🎯 Projection-tag sweep (single-assembly flows): flipping the Bracket Projection
+          // clears any selection whose proj: tag no longer fits — brackets (exact), returns
+          // (minimum), and plate sub-picks. No-op when the flow carries no projection context.
+          if (flowProjSel != null) {
+              [stepEndL, stepEndR, stepBrL, stepBrR, stepBrC].forEach(st => {
+                  if (!st) return;
+                  const o = optOf(st, next[st.id]);
+                  if (o && !projTagOk(o)) { delete next[st.id]; changed = true; }
+                  const so = subOf(st, next[`${st.id}__sub`]);
+                  if (so && !projTagOk(so)) { delete next[`${st.id}__sub`]; changed = true; }
               });
           }
           [['LEFT', stepBrL], ['RIGHT', stepBrR], ['CENTER', stepBrC]].forEach(([pos, st]) => {
@@ -1170,7 +1230,23 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                 <label style={labelStyle}>* Assign Hardware Collection (CPQ)</label>
                                 <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={fieldStyle}>
                                     <option value="">-- SELECT MATCHING CPQ FLOW --</option>
-                                    {cpqFlows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                                    {(() => {
+                                        // 🎯 Single-assembly siblings (H2 pivot): flows stamped sizeGroupLabel
+                                        // collapse under one optgroup per collection, one entry per rod
+                                        // diameter — mirrors the CPQ landing. Unstamped flows (Fabricut H1,
+                                        // legacy) render exactly as before.
+                                        const groups = {};
+                                        cpqFlows.forEach(f => { if (f.sizeGroupLabel) (groups[f.sizeGroupLabel] = groups[f.sizeGroupLabel] || []).push(f); });
+                                        Object.values(groups).forEach(list => list.sort((a, b) => (a.sizeGroupSort ?? 99) - (b.sizeGroupSort ?? 99)));
+                                        return [
+                                            ...cpqFlows.filter(f => !f.sizeGroupLabel).map(f => <option key={f.id} value={f.id}>{f.name}</option>),
+                                            ...Object.keys(groups).sort().map(g => (
+                                                <optgroup key={g} label={g}>
+                                                    {groups[g].map(f => <option key={f.id} value={f.id}>{f.sizeGroupChoice || f.name}</option>)}
+                                                </optgroup>
+                                            ))
+                                        ];
+                                    })()}
                                 </select>
                             </div>
                         </div>
@@ -1241,13 +1317,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             {/* SIZE-MATRIX (Fabricut H1): Rod Diameter + Bracket Projection — the two top-level
                                 flow questions. Every picker below re-labels + every dim re-syncs to the chosen
                                 size; unanswered = the flow's base size (3/4" × 4-5/8"). */}
-                            {sizeSteps.length > 0 && (
+                            {(sizeSteps.length > 0 || projSelectSteps.length > 0) && (
                                 <div style={{ display: 'flex', gap: '16px' }}>
-                                    {sizeSteps.map(st => (
+                                    {[...sizeSteps, ...projSelectSteps].map(st => (
                                         <div key={st.id} style={{ flex: 1 }}>
                                             <label style={labelStyle}>{st.title} · from flow</label>
                                             <select value={dynamicConfigParams[st.id] || ''} onChange={e => pickStep(st.id, e.target.value)} style={fieldStyle}>
-                                                <option value="">-- Default ({st.sizeAxis === 'DIA' ? '3/4"' : '4-5/8"'}) --</option>
+                                                <option value="">{st.type === 'PROJ_SELECT' ? '-- Select Projection --' : `-- Default (${st.sizeAxis === 'DIA' ? '3/4"' : '4-5/8"'}) --`}</option>
                                                 {(st.styleOptions || []).map(o => <option key={o.optId} value={o.optId}>{o.partName}</option>)}
                                             </select>
                                         </div>
