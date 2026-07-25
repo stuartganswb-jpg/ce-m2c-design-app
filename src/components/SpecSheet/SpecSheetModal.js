@@ -11,6 +11,7 @@ import { db, storage } from '../../firebase';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { SIZE_FAMILIES, buildSizeIndex, sizeVariantOf, projAllowedAtDia } from '../Shared/sizeMatrix';
 import { loadGLBScene } from '../Shared/componentExport';
+import { Box3 } from 'three';
 import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
 import {
   M2IN, extractWorldMeshes, groupBbox, translateMeshes, inferAxes, makeViews,
@@ -84,9 +85,29 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return top && top[1] >= 5 ? top[0] : null;
   }, [basePins, libraryParts]);
   const sizeFam = sizeFamilyKey ? SIZE_FAMILIES[sizeFamilyKey] : null;
+  // The OPENED assembly's own diameter (bare code, e.g. H2-05 → '05'): per-assembly flows open
+  // each size's sheet from that size's own doc, so the sheet starts on THAT cell and treats it
+  // as the local base (drawing the assembly's own GLB). Families without codeRx (Fabricut H1)
+  // and masters that ARE the family base resolve to baseDia — byte-identical behavior there.
+  const openedDia = React.useMemo(() => {
+    if (!sizeFam) return null;
+    if (!sizeFam.codeRx) return sizeFam.baseDia;
+    const bare = new RegExp(sizeFam.codeRx.source.replace('([A-Z].*)$', '$'));
+    for (const c of [baseAssembly?.legacyErpId, baseAssembly?.itemId, baseAssembly?.itemName]) {
+      const m = String(c || '').trim().toUpperCase().match(bare);
+      if (m) return m[1];
+    }
+    return sizeFam.baseDia;
+  }, [sizeFam, baseAssembly]);
+  const openedProj = React.useMemo(() => {
+    if (!sizeFam || !openedDia) return sizeFam?.baseProj || null;
+    const opts = sizeFam.proj.options.filter(o => projAllowedAtDia(sizeFamilyKey, o, openedDia));
+    const base = opts.find(o => o.value === sizeFam.baseProj);
+    return (base || opts[0] || sizeFam.proj.options[0]).value;
+  }, [sizeFam, sizeFamilyKey, openedDia]);
   const [sizeSel, setSizeSel] = useState(null); // { dia, proj }
-  useEffect(() => { if (sizeFam && !sizeSel) setSizeSel({ dia: sizeFam.baseDia, proj: sizeFam.baseProj }); }, [sizeFam, sizeSel]);
-  const isBaseCell = !sizeFam || !sizeSel || (sizeSel.dia === sizeFam.baseDia && sizeSel.proj === sizeFam.baseProj);
+  useEffect(() => { if (sizeFam && !sizeSel) setSizeSel({ dia: openedDia || sizeFam.baseDia, proj: openedProj || sizeFam.baseProj }); }, [sizeFam, sizeSel, openedDia, openedProj]);
+  const isBaseCell = !sizeFam || !sizeSel || (sizeSel.dia === (openedDia || sizeFam.baseDia) && sizeSel.proj === (openedProj || sizeFam.baseProj));
   const cellKey = sizeSel ? `${sizeSel.dia}|${sizeSel.proj}` : '';
   const cellLabel = (sizeFam && sizeSel)
     ? `${sizeFam.dia.options.find(o => o.value === sizeSel.dia)?.label || sizeSel.dia} · ${sizeFam.proj.options.find(o => o.value === sizeSel.proj)?.label || sizeSel.proj}`
@@ -317,6 +338,16 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           getDoc(doc(db, 'system', 'spec_sheet_config')).catch(() => null),
         ]);
         if (dead) return;
+        // UNIT AUTO-NORMALIZE (Stuart 2026-07-24: H2-75 sheet blank from its own merged model) —
+        // merged sales GLBs are exported in PRODUCTION units (inches); the sheet's meter math
+        // then draws ~39× off-window, leaving a title block on an empty page. A rod set in true
+        // meters measures well under 10 units; anything larger is inches → scale to meters.
+        // True-m spec layouts and registry GLBs stay untouched (extent < 10).
+        try {
+          const bb = new Box3().setFromObject(scene);
+          const ext = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+          if (Number.isFinite(ext) && ext > 10) { scene.scale.setScalar(0.0254); scene.updateMatrixWorld(true); }
+        } catch (unitErr) { /* keep original units */ }
         sceneRef.current = scene;
         setError(''); // a fresh source is loading — clear any stale banner from the previous one
         // Row/wall-mount/finial caches are keyed by RAW pin names, which collide across size
