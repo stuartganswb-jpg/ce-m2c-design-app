@@ -606,7 +606,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (isQsOrder(job)) {
             // Quick Ship SO: flat stocked lines (kit label kept so the packer sees the set).
             (job.lines || []).forEach((l, i) => {
-                out.push({ key: `L${i}`, erp: l.erp || '', name: `${l.name || 'Item'}${l.kit ? ` · ${l.kit}` : ''}`, qty: Number(l.qty) || 1 });
+                // aliasErp is display-only: erp stays the real code the packer scans and labels.
+                out.push({ key: `L${i}`, erp: l.erp || '', aliasErp: l.aliasErp || '', name: `${l.name || 'Item'}${l.kit ? ` · ${l.kit}` : ''}`, qty: Number(l.qty) || 1 });
             });
         } else if (job.orderType === 'stock') {
             // Stock build: what gets handled here is the FINISHED item going back to the shelf —
@@ -2397,7 +2398,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <tbody>
                                     {(o.lines || []).map((l, i) => (
                                         <tr key={i}>
-                                            <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.erp || '—'}</td>
+                                            {/* The REAL stocked code is what the floor pulls and what
+                                                the label barcodes. A line sold under an alias shows
+                                                that alias underneath in small print, so the picker can
+                                                tie the shelf part back to what the customer ordered. */}
+                                            <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>
+                                                {l.erp || '—'}
+                                                {l.aliasErp && <div style={{ fontSize: '9px', color: theme.inkSoft, letterSpacing: '.04em' }}>alias {l.aliasErp}</div>}
+                                            </td>
                                             <td style={{ padding: '9px 18px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.name}{l.note ? ` · ${l.note}` : ''}{(() => { const pk = packOf(l); return pk ? <span style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px' }}> → pull {(Number(l.qty) || 0) * pk.size} × {pk.singleErp}</span> : null; })()}</td>
                                             <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.bin ? theme.ink : theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.bin || 'UNASSIGNED'}</td>
                                             <td style={{ padding: '9px 18px', textAlign: 'center', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.qty}</td>
@@ -2455,7 +2463,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const lineRow = (l, side) => (
                         <div key={l.key} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', background: side === 'right' ? '#f0f7f1' : '#fff', border: `1px solid ${side === 'right' ? '#bcd8c0' : theme.line}`, marginBottom: '8px' }}>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', color: theme.ink }}>{l.erp || '—'}</div>
+                                <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', color: theme.ink }}>
+                                    {l.erp || '—'}
+                                    {l.aliasErp && <span style={{ fontSize: '9px', color: theme.inkSoft, marginLeft: '8px', letterSpacing: '.04em' }}>alias {l.aliasErp}</span>}
+                                </div>
                                 <div style={{ fontSize: '0.8rem', color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</div>
                                 {side === 'right' && packJob.packedLines[l.key] && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', marginTop: '2px' }}>✓ {packJob.packedLines[l.key].by} · {new Date(packJob.packedLines[l.key].at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
                             </div>

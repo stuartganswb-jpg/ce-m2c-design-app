@@ -23,7 +23,8 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
     // feature) fall back to an unpriced item list.
     const lines = Array.isArray(order.invoiceLines) && order.invoiceLines.length
         ? order.invoiceLines
-        : (order.lines || []).map(l => ({ type: 'ITEM', erp: l.erp, name: l.name, qty: l.qty, rate: null, total: null }));
+        // Customer document → the alias code they ordered under, when the line carries one.
+        : (order.lines || []).map(l => ({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.qty, rate: null, total: null }));
     const total = typeof order.invoiceTotal === 'number'
         ? order.invoiceTotal
         : lines.reduce((s, l) => s + (l.type === 'KIT' ? (l.price || 0) : (l.total || 0)), 0);

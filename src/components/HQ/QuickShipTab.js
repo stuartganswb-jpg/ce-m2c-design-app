@@ -241,6 +241,29 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         return cols;
     };
 
+    // THE CUSTOMER-FACING IDENTITY (Stuart 2026-07-25). Selling H1-1BE inside Simple Elegance, the
+    // customer buys H2-1BE — so quotes, sales orders and invoices show the ALIAS code and the ALIAS
+    // price, while stock, picking, packing and the barcode stay on the real item. Which alias? The
+    // one carrying the collection being sold; without a scope there's no unambiguous answer, so
+    // nothing is substituted.
+    const isAliasDoc = (d) => !!(d.aliasOf || d.manufacturingSpecs?.aliasOf);
+    const aliasFaceOf = (it) => {
+        if (!scopeCollection) return null;
+        const own = baseCodeOf(it);
+        for (const c of aliasCodesOf(it)) {
+            if (c === own) continue;
+            const d = (aliasIndex.docsByCode.get(c) || []).find(x => isAliasDoc(x) && collectionsOf(x).includes(scopeCollection));
+            if (d) return d;
+        }
+        return null;
+    };
+    // The alias code wearing this variant's finish: H2-1BE + /CC → H2-1BE/CC.
+    const aliasCodeFor = (aliasDoc, it) => {
+        const base = bareCode(aliasDoc.legacyErpId && aliasDoc.legacyErpId !== 'PENDING' ? aliasDoc.legacyErpId : aliasDoc.itemId);
+        const fin = finishCodeOf(it);
+        return fin ? `${base}/${fin}` : base;
+    };
+
     // Every collection present on stocked inventory — the scope menu is data, never a hard-coded
     // list. Alias-reachable tags count, so a collection that only ever tags its H2-side aliases
     // still appears here.
@@ -414,9 +437,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const pushLine = (it, qty, note, kitMeta, opts) => {
         if (!it) return;
         const pack = opts?.noPack ? { uom: '', size: 1 } : packForItem(it);
+        // Captured at ADD time so the line keeps the identity it was sold under even if the
+        // operator changes the collection scope afterwards.
+        const face = aliasFaceOf(it);
         setCart(prev => [...prev, {
             key: `${it.id}-${Date.now()}-${Math.round(prev.length)}`,
             itemId: it.id, erp: erpOf(it), nsId: nsIdOf(it), name: it.itemName || erpOf(it),
+            // Customer-facing alias: shown on the quote/SO/invoice and priced from. The REAL item
+            // above is what we stock, pick, barcode and send to NetSuite.
+            aliasErp: face ? aliasCodeFor(face, it) : '', aliasItemId: face ? face.id : null,
             qty: Math.max(1, parseInt(qty) || 1), note: note || '',
             bin: it.manufacturingSpecs?.homeBin || it.binLocation || '',
             // SELLING unit. qty means packs; packSize converts to the each count we stock, pick and
@@ -575,6 +604,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // the each count (qty × packSize). A 7-pack of $4 rings at qty 2 is 14 × $4 — so kit
     // distribution, the cart total and the NetSuite rate all stay in the same unit as stock.
     const rateForId = (id) => { const it = itemById(id); return it ? rateFor(it) : 0; };
+    // A line sold under an alias bills at the ALIAS's price — that's the price list the customer is
+    // buying from. An unpriced alias doc falls back to the real item, so a missing price can never
+    // silently zero a line.
+    const rateForLine = (l) => {
+        if (l.aliasItemId) { const a = itemById(l.aliasItemId); if (a) { const r = rateFor(a); if (r > 0) return r; } }
+        return rateForId(l.itemId);
+    };
     const pricedCart = useMemo(() => {
         const rateMap = new Map();
         const byKit = {};
@@ -583,11 +619,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // absorbs kit distribution — it isn't part of the kit's value.
             if (l.rateOverride != null) rateMap.set(l.key, l.rateOverride);
             else if (l.kitKey) (byKit[l.kitKey] = byKit[l.kitKey] || []).push(l);
-            else rateMap.set(l.key, rateForId(l.itemId));
+            else rateMap.set(l.key, rateForLine(l));
         });
         Object.values(byKit).forEach(group => {
             const kp = effectiveKitPrice(group[0].kitName, group[0].kitBrand);
-            const stds = group.map(l => ({ l, std: rateForId(l.itemId), each: Math.max(1, eachQtyOf(l)) }));
+            const stds = group.map(l => ({ l, std: rateForLine(l), each: Math.max(1, eachQtyOf(l)) }));
             if (kp === null) { stds.forEach(({ l, std }) => rateMap.set(l.key, std)); return; }
             const S = stds.reduce((s, x) => s + x.std * x.each, 0);
             let spent = 0;
@@ -644,7 +680,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         quantity: l.eachQty,
                         rate: parseFloat((l.rate || 0).toFixed(2)),
                         price: { id: "-1" },
-                        description: `${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`
+                        // The customer ordered the alias code — name it first so the SO reads the way
+                        // they ordered, while the LINE ITEM stays the real stocked part.
+                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`
                     }))
                 }
             };
@@ -670,7 +708,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // PICK/PACK reads lines[].qty — it must be the EACH count the warehouse pulls off
                 // the shelf (14 rings), never the pack count. packs/packUom ride alongside so the
                 // packing station knows to bundle them 7 to a bag.
-                lines: lines.map(l => ({ erp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '' })),
+                // erp stays the REAL stocked code — pick/pack scans and barcodes it. aliasErp rides
+                // alongside so the floor can see, in small print, what the customer ordered it as.
+                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '' })),
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -681,12 +721,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     const out = Object.values(groups).map(g => {
                         const kp = effectiveKitPrice(g[0].kitName, g[0].kitBrand);
                         // Customer-facing kit # = pattern + finish suffix (HS0109T … - SG).
-                        return { type: 'KIT', code: `${g[0].kitName}${g[0].kitFinish ? ' - ' + g[0].kitFinish : ''}`, price: kp !== null ? kp : g.reduce((s, l) => s + l.rate * l.eachQty, 0), components: g.map(l => ({ erp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '' })) };
+                        // The INVOICE is the customer's document: it carries the alias code they
+                        // ordered. The real code is kept as realErp for internal reconciliation.
+                        return { type: 'KIT', code: `${g[0].kitName}${g[0].kitFinish ? ' - ' + g[0].kitFinish : ''}`, price: kp !== null ? kp : g.reduce((s, l) => s + l.rate * l.eachQty, 0), components: g.map(l => ({ erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '' })) };
                     });
                     // Loose lines invoice in the unit the customer BUYS: "2 × 7 PACK" at the pack
                     // price, with the each count kept for reference. qty stays the each count so an
                     // older invoice reader (which knows nothing about packs) still totals correctly.
-                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty }));
+                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty }));
                     return out;
                 })(),
                 invoiceTotal: lines.reduce((s, l) => s + l.rate * l.eachQty, 0),
@@ -1028,7 +1070,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         {pricedCart.map(l => (
                             <div key={l.key} style={{ display: 'grid', gridTemplateColumns: '1fr 64px 74px auto', gap: '10px', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
                                 <div style={{ minWidth: 0 }}>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
+                                    {/* Customer-facing code leads; the real stocked code rides small
+                                        beneath it, since that's what we pick and barcode. */}
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.aliasErp || l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
+                                    {l.aliasErp && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>ships as {l.erp}</div>}
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.packUom && <span style={{ color: 'var(--brass)' }}> · {l.qty} × {l.packUom} = {l.eachQty} ea</span>}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
                                 </div>
                                 <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} title={l.packUom ? `Packs of ${l.packSize}` : 'Quantity'} />
