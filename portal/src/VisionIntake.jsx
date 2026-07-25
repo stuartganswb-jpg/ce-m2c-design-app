@@ -1,16 +1,20 @@
 // MEASURE & FIT — the customer-facing half of Client Vision (measurement intake ONLY).
-// The customer enters wall/opening measurements and end treatments; the page shows, live, the
-// outside-edge numbers their opening has to accommodate (poleO2O / totalSystemO2O / wall C2C)
-// via the VERBATIM fit-math copy in ./shared/bayMath.js — the same computeBayMath the internal
-// Vision board runs. Submitting calls the portalVisionDraft BFF, which lands the line as a
-// cpq_drafts doc in the exact internal shape: staff reopen the quote (CRM card → Reopen Vision),
-// "Load saved line" restores this entire form onto the Engineering board with zero re-entry,
-// and their save stamps the shop drawing + cut-sheet numbers. NOTHING shop-only renders here —
-// no raw cuts, no saw angles, no drawings; those are derived by staff from this data.
+// FLOW-DRIVEN (Stuart 2026-07-25: "the vision tool must ask which brackets and end treatment and
+// these choices come from the cpq flow"): after the product pick this page loads the flow via the
+// portalFlow BFF and mirrors the internal Vision board's flow-mirror — Rod Diameter / Bracket
+// Projection come from the flow's SIZE steps (inches resolved from the verbatim sizeMatrix
+// registry by optId), each end's treatment comes from that side's End Treatment step's OPTIONS
+// (endStyleOf mapping copied from VisionHardware: FRENCH_RETURN→RETURN_BEND, MITER_RETURN→
+// RETURN_MITER, INSIDE_MOUNT/OPT-FLUSH→FLUSH), and brackets come from that position's Bracket &
+// Mount step. Selections are stored as STEP params (stepId → optId — the same shape CPQ and the
+// internal board use), so staff Load-Line/Configure pre-pick the exact same options.
+// The readouts run the VERBATIM fit-math copy (shared/bayMath.js). NOTHING shop-only renders —
+// no raw cuts, no saw angles, no drawings; staff derive those from this data in Vision.
 import React, { useEffect, useMemo, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
 import { computeBayMath, safeProjOf } from './shared/bayMath.js';
+import { SIZE_STEP_TYPE, SIZE_FAMILIES, projAllowedAtDia, projOptionInches } from './shared/sizeMatrix.js';
 
 // "138 3/4", "138-3/4", "3/4", "138.75" → decimal inches. Blank/invalid → 0.
 const parseMeas = (s) => {
@@ -35,34 +39,58 @@ const toFrac = (v) => {
 };
 const both = (v) => Number.isFinite(v) ? `${(Math.round(v * 1000) / 1000)}"  (${toFrac(v)})` : '—';
 
+// ——— flow-mirror helpers, copied from VisionHardware's flow-driven Fabrication Settings ———
+const upperS = (s) => String(s || '').toUpperCase();
+const endStepFor = (steps, pos) => (steps || []).find((s) => /end treatment/i.test(s.title || '') && upperS(s.position) === pos);
+const bracketStepFor = (steps, pos) => (steps || []).find((s) => (s.stepRole === 'BRACKET' || /bracket/i.test(s.title || '')) && !/end treatment/i.test(s.title || '') && upperS(s.position) === pos);
+const optOf = (step, sel) => step ? ((step.styleOptions || []).find((o) => (o.optId || o.partId) === sel) || null) : null;
+const optIsReturn = (o) => {
+  const t = upperS(o?.endTreatment);
+  if (t) return t === 'FRENCH_RETURN' || t === 'MITER_RETURN' || t === 'INSIDE_MOUNT';
+  if (!o) return false;
+  if (/^OPT-(BEND|MITER)/i.test(o.optId || '')) return true;
+  return /bend|return|miter|mitre|mtr|french/i.test(String(o.partName || ''));
+};
+const endStyleOf = (o) => {
+  const t = upperS(o?.endTreatment);
+  if (t === 'FRENCH_RETURN') return 'RETURN_BEND';
+  if (t === 'MITER_RETURN') return 'RETURN_MITER';
+  if (t === 'INSIDE_MOUNT') return 'FLUSH';
+  if (t === 'FINIAL') return 'FINIAL';
+  if (/^OPT-FLUSH/i.test(o?.optId || '')) return 'FLUSH';
+  if (/^OPT-BEND/i.test(o?.optId || '')) return 'RETURN_BEND';
+  if (/^OPT-MITER/i.test(o?.optId || '')) return 'RETURN_MITER';
+  return o ? 'FINIAL' : '';
+};
+
 const SHAPES = [
   { id: 'STRAIGHT', label: 'Straight' },
   { id: 'MITERED', label: 'Angled Bay' },
   { id: 'BOW', label: 'Curved Bay' },
 ];
-const END_STYLES = [
+const GENERIC_ENDS = [
   { id: 'FINIAL', label: 'Finial / End Cap' },
   { id: 'RETURN_BEND', label: 'French (Bent) Return' },
   { id: 'RETURN_MITER', label: 'Mitered Return' },
-];
-const MOUNTS = [
-  { id: 'OPEN', label: 'Wall' },
-  { id: 'CEILING', label: 'Ceiling' },
-  { id: 'INSIDE', label: 'Inside Mount' },
+  { id: 'FLUSH', label: 'Flush Cut' },
 ];
 
 const lbl = { fontFamily: 'var(--mono, monospace)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', margin: '0 0 6px' };
 const field = { width: '100%', padding: '10px 12px', border: '1px solid var(--line)', boxSizing: 'border-box', fontSize: '0.95rem', outline: 'none', background: '#fff', borderRadius: 2 };
 const row = { display: 'flex', gap: 12, flexWrap: 'wrap' };
 const cell = { flex: 1, minWidth: 150 };
+const toggleBtn = (on) => ({ flex: 1, padding: '10px 4px', cursor: 'pointer', borderRadius: 2, fontSize: '0.85rem', border: `1px solid ${on ? 'var(--brass, #b08d57)' : 'var(--line)'}`, background: on ? 'var(--brass, #b08d57)' : '#fff', color: on ? '#fff' : 'var(--ink)' });
 
 export default function VisionIntake() {
   const [products, setProducts] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
   const [flowId, setFlowId] = useState('');
+  const [flow, setFlow] = useState(null);        // sanitized flow from portalFlow
+  const [flowBusy, setFlowBusy] = useState(false);
   const [sidemark, setSidemark] = useState('');
   const [note, setNote] = useState('');
   const [sel, setSel] = useState({ shape: 'STRAIGHT', inputMode: 'WALL', endStyle: 'FINIAL', endStyleRight: 'FINIAL', mountLeft: 'OPEN', mountRight: 'OPEN', mountOuter: 'OPEN' });
+  const [params, setParams] = useState({});      // stepId → optId, the CPQ selection shape
   const [m, setM] = useState({ w1: '', w2: '', w3: '', bowDepth: '', proj: '', poleDiameter: '1', bracketW: '3', returnRadius: '4', gripAllowance: '8.5', insideMountDeduct: '0.25' });
   const [showAdv, setShowAdv] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -77,36 +105,108 @@ export default function VisionIntake() {
     return () => { alive = false; };
   }, []);
 
+  // Product pick → load its flow (same BFF the configurator uses). Seed the shape from the
+  // flow's bay configuration and reset step picks to the flow's defaults.
+  useEffect(() => {
+    if (!flowId) { setFlow(null); setParams({}); return; }
+    let alive = true;
+    setFlowBusy(true); setFlow(null); setParams({});
+    httpsCallable(functions, 'portalFlow')({ flowId })
+      .then((res) => {
+        if (!alive) return;
+        const f = res.data?.flow || null;
+        setFlow(f);
+        const fs = upperS(res.data?.fabShape || '');
+        if (fs === 'MITERED' || fs === 'BOW' || fs === 'STRAIGHT') setSel((p) => ({ ...p, shape: fs }));
+      })
+      .catch(() => { if (alive) setFlow(null); })
+      .finally(() => { if (alive) setFlowBusy(false); });
+    return () => { alive = false; };
+  }, [flowId]);
+
+  const steps = flow?.steps || [];
+  const stepDia = steps.find((s) => s.type === SIZE_STEP_TYPE && s.sizeAxis === 'DIA') || null;
+  const stepProjSz = steps.find((s) => s.type === SIZE_STEP_TYPE && s.sizeAxis === 'PROJ') || null;
+  const stepEndL = endStepFor(steps, 'LEFT'), stepEndR = endStepFor(steps, 'RIGHT');
+  const stepBrL = bracketStepFor(steps, 'LEFT'), stepBrR = bracketStepFor(steps, 'RIGHT'), stepBrC = bracketStepFor(steps, 'CENTER');
+  const fam = stepDia ? SIZE_FAMILIES[stepDia.sizeFamily] : null;
+
+  const setParam = (stepId, v) => setParams((p) => { const n = { ...p }; if (v) n[stepId] = v; else delete n[stepId]; return n; });
+
+  // Registry-resolved size picks (defaults = the family base, exactly what the internal board
+  // labels "-- Default --"). Registry lookup by optId, never label parsing.
+  const diaOpt = useMemo(() => {
+    if (!stepDia || !fam) return null;
+    const selId = params[stepDia.id];
+    return fam.dia.options.find((o) => o.optId === selId) || fam.dia.options.find((o) => o.value === fam.baseDia) || fam.dia.options[0];
+  }, [stepDia, fam, params]);
+  const projOptsAtDia = useMemo(() => {
+    if (!stepProjSz || !fam) return [];
+    return (stepProjSz.styleOptions || []).filter((o) => projAllowedAtDia(stepProjSz.sizeFamily, o, diaOpt?.value));
+  }, [stepProjSz, fam, diaOpt]);
+  const projOpt = useMemo(() => {
+    if (!stepProjSz || !fam) return null;
+    const selId = params[stepProjSz.id];
+    return projOptsAtDia.find((o) => o.optId === selId)
+      || projOptsAtDia.find((o) => o.sizeValue === fam.baseProj) || projOptsAtDia[0] || null;
+  }, [stepProjSz, fam, params, projOptsAtDia]);
+
+  const endOptL = optOf(stepEndL, stepEndL ? params[stepEndL.id] : null);
+  const endOptR = optOf(stepEndR, stepEndR ? params[stepEndR.id] : null);
+  // A chosen return replaces that side's bracket when the step carries return-only plates —
+  // same grey rule as the internal board ("— replaced by —").
+  const brLocked = (brStep, endOpt) => !!(brStep && (brStep.subOptions || []).some((o) => o.returnOnly) && optIsReturn(endOpt));
+  const brLockedL = brLocked(stepBrL, endOptL), brLockedR = brLocked(stepBrR, endOptR);
+  useEffect(() => {
+    if (brLockedL && stepBrL && params[stepBrL.id]) setParam(stepBrL.id, '');
+    if (brLockedR && stepBrR && params[stepBrR.id]) setParam(stepBrR.id, '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brLockedL, brLockedR]);
+
   const setSelKey = (k, v) => setSel((p) => ({ ...p, [k]: v }));
   const setMKey = (k, v) => setM((p) => ({ ...p, [k]: v }));
 
   // The engData the internal Vision board runs on — same keys, decimal inches always.
-  const engData = useMemo(() => ({
-    shape: sel.shape, inputMode: sel.inputMode,
-    w1: parseMeas(m.w1), w2: parseMeas(m.w2), w3: parseMeas(m.w3),
-    a1: 135, a2: 135, bowDepth: parseMeas(m.bowDepth),
-    mountLeft: sel.mountLeft, mountRight: sel.mountRight, mountCenter: 'OPEN', mountOuter: sel.mountOuter,
-    endStyle: sel.endStyle, endStyleRight: sel.endStyleRight,
-    proj: m.proj === '' ? '' : parseMeas(m.proj),
-    bracketId: '', bracketIdRight: '', bracketIdCenter: '', backplateIdLeft: '', backplateIdRight: '', backplateIdCenter: '',
-    poleDiameter: parseMeas(m.poleDiameter) || 1, bracketW: parseMeas(m.bracketW) || 3, finialW: 3.5,
-    bracketThickness: 0.25, insideMountDeduct: parseMeas(m.insideMountDeduct) || 0.25,
-    returnRadius: parseMeas(m.returnRadius) || 4, gripAllowance: parseMeas(m.gripAllowance) || 8.5,
-  }), [sel, m]);
+  // Flow-driven fields (dia / proj / end styles / INSIDE mount flip) derive from the STEP picks,
+  // exactly like VisionHardware's flow-mirror; free inputs remain only where the flow has no step.
+  const engData = useMemo(() => {
+    const endL = stepEndL ? (endOptL ? endStyleOf(endOptL) : 'FINIAL') : sel.endStyle;
+    const endR = stepEndR ? (endOptR ? endStyleOf(endOptR) : 'FINIAL') : sel.endStyleRight;
+    const imL = upperS(endOptL?.endTreatment) === 'INSIDE_MOUNT';
+    const imR = upperS(endOptR?.endTreatment) === 'INSIDE_MOUNT';
+    const mountL = sel.shape === 'STRAIGHT' && stepEndL ? (imL ? 'INSIDE' : (sel.mountLeft === 'INSIDE' ? 'OPEN' : sel.mountLeft)) : sel.mountLeft;
+    const mountR = sel.shape === 'STRAIGHT' && stepEndR ? (imR ? 'INSIDE' : (sel.mountRight === 'INSIDE' ? 'OPEN' : sel.mountRight)) : sel.mountRight;
+    const dia = diaOpt && Number.isFinite(diaOpt.inches) ? diaOpt.inches : (parseMeas(m.poleDiameter) || 1);
+    const projIn = projOpt ? projOptionInches(stepProjSz.sizeFamily, projOpt) : null;
+    const proj = projIn != null ? projIn : (m.proj === '' ? '' : parseMeas(m.proj));
+    return {
+      shape: sel.shape, inputMode: sel.inputMode,
+      w1: parseMeas(m.w1), w2: parseMeas(m.w2), w3: parseMeas(m.w3),
+      a1: 135, a2: 135, bowDepth: parseMeas(m.bowDepth),
+      mountLeft: mountL, mountRight: mountR, mountCenter: 'OPEN', mountOuter: sel.mountOuter,
+      endStyle: endL, endStyleRight: endR,
+      proj,
+      bracketId: '', bracketIdRight: '', bracketIdCenter: '', backplateIdLeft: '', backplateIdRight: '', backplateIdCenter: '',
+      poleDiameter: dia, bracketW: parseMeas(m.bracketW) || 3, finialW: 3.5,
+      bracketThickness: 0.25, insideMountDeduct: parseMeas(m.insideMountDeduct) || 0.25,
+      returnRadius: parseMeas(m.returnRadius) || 4, gripAllowance: parseMeas(m.gripAllowance) || 8.5,
+    };
+  }, [sel, m, stepEndL, stepEndR, endOptL, endOptR, diaOpt, projOpt, stepProjSz]);
 
   // IDENTICAL math to the internal board (verbatim bayMath copy). No parts library on the
   // portal → open ends use the half-bracket-width allowance; staff confirm exact hardware.
   const fit = useMemo(() => computeBayMath({ engData, safeProj: safeProjOf(engData), libraryParts: [] }), [engData]);
 
   const isBay = sel.shape !== 'STRAIGHT';
-  const needProj = isBay && !parseMeas(m.proj);
+  const needProj = isBay && !safeProjOf(engData);
   const missing =
     !flowId ? 'Pick a product first.'
+    : flowBusy ? 'Loading the product’s options…'
     : !sidemark.trim() ? 'Give this window a name (sidemark) — e.g. “Living Room East”.'
     : !(engData.w2 > 0) ? (sel.shape === 'MITERED' ? 'Enter the center wall measurement.' : 'Enter the width measurement.')
     : (sel.shape === 'MITERED' && !(engData.w1 > 0 && engData.w3 > 0)) ? 'Enter the left and right wall measurements.'
     : (sel.shape === 'BOW' && !(engData.bowDepth > 0)) ? 'Enter the bay depth.'
-    : needProj ? 'Enter the bracket projection (bay math needs it).'
+    : needProj ? 'Pick the bracket projection (bay math needs it).'
     : null;
 
   const submit = async () => {
@@ -119,7 +219,12 @@ export default function VisionIntake() {
         pole1: fit.pole1, pole2: fit.pole2, pole3: fit.pole3,
         endAddL: fit.endAddL, endAddR: fit.endAddR,
       };
-      const res = await httpsCallable(functions, 'portalVisionDraft')({ flowId, flowName, sidemark: sidemark.trim(), note, engData, preview });
+      // Step params include the registry defaults explicitly, so the staff board and CPQ
+      // Configure open with the SAME picks the customer's readouts used.
+      const outParams = { ...params };
+      if (stepDia && diaOpt) outParams[stepDia.id] = diaOpt.optId;
+      if (stepProjSz && projOpt) outParams[stepProjSz.id] = projOpt.optId;
+      const res = await httpsCallable(functions, 'portalVisionDraft')({ flowId, flowName, sidemark: sidemark.trim(), note, engData, preview, params: outParams });
       setSubmitted({ quoteNo: res.data?.quoteNo || '' });
     } catch (e) {
       setSubErr(/permission/i.test(e.message || '') ? 'This product is not enabled on your account.' : 'Could not submit right now — please try again shortly.');
@@ -140,11 +245,36 @@ export default function VisionIntake() {
     );
   }
 
+  const endSelect = (side, st, endOpt) => {
+    const isLeft = side === 'LEFT';
+    if (!st) {
+      // No End Treatment step on this flow → generic fallback (never the case for generated flows).
+      const key = isLeft ? 'endStyle' : 'endStyleRight';
+      return (
+        <select style={field} value={sel[key]} onChange={(e) => setSelKey(key, e.target.value)}>
+          {GENERIC_ENDS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        </select>
+      );
+    }
+    return (
+      <select style={field} value={endOpt?.optId || ''} onChange={(e) => setParam(st.id, e.target.value)}>
+        <option value="">— choose from this collection —</option>
+        {(st.styleOptions || []).map((o) => <option key={o.optId} value={o.optId}>{o.partName || o.label || o.optId}</option>)}
+      </select>
+    );
+  };
+  const bracketSelect = (st, locked) => (
+    <select style={{ ...field, opacity: locked ? 0.5 : 1 }} value={locked ? '' : (params[st.id] || '')} disabled={locked} onChange={(e) => setParam(st.id, e.target.value)}>
+      <option value="">{locked ? '— replaced by the return —' : '— our team can choose —'}</option>
+      {(st.styleOptions || []).map((o) => <option key={o.optId} value={o.optId}>{o.partName || o.label || o.optId}</option>)}
+    </select>
+  );
+
   return (
     <div style={{ marginTop: 24 }}>
       <h2 className="sec">Measure &amp; Fit</h2>
       <p style={{ color: 'var(--ink-soft)', margin: '0 0 16px', fontSize: '0.92rem' }}>
-        Enter your wall measurements and end treatments — we show the <b>outside-edge size the finished system needs</b>, so it fits before it ships.
+        Enter your wall measurements and pick the end treatments — we show the <b>outside-edge size the finished system needs</b>, so it fits before it ships.
         Measure in inches; fractions welcome (type <i>138 3/4</i>).
       </p>
 
@@ -172,10 +302,7 @@ export default function VisionIntake() {
                 <label style={lbl}>Shape</label>
                 <div style={{ display: 'flex', gap: 6 }}>
                   {SHAPES.map((s) => (
-                    <button key={s.id} onClick={() => setSelKey('shape', s.id)}
-                      style={{ flex: 1, padding: '10px 4px', cursor: 'pointer', borderRadius: 2, fontSize: '0.85rem', border: `1px solid ${sel.shape === s.id ? 'var(--brass, #b08d57)' : 'var(--line)'}`, background: sel.shape === s.id ? 'var(--brass, #b08d57)' : '#fff', color: sel.shape === s.id ? '#fff' : 'var(--ink)' }}>
-                      {s.label}
-                    </button>
+                    <button key={s.id} onClick={() => setSelKey('shape', s.id)} style={toggleBtn(sel.shape === s.id)}>{s.label}</button>
                   ))}
                 </div>
               </div>
@@ -185,8 +312,8 @@ export default function VisionIntake() {
               <div style={{ ...cell, flexBasis: '100%' }}>
                 <label style={lbl}>What did you measure?</label>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={() => setSelKey('inputMode', 'WALL')} style={{ flex: 1, padding: '10px 6px', cursor: 'pointer', borderRadius: 2, fontSize: '0.85rem', border: `1px solid ${sel.inputMode === 'WALL' ? 'var(--brass, #b08d57)' : 'var(--line)'}`, background: sel.inputMode === 'WALL' ? 'var(--brass, #b08d57)' : '#fff', color: sel.inputMode === 'WALL' ? '#fff' : 'var(--ink)' }}>Wall / opening (outside edges)</button>
-                  <button onClick={() => setSelKey('inputMode', 'ORDERING')} style={{ flex: 1, padding: '10px 6px', cursor: 'pointer', borderRadius: 2, fontSize: '0.85rem', border: `1px solid ${sel.inputMode === 'ORDERING' ? 'var(--brass, #b08d57)' : 'var(--line)'}`, background: sel.inputMode === 'ORDERING' ? 'var(--brass, #b08d57)' : '#fff', color: sel.inputMode === 'ORDERING' ? '#fff' : 'var(--ink)' }}>Exact pole length I want</button>
+                  <button onClick={() => setSelKey('inputMode', 'WALL')} style={toggleBtn(sel.inputMode === 'WALL')}>Wall / opening (outside edges)</button>
+                  <button onClick={() => setSelKey('inputMode', 'ORDERING')} style={toggleBtn(sel.inputMode === 'ORDERING')}>Exact pole length I want</button>
                 </div>
               </div>
             </div>
@@ -198,34 +325,71 @@ export default function VisionIntake() {
               {sel.shape === 'BOW' && <div style={cell}><label style={lbl}>Bay depth (in)</label><input style={field} value={m.bowDepth} onChange={(e) => setMKey('bowDepth', e.target.value)} placeholder="15" /></div>}
             </div>
 
+            {flowBusy && <div className="empty" style={{ marginBottom: 14 }}>Loading this collection's options…</div>}
+
+            {/* Size steps — from the flow, inches from the registry (never typed) */}
+            {(stepDia || stepProjSz) && (
+              <div style={{ ...row, marginBottom: 14 }}>
+                {stepDia && (
+                  <div style={cell}>
+                    <label style={lbl}>{stepDia.title || 'Rod Diameter'} — from this collection</label>
+                    <select style={field} value={diaOpt?.optId || ''} onChange={(e) => setParam(stepDia.id, e.target.value)}>
+                      {(fam?.dia.options || []).map((o) => <option key={o.optId} value={o.optId}>{o.label}</option>)}
+                    </select>
+                  </div>
+                )}
+                {stepProjSz && (
+                  <div style={cell}>
+                    <label style={lbl}>{stepProjSz.title || 'Bracket Projection'} — from this collection</label>
+                    <select style={field} value={projOpt?.optId || ''} onChange={(e) => setParam(stepProjSz.id, e.target.value)}>
+                      {projOptsAtDia.map((o) => <option key={o.optId} value={o.optId}>{o.partName || o.label}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Free inputs ONLY when the flow carries no size steps */}
+            {flow && !stepDia && (
+              <div style={{ ...row, marginBottom: 14 }}>
+                <div style={cell}><label style={lbl}>Rod diameter (in)</label><input style={field} value={m.poleDiameter} onChange={(e) => setMKey('poleDiameter', e.target.value)} placeholder="1 3/8" /></div>
+                {!stepProjSz && <div style={cell}><label style={lbl}>Bracket projection (in){isBay ? '' : ' — optional'}</label><input style={field} value={m.proj} onChange={(e) => setMKey('proj', e.target.value)} placeholder="4 5/8" /></div>}
+              </div>
+            )}
+
             <div style={{ ...row, marginBottom: 14 }}>
               <div style={cell}>
-                <label style={lbl}>Left end</label>
-                <select style={field} value={sel.endStyle} onChange={(e) => setSelKey('endStyle', e.target.value)}>
-                  {END_STYLES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-                </select>
+                <label style={lbl}>Left end{stepEndL ? ' — from this collection' : ''}</label>
+                {endSelect('LEFT', stepEndL, endOptL)}
               </div>
               <div style={cell}>
-                <label style={lbl}>Right end</label>
-                <select style={field} value={sel.endStyleRight} onChange={(e) => setSelKey('endStyleRight', e.target.value)}>
-                  {END_STYLES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-                </select>
+                <label style={lbl}>Right end{stepEndR ? ' — from this collection' : ''}</label>
+                {endSelect('RIGHT', stepEndR, endOptR)}
               </div>
             </div>
+
+            {(stepBrL || stepBrR || stepBrC) && (
+              <div style={{ ...row, marginBottom: 14 }}>
+                {stepBrL && <div style={cell}><label style={lbl}>Left bracket</label>{bracketSelect(stepBrL, brLockedL)}</div>}
+                {stepBrC && <div style={cell}><label style={lbl}>Center bracket</label>{bracketSelect(stepBrC, false)}</div>}
+                {stepBrR && <div style={cell}><label style={lbl}>Right bracket</label>{bracketSelect(stepBrR, brLockedR)}</div>}
+              </div>
+            )}
 
             <div style={{ ...row, marginBottom: 14 }}>
               {sel.shape === 'STRAIGHT' ? (
                 <>
                   <div style={cell}>
                     <label style={lbl}>Left mount</label>
-                    <select style={field} value={sel.mountLeft} onChange={(e) => setSelKey('mountLeft', e.target.value)}>
-                      {MOUNTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                    <select style={field} value={engData.mountLeft} disabled={upperS(endOptL?.endTreatment) === 'INSIDE_MOUNT'} onChange={(e) => setSelKey('mountLeft', e.target.value)}>
+                      <option value="OPEN">Wall</option><option value="CEILING">Ceiling</option>
+                      {(upperS(endOptL?.endTreatment) === 'INSIDE_MOUNT' || !stepEndL) && <option value="INSIDE">Inside Mount</option>}
                     </select>
                   </div>
                   <div style={cell}>
                     <label style={lbl}>Right mount</label>
-                    <select style={field} value={sel.mountRight} onChange={(e) => setSelKey('mountRight', e.target.value)}>
-                      {MOUNTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                    <select style={field} value={engData.mountRight} disabled={upperS(endOptR?.endTreatment) === 'INSIDE_MOUNT'} onChange={(e) => setSelKey('mountRight', e.target.value)}>
+                      <option value="OPEN">Wall</option><option value="CEILING">Ceiling</option>
+                      {(upperS(endOptR?.endTreatment) === 'INSIDE_MOUNT' || !stepEndR) && <option value="INSIDE">Inside Mount</option>}
                     </select>
                   </div>
                 </>
@@ -233,18 +397,10 @@ export default function VisionIntake() {
                 <div style={cell}>
                   <label style={lbl}>End mounts</label>
                   <select style={field} value={sel.mountOuter} onChange={(e) => setSelKey('mountOuter', e.target.value)}>
-                    {MOUNTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                    <option value="OPEN">Wall</option><option value="CEILING">Ceiling</option><option value="INSIDE">Inside Mount</option>
                   </select>
                 </div>
               )}
-              <div style={cell}>
-                <label style={lbl}>Bracket projection (in){isBay ? '' : ' — optional'}</label>
-                <input style={field} value={m.proj} onChange={(e) => setMKey('proj', e.target.value)} placeholder="4 5/8" />
-              </div>
-              <div style={cell}>
-                <label style={lbl}>Rod diameter (in)</label>
-                <input style={field} value={m.poleDiameter} onChange={(e) => setMKey('poleDiameter', e.target.value)} placeholder="1 3/8" />
-              </div>
             </div>
 
             <button className="btn-ghost" onClick={() => setShowAdv(!showAdv)} style={{ marginBottom: showAdv ? 10 : 14 }}>
@@ -284,6 +440,8 @@ export default function VisionIntake() {
               {sel.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Left wall C2C</span><b>{both(fit.pole1)}</b></div>}
               <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{sel.shape === 'STRAIGHT' ? 'Main wall C2C' : 'Center wall C2C'}</span><b>{both(fit.pole2)}</b></div>
               {sel.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Right wall C2C</span><b>{both(fit.pole3)}</b></div>}
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Rod diameter</span><b>{both(engData.poleDiameter)}</b></div>
+              {safeProjOf(engData) > 0 && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Projection</span><b>{both(safeProjOf(engData))}</b></div>}
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--ink-soft)', marginTop: 14, lineHeight: 1.5 }}>
               Returns and inside mounts change these numbers automatically. End allowances use half your bracket width until our team confirms the exact hardware on review.

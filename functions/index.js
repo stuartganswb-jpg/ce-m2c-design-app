@@ -1052,6 +1052,9 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
         },
         assembly,
         finishes,
+        // Bay configuration (display-safe scalar) — the portal Measure & Fit page seeds its
+        // shape from this, mirroring the internal Vision board's fabShape seeding.
+        fabShape: flow.fabShape || '',
     };
 });
 
@@ -1147,7 +1150,7 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
 // fields forced empty (bracket selection is engineering, not intake).
 exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
-    const { flowId, flowName, sidemark, note, engData: rawEng, preview } = request.data || {};
+    const { flowId, flowName, sidemark, note, engData: rawEng, preview, params: rawParams } = request.data || {};
     const db = admin.firestore();
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
     const crm = crmSnap.exists ? crmSnap.data() : {};
@@ -1162,7 +1165,8 @@ exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
     const oneOf = (v, list, d) => { const s = String(v || '').toUpperCase(); return list.includes(s) ? s : d; };
     const e = rawEng || {};
     const MOUNTS = ['OPEN', 'INSIDE', 'CEILING'];
-    const ENDS = ['FINIAL', 'RETURN_BEND', 'RETURN_MITER'];
+    // FLUSH included: the internal endStyleOf maps Flush Cut AND Inside Mount options to 'FLUSH'.
+    const ENDS = ['FINIAL', 'RETURN_BEND', 'RETURN_MITER', 'FLUSH'];
     const engData = {
         shape: oneOf(e.shape, ['STRAIGHT', 'MITERED', 'BOW'], 'STRAIGHT'),
         inputMode: oneOf(e.inputMode, ['WALL', 'ORDERING'], 'WALL'),
@@ -1191,6 +1195,20 @@ exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
     const p = preview || {};
     const pnum = (v) => { const f = parseFloat(v); return Number.isFinite(f) ? f : null; };
 
+    // STEP PICKS (stepId → optId) — the flow-driven selections (rod diameter / projection / end
+    // treatments / brackets), VALIDATED against the flow's own steps so only real selections ride.
+    // They land in specs exactly like the internal Vision save's dynamicConfigParams spread, so
+    // staff Load-Line and CPQ Configure open pre-picked on the same options the customer's
+    // readouts used (this is what makes the portal numbers and the board numbers agree).
+    const stepParams = {};
+    const stepById = new Map((flow.steps || []).map((s) => [String(s.id), s]));
+    for (const [k, v] of Object.entries(rawParams || {}).slice(0, 40)) {
+        const st = stepById.get(String(k));
+        if (!st) continue;
+        const opt = (st.styleOptions || []).find((o) => (o.optId || o.partId) === v);
+        if (opt) stepParams[String(k)] = String(v);
+    }
+
     await db.collection('jobs').doc(quoteNo).set({
         jobId: quoteNo, quoteNo, brandId,
         status: 'PORTAL_REQUEST', source: 'PORTAL',
@@ -1217,6 +1235,7 @@ exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
                 pole1: pnum(p.pole1), pole2: pnum(p.pole2), pole3: pnum(p.pole3),
                 svgString: '', customerNote: cleanNote,
             },
+            ...stepParams,
         },
         spatialData: { ...engData, attachments: [], shopNotes: [] },
         author: { name: `${crm.name || 'Customer'} (portal)`, email },
