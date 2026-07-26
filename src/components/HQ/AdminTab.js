@@ -1528,26 +1528,39 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   const handleApplyFinishesToSteps = async () => {
       if (!activeFlowId || !activeFlow) return;
       const def = flowSettings.defaultFinishOptions || [];
-      const steps = activeFlow.steps || [];
-      // SIZE steps (Rod Diameter / Projection) are selectors, not parts — no finish picker.
-      const eligible = steps.filter(s => s.type !== 'STATIC_FEE' && s.type !== SIZE_STEP_TYPE);
-      if (eligible.length === 0) return alert("This flow has no steps that can carry a finish (only fees).");
-      if (!window.confirm(`Apply ${def.length} default finish(es) to all ${eligible.length} step(s)? This overwrites each step's current finish list.`)) return;
-      const updatedSteps = steps.map(s => {
-          if (s.type === 'STATIC_FEE' || s.type === SIZE_STEP_TYPE) return s;
-          if (s.dataSource === 'master_finishes') {
-              // The step's own options ARE finishes — scope them directly.
-              return { ...s, allowedOptions: [...def] };
-          }
-          // Component step — offer the finishes as a secondary picker on the selection.
-          return { ...s, finishDataSource: 'master_finishes', finishAllowedOptions: [...def] };
-      });
+      // SIZE GROUPS (Stuart 2026-07-26: "do i save those finishes on all 4?"): one product = one
+      // finish palette — applying from ANY sibling stamps EVERY flow in the group in one click
+      // (same rule as the shared rollup item), so the diameters can never drift apart. Per-step
+      // exceptions can still be hand-edited on a specific flow afterwards.
+      const groupLabel = String(activeFlow.sizeGroupLabel || '').trim();
+      const targets = groupLabel ? cpqFlows.filter(f => f.sizeGroupLabel === groupLabel) : [activeFlow];
+      // Selector steps carry no finish picker: fees, SIZE steps, and the per-assembly Bracket
+      // Projection question (PROJ_SELECT) are all questions, not parts.
+      const isSelector = (s) => s.type === 'STATIC_FEE' || s.type === SIZE_STEP_TYPE || s.type === 'PROJ_SELECT';
+      const eligibleCount = targets.reduce((n, fl) => n + (fl.steps || []).filter(s => !isSelector(s)).length, 0);
+      if (eligibleCount === 0) return alert("No steps here can carry a finish (only fees/selectors).");
+      if (!window.confirm(groupLabel
+          ? `Apply ${def.length} default finish(es) to ALL ${targets.length} ${groupLabel} flows (${targets.map(f => f.sizeGroupChoice || f.name).join(', ')}) — ${eligibleCount} step(s) total? This overwrites each step's current finish list on every sibling.`
+          : `Apply ${def.length} default finish(es) to all ${eligibleCount} step(s)? This overwrites each step's current finish list.`)) return;
       try {
-          await updateDoc(doc(db, "cpq_flows", activeFlowId), stripUndefined({ steps: updatedSteps, defaultFinishOptions: def }));
-          alert(`Applied default finishes to ${eligible.length} step(s).`);
+          for (const fl of targets) {
+              const updatedSteps = (fl.steps || []).map(s => {
+                  if (isSelector(s)) return s;
+                  if (s.dataSource === 'master_finishes') {
+                      // The step's own options ARE finishes — scope them directly.
+                      return { ...s, allowedOptions: [...def] };
+                  }
+                  // Component step — offer the finishes as a secondary picker on the selection.
+                  return { ...s, finishDataSource: 'master_finishes', finishAllowedOptions: [...def] };
+              });
+              await updateDoc(doc(db, "cpq_flows", fl.id), stripUndefined({ steps: updatedSteps, defaultFinishOptions: def }));
+          }
+          alert(groupLabel
+              ? `Applied the ${def.length}-finish palette to all ${targets.length} ${groupLabel} flows (${eligibleCount} step(s)).`
+              : `Applied default finishes to ${eligibleCount} step(s).`);
       } catch (err) {
           console.error("Error applying finishes to steps:", err);
-          alert("Failed to apply finishes to steps.");
+          alert("Failed to apply finishes to steps: " + (err?.message || err));
       }
   };
 
