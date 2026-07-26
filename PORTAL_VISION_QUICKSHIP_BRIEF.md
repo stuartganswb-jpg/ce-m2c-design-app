@@ -40,6 +40,16 @@ Set on the CRM card (**External Co-Op → customer → Portal Access**):
 
 ---
 
+## 3a. ✅ STOCK COUNTER V1 BUILT (2026-07-26, Simple Elegance = the test collection — needs Cloud Shell deploy)
+
+**Shipped:** portal tab **"Quick Ship"** (`portal/src/QuickShip.jsx`) + BFFs **`portalStock`** / **`portalStockQuoteRequest`** + a staff **"Portal Quote Requests" panel in HQ tab 7** that loads a request into the cart in one click (zero re-entry; rates re-resolve LIVE via pricedCart).
+
+Mechanics: `portalStock` mirrors tab 7's picker exactly — brand → `isStocked` → **alias-aware collection entitlement** (`functions/aliasIdentity.js`, a CJS port of the Shared module — keep in sync) — and serves slim doc-shaped items (+ unpriced alias-neighborhood docs) so the client cascade runs the **VERBATIM modules** (`portal/src/shared/{aliasIdentity,quickShipUom,sizeMatrix}.js`): category → finished-goods-only → diameter (size grammar through the alias) → finish → outer/center brackets (flow `stepRole/position` sets shipped as code arrays). Pricing per Shared/clientPricing semantics + the §4b alias price rule (face rate wins when > 0), computed server-side; packs per CRM prefs (`qsRingPack`/`qsFinialPack`/`qsInsideMountPack`) else item UOM — **qty means PACKS, rate per EACH, lines carry eachQty**. Submit **re-validates + re-prices everything server-side** and lands a `jobs` doc (`PORTAL_REQUEST`, kind `QUICKSHIP`, lines incl. `faceItemId`). Verified: end-to-end alias-chain node test (H1-1BE/CC → faces as H2-1BE/CC in SIMPLE ELEGANCE at 1"), pack parity, lint/CRA/vite builds clean.
+
+**Not in v1 (deliberate):** saved pattern KITS + kit pricing, cut-to-length/splice lines, rush (internal only), self-service ordering. Staff add those at review.
+
+**To go live:** (1) Cloud Shell functions deploy; (2) on the test customer's CRM card: Portal Access → Available Collections = **Simple Elegance**, pack prefs set, portal login active; (3) confirm the H2-1BE alias/real-assembly data state — the counter follows whichever shape exists (the alias chain is tested; a real-assembly H2 code parses to the same H2-RND cell directly).
+
 ## 3. Quick Ship as it stands (HQ tab 7) — what you're porting
 
 `src/components/HQ/QuickShipTab.js`. Stocked/pre-finished goods → **flat NetSuite Sales Order lines**, no BOM, no flow. Mirrored to `hq_sales_orders` with `orderClass:'QUICKSHIP'` for pick/pack.

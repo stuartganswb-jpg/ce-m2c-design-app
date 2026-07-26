@@ -5,6 +5,7 @@ import { auth, functions } from './firebase';
 
 const Showroom = lazy(() => import('./Showroom.jsx'));
 const VisionIntake = lazy(() => import('./VisionIntake.jsx'));
+const QuickShip = lazy(() => import('./QuickShip.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' :
   Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -168,6 +169,7 @@ const TABS = [
   { id: 'orders', label: 'Orders & Quotes' },
   { id: 'showroom', label: 'Showroom' },
   { id: 'measure', label: 'Measure & Fit' },
+  { id: 'quickship', label: 'Quick Ship' },
 ];
 
 const Dashboard = ({ user }) => {
@@ -189,6 +191,11 @@ const Dashboard = ({ user }) => {
       {tab === 'measure' && (
         <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading Measure &amp; Fit…</div>}>
           <VisionIntake />
+        </Suspense>
+      )}
+      {tab === 'quickship' && (
+        <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading the stock counter…</div>}>
+          <QuickShip />
         </Suspense>
       )}
       <PortalFooter />

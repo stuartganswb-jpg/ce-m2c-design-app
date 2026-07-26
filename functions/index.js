@@ -1311,6 +1311,206 @@ exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
     return { ok: true, quoteNo, draftId };
 });
 
+// ---- Quick Ship stock counter (portal) --------------------------------------------------------
+// The customer-facing half of HQ tab 7, browse + QUOTE REQUEST only (settled 2026-07-25): the
+// customer builds a stock quote from their entitled collections; staff open the request in Quick
+// Ship, review, and push the real NetSuite SO. The picker mirrors tab 7's predicate chain
+// EXACTLY (QuickShipTab.js): brand → isStocked → alias-aware collection scope → the client-side
+// cascade (category / finished-goods / diameter / finish / bracket position) runs the SAME
+// verbatim modules the counter uses. Pricing = Shared/clientPricing semantics with the alias
+// price rule (the collection's alias doc fronts the item; its rate wins when > 0).
+const qsAlias = require('./aliasIdentity');
+
+// Mirror of Shared/quickShipUom.js (packs) — qty means PACKS, rate is per EACH, and every
+// request line carries the each count. Keep in sync with the app module.
+const qsPackSizeOf = (uom) => {
+    const raw = String(uom || '').trim().toUpperCase();
+    if (!raw) return 1;
+    const explicit = raw.match(/-\s*(\d+(?:\.\d+)?)\s*$/);
+    if (explicit) { const n = parseFloat(explicit[1]); if (n > 0) return Math.round(n); }
+    const lead = raw.match(/^(\d+)/);
+    if (lead) { const n = parseInt(lead[1], 10); if (n > 0) return n; }
+    if (/\bPAIR\b|\bPR\b/.test(raw)) return 2;
+    if (/\bDOZEN\b|\bDOZ\b/.test(raw)) return 12;
+    return 1;
+};
+const qsPackLabelOf = (uom) => String(uom || '').trim().replace(/\s*-\s*\d+(?:\.\d+)?\s*$/, '').toUpperCase();
+const qsIsRealPack = (uom) => !!uom && qsPackSizeOf(uom) > 1;
+const QS_PACK_PREFS = { ring: 'qsRingPack', finial: 'qsFinialPack', insideMount: 'qsInsideMountPack' };
+// Mirror of QuickShipTab's classifyCat / isInsideMount / slotOfCat / packForItem chain.
+const qsClassifyCat = (pt) => {
+    const t = String(pt || '').toUpperCase();
+    if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE';
+    if (t.includes('BRACKET')) return 'BRACKET';
+    if (t.includes('FINIAL')) return 'FINIAL';
+    if (t.includes('RING')) return 'RING';
+    if (t.includes('POLE') || t.includes('ROD')) return 'POLE';
+    return '';
+};
+const qsCatOf = (it) => qsClassifyCat((it.manufacturingSpecs && it.manufacturingSpecs.productType) || it.productType || (it.customData && it.customData.category));
+const qsIsInsideMount = (it) => /INSIDE/.test(String((it.manufacturingSpecs && it.manufacturingSpecs.customData && (it.manufacturingSpecs.customData.bracketType || it.manufacturingSpecs.customData.bracketMount)) || '').toUpperCase());
+const qsPackForItem = (it, crm) => {
+    const c = qsCatOf(it);
+    const slot = c === 'RING' ? 'ring' : c === 'FINIAL' ? 'finial' : (c === 'BRACKET' && qsIsInsideMount(it)) ? 'insideMount' : '';
+    if (!slot) return { uom: '', size: 1 };
+    const fromCust = crm && crm[QS_PACK_PREFS[slot]];
+    const uom = fromCust ? String(fromCust).toUpperCase()
+        : String((it.manufacturingSpecs && it.manufacturingSpecs.quickShipUom) || '').toUpperCase();
+    return qsIsRealPack(uom) ? { uom: qsPackLabelOf(uom), size: qsPackSizeOf(uom) } : { uom: '', size: 1 };
+};
+
+// Everything both stock endpoints agree on — built the same way per call, so browse and submit
+// can never diverge on what a customer may buy or at what price.
+const buildPortalStockCtx = async (db, customerId, crm) => {
+    const brand = crm.brandId || null;
+    const adSnap = await db.collection('Approved_Designs').get();
+    const allItems = adSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        .filter((p) => !brand || p.brandId === brand || (Array.isArray(p.sharedBrands) && p.sharedBrands.includes(brand)));
+    const index = qsAlias.buildAliasIndex(allItems);
+    const stocked = allItems.filter((it) => it.manufacturingSpecs && it.manufacturingSpecs.isStocked === true);
+    // Entitlement (crm_records.portalCollections) — STRICT for restricted customers, and
+    // alias-reachable tags count (the Simple Elegance tag rides the H2-side alias).
+    const allowed = (Array.isArray(crm.portalCollections) ? crm.portalCollections : [])
+        .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean);
+    const effCols = (it) => qsAlias.effectiveCollectionsOf(index, it);
+    const sellable = allowed.length ? stocked.filter((it) => [...effCols(it)].some((c) => allowed.includes(c))) : stocked;
+    const collections = [...new Set(sellable.flatMap((it) => [...effCols(it)]))]
+        .filter((c) => !allowed.length || allowed.includes(c)).sort();
+    // Per-customer rate — Shared/clientPricing semantics (row price > 0 wins, else base price).
+    const custKeys = new Set([customerId, crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
+    const rateFor = (it) => {
+        const rows = Array.isArray(it.clientPricing) ? it.clientPricing : [];
+        const row = rows.find((r) => custKeys.has(String((r && r.customerId) || '').trim().toUpperCase()));
+        const v = row ? parseFloat(row.price) : NaN;
+        if (Number.isFinite(v) && v > 0) return v;
+        return parseFloat((it.manufacturingSpecs && it.manufacturingSpecs.basePrice) || 0) || 0;
+    };
+    // Alias display+price rule (§4b): the collection's alias doc fronts the item; its rate wins when > 0.
+    const faceOf = (it, scope) => qsAlias.customerFaceOf(index, it, scope);
+    const priceOf = (it, scope) => {
+        const face = faceOf(it, scope);
+        if (face) { const r = rateFor(face); if (r > 0) return r; }
+        return rateFor(it);
+    };
+    // Outer/center bracket split — from the generated flows' stepRole/position, brand-wide,
+    // exactly like tab 7 (position is a property of the PART, read through the flows).
+    const outer = new Set(); const center = new Set();
+    if (brand) {
+        const flowSnap = await db.collection('cpq_flows').where('brandId', '==', brand).get();
+        flowSnap.forEach((d) => (((d.data() || {}).steps) || []).forEach((s) => {
+            if (String(s.stepRole || '').toUpperCase() !== 'BRACKET') return;
+            const pos = String(s.position || '').toUpperCase();
+            const target = pos === 'CENTER' ? center : (pos === 'LEFT' || pos === 'RIGHT') ? outer : null;
+            if (!target) return;
+            (s.styleOptions || []).forEach((o) => [o.partName, o.partId].forEach((v) => { const c = qsAlias.bareCode(v); if (c) target.add(c); }));
+        }));
+    }
+    return { allItems, index, sellable, collections, rateFor, faceOf, priceOf, outer, center, brand };
+};
+
+exports.portalStock = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const ctx = await buildPortalStockCtx(db, customerId, crm);
+
+    // Alias-neighborhood docs ride along (slim, unpriced) so the client-side cascade — the SAME
+    // verbatim aliasIdentity/sizeMatrix modules tab 7 uses — resolves diameters, collections and
+    // bracket positions through the alias links. Sellable items carry the customer's rate + the
+    // per-collection alias face (code + rate); nothing else leaves the server.
+    const sellIds = new Set(ctx.sellable.map((it) => it.id));
+    const neighborhood = new Map();
+    ctx.sellable.forEach((it) => qsAlias.aliasCodesOf(ctx.index, it).forEach((c) =>
+        (ctx.index.docsByCode.get(c) || []).forEach((d) => { if (!sellIds.has(d.id) && !neighborhood.has(d.id)) neighborhood.set(d.id, d); })));
+    const slim = (it, sellable) => {
+        const out = {
+            id: it.id, itemId: it.itemId || '', legacyErpId: it.legacyErpId || '',
+            itemName: it.itemName || '',
+            aliasOf: qsAlias.aliasTargetIdOf(it) || null,
+            sellable: !!sellable,
+            manufacturingSpecs: {
+                isStocked: !!(it.manufacturingSpecs && it.manufacturingSpecs.isStocked),
+                productType: (it.manufacturingSpecs && it.manufacturingSpecs.productType) || it.productType || '',
+                collections: [...qsAlias.collectionsOf(it)],
+                quickShipUom: String((it.manufacturingSpecs && it.manufacturingSpecs.quickShipUom) || ''),
+                customData: { bracketType: String((it.manufacturingSpecs && it.manufacturingSpecs.customData && (it.manufacturingSpecs.customData.bracketType || it.manufacturingSpecs.customData.bracketMount)) || '') },
+            },
+        };
+        if (sellable) {
+            out.rate = ctx.rateFor(it);
+            out.faces = {};
+            ctx.collections.forEach((c) => {
+                const f = ctx.faceOf(it, c);
+                if (f) out.faces[c] = { code: qsAlias.faceCodeFor(f, it), rate: ctx.rateFor(f) };
+            });
+        }
+        return out;
+    };
+    return {
+        items: [...ctx.sellable.map((it) => slim(it, true)), ...[...neighborhood.values()].map((it) => slim(it, false))],
+        bracketPos: { outer: [...ctx.outer], center: [...ctx.center] },
+        collections: ctx.collections,
+        packPrefs: { qsRingPack: crm.qsRingPack || '', qsFinialPack: crm.qsFinialPack || '', qsInsideMountPack: crm.qsInsideMountPack || '' },
+        customerName: crm.name || '',
+    };
+});
+
+// The customer submits their stock quote. Lines are RE-VALIDATED and RE-PRICED server-side
+// against the same ctx the browse endpoint serves — the browser's numbers are never trusted.
+// Lands as a jobs doc (PORTAL_REQUEST, kind QUICKSHIP) on the CRM pipeline; Quick Ship's
+// "portal requests" panel loads it straight into the cart for review + the real SO push.
+exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const { lines: rawLines, jobName, note, collection } = request.data || {};
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const ctx = await buildPortalStockCtx(db, customerId, crm);
+    const scope = String(collection || '').trim().toUpperCase();
+    if (scope && !ctx.collections.includes(scope)) throw new HttpsError('permission-denied', 'This collection is not enabled on your account.');
+
+    const byId = new Map(ctx.sellable.map((it) => [it.id, it]));
+    const lines = [];
+    for (const l of (Array.isArray(rawLines) ? rawLines : []).slice(0, 60)) {
+        const it = byId.get(String((l && l.id) || ''));
+        const qty = Math.floor(parseFloat(l && l.qty));
+        if (!it || !(qty > 0) || qty > 999) continue;
+        const pack = qsPackForItem(it, crm);
+        const face = ctx.faceOf(it, scope);
+        const rate = ctx.priceOf(it, scope);
+        const erp = String(it.legacyErpId || it.itemId || '').toUpperCase();
+        lines.push({
+            itemId: it.id, erp, name: it.itemName || erp,
+            aliasErp: face ? qsAlias.faceCodeFor(face, it) : '', faceItemId: face ? face.id : null,
+            qty, packUom: pack.uom, packSize: pack.size, eachQty: qty * pack.size,
+            rate, note: '',
+        });
+    }
+    if (!lines.length) throw new HttpsError('invalid-argument', 'No valid lines to quote.');
+    const total = Math.round(lines.reduce((s, l) => s + l.rate * l.eachQty, 0) * 100) / 100;
+
+    const email = String((request.auth.token && request.auth.token.email) || '');
+    const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
+    const submitterName = (puSnap.exists && puSnap.data().name) || email;
+    const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
+    const cleanJobName = String(jobName || '').slice(0, 120) || `Quick Ship — ${scope || 'stock'} — ${crm.name || ''}`.trim();
+
+    await db.collection('jobs').doc(quoteNo).set({
+        jobId: quoteNo, quoteNo, brandId: ctx.brand,
+        status: 'PORTAL_REQUEST', source: 'PORTAL',
+        customer: { id: customerId, name: crm.name || '' },
+        jobName: cleanJobName,
+        portalRequest: {
+            kind: 'QUICKSHIP', collection: scope, lines, total,
+            note: String(note || '').slice(0, 2000), byEmail: email,
+        },
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        dateSaved: new Date().toISOString(),
+    });
+    return { ok: true, quoteNo, total };
+});
+
 
 // ---- Configured pricing (server-side engine, matches HQ) -------------------------------------
 // Loads the SAME data CPQTab prices from (flow + brand's Approved_Designs parts + the assembly's

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, getDoc, query, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
@@ -305,6 +305,44 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const bracketIn = (set, it) => [...aliasCodesOf(it)].some(x => x && set.has(x));
     const outerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketIn(bracketPos.outer, it)) : brackets, [brackets, bracketPos]); // eslint-disable-line react-hooks/exhaustive-deps
     const centerBrackets = useMemo(() => bracketPos ? brackets.filter(it => bracketIn(bracketPos.center, it)) : brackets, [brackets, bracketPos]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ---- PORTAL QUOTE REQUESTS (portal Quick Ship → portalStockQuoteRequest) -----------------
+    // Customer-built stock quotes land as jobs docs (status PORTAL_REQUEST, kind QUICKSHIP) with
+    // server-validated lines. One click loads the customer + cart for review — ZERO re-entry —
+    // then the SO pushes exactly like a counter-built cart (rates re-resolve LIVE via pricedCart,
+    // so a price that changed since the customer submitted resolves to today's truth).
+    const [portalReqs, setPortalReqs] = useState([]);
+    useEffect(() => {
+        if (!activeBrand) { setPortalReqs([]); return; }
+        const unsub = onSnapshot(query(collection(db, 'jobs'), where('brandId', '==', activeBrand), where('status', '==', 'PORTAL_REQUEST')),
+            (snap) => setPortalReqs(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(j => j.portalRequest?.kind === 'QUICKSHIP')),
+            e => { console.warn('Quick Ship portal request listen failed', e); setPortalReqs([]); });
+        return unsub;
+    }, [activeBrand]);
+    const loadPortalReq = async (job) => {
+        const pr = job.portalRequest || {};
+        const lines = Array.isArray(pr.lines) ? pr.lines : [];
+        setCustomerId(job.customer?.id || '');
+        setCustSearch(job.customer ? `${job.customer.name || ''} (${job.customer.id})` : '');
+        setJobName(job.jobName || '');
+        setCart(lines.map((l, i) => {
+            const it = itemById(l.itemId);
+            return {
+                key: `${l.itemId}-${Date.now()}-${i}`,
+                itemId: l.itemId, erp: l.erp || (it ? erpOf(it) : ''), nsId: it ? nsIdOf(it) : '',
+                name: l.name || it?.itemName || l.erp || '',
+                aliasErp: l.aliasErp || '', aliasItemId: l.faceItemId || null,
+                qty: Math.max(1, parseInt(l.qty) || 1), note: l.note || '',
+                bin: it?.manufacturingSpecs?.homeBin || it?.binLocation || '',
+                packUom: l.packUom || '', packSize: l.packSize || 1,
+                rateOverride: null, kitKey: null, kitName: null, kitBrand: null, kitFinish: ''
+            };
+        }));
+        try {
+            await updateDoc(doc(db, 'jobs', job.id), { status: 'QUICKSHIP_REVIEW', 'portalRequest.loadedBy': currentUser?.name || currentUser?.uName || 'staff', 'portalRequest.loadedAt': new Date().toISOString() });
+        } catch (e) { console.warn('portal request stamp failed', e); }
+        addLog(`Loaded portal request ${job.quoteNo || job.id} — ${lines.length} line(s) for ${job.customer?.name || '?'}`, 'success');
+    };
 
     // Fee / billable items — matched by keyword across ALL brand parts (fees aren't usually
     // "stocked"), and never narrowed by collection or diameter: a cut is a cut.
@@ -785,6 +823,28 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     Flat lines → NetSuite Sales Order<br />No BOM build · {stocked.length} stocked items
                 </div>
             </div>
+
+            {/* PORTAL QUOTE REQUESTS — customer-built stock quotes awaiting review */}
+            {portalReqs.length > 0 && (
+                <div style={{ ...card, padding: '20px 24px', border: '1px solid var(--brass)' }}>
+                    <span style={{ ...lbl, color: 'var(--brass)' }}>Portal Quote Requests · {portalReqs.length} awaiting review</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                        {portalReqs.map(j => (
+                            <div key={j.id} style={{ border: '1px solid var(--line)', padding: '10px 14px', background: 'var(--paper-2)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{j.quoteNo || j.id}</span>
+                                    <span style={{ fontSize: '0.9rem', color: 'var(--ink)', flex: 1 }}>{j.customer?.name || '?'}{j.jobName ? ` · ${j.jobName}` : ''}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>
+                                        {(j.portalRequest?.lines || []).length} line(s){Number.isFinite(j.portalRequest?.total) ? ` · $${j.portalRequest.total.toLocaleString()}` : ''}{j.portalRequest?.collection ? ` · ${j.portalRequest.collection}` : ''}
+                                    </span>
+                                    <button onClick={() => loadPortalReq(j)} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Load into cart</button>
+                                </div>
+                                {j.portalRequest?.note && <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '6px' }}>“{j.portalRequest.note}”</div>}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* CUSTOMER + JOB */}
             <div style={{ ...card, padding: '20px 24px', display: 'grid', gridTemplateColumns: '2fr 2fr', gap: '20px' }}>
