@@ -972,9 +972,17 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               movers.forEach((p, i) => {
                   const cat = String(p.catOverride).toUpperCase();
                   const nsId = `OVR-${cat}-${cl.id}-${i}`;
-                  clusters.push({ ...cl, id: nsId, category: cat, nodes: [String(p.choiceNode || '').trim()].filter(Boolean) });
-                  pinsByCluster[nsId] = [p];
-                  pinByCluster[nsId] = p;
+                  // A pin authored in a FINIAL slot carries finial-row artifacts — endTreatment
+                  // 'FINIAL', collar fields — that POISON its new pool: an explicit endTreatment
+                  // beats the return-name heuristics in flagsFor, so a re-homed return backplate
+                  // emitted without returnOnly and CPQ's return→bracket lock never fired (Stuart
+                  // 2026-07-26, H2-RBP right side). Strip END-only fields for non-FINIAL homes;
+                  // the cluster's own name ("…RETURNS") then classifies the plate return-only,
+                  // and the row's rtn-only checkbox (now shown for overridden rows) is explicit.
+                  const moved = cat === 'FINIAL' ? p : (({ endTreatment, isCollar, requiresCollar, ...rest }) => rest)(p);
+                  clusters.push({ ...cl, id: nsId, category: cat, nodes: [String(moved.choiceNode || '').trim()].filter(Boolean) });
+                  pinsByCluster[nsId] = [moved];
+                  pinByCluster[nsId] = moved;
               });
               if (!pinsByCluster[cl.id].length) emptied.add(cl.id);
               else if (pinByCluster[cl.id] && movers.includes(pinByCluster[cl.id])) pinByCluster[cl.id] = pinsByCluster[cl.id][0];
