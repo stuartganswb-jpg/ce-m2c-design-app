@@ -287,7 +287,7 @@ const optLabelText = (info, o, kind) => {
   return `${label}${(price !== undefined && price !== null && price > 0) ? `  ·  ${fmtMoney(price)}` : ''}`;
 };
 
-function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel, allSteps, info, projTagOk }) {
+function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel, allSteps, info, projTagOk, dims, onDim }) {
   const sel = params[step.id];
 
   // Return-pool gating (matches HQ): french/miter/bent returns drop out when the chosen projection
@@ -309,6 +309,44 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
     <label className="qty-row">Quantity
       <input type="number" min="1" step="1" placeholder="1" value={quantities[step.id] ?? ''} onChange={(e) => setQty(step.id, e.target.value)} />
     </label>
+  ) : null;
+
+  // DIMENSIONAL INPUT (matches HQ): on calculator steps the customer types the finished size in
+  // inches and the purchase quantity (feet) computes itself — 100.25" → 9 ft.
+  const template = step.calculatorTemplate || '';
+  const isCalc = !!template || step.type === 'DIMENSIONS' || step.type === 'VISUAL_DIMENSIONS';
+  const dm = (dims && dims[step.id]) || { length: '', type: 'O2O', wallA: '', wallB: '', wallC: '' };
+  const dimLbl = { flex: 1, fontSize: '0.75rem', color: 'var(--ink-soft)' };
+  const dimInp = { width: '100%', boxSizing: 'border-box', padding: 8, border: '1px solid var(--line)', marginTop: 4, background: '#fff' };
+  const dimEl = (isCalc && onDim) ? (
+    <div style={{ margin: '10px 0 4px', padding: 12, border: '1px solid var(--line)', background: '#faf8f3', borderRadius: 2 }}>
+      <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: 8 }}>
+        Dimensional input — type the finished size, the feet compute themselves
+      </div>
+      {template === 'calc_mitered_bay' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+          {[['wallA', 'Wall A (left)'], ['wallB', 'Wall B (center)'], ['wallC', 'Wall C (right)']].map(([k, label]) => (
+            <label key={k} style={dimLbl}>{label}
+              <input type="number" min="0" step="0.01" placeholder="in" value={dm[k] || ''} onChange={(e) => onDim(step.id, k, e.target.value, template)} style={dimInp} />
+            </label>
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8 }}>
+          {(template === 'calc_french_return_1in' || template === 'calc_curved_bay') && (
+            <label style={dimLbl}>Measurement
+              <select value={dm.type || 'O2O'} onChange={(e) => onDim(step.id, 'type', e.target.value, template)} style={dimInp}>
+                <option value="O2O">Outside to outside (O2O)</option>
+                <option value="C2C">Center to center (C2C)</option>
+              </select>
+            </label>
+          )}
+          <label style={dimLbl}>Finished length (in)
+            <input type="number" min="0" step="0.01" placeholder="e.g. 100.25" value={dm.length || ''} onChange={(e) => onDim(step.id, 'length', e.target.value, template)} style={dimInp} />
+          </label>
+        </div>
+      )}
+    </div>
   ) : null;
 
   if (step.type === SIZE_TYPE || step.type === 'PROJ_SELECT') {
@@ -335,6 +373,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
   if (isSimpleFinish) {
     return <>
       <FinishPicker finishes={finishOptionsFor(step, finishes, null)} value={sel} onChange={(v) => setParam(step.id, v)} />
+      {dimEl}
       {qtyEl}
     </>;
   }
@@ -369,6 +408,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
           />
         </div>
       )}
+      {dimEl}
       {qtyEl}
     </>
   );
@@ -413,7 +453,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
 
   useEffect(() => {
     let alive = true;
-    setData(null); setErr(null); setParams({}); setQuantities({}); setStepIdx(0); setSubmitted(false); setSubmittedNo(null);
+    setData(null); setErr(null); setParams({}); setQuantities({}); setDims({}); setStepIdx(0); setSubmitted(false); setSubmittedNo(null);
     httpsCallable(functions, 'portalFlow')({ flowId })
       .then((res) => {
         if (!alive) return;
@@ -433,6 +473,36 @@ export default function Configurator({ flowId, flowName, onExit }) {
 
   const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
   const setQty = (k, v) => setQuantities((q) => ({ ...q, [k]: v }));
+
+  // DIMENSIONAL INPUT (Stuart 2026-07-26: "we need to be able to enter in 100.25 there, which
+  // would enter in 9ft in the qty field") — mirrors CPQTab's handleDimensionChange EXACTLY,
+  // template for template: straight = ceil(len/12); 1" french return = O2O/C2C, cut = O2O+17;
+  // mitered = walls+12; curved = len+12. The raw dims ride the quote request as `__dims` params
+  // so the team sees the entered size, and the computed FEET land in the step quantity.
+  const [dims, setDims] = useState({});
+  const handleDimensionChange = (stepId, key, value, template) => {
+    setDims((prev) => {
+      const current = prev[stepId] || { length: '', type: 'O2O', wallA: '', wallB: '', wallC: '' };
+      const updated = { ...current, [key]: value };
+      let calculatedQty = 1;
+      if (template === 'calc_french_return_1in') {
+        const baseLength = parseFloat(updated.length) || 0;
+        const o2o = updated.type === 'C2C' ? baseLength + 1 : baseLength;
+        calculatedQty = Math.max(1, Math.ceil((o2o + 17) / 12));
+      } else if (template === 'calc_straight_pole') {
+        const baseLength = parseFloat(updated.length) || 0;
+        calculatedQty = Math.max(1, Math.ceil(baseLength / 12));
+      } else if (template === 'calc_mitered_bay') {
+        const a = parseFloat(updated.wallA) || 0, b = parseFloat(updated.wallB) || 0, c = parseFloat(updated.wallC) || 0;
+        calculatedQty = Math.max(1, Math.ceil((a + b + c + 12) / 12));
+      } else if (template === 'calc_curved_bay') {
+        const baseLength = parseFloat(updated.length) || 0;
+        calculatedQty = Math.max(1, Math.ceil((baseLength + 12) / 12));
+      }
+      if (value !== '') setQuantities((q) => ({ ...q, [stepId]: String(calculatedQty) }));
+      return { ...prev, [stepId]: updated };
+    });
+  };
 
   // Live configured pricing + resolved option descriptions/prices from the server engine (debounced),
   // at the customer's assigned level.
@@ -544,7 +614,10 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const submit = async () => {
     setSubmitting(true);
     try {
-      const res = await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params, quantities }, note });
+      // The entered dimensions ride the request as `${stepId}__dims` params — the pricing engine
+      // ignores unknown keys, but the team sees the exact finished size the customer typed.
+      const dimParams = Object.fromEntries(Object.entries(dims).map(([sid, v]) => [`${sid}__dims`, v]));
+      const res = await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params: { ...params, ...dimParams }, quantities }, note });
       setSubmitted(true);
       setSubmittedNo(res.data?.quoteNo || null);
     } catch (e) {
@@ -606,7 +679,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 </div>
                 <div className="cfg-step-title lg">{step.title}</div>
                 <div className="cfg-step-body">
-                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} allSteps={allSteps} info={stepOptions[step.id]} projTagOk={projTagOk} />
+                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} allSteps={allSteps} info={stepOptions[step.id]} projTagOk={projTagOk} dims={dims} onDim={handleDimensionChange} />
                 </div>
                 {finishMissing(step) && <div className="cfg-require">Please select a finish to continue.</div>}
                 <div className="cfg-nav">

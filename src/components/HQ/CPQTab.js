@@ -2935,8 +2935,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               </div>
                           )}
 
+                      </div>
+
+                      {/* 📌 PINNED (Stuart 2026-07-26): the Dimensional Input + Step Quantity stick to the
+                          bottom of the screen while long finish lists scroll — the pole length and its computed
+                          feet can never hide under the chips. */}
+                      <div style={{ position: 'sticky', bottom: 0, zIndex: 5, background: 'var(--paper)', boxShadow: '0 -10px 18px rgba(28,26,22,0.10)' }}>
                           {(currentStep.calculatorTemplate || currentStep.type === 'DIMENSIONS' || currentStep.type === 'VISUAL_DIMENSIONS') && (
-                              <div style={{ padding: '20px', background: activeDraftSvg ? '#eef0f2' : 'var(--paper-2)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: '20px', opacity: activeDraftSvg ? 0.7 : 1 }}>
+                              <div style={{ padding: '20px', background: activeDraftSvg ? '#eef0f2' : 'var(--paper-2)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', marginBottom: 0, opacity: activeDraftSvg ? 0.7 : 1 }}>
                                   <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Dimensional Input</h4>
                                   {activeDraftSvg && <div style={{ fontSize: '10px', fontFamily: 'var(--mono)', color: 'var(--brass)', textTransform: 'uppercase', marginBottom: '12px' }}>Locked (Controlled by Vision Tool)</div>}
                                   
@@ -2999,7 +3005,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                   )}
                               </div>
                           )}
-                      </div>
 
                       {!currentStep.hideQty && currentStep.type !== SIZE_STEP_TYPE && currentStep.type !== 'PROJ_SELECT' && (
                       <div style={{ padding: '20px 24px', background: 'var(--paper)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -3035,6 +3040,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           </div>
                       </div>
                       )}
+                      </div>
 
                       <div style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', background: '#fff' }}>
                           <button onClick={handleBackStep} disabled={currentStepIndex === 0} style={{ padding: '12px 24px', border: '1px solid var(--line)', background: 'transparent', color: currentStepIndex === 0 ? 'var(--line)' : 'var(--ink)', cursor: currentStepIndex === 0 ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Back</button>
