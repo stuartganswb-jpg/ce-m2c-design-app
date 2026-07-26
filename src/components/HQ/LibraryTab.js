@@ -699,28 +699,32 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const savePartUpdates = async () => {
     if (!activePart) return;
     setIsSaving(true);
-    
+    // EVERYTHING lives inside the try (2026-07-26, the H2-05 silent hang): the id line below used
+    // to run BEFORE the try — a 1.6-built ASSEMBLY carrying no legacyErpId at all threw
+    // `undefined.toUpperCase()` there, the function died before any catch existed, and the button
+    // sat on "Saving..." forever with no message. Regular items always carry an ERP id, which is
+    // why only assemblies hung. PENDING is the app-wide "no ERP code yet" convention.
+    try {
     let finalPdfUrl = editSpecs.pdfUrl || "";
     if (pdfFile) {
-      const storageRef = ref(storage, `prints/${activeBrand}_${editSpecs.tempLegacyId || activePart.legacyErpId}_${pdfFile.name}`);
+      const storageRef = ref(storage, `prints/${activeBrand}_${editSpecs.tempLegacyId || activePart.legacyErpId || activePart.id}_${pdfFile.name}`);
       const uploadTask = uploadBytesResumable(storageRef, pdfFile);
       await new Promise((resolve, reject) => { uploadTask.on("state_changed", (snap) => setUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)), (err) => reject(err), async () => { finalPdfUrl = await getDownloadURL(uploadTask.snapshot.ref); resolve(); }); });
     }
 
     let finalCadUrl = editSpecs.cadUrl || "";
     if (cadFile) {
-      const cadStorageRef = ref(storage, `cad_models/${activeBrand}_${editSpecs.tempLegacyId || activePart.legacyErpId}_${cadFile.name}`);
+      const cadStorageRef = ref(storage, `cad_models/${activeBrand}_${editSpecs.tempLegacyId || activePart.legacyErpId || activePart.id}_${cadFile.name}`);
       const cadUploadTask = uploadBytesResumable(cadStorageRef, cadFile);
       await new Promise((resolve, reject) => { cadUploadTask.on("state_changed", (snap) => setCadUploadProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100)), (err) => reject(err), async () => { finalCadUrl = await getDownloadURL(cadUploadTask.snapshot.ref); resolve(); }); });
     }
 
     const compiledSpecs = { ...editSpecs, pdfUrl: finalPdfUrl, cadUrl: finalCadUrl };
-    delete compiledSpecs.collection; 
+    delete compiledSpecs.collection;
 
-    const finalName = editSpecs.tempName || activePart.itemName;
-    const finalLegacyId = (editSpecs.tempLegacyId || activePart.legacyErpId).toUpperCase();
+    const finalName = editSpecs.tempName || activePart.itemName || "";
+    const finalLegacyId = String(editSpecs.tempLegacyId || activePart.legacyErpId || "PENDING").toUpperCase();
 
-    try {
       const payload = stripUndefinedDeep({
           itemName: finalName,
           legacyErpId: finalLegacyId,
