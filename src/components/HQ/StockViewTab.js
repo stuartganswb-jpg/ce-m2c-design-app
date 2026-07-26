@@ -73,6 +73,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
+    const [woShowAll, setWoShowAll] = useState(false); // WO queue: include in-house items NOT flagged Stocked
     const [activeVendor, setActiveVendor] = useState("");
     const [orderDrafts, setOrderDrafts] = useState({});
     
@@ -1263,12 +1264,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     });
 
     let displayItems = baseFilteredItems;
+    let woHiddenNotStocked = 0;
+    let woHiddenOutsourced = 0;
     if (activeBuilder === 'PO' && activeVendor) {
         displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.vendorName === activeVendor && !p.manufacturingSpecs?.isInHouse);
     } else if (activeBuilder === 'WO') {
-        // Only in-house items flagged STOCKED get replenishment WOs here. In-house NOT-stocked items are
-        // made-to-order straight from the sales order, so they never appear in the planning queue.
-        displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.isInHouse !== false && p.manufacturingSpecs?.isStocked);
+        // Only in-house items flagged STOCKED get replenishment WOs by default — in-house
+        // NOT-stocked items are made-to-order straight from the sales order. But the queue must
+        // NEVER hide rows silently (Stuart 2026-07-26: switching to WO 'removes all populated
+        // data' with no explanation): the banner above the table names exactly what the queue
+        // rule hid, and "show not-stocked too" lets a WO be planned for any in-house item.
+        const inHouse = baseFilteredItems.filter(p => p.manufacturingSpecs?.isInHouse !== false);
+        const queue = inHouse.filter(p => p.manufacturingSpecs?.isStocked);
+        woHiddenOutsourced = baseFilteredItems.length - inHouse.length;
+        woHiddenNotStocked = inHouse.length - queue.length;
+        displayItems = woShowAll ? inHouse : queue;
     }
 
     return (
@@ -1945,7 +1955,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         <button onClick={openSalesHistory} style={{ marginLeft: 'auto', padding: '8px 14px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>📈 Stocked Sales Snapshot</button>
                         <button onClick={() => setLabelTool(true)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🏷 Print Labels</button>
                     </div>
-                    
+
+                    {/* WO-queue transparency: what the Production filter hid, and the escape hatch. */}
+                    {activeBuilder === 'WO' && (woHiddenNotStocked > 0 || woHiddenOutsourced > 0 || woShowAll) && (
+                        <div style={{ padding: '10px 24px', background: '#fdf6ec', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '14px', fontSize: '0.82rem' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', whiteSpace: 'nowrap' }}>Production queue filter</span>
+                            <span style={{ flex: 1, color: 'var(--ink-soft)' }}>
+                                Plans replenishment for in-house + Stocked items{woHiddenNotStocked > 0 ? ` — ${woHiddenNotStocked} matching in-house item(s) hidden (not flagged Stocked: made-to-order builds from its sales order)` : ''}{woHiddenOutsourced > 0 ? ` · ${woHiddenOutsourced} outsourced item(s) belong on the PO side` : ''}.
+                            </span>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap', color: woShowAll ? 'var(--brass)' : 'var(--ink)' }}>
+                                <input type="checkbox" checked={woShowAll} onChange={e => setWoShowAll(e.target.checked)} style={{ accentColor: 'var(--brass)' }} />
+                                show not-stocked too
+                            </label>
+                        </div>
+                    )}
+
                     <div style={{ overflowY: 'auto', maxHeight: '75vh', background: '#fff' }}>
                         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontFamily: 'var(--sans)' }}>
                             <thead style={{ background: 'var(--paper)', position: 'sticky', top: 0, zIndex: 10 }}>
@@ -1964,7 +1988,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 </tr>
                             </thead>
                             <tbody>
-                                {displayItems.length === 0 && <tr><td colSpan="11" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>No inventory items matched.</td></tr>}
+                                {displayItems.length === 0 && <tr><td colSpan="11" style={{ padding: '40px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.95rem' }}>
+                                    {activeBuilder === 'WO' && (woHiddenNotStocked > 0 || woHiddenOutsourced > 0)
+                                        ? `No items in the Production queue — ${woHiddenNotStocked} matching in-house item(s) are hidden because they aren't flagged Stocked${woHiddenOutsourced > 0 ? ` (${woHiddenOutsourced} outsourced belong on the PO side)` : ''}. Tick "show not-stocked too" above to plan WOs for them anyway — or flag them Stocked (4.5 Mass Update / Master Library) to make them permanent queue members.`
+                                        : 'No inventory items matched.'}
+                                </td></tr>}
                                 {activeBuilder === 'PO' && activeVendor && <tr><td colSpan="11" style={{ padding: '60px', textAlign: 'center', color: 'var(--ink-soft)', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontStyle: 'italic' }}>Viewing {activeVendor} Catalog. Refer to the right-side PO Builder.</td></tr>}
                                 {!(activeBuilder === 'PO' && activeVendor) && displayItems.map(item => (
                                     <tr key={item.id} style={{ borderBottom: '1px solid var(--line)', background: item.isLowStock ? '#fdf2f2' : '#fff' }}>
