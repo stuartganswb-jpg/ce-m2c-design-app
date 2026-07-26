@@ -1497,9 +1497,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           await setDoc(doc(db, "cpq_flows", activeFlowId), stripUndefined({ ...flowSettings, name: formattedName, legacyErpId: formattedErpId }), { merge: true });
           
           if (flowSettings.linkedAssemblyId) {
+              // Size-group flows share ONE rollup name/ERP id across all siblings — cascading
+              // that shared name into each ASSEMBLY's legacyErpId would stomp the doc's own code
+              // (H2-05 …), which the 🧬 stamper, spec sheets and codeRx grammar parse. Grouped
+              // flows keep the link + price sync but leave the assembly's own code alone.
+              const isGrouped = !!cpqFlows.find(f => f.id === activeFlowId)?.sizeGroupLabel;
               await updateDoc(doc(db, "Approved_Designs", flowSettings.linkedAssemblyId), {
                   linkedCpqFlowId: activeFlowId,
-                  legacyErpId: formattedErpId,
+                  ...(isGrouped ? {} : { legacyErpId: formattedErpId }),
                   "manufacturingSpecs.basePrice": parseFloat(flowSettings.basePrice) || 0
               });
           }
@@ -1584,9 +1589,20 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
   const handleCreateRollupItem = async () => {
       if (!activeFlowId) return;
-      const flowName = (flowSettings.name || '').trim().toUpperCase();
+      // SIZE GROUPS (per-assembly H2 model, Stuart 2026-07-26: "the combined holding unit"): the
+      // per-diameter sibling flows are ONE product, so they share ONE rollup item named after the
+      // GROUP — the same precedent as the Fabricut combined flow, where one item covers every
+      // diameter and the size lives in the pushed line's description/config. This button creates/
+      // maps that single item and stamps EVERY sibling flow in one click; ERPPushPull needs no
+      // change (it reads nsRollupItemId per flow, and sharing an id is fine).
+      const activeF = cpqFlows.find(f => f.id === activeFlowId);
+      const groupLabel = String(activeF?.sizeGroupLabel || '').trim();
+      const siblings = groupLabel ? cpqFlows.filter(f => f.sizeGroupLabel === groupLabel) : [];
+      const flowName = (groupLabel || flowSettings.name || '').trim().toUpperCase();
       if (!flowName) return alert("Give the flow a name first — the rollup item is named to match it.");
-      if (!window.confirm(`Create / map the NetSuite rollup item "${flowName}" for this flow? (Safe to re-run — it maps to the existing item if one already exists.)`)) return;
+      if (!window.confirm(groupLabel
+          ? `Create / map ONE NetSuite rollup item "${flowName}" shared by ALL ${siblings.length} ${groupLabel} flows (${siblings.map(f => f.sizeGroupChoice || f.name).join(', ')})?\n\nEvery configured ${groupLabel} quote rolls its labor + fees into this item regardless of the diameter picked — the inventory parts still push as their own lines. (Safe to re-run — it maps to the existing item if one already exists.)`
+          : `Create / map the NetSuite rollup item "${flowName}" for this flow? (Safe to re-run — it maps to the existing item if one already exists.)`)) return;
 
       setIsCreatingRollup(true);
       try {
@@ -1622,13 +1638,19 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           // Fill the flow's ERP Item ID with the item NAME/CODE (= flowName, derived from
           // the master assembly name and used as the rollup item's NetSuite itemid), so the
           // top-of-page field populates automatically and cascades to the master on Save.
-          await setDoc(doc(db, "cpq_flows", activeFlowId), {
-              nsRollupItemId: String(newId),
-              nsRollupItemName: flowName,
-              legacyErpId: flowName
-          }, { merge: true });
+          // Size groups: EVERY sibling flow gets the same mapping in one pass.
+          const targets = (groupLabel && siblings.length) ? siblings : [{ id: activeFlowId }];
+          for (const f of targets) {
+              await setDoc(doc(db, "cpq_flows", f.id), {
+                  nsRollupItemId: String(newId),
+                  nsRollupItemName: flowName,
+                  legacyErpId: flowName
+              }, { merge: true });
+          }
           setFlowSettings(prev => ({ ...prev, nsRollupItemId: String(newId), nsRollupItemName: flowName, legacyErpId: flowName }));
-          alert(`✅ Rollup item "${flowName}" mapped to this flow (NetSuite internal id ${newId}). The ERP Item ID has been set to "${flowName}".`);
+          alert(groupLabel
+              ? `✅ ONE rollup item "${flowName}" (NetSuite internal id ${newId}) mapped to all ${targets.length} ${groupLabel} flows. Labor + fees on any diameter's quote roll into it.`
+              : `✅ Rollup item "${flowName}" mapped to this flow (NetSuite internal id ${newId}). The ERP Item ID has been set to "${flowName}".`);
       } catch (err) {
           console.error("Rollup item create failed:", err);
           alert(`Failed to create the NetSuite rollup item.\n\n${err.message}`);
