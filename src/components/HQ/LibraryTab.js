@@ -409,6 +409,19 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     return matchesSearch && matchesType && matchesCollection && matchesClass && matchesWatchlist && matchesAppOnly && matchesOrphan;
   });
 
+  // Firestore rejects `undefined` field values outright — recursively drop them so a save can
+  // never throw "Unsupported field value: undefined" over an optional field (same guard AdminTab
+  // uses for flow docs).
+  const stripUndefinedDeep = (v) => {
+    if (Array.isArray(v)) return v.map(stripUndefinedDeep);
+    if (v && typeof v === 'object') {
+      const out = {};
+      for (const k of Object.keys(v)) { if (v[k] !== undefined) out[k] = stripUndefinedDeep(v[k]); }
+      return out;
+    }
+    return v;
+  };
+
   const openPartDetails = (part) => {
     setActivePart(part); setPdfFile(null); setCadFile(null); setDynamicUploadProgress({}); setCloneSourceId(""); setWoTargetQty(1);
     
@@ -708,22 +721,36 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     const finalLegacyId = (editSpecs.tempLegacyId || activePart.legacyErpId).toUpperCase();
 
     try {
-      const payload = { 
-          itemName: finalName, 
-          legacyErpId: finalLegacyId, 
-          clientPricing: editSpecs.clientPricing || [], 
-          sharedBrands: editSpecs.sharedBrands || [activePart.brandId || activeBrand], 
+      const payload = stripUndefinedDeep({
+          itemName: finalName,
+          legacyErpId: finalLegacyId,
+          clientPricing: editSpecs.clientPricing || [],
+          sharedBrands: editSpecs.sharedBrands || [activePart.brandId || activeBrand],
           project: editSpecs.project || "",
           routingType: editSpecs.routingType || "",
           productType: editSpecs.productType || "",
-          manufacturingSpecs: compiledSpecs, 
-          updatedAt: new Date().toISOString() 
-      };
+          manufacturingSpecs: compiledSpecs,
+          updatedAt: new Date().toISOString()
+      });
 
-      if (activePart.isNew) payload.createdAt = new Date().toISOString();
-      await setDoc(doc(db, "Approved_Designs", activePart.id), { ...activePart, ...payload }, { merge: true });
+      // MERGE ONLY WHAT THIS EDITOR OWNS (2026-07-26, the H2-05 stuck save): the old write spread
+      // the ENTIRE captured doc back over itself — on a 1.6-built ASSEMBLY that re-sent a stale
+      // copy of nodeClusters/revisions/GLB metadata (ballooning the write and racing other
+      // sessions' assembly work). merge:true keeps every untouched field exactly as it is, so
+      // only the fields this editor actually edits ride the wire. New parts still need their
+      // identity fields, which live on the draft activePart (isNew itself must never persist).
+      if (activePart.isNew) {
+          const { isNew, itemName: _draftName, legacyErpId: _draftErp, ...identity } = activePart;
+          Object.assign(payload, stripUndefinedDeep(identity), { createdAt: new Date().toISOString() });
+      }
+      // A write that never settles used to leave the button on "Saving..." forever with no
+      // message — race a watchdog so a dead connection or a stale tab SAYS so instead.
+      await Promise.race([
+          setDoc(doc(db, "Approved_Designs", activePart.id), payload, { merge: true }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Save timed out after 20 seconds — check your connection; if the 'new version is live' banner is up, tap it (or hard-refresh) and try again. Nothing was saved.")), 20000)),
+      ]);
       setTimeout(() => { setIsSaving(false); setActivePart(null); setUploadProgress(0); setCadUploadProgress(0); }, 500);
-    } catch (err) { console.error(err); setIsSaving(false); alert("Failed to save."); }
+    } catch (err) { console.error(err); setIsSaving(false); alert(`Failed to save: ${err?.message || err}`); }
   };
 
   const handlePushUpdatesToNetSuite = async () => {
