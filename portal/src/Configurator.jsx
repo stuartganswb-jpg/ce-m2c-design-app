@@ -287,13 +287,15 @@ const optLabelText = (info, o, kind) => {
   return `${label}${(price !== undefined && price !== null && price > 0) ? `  ·  ${fmtMoney(price)}` : ''}`;
 };
 
-function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel, allSteps, info }) {
+function StepControl({ step, params, setParam, quantities, setQty, finishes, sizeSel, allSteps, info, projTagOk }) {
   const sel = params[step.id];
 
   // Return-pool gating (matches HQ): french/miter/bent returns drop out when the chosen projection
   // doesn't allow returns. isReturn is stamped by the flow; fall back to the sizeMatrix detector.
+  // Per-assembly flows (H2 pivot) add the projection-TAG gate (projTagOk, mirrored from
+  // VisionHardware/CPQTab): brackets match their tag exactly, returns treat it as a minimum.
   const allowReturns = returnsAllowedFor(sizeSel);
-  const optionAllowed = (o) => allowReturns || !(o.isReturn || isReturnOption(o));
+  const optionAllowed = (o) => (allowReturns || !(o.isReturn || isReturnOption(o))) && (!projTagOk || projTagOk(o));
   const visStyleOptions = (step.styleOptions || []).filter(optionAllowed);
 
   // A return on this side replaces the bracket arm (grey it out); or a return-arm bracket replaces
@@ -309,10 +311,13 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
     </label>
   ) : null;
 
-  if (step.type === SIZE_TYPE) {
-    // Diameter-dependent projections (sizeMatrix `dias`, matches HQ): hide projections the
-    // chosen diameter doesn't offer; sizeSelectionsOf self-heals a stale invalid pick.
-    const sizeOpts = visStyleOptions.filter((o) => step.sizeAxis !== 'PROJ' || projAllowedAtDia(step.sizeFamily, o, sizeSel?.dia));
+  if (step.type === SIZE_TYPE || step.type === 'PROJ_SELECT') {
+    // SIZE steps: diameter-dependent projections (sizeMatrix `dias`, matches HQ); stale invalid
+    // picks self-heal in sizeSelectionsOf. PROJ_SELECT (per-assembly flows): the generated
+    // Bracket Projection question renders as the same cards — the pick drives projTagOk.
+    const sizeOpts = step.type === 'PROJ_SELECT'
+      ? visStyleOptions
+      : visStyleOptions.filter((o) => step.sizeAxis !== 'PROJ' || projAllowedAtDia(step.sizeFamily, o, sizeSel?.dia));
     return (
       <div className="opt-cards">
         {sizeOpts.map((o) => (
@@ -344,7 +349,7 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
       )}
       {(step.subOptions && step.subOptions.length > 0) && (() => {
         const noPlate = basicNoBackplate(step, params);
-        const subs = scopedBackplates(step, allSteps, params, info);
+        const subs = scopedBackplates(step, allSteps, params, info).filter((o) => !projTagOk || projTagOk(o));
         return (
           <div style={{ marginTop: 8 }}>
             <label className="cfg-sublabel">Backplate</label>
@@ -473,6 +478,45 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const sizeSel = useMemo(() => {
     try { return sizeSelectionsOf(data?.flow, params); } catch (e) { return null; }
   }, [data, params]);
+  // 🎯 Per-assembly projection context (H2 pivot) — VERBATIM mirror of VisionHardware/CPQTab:
+  // the PROJ_SELECT pick (or the flow's stamped implied projection) gates proj-tagged options.
+  // A bracket's proj: tag is the exact projection the physical item IS; a return-type option's
+  // tag is a MINIMUM depth. Fabricut/legacy flows carry neither the step nor the stamp →
+  // flowProjSel null → every option passes untouched.
+  const flowProjSel = useMemo(() => {
+    const st = allSteps.find((s) => s.type === 'PROJ_SELECT');
+    if (!st) {
+      const imp = parseFloat(String(data?.flow?.impliedProjInches ?? ''));
+      return Number.isFinite(imp) ? imp : null;
+    }
+    const o = (st.styleOptions || []).find((x) => x.optId === params[st.id]);
+    const f = parseFloat(String(o?.projInches ?? '').replace(/[^0-9.]/g, ''));
+    return Number.isFinite(f) ? f : null;
+  }, [allSteps, data, params]);
+  const projTagOk = (o) => {
+    if (flowProjSel == null || !o?.projInches) return true;
+    const f = parseFloat(String(o.projInches).replace(/[^0-9.]/g, ''));
+    if (!Number.isFinite(f)) return true;
+    const et = String(o.endTreatment || '').toUpperCase();
+    const returnish = et === 'FRENCH_RETURN' || et === 'MITER_RETURN'
+      || (o.isFee && /return|miter|mitre|french|bend/i.test(String(o.partName || '')));
+    return returnish ? (flowProjSel >= f - 0.01) : (Math.abs(f - flowProjSel) < 0.01);
+  };
+  // Stale-pick sweep: flipping the projection clears any selection whose tag no longer fits
+  // (main picks AND backplate sub-picks) — the config can never carry an impossible combination.
+  useEffect(() => {
+    setParams((prev) => {
+      let changed = false; const next = { ...prev };
+      allSteps.forEach((st) => {
+        const o = (st.styleOptions || []).find((x) => (x.optId || x.partId) === next[st.id]);
+        if (o && !projTagOk(o)) { delete next[st.id]; changed = true; }
+        const so = (st.subOptions || []).find((x) => (x.optId || x.partId) === next[`${st.id}__sub`]);
+        if (so && !projTagOk(so)) { delete next[`${st.id}__sub`]; changed = true; }
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flowProjSel]);
   // Render scale normalized to the master GLB's native dia (mirrors CPQTab): raw sizeSel.scale is
   // anchored to the family base (¾"), wrong for flows generated from a non-base master (H2's
   // 1-3/8"). The portal payload carries no assembly codes, so renderScaleOf resolves the master
@@ -562,7 +606,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 </div>
                 <div className="cfg-step-title lg">{step.title}</div>
                 <div className="cfg-step-body">
-                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} allSteps={allSteps} info={stepOptions[step.id]} />
+                  <StepControl step={step} params={params} setParam={setParam} quantities={quantities} setQty={setQty} finishes={finishes} sizeSel={sizeSel} allSteps={allSteps} info={stepOptions[step.id]} projTagOk={projTagOk} />
                 </div>
                 {finishMissing(step) && <div className="cfg-require">Please select a finish to continue.</div>}
                 <div className="cfg-nav">

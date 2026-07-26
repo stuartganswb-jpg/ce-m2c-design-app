@@ -13,6 +13,7 @@ export default function Showroom() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [active, setActive] = useState(null); // { flowId, name }
+  const [pickSizes, setPickSizes] = useState(null); // size-group landing: { name, sizes: [{flowId, choice}] }
 
   useEffect(() => {
     let alive = true;
@@ -30,6 +31,26 @@ export default function Showroom() {
     );
   }
 
+  // Rod-diameter landing for a size-group product (the per-assembly model, e.g. Simple
+  // Elegance): one showroom card, then "pick rod diameter first" — each card opens that
+  // diameter's own flow, exactly like the internal CPQ landing.
+  if (pickSizes) {
+    return (
+      <div style={{ marginTop: 24 }}>
+        <button className="btn-ghost" onClick={() => setPickSizes(null)}>← All products</button>
+        <h2 className="sec" style={{ marginTop: 14 }}>{pickSizes.name} — pick your rod diameter</h2>
+        <div className="catalog">
+          {pickSizes.sizes.map((s) => (
+            <button key={s.flowId} className="catalog-card" onClick={() => { setActive({ flowId: s.flowId, name: `${pickSizes.name} — ${s.choice}` }); setPickSizes(null); }}>
+              <span className="c-name">{s.choice}</span>
+              <span className="c-cta"><span /><span className="c-open">Configure →</span></span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (err) return <div className="empty" style={{ marginTop: 24 }}>{err}</div>;
   if (!data) return <div className="empty" style={{ marginTop: 24 }}>Loading your showroom…</div>;
 
@@ -41,7 +62,7 @@ export default function Showroom() {
   return (
     <div className="catalog">
       {items.map((it) => (
-        <button key={it.flowId || it.id} className="catalog-card" onClick={() => setActive({ flowId: it.flowId, name: it.name })}>
+        <button key={it.flowId || it.id} className="catalog-card" onClick={() => it.isGroup ? setPickSizes({ name: it.name, sizes: it.sizes || [] }) : setActive({ flowId: it.flowId, name: it.name })}>
           <span className="c-name">{it.name}</span>
           {it.sku ? <span className="c-sku">{it.sku}</span> : null}
           <span className="c-cta">

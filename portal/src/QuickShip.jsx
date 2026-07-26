@@ -271,7 +271,7 @@ export default function QuickShip() {
                 <label style={lbl}>Finish</label>
                 <select style={field} value={fin} onChange={(e) => setFin(e.target.value)}>
                   <option value="">Any</option>
-                  {finishes.map((f) => <option key={f} value={f}>{f}</option>)}
+                  {finishes.map((f) => <option key={f} value={f}>{data?.finishNames?.[f] ? `${f} — ${data.finishNames[f]}` : f}</option>)}
                 </select>
               </div>
             </div>

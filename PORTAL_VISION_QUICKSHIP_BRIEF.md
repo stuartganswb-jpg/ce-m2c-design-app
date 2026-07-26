@@ -50,6 +50,12 @@ Mechanics: `portalStock` mirrors tab 7's picker exactly — brand → `isStocked
 
 **To go live:** (1) Cloud Shell functions deploy; (2) on the test customer's CRM card: Portal Access → Available Collections = **Simple Elegance**, pack prefs set, portal login active; (3) confirm the H2-1BE alias/real-assembly data state — the counter follows whichever shape exists (the alias chain is tested; a real-assembly H2 code parses to the same H2-RND cell directly).
 
+## 3b. ✅ SIZE-GROUP (per-assembly H2) PORTAL SUPPORT (2026-07-26 — needs Cloud Shell deploy)
+
+The H2 pivot's four per-diameter flows now present as **ONE top-level product** everywhere: **CRM Portal Access** groups `sizeGroupLabel` flows under a single checkbox ("SIMPLE ELEGANCE ROUND · 4 sizes · one product", indeterminate when partial, toggles all sibling ids); **portalCatalog** collapses them into one showroom card (`isGroup` + `sizes[]`, min starting price); the **Showroom** opens a rod-diameter LANDING (pick the size → that diameter's own flow), mirroring the internal CPQ landing; and the **Configurator got the held per-assembly runtime mirror**: `PROJ_SELECT` steps render as cards, `flowProjSel`/`projTagOk` (verbatim from VisionHardware/CPQTab — brackets exact ±0.01, returns treat the tag as a minimum, `impliedProjInches` fallback now on the portalFlow response) gate every option pool + backplate subs, with the stale-pick sweep on projection flips. `sanitizeStep` gained `projInches` + `isFee` on options (physical dims/flags only). **H2's portal HOLD is thereby lifted for the configurator runtime** — remaining known gap: `partAllowedAtSize` client-side (combined-flow families only — per-assembly flows don't need it). Quick Ship finish selector shows names ("WS — Warm Silver") via `portalStock.finishNames`.
+
+⚠ **Data prerequisite for the showroom:** the collection gate is STRICT on the FLOW'S LINKED ASSEMBLY — the four H2 master assemblies must carry the `Simple Elegance` collection tag (Master Library → Collections) or a Simple-Elegance-restricted customer sees an empty showroom.
+
 ## 3. Quick Ship as it stands (HQ tab 7) — what you're porting
 
 `src/components/HQ/QuickShipTab.js`. Stocked/pre-finished goods → **flat NetSuite Sales Order lines**, no BOM, no flow. Mirrored to `hq_sales_orders` with `orderClass:'QUICKSHIP'` for pick/pack.

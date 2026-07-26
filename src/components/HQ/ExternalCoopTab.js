@@ -59,19 +59,27 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
     if (!brand) { setBrandFlows([]); return; }
     const q = query(collection(db, 'cpq_flows'), where('brandId', '==', brand));
     const unsub = onSnapshot(q, (snap) => setBrandFlows(
-      snap.docs.map(d => ({ id: d.id, name: d.data().name || d.id, linkedAssemblyId: d.data().linkedAssemblyId || null }))
+      snap.docs.map(d => ({ id: d.id, name: d.data().name || d.id, linkedAssemblyId: d.data().linkedAssemblyId || null, sizeGroupLabel: d.data().sizeGroupLabel || '', sizeGroupChoice: d.data().sizeGroupChoice || '', sizeGroupSort: d.data().sizeGroupSort ?? 99 }))
         .sort((a, b) => String(a.name).localeCompare(String(b.name)))
     ), () => setBrandFlows([]));
     return unsub;
   }, [customerId, customer?.brandId, activeBrand]);
 
-  const toggleFlow = async (flowId) => {
-    const next = assignedFlowIds.includes(flowId)
-      ? assignedFlowIds.filter(f => f !== flowId)
-      : [...assignedFlowIds, flowId];
+  const saveFlowIds = async (next) => {
     setAssignedFlowIds(next);
     try { await updateDoc(doc(db, 'crm_records', customerId), { portalFlowIds: next }); }
     catch (e) { setAssignedFlowIds(assignedFlowIds); alert('Could not update flow access: ' + (e.message || e)); }
+  };
+  const toggleFlow = (flowId) => saveFlowIds(assignedFlowIds.includes(flowId)
+    ? assignedFlowIds.filter(f => f !== flowId)
+    : [...assignedFlowIds, flowId]);
+  // A single-assembly SIZE GROUP (H2 pivot: four per-diameter flows stamped sizeGroupLabel)
+  // entitles as ONE product — the portal presents it as one top-level card with a rod-diameter
+  // landing, so the checkbox toggles every sibling flow id together.
+  const toggleFlowGroup = (list) => {
+    const ids = list.map(f => f.id);
+    const allOn = ids.every(id => assignedFlowIds.includes(id));
+    saveFlowIds(allOn ? assignedFlowIds.filter(id => !ids.includes(id)) : [...new Set([...assignedFlowIds, ...ids])]);
   };
 
   // The price level THIS customer sees in the portal. Customer-safe options only — FAB_COST
@@ -219,13 +227,38 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
               <div style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No CPQ flows exist for this brand yet.</div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
-                {brandFlows.map(f => (
-                  <label key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', padding: '6px 8px', border: '1px solid var(--line-soft, rgba(28,26,22,.07))', background: assignedFlowIds.includes(f.id) ? 'var(--paper)' : 'transparent' }}>
-                    <input type="checkbox" checked={assignedFlowIds.includes(f.id)} onChange={() => toggleFlow(f.id)} style={{ accentColor: 'var(--brass)' }} />
-                    <span style={{ flex: 1 }}>{f.name}</span>
-                    {!f.linkedAssemblyId && <span title="This flow has no linked assembly — nothing will render in the portal showroom" style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: '#a05a2c', textTransform: 'uppercase', letterSpacing: '.08em' }}>no assembly</span>}
-                  </label>
-                ))}
+                {(() => {
+                  // Size-group flows (sizeGroupLabel, the per-assembly H2 model) collapse into ONE
+                  // top-level row — the portal shows one product card with a diameter landing, so
+                  // the entitlement is one decision, not four checkboxes.
+                  const groups = {}; const flat = [];
+                  brandFlows.forEach(f => { if (f.sizeGroupLabel) (groups[f.sizeGroupLabel] = groups[f.sizeGroupLabel] || []).push(f); else flat.push(f); });
+                  Object.values(groups).forEach(l => l.sort((a, b) => (a.sizeGroupSort ?? 99) - (b.sizeGroupSort ?? 99)));
+                  const rowStyle = (on) => ({ display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)', cursor: 'pointer', padding: '6px 8px', border: '1px solid var(--line-soft, rgba(28,26,22,.07))', background: on ? 'var(--paper)' : 'transparent' });
+                  return (
+                    <>
+                      {Object.keys(groups).sort().map(label => {
+                        const list = groups[label];
+                        const onCount = list.filter(f => assignedFlowIds.includes(f.id)).length;
+                        const allOn = onCount === list.length;
+                        return (
+                          <label key={`GROUP::${label}`} style={rowStyle(onCount > 0)}>
+                            <input type="checkbox" checked={allOn} ref={el => { if (el) el.indeterminate = onCount > 0 && !allOn; }} onChange={() => toggleFlowGroup(list)} style={{ accentColor: 'var(--brass)' }} />
+                            <span style={{ flex: 1 }}>{label}</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em' }}>{list.length} sizes · one product{onCount > 0 && !allOn ? ` · ${onCount}/${list.length} on` : ''}</span>
+                          </label>
+                        );
+                      })}
+                      {flat.map(f => (
+                        <label key={f.id} style={rowStyle(assignedFlowIds.includes(f.id))}>
+                          <input type="checkbox" checked={assignedFlowIds.includes(f.id)} onChange={() => toggleFlow(f.id)} style={{ accentColor: 'var(--brass)' }} />
+                          <span style={{ flex: 1 }}>{f.name}</span>
+                          {!f.linkedAssemblyId && <span title="This flow has no linked assembly — nothing will render in the portal showroom" style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: '#a05a2c', textTransform: 'uppercase', letterSpacing: '.08em' }}>no assembly</span>}
+                        </label>
+                      ))}
+                    </>
+                  );
+                })()}
               </div>
             )}
 

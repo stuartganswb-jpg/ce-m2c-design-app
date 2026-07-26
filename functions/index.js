@@ -934,7 +934,7 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
     const assemblies = new Map(asmSnaps.filter((s) => s.exists).map((s) => [s.id, s.data()]));
 
     const inCollection = collectionGateOf(crm);
-    const items = [];
+    const built = [];
     let blockedByCollection = 0;
     for (const flow of flows) {
         const asm = flow.linkedAssemblyId ? assemblies.get(flow.linkedAssemblyId) : null;
@@ -945,15 +945,39 @@ exports.portalCatalog = onCall({ cors: true }, async (request) => {
         const base = asm.manufacturingSpecs && asm.manufacturingSpecs.basePrice;
         const priceRaw = cp ? (cp.clientSalesPrice ?? cp.price ?? base) : base;
         const price = (priceRaw === undefined || priceRaw === null || priceRaw === '') ? null : Number(priceRaw);
-        items.push({
-            id: flow.linkedAssemblyId,
-            flowId: flow.id,
-            name: flow.name || asm.itemName || 'Product',
-            sku: (cp && cp.clientSku) || asm.legacyErpId || asm.itemId || '',
-            cadUrl,
-            price: Number.isFinite(price) ? price : null,
+        built.push({
+            groupLabel: flow.sizeGroupLabel || '', groupChoice: flow.sizeGroupChoice || '', groupSort: flow.sizeGroupSort ?? 99,
+            item: {
+                id: flow.linkedAssemblyId,
+                flowId: flow.id,
+                name: flow.name || asm.itemName || 'Product',
+                sku: (cp && cp.clientSku) || asm.legacyErpId || asm.itemId || '',
+                cadUrl,
+                price: Number.isFinite(price) ? price : null,
+            },
         });
     }
+    // Size-group flows (the per-assembly H2 model: four per-diameter flows stamped
+    // sizeGroupLabel/Choice/Sort) collapse into ONE top-level product — the showroom shows a
+    // single card whose Configure opens a rod-diameter landing, mirroring the internal CPQ's
+    // "pick rod diameter first". Flat flows are untouched.
+    const items = built.filter((b) => !b.groupLabel).map((b) => b.item);
+    const groupsMap = new Map();
+    built.filter((b) => b.groupLabel).forEach((b) => { const l = groupsMap.get(b.groupLabel) || []; l.push(b); groupsMap.set(b.groupLabel, l); });
+    groupsMap.forEach((list, label) => {
+        list.sort((a, b) => (a.groupSort ?? 99) - (b.groupSort ?? 99));
+        const prices = list.map((b) => b.item.price).filter((p) => p !== null);
+        items.push({
+            id: `GROUP-${label.replace(/[^A-Za-z0-9]+/g, '-')}`,
+            flowId: list[0].item.flowId,
+            isGroup: true,
+            name: label,
+            sku: `${list.length} sizes`,
+            cadUrl: (list.find((b) => b.item.cadUrl) || list[0]).item.cadUrl,
+            price: prices.length ? Math.min(...prices) : null,
+            sizes: list.map((b) => ({ flowId: b.item.flowId, choice: b.groupChoice || b.item.name })),
+        });
+    });
     items.sort((a, b) => a.name.localeCompare(b.name));
 
     // An empty showroom because the collection filter ate everything is a SETUP mistake, not an
@@ -1010,11 +1034,15 @@ const sanitizeStep = (s, feeNameOf) => ({
         isReturnArm: !!o.isReturnArm,
         usesReturnPlates: !!o.usesReturnPlates,
         isBasic: !!o.isBasic,
+        // Per-assembly flows (H2 pivot): the option's projection tag + fee flag drive the
+        // portal's projTagOk gating — physical dims/flags only, never cost.
+        projInches: o.projInches || '',
+        isFee: !!o.isFee,
     })),
     subOptions: (s.subOptions || []).map((o) => ({
         optId: o.optId || o.partId || '', partId: o.partId || '', partName: customerOptName(o, feeNameOf),
         label: customerOptName({ ...o, partName: o.label || o.partName }, feeNameOf), targetNode: o.targetNode || '', location: o.location || '', position: o.position || '',
-        returnOnly: !!o.returnOnly, inlineOnly: !!o.inlineOnly,
+        returnOnly: !!o.returnOnly, inlineOnly: !!o.inlineOnly, projInches: o.projInches || '',
     })),
 });
 
@@ -1119,6 +1147,9 @@ exports.portalFlow = onCall({ cors: true }, async (request) => {
         // Bay configuration (display-safe scalar) — the portal Measure & Fit page seeds its
         // shape from this, mirroring the internal Vision board's fabShape seeding.
         fabShape: flow.fabShape || '',
+        // Per-assembly flows (H2 pivot): the flow-level implied projection (stamped when exactly
+        // one proj tag exists) — the Configurator's projTagOk falls back to it, like the board.
+        impliedProjInches: flow.impliedProjInches ?? null,
     };
 });
 
@@ -1447,11 +1478,20 @@ exports.portalStock = onCall({ cors: true }, async (request) => {
         }
         return out;
     };
+    // Finish NAMES for the counter's finish selector ("WS — Warm Silver"): master + outsourced
+    // finishes, code → display name. Names only — no vendor or multiplier data leaves.
+    const finishNames = {};
+    const mfSnap = await db.collection('system').doc('master_finishes').get();
+    ((mfSnap.exists && mfSnap.data().finishes) || []).forEach((f) => { if (f && f.code) finishNames[String(f.code).toUpperCase()] = String(f.name || f.code); });
+    const outSnap = await db.collection('hq_outsource_finishes').get();
+    outSnap.forEach((d) => { const f = d.data(); if (f && f.code && !finishNames[String(f.code).toUpperCase()]) finishNames[String(f.code).toUpperCase()] = String(f.name || f.code); });
+
     return {
         items: [...ctx.sellable.map((it) => slim(it, true)), ...[...neighborhood.values()].map((it) => slim(it, false))],
         bracketPos: { outer: [...ctx.outer], center: [...ctx.center] },
         collections: ctx.collections,
         packPrefs: { qsRingPack: crm.qsRingPack || '', qsFinialPack: crm.qsFinialPack || '', qsInsideMountPack: crm.qsInsideMountPack || '' },
+        finishNames,
         customerName: crm.name || '',
     };
 });
