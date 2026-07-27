@@ -34,6 +34,10 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [bulkRename, setBulkRename] = useState(true);
     const [bulkBusy, setBulkBusy] = useState(null); // { done, total }
     const [portalFlagCol, setPortalFlagCol] = useState(''); // 🌐 portal-gallery flagging target collection
+    // Browse paging (Stuart 2026-07-27: "no way for me to see the next 100") — the grid renders in
+    // 100-card pages with SHOW MORE / SHOW ALL; a new search or chip pick resets to the first page.
+    const [visibleCount, setVisibleCount] = useState(100);
+    useEffect(() => { setVisibleCount(100); }, [searchQuery, chipFilters]);
 
     // 🗑 BULK DELETE (Stuart 2026-07-27: legacy assets with unusable ids made the re-tagger skip
     // 95% — nuke & reimport). Deletes the SELECTED assets' records in 400-doc batches — with no
@@ -259,8 +263,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         return searchTokens.every(t => blob.includes(t));
     });
 
-    const MAX_DISPLAY = 100;
-    const displayAssets = filteredAssets.slice(0, MAX_DISPLAY);
+    const displayAssets = filteredAssets.slice(0, visibleCount);
 
     const generateWatermarkedImages = (file, textStr) => {
         return new Promise((resolve) => {
@@ -580,7 +583,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                         <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', color: theme.inkSoft }}>SELECTED: {bulkSelected.size}</span>
                         <div style={{ display: 'flex', gap: '8px' }}>
-                            <button onClick={() => setBulkSelected(new Set(displayAssets.map(a => a.id)))} style={{ padding: '6px 10px', background: '#fff', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>SELECT ALL SHOWN</button>
+                            <button onClick={() => setBulkSelected(new Set(filteredAssets.map(a => a.id)))} title="Selects EVERY asset matching the current search/chips — including pages not rendered yet — so bulk re-tag / portal-flag / delete never silently stop at the first 100." style={{ padding: '6px 10px', background: '#fff', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>SELECT ALL MATCHING ({filteredAssets.length})</button>
                             <button onClick={() => setBulkSelected(new Set())} style={{ padding: '6px 10px', background: '#fff', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>CLEAR</button>
                         </div>
                         <button onClick={handleBulkDelete} disabled={!!bulkBusy || bulkSelected.size === 0} title="Permanently deletes the selected asset records (no undo; image files stay in storage). SELECT ALL SHOWN with no filters = the whole gallery — for the nuke-and-reimport." style={{ marginTop: '2px', padding: '8px 12px', background: 'transparent', color: (!!bulkBusy || bulkSelected.size === 0) ? theme.inkSoft : '#d9534f', border: `1px solid ${(!!bulkBusy || bulkSelected.size === 0) ? theme.line : '#d9534f'}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', cursor: (!!bulkBusy || bulkSelected.size === 0) ? 'not-allowed' : 'pointer' }}>
@@ -762,9 +765,11 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 {/* THE THUMBNAIL MASONRY GRID */}
                 <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', minHeight: '600px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                     
-                    {filteredAssets.length > MAX_DISPLAY && (
-                        <div style={{ background: theme.paper, border: `1px solid ${theme.brass}`, color: theme.brass, padding: '10px', textAlign: 'center', fontFamily: theme.sans, fontSize: '0.9rem' }}>
-                            ⚠️ Showing {MAX_DISPLAY} of {filteredAssets.length} matching results. Keep typing to deep-search.
+                    {filteredAssets.length > visibleCount && (
+                        <div style={{ background: theme.paper, border: `1px solid ${theme.brass}`, color: theme.brass, padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '14px', flexWrap: 'wrap', fontFamily: theme.sans, fontSize: '0.9rem' }}>
+                            <span>Showing {displayAssets.length} of {filteredAssets.length} matching results — deep-search to narrow, or:</span>
+                            <button onClick={() => setVisibleCount(c => c + 100)} style={{ padding: '7px 14px', background: theme.brass, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>SHOW 100 MORE</button>
+                            <button onClick={() => setVisibleCount(filteredAssets.length)} style={{ padding: '7px 14px', background: 'transparent', color: theme.brass, border: `1px solid ${theme.brass}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>SHOW ALL {filteredAssets.length}</button>
                         </div>
                     )}
 
