@@ -250,6 +250,72 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       } catch (e) { alert('Force clear failed: ' + (e.message || e)); }
   };
 
+  // ✔ FORCE COMPLETE → PACKING (Stuart 2026-07-25): a work order can strand on the floor with
+  // steps still Pending (a card that never rendered, a bake that was run off-app, a stock build
+  // already assembled in NetSuite by hand). This supervisor override marks every step Complete,
+  // frees the sled and stamps currentPhase 'Complete' — which is exactly what the WMS PACKING
+  // queue reads (PickPackApp: currentPhase === 'Complete' && packStatus !== 'Packed'), so the
+  // order appears there immediately. No scan, no QC, no timing — it is the exception path.
+  //
+  // THE NETSUITE FORK (this is the part that matters): the onStockBuildDone trigger fires on any
+  // fin_workorders write where orderType 'stock' + nsWoId + bake Complete + !nsCompletionQueued,
+  // and enqueues the WO-linked assembly build. So for a WO that is ALREADY built in NetSuite we
+  // write nsCompletionQueued:true in the SAME atomic update as the completion — the trigger reads
+  // the after-state, sees the stamp and returns early, so nothing double-posts. For a WO that
+  // still needs its build we simply omit the stamp and let that proven server path do the work
+  // (it looks up the receive bin itself) — no duplicate NetSuite payload lives here.
+  const forceCompleteToPacking = async (wo) => {
+      const len = recipeLen(wo);
+      const t = wo.tasks || {};
+      const pend = [['Sled Setup', t.spinSetup], ['Sled Spray', t.spinSpray], ['Sled Bake', t.spinBake],
+          ...(woHasPoles(wo) ? [['Pole Spray', t.poleSpray], ['Pole Bake', t.poleBake]] : []), ['Hand Finish', t.hand]]
+          .filter(([, task]) => (task?.status || 'Pending') !== 'Complete').map(([label]) => label);
+      const isStockBuild = wo.orderType === 'stock' && !!wo.nsWoId;
+      const alreadyHandled = !!(wo.nsCompletionQueued || wo.nsWoCompletionPosted);
+
+      if (!window.confirm(
+          `✔ FORCE COMPLETE — ${woRef(wo)}?\n\n` +
+          `${wo.stockErpId || wo.type || 'Order'} · ${wo.totalParts || 0} pcs${wo.recipe ? ` · ${wo.recipe}` : ''}\n` +
+          `${pend.length ? `Still pending: ${pend.join(', ')}` : 'All steps already complete'}\n\n` +
+          `Every step is marked Complete, the sled is freed, and the order goes STRAIGHT TO THE WMS PACKING QUEUE.\n\n` +
+          `Supervisor override — nothing is scanned, QC'd or timed.`)) return;
+
+      // NetSuite question — only for a stock build that hasn't already queued/posted its completion.
+      let blockNsPost = true;
+      if (isStockBuild && !alreadyHandled) {
+          blockNsPost = window.confirm(
+              `Is ${wo.nsWoTran || wo.nsWoId} ALREADY BUILT in NetSuite?\n\n` +
+              `OK  = YES, already built → the app posts NOTHING (use this for a WO you built in NetSuite yourself).\n\n` +
+              `CANCEL = NO, not built yet → the app queues the assembly build now (watch HQ 11.1 → NetSuite Sync Queue).`);
+      }
+
+      const updates = {
+          currentPhase: 'Complete', stepStatus: 'Complete', completedAt: Date.now(),
+          currentStepIndex: len || (wo.currentStepIndex || 0),
+          machineAssigned: null,
+          "tasks.spinSetup.status": "Complete", "tasks.spinSpray.status": "Complete", "tasks.spinBake.status": "Complete",
+          "tasks.hand.status": "Complete",
+          forceCompletedAt: Date.now(), forceCompletedBy: user?.name || '',
+          forceCompleteNsBuildSkipped: isStockBuild ? blockNsPost : null,
+      };
+      if (woHasPoles(wo)) {
+          updates.poleStepIndex = len || poleIdxOf(wo);
+          updates["tasks.poleSpray.status"] = "Complete";
+          updates["tasks.poleBake.status"] = "Complete";
+      }
+      // Same write as the completion — the trigger reads the after-state, so the stamp always wins.
+      if (blockNsPost) updates.nsCompletionQueued = true;
+
+      try {
+          await updateDoc(doc(db, "fin_workorders", wo.id), updates);
+          setViewWo(null);
+          alert(`✅ ${woRef(wo)} marked COMPLETE — it is now in the WMS Packing queue.\n\n` +
+              (isStockBuild
+                  ? (blockNsPost ? 'No NetSuite build was posted (already built).' : 'The NetSuite assembly build was queued — check HQ 11.1 → NetSuite Sync Queue.')
+                  : 'Custom order — NetSuite is handled by the sales-order fulfillment, not here.'));
+      } catch (e) { alert('Force complete failed: ' + (e.message || e)); }
+  };
+
   // ===== MANUAL STATION CONTROLS (Stuart 2026-07-20) =====
   // The machines aren't fully dialed in yet, so operators need direct start/stop/complete on
   // whatever job sits at a station — tap the RED/BLUE sled, the OVEN, the POLE RACK or the HAND
@@ -875,6 +941,24 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                               {hasP && chip('Pole Bake', t.poleBake?.status)}
                               {chip('Hand Finish', t.hand?.status)}
                           </div>
+                          {/* Supervisor override — a stranded order (steps stuck Pending, or a stock
+                              build already assembled in NetSuite) goes straight to WMS Packing. */}
+                          {(() => {
+                              const role = String(user?.role || '').toLowerCase().replace(/[^a-z]/g, '');
+                              const canForce = user?.superAdmin === true || ['superadmin', 'admin', 'floormanager', 'paintmanager'].includes(role);
+                              if (!canForce) return null;
+                              const done = wo.currentPhase === 'Complete';
+                              return (
+                                  <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
+                                      <button onClick={() => forceCompleteToPacking(wo)} disabled={done}
+                                          title={done ? 'This order is already complete — find it on the WMS Packing tab.' : 'Mark every step Complete and send this order to the WMS Packing queue. Asks first whether NetSuite is already built so nothing double-posts.'}
+                                          style={{ width: '100%', padding: '14px', background: done ? 'var(--paper)' : 'var(--ink)', color: done ? 'var(--ink-soft)' : '#fff', border: '1px solid var(--line)', cursor: done ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                          {done ? '✓ Complete — waiting in WMS Packing' : '✔ Force Complete → Packing'}
+                                      </button>
+                                      {!done && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textAlign: 'center', marginTop: '8px', letterSpacing: '.04em' }}>Supervisor override · no scan, QC or timing · logged on the order</div>}
+                                  </div>
+                              );
+                          })()}
                       </div>
                   </div>
               </div>
