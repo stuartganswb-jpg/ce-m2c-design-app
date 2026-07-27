@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, doc, updateDoc, deleteDoc, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import {
     buildPartIndex, assetSearchBlob, buildComboMeta, buildSingleMeta, resolveBaseDoc,
@@ -34,6 +34,31 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [bulkRename, setBulkRename] = useState(true);
     const [bulkBusy, setBulkBusy] = useState(null); // { done, total }
     const [portalFlagCol, setPortalFlagCol] = useState(''); // 🌐 portal-gallery flagging target collection
+
+    // 🗑 BULK DELETE (Stuart 2026-07-27: legacy assets with unusable ids made the re-tagger skip
+    // 95% — nuke & reimport). Deletes the SELECTED assets' records in 400-doc batches — with no
+    // filters, SELECT ALL SHOWN + this = the whole gallery. Program prints can never ride along
+    // (the grid excludes them, so they are never selectable). Image FILES stay in Storage as
+    // harmless orphans — doc-only keeps the wipe fast and the reimport uploads fresh anyway.
+    // Type-to-confirm because there is no undo.
+    const handleBulkDelete = async () => {
+        const ids = [...bulkSelected];
+        if (!ids.length) return alert('Tick some assets first — SELECT ALL SHOWN grabs the whole filtered gallery.');
+        const typed = window.prompt(`⚠ PERMANENTLY DELETE ${ids.length} asset record(s) from the gallery?\n\nThere is no undo. (Image files stay in storage; only the gallery records are removed.)\n\nType DELETE to confirm:`);
+        if (typed !== 'DELETE') return;
+        setBulkBusy({ done: 0, total: ids.length });
+        try {
+            for (let i = 0; i < ids.length; i += 400) {
+                const batch = writeBatch(db);
+                ids.slice(i, i + 400).forEach(id => batch.delete(doc(db, 'global_assets', id)));
+                await batch.commit();
+                setBulkBusy({ done: Math.min(ids.length, i + 400), total: ids.length });
+            }
+            setBulkSelected(new Set());
+            alert(`Deleted ${ids.length} asset record(s). The gallery is ready for the reimport.`);
+        } catch (e) { console.error('bulk delete failed', e); alert('Delete failed: ' + (e?.message || e)); }
+        finally { setBulkBusy(null); }
+    };
 
     // 🌐 PORTAL FLAGGING (Stuart 2026-07-27: "only images we flag for them should populate") —
     // opt-in per asset: portalCollections lists the collections whose entitled portal customers
@@ -558,6 +583,9 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                             <button onClick={() => setBulkSelected(new Set(displayAssets.map(a => a.id)))} style={{ padding: '6px 10px', background: '#fff', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>SELECT ALL SHOWN</button>
                             <button onClick={() => setBulkSelected(new Set())} style={{ padding: '6px 10px', background: '#fff', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>CLEAR</button>
                         </div>
+                        <button onClick={handleBulkDelete} disabled={!!bulkBusy || bulkSelected.size === 0} title="Permanently deletes the selected asset records (no undo; image files stay in storage). SELECT ALL SHOWN with no filters = the whole gallery — for the nuke-and-reimport." style={{ marginTop: '2px', padding: '8px 12px', background: 'transparent', color: (!!bulkBusy || bulkSelected.size === 0) ? theme.inkSoft : '#d9534f', border: `1px solid ${(!!bulkBusy || bulkSelected.size === 0) ? theme.line : '#d9534f'}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', cursor: (!!bulkBusy || bulkSelected.size === 0) ? 'not-allowed' : 'pointer' }}>
+                            🗑 DELETE {bulkSelected.size} SELECTED
+                        </button>
                     </div>
                     <div style={{ minWidth: '180px' }}>
                         <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', color: theme.inkSoft }}>PLATE CODE OVERRIDE (blank = keep each asset's)</span>
