@@ -48,11 +48,16 @@ const OuterGate = ({ children }) => {
     const unsub = onAuthStateChanged(outerAuth, async (u) => {
       if (!u) { setGateUser(null); setChecking(false); return; }
       try {
-        // Reject sessions older than the daily window or (defense in depth) off-domain accounts.
+        // Reject sessions older than the daily window. Off-domain accounts are NOT bounced here:
+        // outside collaborators (per-email grants — see externalAccessAllowed in functions) are
+        // legitimate and the client cannot read the admin-locked allow-list while signed out.
+        // authenticatePin is the authority — an unlisted address gets a real gate session and
+        // still cannot mint a PIN token, and this session alone grants NO Firestore access
+        // (it lives on the secondary 'outer-gate' app instance, never the one db uses).
         const res = await u.getIdTokenResult();
         const authedAt = new Date(res.claims.auth_time * 1000).getTime();
         const ageHours = (Date.now() - authedAt) / 3600000;
-        if (ageHours > MAX_SESSION_HOURS || !domainAllowed(u.email)) {
+        if (ageHours > MAX_SESSION_HOURS) {
           await signOut(outerAuth);
           setGateUser(null);
         } else {
@@ -69,17 +74,20 @@ const OuterGate = ({ children }) => {
   const handleSignIn = async (e) => {
     e.preventDefault();
     setErr('');
-    if (!domainAllowed(email)) {
-      setErr('Use your company email (' + ALLOWED_EMAIL_DOMAINS.join(', ') + ').');
-      return;
-    }
+    // No client-side domain block: an admin can grant a single outside address access (contract
+    // engineers), and only the server knows who is on that list. A wrong-domain guess simply
+    // fails on credentials, and even a valid off-domain session is refused at the PIN step.
     setBusy(true);
     try {
       await signInWithEmailAndPassword(outerAuth, email.trim(), pw);
       setPw('');
     } catch (error) {
       const code = error?.code || '';
-      setErr(code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found'
+      const badCreds = code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found';
+      // Most failures here are a typo'd company address; say so rather than leaving them guessing.
+      setErr(badCreds && !domainAllowed(email)
+        ? 'Email or password is incorrect. Company addresses end in ' + ALLOWED_EMAIL_DOMAINS.join(', ') + ' — outside collaborators need an admin to grant their address access first.'
+        : badCreds
         ? 'Email or password is incorrect.'
         : code === 'auth/too-many-requests'
           ? 'Too many attempts — try again in a few minutes.'
@@ -91,7 +99,7 @@ const OuterGate = ({ children }) => {
 
   const handleForgot = async () => {
     setErr('');
-    if (!domainAllowed(email)) { setErr('Enter your company email above first, then tap "Forgot password".'); return; }
+    if (!email.trim()) { setErr('Enter your email above first, then tap "Forgot password".'); return; }
     try {
       await sendPasswordResetEmail(outerAuth, email.trim());
       setErr('Password reset email sent to ' + email.trim() + '.');

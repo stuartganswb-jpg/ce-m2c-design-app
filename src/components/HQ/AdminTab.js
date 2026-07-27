@@ -552,7 +552,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   // the setup link → add their PIN row below. Accounts made in the console still work — "Find
   // console-made accounts" adopts them so they can be managed here too.
   const ALLOWED_LOGIN_DOMAINS = ['classicalelements.com', 'm2cstudio.com', 'uniquitystyle.com', 'leylagans.com', 'thelab-hp.com'];
-  const [loginForm, setLoginForm] = useState({ email: '', name: '', pin: '' });
+  const [loginForm, setLoginForm] = useState({ email: '', name: '', pin: '', external: false, expires: '' });
   const [loginBusy, setLoginBusy] = useState('');
   const [inviteLink, setInviteLink] = useState(null); // { email, link } shown until dismissed
   const [unlinkedLogins, setUnlinkedLogins] = useState(null); // null = not scanned yet
@@ -569,16 +569,39 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const mail = loginForm.email.trim().toLowerCase();
       if (!mail) return alert('Email is required.');
       const dom = mail.split('@')[1] || '';
-      if (!ALLOWED_LOGIN_DOMAINS.includes(dom)) {
-          return alert(`"${dom}" is not a company domain, so this account could never sign in.\n\nAllowed: ${ALLOWED_LOGIN_DOMAINS.join(', ')}`);
+      // Off-domain is allowed ONLY as an explicit outside-collaborator grant — per address, never
+      // per domain (adding "gmail.com" to the company list would admit the whole provider).
+      if (!ALLOWED_LOGIN_DOMAINS.includes(dom) && !loginForm.external) {
+          return alert(`"${dom}" is not a company domain.\n\nTick "Outside collaborator" to grant this ONE address access, or use a company email.\n\nCompany domains: ${ALLOWED_LOGIN_DOMAINS.join(', ')}`);
       }
+      const expMs = loginForm.expires ? new Date(`${loginForm.expires}T23:59:59`).getTime() : null;
+      if (loginForm.external && !window.confirm(
+          `Grant OUTSIDE ACCESS to ${mail}?\n\n` +
+          `This one address can sign in like staff. What they can DO is set by the PIN + role you give them below — but note any staff PIN can read and write the core data collections, so give them a limited role and remove access when the engagement ends.\n\n` +
+          (expMs ? `Access auto-expires after ${loginForm.expires}.` : 'No expiry date set — access lasts until you revoke it.'))) return;
       setLoginBusy('create');
       try {
-          const d = await callLogin('createStaffLogin', { email: mail, name: loginForm.name, pin: loginForm.pin });
+          const d = await callLogin('createStaffLogin', { email: mail, name: loginForm.name, pin: loginForm.pin, external: !!loginForm.external, expiresAt: expMs });
           setInviteLink({ email: mail, link: d.setupLink });
           if (d.setupLink) copyInvite(d.setupLink);
-          setLoginForm({ email: '', name: '', pin: '' });
+          setLoginForm({ email: '', name: '', pin: '', external: false, expires: '' });
           if (d.adopted) alert(`${mail} already existed in Firebase — it is now linked here and manageable from this panel.`);
+      } catch (e) { alert(e.message || String(e)); }
+      finally { setLoginBusy(''); }
+  };
+  // Extend / revoke an outside grant without deleting the account.
+  const handleAccessChange = async (l, mode) => {
+      if (mode === 'revoke' && !window.confirm(`Revoke outside access for ${l.email}?\n\nTheir next sign-in attempt is refused at the PIN step. The account stays (re-grant any time).`)) return;
+      let expMs;
+      if (mode === 'extend') {
+          const d = window.prompt('New expiry date (YYYY-MM-DD) — leave blank for no expiry:', l.expiresAt ? new Date(l.expiresAt).toISOString().slice(0, 10) : '');
+          if (d === null) return;
+          expMs = d.trim() ? new Date(`${d.trim()}T23:59:59`).getTime() : null;
+          if (expMs !== null && Number.isNaN(expMs)) return alert('That date could not be read — use YYYY-MM-DD.');
+      }
+      setLoginBusy(l.id);
+      try {
+          await callLogin('setStaffLoginAccess', mode === 'revoke' ? { uid: l.id, external: false } : { uid: l.id, expiresAt: expMs });
       } catch (e) { alert(e.message || String(e)); }
       finally { setLoginBusy(''); }
   };
@@ -3228,6 +3251,22 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                     <button onClick={handleCreateLogin} disabled={loginBusy === 'create'} style={{ padding: '12px 22px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: loginBusy === 'create' ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>{loginBusy === 'create' ? 'Creating…' : '+ Create Login'}</button>
                   </div>
 
+                  {/* Outside collaborators: contract engineers etc. Granted per EXACT address — never
+                      by adding their domain, which would admit everyone at that provider. */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginTop: '10px', flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--ink)' }}>
+                      <input type="checkbox" checked={loginForm.external} onChange={e => setLoginForm({ ...loginForm, external: e.target.checked, expires: e.target.checked && !loginForm.expires ? new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10) : loginForm.expires })} style={{ width: '15px', height: '15px', cursor: 'pointer' }} />
+                      Outside collaborator <span style={{ color: 'var(--ink-soft)' }}>(non-company email — grants this one address)</span>
+                    </label>
+                    {loginForm.external && (
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
+                        Access until
+                        <input type="date" value={loginForm.expires} onChange={e => setLoginForm({ ...loginForm, expires: e.target.value })} style={{ padding: '7px 10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px' }}>blank = no expiry</span>
+                      </label>
+                    )}
+                  </div>
+
                   {inviteLink && (
                     <div style={{ marginTop: '14px', padding: '14px', background: '#fff', border: '1px solid var(--brass)' }}>
                       <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', marginBottom: '8px' }}>Password setup link · {inviteLink.email} · copied to your clipboard</div>
@@ -3248,6 +3287,17 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                           <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 14px', background: '#fff', border: '1px solid var(--line)', opacity: off ? 0.55 : 1 }}>
                             <span style={{ flex: 1, color: 'var(--ink)', fontSize: '0.9rem' }}>{l.email}</span>
                             <span style={{ flex: 1, color: 'var(--ink-soft)', fontSize: '0.85rem' }}>{person ? `${person.name} · PIN row linked` : (l.name || '')}</span>
+                            {l.external && (() => {
+                                const expired = l.expiresAt && Date.now() > Number(l.expiresAt);
+                                return (
+                                    <span title={l.expiresAt ? `Outside collaborator · access ${expired ? 'EXPIRED' : 'until'} ${new Date(Number(l.expiresAt)).toLocaleDateString()}` : 'Outside collaborator · no expiry set'}
+                                        style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.08em', color: expired ? '#d9534f' : 'var(--brass)', border: `1px solid ${expired ? '#d9534f' : 'var(--brass)'}`, padding: '3px 7px', whiteSpace: 'nowrap' }}>
+                                        {expired ? 'Expired' : 'Outside'}{l.expiresAt && !expired ? ` · ${new Date(Number(l.expiresAt)).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}
+                                    </span>
+                                );
+                            })()}
+                            {l.external && <button onClick={() => handleAccessChange(l, 'extend')} disabled={loginBusy === l.id} title="Change or clear the expiry date" style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Expiry</button>}
+                            {l.external && <button onClick={() => handleAccessChange(l, 'revoke')} disabled={loginBusy === l.id} title="End outside access now (account kept — re-grant any time)" style={{ padding: '6px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Revoke</button>}
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: off ? '#d9534f' : '#3a7d44', width: '70px' }}>{off ? 'Disabled' : 'Active'}</span>
                             <button onClick={() => handleReinvite(l)} disabled={loginBusy === l.id} title="New password-setup link (new hire, or they forgot it)" style={{ padding: '6px 12px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Setup link</button>
                             <button onClick={() => handleToggleLogin(l)} disabled={loginBusy === l.id} style={{ padding: '6px 12px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{off ? 'Enable' : 'Disable'}</button>

@@ -37,6 +37,22 @@ const ALLOWED_EMAIL_DOMAINS = [
 // never hits the server wall mid-shift; the client re-prompts first.
 const OUTER_MAX_AGE_HOURS = 16;
 
+// OUTSIDE COLLABORATORS (Stuart 2026-07-25: "an outside engineer I want to join in"). Adding a
+// contractor's domain to the list above would admit EVERY address at that provider — gmail.com
+// would be catastrophic. So exceptions are granted per EXACT EMAIL: an admin flags one
+// staff_logins record `external`, and only that address passes. The record must still be active,
+// and an optional expiresAt makes the access self-revoking when the engagement ends.
+// Company users never reach this lookup — it runs only after the domain check fails.
+const externalAccessAllowed = async (email) => {
+    if (!email) return false; // never let an email-less token (e.g. a replayed PIN token) match
+    const snap = await admin.firestore().collection('staff_logins').where('email', '==', email).limit(1).get();
+    if (snap.empty) return false;
+    const d = snap.docs[0].data() || {};
+    if (d.external !== true || d.active === false) return false;
+    if (d.expiresAt && Date.now() > Number(d.expiresAt)) return false;
+    return true;
+};
+
 exports.authenticatePin = onCall({
     enforceAppCheck: true, // 🛡️ Requires a valid App Check (reCAPTCHA) token
     cors: true,
@@ -59,7 +75,7 @@ exports.authenticatePin = onCall({
     }
     const outerEmail = String(outer.email || '').toLowerCase();
     const outerDomain = outerEmail.split('@')[1] || '';
-    if (!ALLOWED_EMAIL_DOMAINS.includes(outerDomain)) {
+    if (!ALLOWED_EMAIL_DOMAINS.includes(outerDomain) && !(await externalAccessAllowed(outerEmail))) {
         // Also rejects PIN-minted custom tokens replayed as outerToken (they carry no email).
         throw new HttpsError('permission-denied', 'This account is not authorized for the portal.');
     }
@@ -769,15 +785,19 @@ const staffMirror = (uid, rec, extra) => Object.assign({
 
 exports.createStaffLogin = onCall({ enforceAppCheck: true }, async (request) => {
     assertStaffAdmin(request);
-    const { email, name, pin } = request.data || {};
+    const { email, name, pin, external, expiresAt } = request.data || {};
     const mail = String(email || '').trim().toLowerCase();
     const who = String(name || '').trim();
     const linkPin = String(pin || '').trim();
+    const isExternal = external === true;
+    const expires = Number(expiresAt) > 0 ? Number(expiresAt) : null;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) throw new HttpsError('invalid-argument', 'A valid email is required.');
     const domain = mail.split('@')[1] || '';
-    if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
+    // An off-domain address is allowed ONLY as an explicit outside-collaborator grant (per email,
+    // never per domain — see externalAccessAllowed).
+    if (!ALLOWED_EMAIL_DOMAINS.includes(domain) && !isExternal) {
         throw new HttpsError('invalid-argument',
-            `${domain} is not an allowed company domain, so this account could never sign in. Allowed: ${ALLOWED_EMAIL_DOMAINS.join(', ')}.`);
+            `${domain} is not a company domain. Tick "outside collaborator" to grant this ONE address access, or use a company email. Company domains: ${ALLOWED_EMAIL_DOMAINS.join(', ')}.`);
     }
 
     const db = admin.firestore();
@@ -806,6 +826,8 @@ exports.createStaffLogin = onCall({ enforceAppCheck: true }, async (request) => 
         createdAt: Date.now(),
         createdBy: String((request.auth.token && request.auth.token.name) || 'admin'),
         adopted,
+        external: isExternal,
+        expiresAt: expires,
     }), { merge: true });
 
     // Stamp the email onto the person's PIN doc so the directory shows who still needs a login.
@@ -834,6 +856,23 @@ exports.setStaffLoginStatus = onCall({ enforceAppCheck: true }, async (request) 
     if (!snap.exists) throw new HttpsError('not-found', 'Staff login not found.');
     await admin.auth().updateUser(id, { disabled: active !== true });
     await admin.firestore().collection(STAFF_LOGINS).doc(id).set({ active: active === true }, { merge: true });
+    return { ok: true };
+});
+
+// Extend, shorten or revoke an outside collaborator's access without deleting the account.
+// Revoking (external:false) is instant and total for an off-domain address — the next PIN
+// attempt fails the domain check with no exception to fall back on.
+exports.setStaffLoginAccess = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const { uid, external, expiresAt } = request.data || {};
+    const id = String(uid || '');
+    const ref = admin.firestore().collection(STAFF_LOGINS).doc(id);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError('not-found', 'Staff login not found.');
+    const patch = {};
+    if (external !== undefined) patch.external = external === true;
+    if (expiresAt !== undefined) patch.expiresAt = Number(expiresAt) > 0 ? Number(expiresAt) : null;
+    await ref.set(patch, { merge: true });
     return { ok: true };
 });
 
