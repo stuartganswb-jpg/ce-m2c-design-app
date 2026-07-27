@@ -1551,6 +1551,55 @@ exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
     return { ok: true, quoteNo, total };
 });
 
+// ---- Asset gallery (portal) -------------------------------------------------------------------
+// A LIMITED, opt-in slice of the internal Asset Gallery (Stuart 2026-07-27, Fabricut H1 = the
+// test set): an image appears ONLY when staff flagged it (global_assets.portalVisible +
+// portalCollections, set via the gallery's bulk 🌐 FLAG FOR PORTAL), AND the signed-in customer
+// is entitled to one of its collections (crm_records.portalCollections; empty = unrestricted).
+// Each asset ships with a server-built lowercase search BLOB of its Fabricut identity (fab{} +
+// tags + names) — the portal search AND-matches tokens against it, the same matching rule as
+// the internal gallery. Identity fields only — never costs, vendors, or internal notes.
+exports.portalAssets = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const allowed = (Array.isArray(crm.portalCollections) ? crm.portalCollections : [])
+        .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean);
+
+    const snap = await db.collection('global_assets').where('portalVisible', '==', true).get();
+    const assets = [];
+    snap.forEach((d) => {
+        const a = d.data() || {};
+        const cols = (Array.isArray(a.portalCollections) ? a.portalCollections : []).map((c) => String(c || '').trim().toUpperCase()).filter(Boolean);
+        if (!cols.length) return; // flag without a collection = not addressable, never shown
+        if (allowed.length && !cols.some((c) => allowed.includes(c))) return;
+        const fab = a.fab || {};
+        const fabSafe = {
+            role: fab.role || '', endTreatment: fab.endTreatment || '',
+            pairedCode: fab.pairedCode || '', pairedName: fab.pairedName || '',
+            plateCode: fab.plateCode || '', plateIsCover: !!fab.plateIsCover, plateOrientation: fab.plateOrientation || '',
+            diaLabel: fab.diaLabel || '', projLabel: fab.projLabel || '',
+            fabCode: fab.fabCode || '', fabColorName: fab.fabColorName || '', ourFinishName: fab.ourFinishName || '',
+        };
+        const blob = [a.name, a.patternId, a.finishId, a.fabCode, ...Object.values(fabSafe).filter((v) => typeof v === 'string'), ...(Array.isArray(a.tags) ? a.tags : []), ...cols]
+            .filter(Boolean).join(' ').toLowerCase();
+        assets.push({
+            id: d.id,
+            url: a.thumbnailUrl || a.url || '',
+            fullUrl: a.originalUrl || a.url || '',
+            name: a.name || a.patternId || '',
+            fabCode: String(a.fabCode || fab.fabCode || ''),
+            tags: (Array.isArray(a.tags) ? a.tags : []).slice(0, 24),
+            fab: fabSafe,
+            collections: cols,
+            blob,
+        });
+    });
+    assets.sort((x, y) => String(x.name).localeCompare(String(y.name), undefined, { numeric: true }));
+    return { assets, collections: allowed };
+});
+
 
 // ---- Configured pricing (server-side engine, matches HQ) -------------------------------------
 // Loads the SAME data CPQTab prices from (flow + brand's Approved_Designs parts + the assembly's

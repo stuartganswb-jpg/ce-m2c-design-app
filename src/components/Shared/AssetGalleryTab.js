@@ -33,6 +33,34 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [bulkPlateCode, setBulkPlateCode] = useState('');
     const [bulkRename, setBulkRename] = useState(true);
     const [bulkBusy, setBulkBusy] = useState(null); // { done, total }
+    const [portalFlagCol, setPortalFlagCol] = useState(''); // 🌐 portal-gallery flagging target collection
+
+    // 🌐 PORTAL FLAGGING (Stuart 2026-07-27: "only images we flag for them should populate") —
+    // opt-in per asset: portalCollections lists the collections whose entitled portal customers
+    // may see the image; portalVisible mirrors non-emptiness so the BFF has one cheap equality
+    // query. Runs over the bulk selection — filter the grid (e.g. search H1), SELECT ALL SHOWN,
+    // pick the collection, FLAG. Un-flag removes just that collection (asset stays visible to
+    // other flagged collections, hides everywhere once the list empties).
+    const handleBulkPortalFlag = async (add) => {
+        const col = String(portalFlagCol || '').trim().toUpperCase();
+        if (!col) return alert('Pick a collection to flag for first.');
+        const ids = [...bulkSelected];
+        if (!ids.length) return alert('Tick some assets first.');
+        if (!window.confirm(`${add ? 'FLAG' : 'UN-FLAG'} ${ids.length} selected asset(s) ${add ? 'for' : 'from'} the customer portal gallery under "${col}"?${add ? '\n\nOnly customers entitled to this collection (CRM → Portal Access → Available Collections) will see them.' : ''}`)) return;
+        setBulkBusy({ done: 0, total: ids.length });
+        try {
+            let done = 0;
+            for (const id of ids) {
+                const a = (Array.isArray(assets) ? assets : []).find(x => x.id === id);
+                const cur = (Array.isArray(a?.portalCollections) ? a.portalCollections : []).map(c => String(c || '').trim().toUpperCase());
+                const next = add ? [...new Set([...cur, col])] : cur.filter(c => c !== col);
+                await updateDoc(doc(db, 'global_assets', id), { portalCollections: next, portalVisible: next.length > 0 });
+                setBulkBusy({ done: ++done, total: ids.length });
+            }
+            alert(`${add ? 'Flagged' : 'Un-flagged'} ${ids.length} asset(s) ${add ? 'for' : 'from'} the portal gallery (${col}).`);
+        } catch (e) { console.error('portal flag failed', e); alert('Portal flagging failed: ' + (e?.message || e)); }
+        finally { setBulkBusy(null); }
+    };
     
     const [activeAsset, setActiveAsset] = useState(null); 
     const [isZoomed, setIsZoomed] = useState(false); 
@@ -562,6 +590,17 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                             </>
                         )}
                     </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', minWidth: '190px' }}>
+                        <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', color: theme.inkSoft }}>🌐 PORTAL GALLERY (customer-facing)</span>
+                        <select value={portalFlagCol} onChange={e => setPortalFlagCol(e.target.value)} style={{ padding: '8px', border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.85rem', outline: 'none', background: '#fff' }}>
+                            <option value="">— collection —</option>
+                            {collectionsData.map(c => { const n = String(c.name || '').trim().toUpperCase(); return n ? <option key={c.id} value={n}>{n}</option> : null; })}
+                        </select>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                            <button onClick={() => handleBulkPortalFlag(true)} disabled={!!bulkBusy || bulkSelected.size === 0} style={{ flex: 1, padding: '8px 10px', background: (!!bulkBusy || bulkSelected.size === 0) ? theme.paper : theme.brass, color: (!!bulkBusy || bulkSelected.size === 0) ? theme.inkSoft : '#fff', border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', cursor: (!!bulkBusy || bulkSelected.size === 0) ? 'not-allowed' : 'pointer' }}>FLAG FOR PORTAL</button>
+                            <button onClick={() => handleBulkPortalFlag(false)} disabled={!!bulkBusy || bulkSelected.size === 0} style={{ padding: '8px 10px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', cursor: (!!bulkBusy || bulkSelected.size === 0) ? 'not-allowed' : 'pointer' }}>UN-FLAG</button>
+                        </div>
+                    </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         <label style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', color: theme.ink, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
                             <input type="checkbox" checked={bulkRename} onChange={e => setBulkRename(e.target.checked)} />
@@ -715,6 +754,10 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
 
                                     <div style={{ position: 'relative', width: '100%', height: '200px', background: theme.paper, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                         {asset.thumbnailUrl || asset.url ? <img src={asset.thumbnailUrl || asset.url} alt={asset.patternId} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" /> : <span style={{fontSize:'1.5rem', color: theme.inkSoft}}>⚲</span>}
+
+                                        {asset.portalVisible && (
+                                            <span title={`Portal gallery: ${(asset.portalCollections || []).join(', ')}`} style={{ position: 'absolute', top: '8px', right: '8px', background: 'rgba(255,255,255,0.92)', border: `1px solid ${theme.brass}`, color: theme.brass, fontSize: '11px', padding: '1px 6px', borderRadius: '2px', zIndex: 3, fontFamily: theme.mono }}>🌐</span>
+                                        )}
 
                                         {bulkMode && (
                                             <div style={{ position: 'absolute', top: '8px', left: '8px', width: '22px', height: '22px', background: isSel ? theme.brass : 'rgba(255,255,255,0.92)', border: `1px solid ${isSel ? theme.brass : theme.line}`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: theme.mono, fontSize: '13px', zIndex: 3 }}>

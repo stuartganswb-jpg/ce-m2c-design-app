@@ -56,6 +56,10 @@ The H2 pivot's four per-diameter flows now present as **ONE top-level product** 
 
 ⚠ **Data prerequisite for the showroom:** the collection gate is STRICT on the FLOW'S LINKED ASSEMBLY — the four H2 master assemblies must carry the `Simple Elegance` collection tag (Master Library → Collections) or a Simple-Elegance-restricted customer sees an empty showroom.
 
+## 3c. ✅ PORTAL ASSET GALLERY V1 (2026-07-27, Fabricut H1 = the test set — needs Cloud Shell deploy)
+
+**Shipped:** portal tab **"Gallery"** (`portal/src/Gallery.jsx`) + BFF **`portalAssets`** + 🌐 **bulk portal-flagging in the internal Asset Gallery** (AssetGalleryTab bulk bar: pick a collection → FLAG FOR PORTAL / UN-FLAG over the bulk selection; flagged cards wear a 🌐 badge). Data: `global_assets.portalCollections` (the collections whose entitled customers may see the image) + `portalVisible` mirror for the one-equality BFF query. Gate: **opt-in only** — an asset appears iff staff flagged it AND (customer unrestricted OR `crm.portalCollections` intersects the asset's). Search: the BFF builds a lowercase BLOB per asset from the **Fabricut identity** (`fab{}`: role/endTreatment/paired/plate/dia/proj/fabCode/finish names) + `tags[]` + names; the portal search AND-matches tokens against it (the internal gallery's matching rule). Fields shipped are identity-only — never costs/vendors/notes; full-size opens in a lightbox with the identity line + FABRICUT CODE + tag chips. Staff flow for the test: internal gallery → search/filter to the H1 images → BULK → SELECT ALL SHOWN → collection FABRICUT H1 → FLAG FOR PORTAL.
+
 ## 3. Quick Ship as it stands (HQ tab 7) — what you're porting
 
 `src/components/HQ/QuickShipTab.js`. Stocked/pre-finished goods → **flat NetSuite Sales Order lines**, no BOM, no flow. Mirrored to `hq_sales_orders` with `orderClass:'QUICKSHIP'` for pick/pack.
