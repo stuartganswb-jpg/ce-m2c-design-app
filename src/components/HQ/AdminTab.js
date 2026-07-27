@@ -126,6 +126,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   
   const [users, setUsers] = useState([]);
   const [finUsers, setFinUsers] = useState([]); // legacy Finishing-floor directory (fin_users) — merged in for visibility + import
+  const [staffLogins, setStaffLogins] = useState([]); // OuterGate daily sign-in accounts (staff_logins mirror)
 
   const [dynamicRoles, setDynamicRoles] = useState(['admin', 'executive', 'design_team', 'sales_rep', 'operator', 'programmer', 'floor_manager', 'paint_manager']);
   
@@ -221,6 +222,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   useEffect(() => {
       const unsubUsers = onSnapshot(collection(db, "hq_users"), (snap) => setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
       const unsubFinUsers = onSnapshot(collection(db, "fin_users"), (snap) => setFinUsers(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => { });
+      // Daily sign-in accounts (OuterGate). Server-written mirror of Firebase Auth; admin-read.
+      const unsubStaffLogins = onSnapshot(collection(db, "staff_logins"), (snap) => setStaffLogins(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => { });
       const unsubRoles = onSnapshot(doc(db, "hq_config", "roles"), (docSnap) => { if (docSnap.exists() && docSnap.data().list) setDynamicRoles(docSnap.data().list); });
       const unsubHqPerms = onSnapshot(doc(db, "hq_config", "permissions"), (docSnap) => { if (docSnap.exists()) setHqPerms(docSnap.data()); });
       const unsubSchema = onSnapshot(doc(db, "system", "master_schema"), (docSnap) => { if (docSnap.exists() && docSnap.data().inventoryFields) setCustomSchema(docSnap.data().inventoryFields); });
@@ -273,7 +276,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubFinUsers(); unsubRoles(); unsubHqPerms(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
+      return () => { unsubUsers(); unsubFinUsers(); unsubStaffLogins(); unsubRoles(); unsubHqPerms(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -540,6 +543,86 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   };
   // Terminate removes the person from BOTH directories, so a deleted duplicate can't linger as a chip PIN.
   const handleDeleteUser = async (u) => { if(!window.confirm(`Terminate ${u.name}? This removes them from HQ and the finishing (chip PIN) directory.`)) return; const key = String(u.pin || u.id); await deleteDoc(doc(db, "hq_users", u.id)); await deleteDoc(doc(db, "fin_users", key)).catch(() => { }); };
+
+  // ===== DAILY SIGN-IN ACCOUNTS (OUTER GATE) — Stuart 2026-07-25 =====
+  // Every person needs TWO identities: this email/password account (the once-a-day gate in front of
+  // everything) and their PIN row below (role + permissions). The email side used to be hand-made in
+  // the Firebase console because creating an Auth user needs the Admin SDK; these buttons call the
+  // createStaffLogin & co. callables instead. A new hire is now: create the login here → send them
+  // the setup link → add their PIN row below. Accounts made in the console still work — "Find
+  // console-made accounts" adopts them so they can be managed here too.
+  const ALLOWED_LOGIN_DOMAINS = ['classicalelements.com', 'm2cstudio.com', 'uniquitystyle.com', 'leylagans.com', 'thelab-hp.com'];
+  const [loginForm, setLoginForm] = useState({ email: '', name: '', pin: '' });
+  const [loginBusy, setLoginBusy] = useState('');
+  const [inviteLink, setInviteLink] = useState(null); // { email, link } shown until dismissed
+  const [unlinkedLogins, setUnlinkedLogins] = useState(null); // null = not scanned yet
+
+  const callLogin = async (fn, payload) => {
+      const res = await httpsCallable(functions, fn)(payload || {});
+      return res.data || {};
+  };
+  const copyInvite = async (link) => {
+      try { await navigator.clipboard.writeText(link); alert('Setup link copied — send it to them. It lets them set their own password.'); }
+      catch (e) { window.prompt('Copy the setup link:', link); }
+  };
+  const handleCreateLogin = async () => {
+      const mail = loginForm.email.trim().toLowerCase();
+      if (!mail) return alert('Email is required.');
+      const dom = mail.split('@')[1] || '';
+      if (!ALLOWED_LOGIN_DOMAINS.includes(dom)) {
+          return alert(`"${dom}" is not a company domain, so this account could never sign in.\n\nAllowed: ${ALLOWED_LOGIN_DOMAINS.join(', ')}`);
+      }
+      setLoginBusy('create');
+      try {
+          const d = await callLogin('createStaffLogin', { email: mail, name: loginForm.name, pin: loginForm.pin });
+          setInviteLink({ email: mail, link: d.setupLink });
+          if (d.setupLink) copyInvite(d.setupLink);
+          setLoginForm({ email: '', name: '', pin: '' });
+          if (d.adopted) alert(`${mail} already existed in Firebase — it is now linked here and manageable from this panel.`);
+      } catch (e) { alert(e.message || String(e)); }
+      finally { setLoginBusy(''); }
+  };
+  const handleReinvite = async (l) => {
+      setLoginBusy(l.id);
+      try { const d = await callLogin('getStaffLoginSetupLink', { uid: l.id }); if (d.setupLink) { setInviteLink({ email: l.email, link: d.setupLink }); copyInvite(d.setupLink); } }
+      catch (e) { alert(e.message || String(e)); }
+      finally { setLoginBusy(''); }
+  };
+  const handleToggleLogin = async (l) => {
+      const turningOff = l.active !== false;
+      if (turningOff && !window.confirm(`Disable ${l.email}?\n\nThey can no longer sign in — and because the PIN screen requires a live daily sign-in, that blocks their PIN access everywhere too.`)) return;
+      setLoginBusy(l.id);
+      try { await callLogin('setStaffLoginStatus', { uid: l.id, active: !turningOff }); }
+      catch (e) { alert(e.message || String(e)); }
+      finally { setLoginBusy(''); }
+  };
+  const handleDeleteLogin = async (l) => {
+      if (!window.confirm(`Permanently DELETE the sign-in account ${l.email}?\n\nTheir PIN row (role + permissions) is NOT touched — remove that separately if they've left.`)) return;
+      setLoginBusy(l.id);
+      try { await callLogin('deleteStaffLogin', { uid: l.id }); }
+      catch (e) { alert(e.message || String(e)); }
+      finally { setLoginBusy(''); }
+  };
+  const scanUnlinked = async () => {
+      setLoginBusy('scan');
+      try {
+          const d = await callLogin('listUnlinkedStaffLogins');
+          setUnlinkedLogins(d.users || []);
+          if (!(d.users || []).length) alert('✓ Every company account in Firebase is already listed here.');
+      } catch (e) { alert(e.message || String(e)); }
+      finally { setLoginBusy(''); }
+  };
+  const adoptUnlinked = async () => {
+      const uids = (unlinkedLogins || []).map(u => u.uid);
+      if (!uids.length) return;
+      setLoginBusy('adopt');
+      try {
+          const d = await callLogin('adoptStaffLogins', { uids });
+          alert(`✓ ${d.linked} account(s) linked — they appear in the list now. Nothing about the accounts themselves changed.`);
+          setUnlinkedLogins([]);
+      } catch (e) { alert(e.message || String(e)); }
+      finally { setLoginBusy(''); }
+  };
 
   // Rebuild the sanitized `directory` projection (name/role/superAdmin, no PIN) that the floor apps
   // read instead of hq_users. Ongoing edits sync automatically via the mirrorUserToDirectory trigger;
@@ -3125,6 +3208,68 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                     <button onClick={syncDirectory} disabled={syncingDir} title="Rebuild the sanitized name/role directory the floor apps read (no PINs exposed). Safe to re-run." style={{ marginLeft: '12px', padding: '9px 16px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: syncingDir ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{syncingDir ? 'Syncing…' : '⟳ Sync Directory'}</button>
                   </div>
                 </div>
+                {/* ===== DAILY SIGN-IN ACCOUNTS (OUTER GATE) — no more Firebase console ===== */}
+                <div style={{ border: '1px solid var(--line)', background: 'var(--paper)', padding: '20px', marginBottom: '26px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px', flexWrap: 'wrap', gap: '10px' }}>
+                    <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>✉ Daily Sign-In Accounts</h4>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em' }}>{staffLogins.length} account{staffLogins.length === 1 ? '' : 's'} · the email gate in front of the PIN screen</span>
+                  </div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', lineHeight: 1.6, marginBottom: '16px' }}>
+                    Each person needs an email account here <em>and</em> a PIN row below. Create the login, send them the setup link (they choose their own password), then add their PIN + role underneath. Allowed domains: <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', color: 'var(--ink)' }}>{ALLOWED_LOGIN_DOMAINS.join(' · ')}</span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '2.2fr 1.6fr 1.4fr auto', gap: '10px', alignItems: 'stretch' }}>
+                    <input value={loginForm.email} onChange={e => setLoginForm({ ...loginForm, email: e.target.value })} placeholder="name@classicalelements.com" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                    <input value={loginForm.name} onChange={e => setLoginForm({ ...loginForm, name: e.target.value })} placeholder="Display name" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                    <select value={loginForm.pin} onChange={e => setLoginForm({ ...loginForm, pin: e.target.value })} title="Optionally tie this login to a person's PIN row so the table below shows who still needs an account" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }}>
+                      <option value="">Link to PIN… (optional)</option>
+                      {users.map(u => <option key={u.id} value={u.pin || u.id}>{u.name}</option>)}
+                    </select>
+                    <button onClick={handleCreateLogin} disabled={loginBusy === 'create'} style={{ padding: '12px 22px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: loginBusy === 'create' ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>{loginBusy === 'create' ? 'Creating…' : '+ Create Login'}</button>
+                  </div>
+
+                  {inviteLink && (
+                    <div style={{ marginTop: '14px', padding: '14px', background: '#fff', border: '1px solid var(--brass)' }}>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', marginBottom: '8px' }}>Password setup link · {inviteLink.email} · copied to your clipboard</div>
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', wordBreak: 'break-all', lineHeight: 1.5 }}>{inviteLink.link}</div>
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                        <button onClick={() => copyInvite(inviteLink.link)} style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Copy again</button>
+                        <button onClick={() => setInviteLink(null)} style={{ padding: '8px 14px', background: 'transparent', border: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Dismiss</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {staffLogins.length > 0 && (
+                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {[...staffLogins].sort((a, b) => String(a.email).localeCompare(String(b.email))).map(l => {
+                        const person = users.find(u => String(u.pin || u.id) === String(l.pin || ''));
+                        const off = l.active === false;
+                        return (
+                          <div key={l.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 14px', background: '#fff', border: '1px solid var(--line)', opacity: off ? 0.55 : 1 }}>
+                            <span style={{ flex: 1, color: 'var(--ink)', fontSize: '0.9rem' }}>{l.email}</span>
+                            <span style={{ flex: 1, color: 'var(--ink-soft)', fontSize: '0.85rem' }}>{person ? `${person.name} · PIN row linked` : (l.name || '')}</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: off ? '#d9534f' : '#3a7d44', width: '70px' }}>{off ? 'Disabled' : 'Active'}</span>
+                            <button onClick={() => handleReinvite(l)} disabled={loginBusy === l.id} title="New password-setup link (new hire, or they forgot it)" style={{ padding: '6px 12px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Setup link</button>
+                            <button onClick={() => handleToggleLogin(l)} disabled={loginBusy === l.id} style={{ padding: '6px 12px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{off ? 'Enable' : 'Disable'}</button>
+                            <button onClick={() => handleDeleteLogin(l)} disabled={loginBusy === l.id} title="Delete this sign-in account (the PIN row is untouched)" style={{ background: 'transparent', border: 'none', color: '#d9534f', fontSize: '1.1rem', cursor: 'pointer' }}>🗑️</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Accounts made by hand in the Firebase console before this panel existed. */}
+                  <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <button onClick={scanUnlinked} disabled={loginBusy === 'scan'} title="Find company accounts that exist in Firebase Auth but aren't listed here (the ones you created in the console)" style={{ padding: '9px 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{loginBusy === 'scan' ? 'Scanning…' : '⌕ Find console-made accounts'}</button>
+                    {unlinkedLogins && unlinkedLogins.length > 0 && (
+                      <>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{unlinkedLogins.length} unlisted: {unlinkedLogins.slice(0, 4).map(u => u.email).join(', ')}{unlinkedLogins.length > 4 ? '…' : ''}</span>
+                        <button onClick={adoptUnlinked} disabled={loginBusy === 'adopt'} style={{ padding: '9px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{loginBusy === 'adopt' ? 'Linking…' : `⇩ Link all ${unlinkedLogins.length} into this list`}</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: '15px', marginBottom: '20px' }}>
                   <input value={adminForm.uName} onChange={e => setAdminForm({...adminForm, uName: e.target.value})} placeholder="User Name" disabled={!!adminForm.oldId} style={{ padding: '12px', border: '1px solid var(--line)', background: adminForm.oldId ? 'var(--paper)' : '#fff', outline: 'none', fontFamily: 'var(--sans)' }} />
                   <input value={adminForm.uPin} onChange={e => setAdminForm({...adminForm, uPin: e.target.value})} placeholder="4-Digit PIN" maxLength="4" style={{ padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
@@ -3139,6 +3284,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       <tr>
                           <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Name</th>
                           <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Role</th>
+                          <th title="Has a daily email sign-in account (OuterGate). Without one they cannot reach the PIN screen at all." style={{ padding: '15px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Sign-In</th>
                           <th title="On the finishing/chip employee selection lists (fin_users)" style={{ padding: '15px', borderBottom: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Floor / Chips</th>
                           <th style={{ padding: '15px', borderBottom: '1px solid var(--line)', textAlign: 'right' }}></th>
                       </tr>
@@ -3148,6 +3294,15 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                           <tr key={u.id} style={{ borderBottom: '1px solid var(--line)' }}>
                               <td style={{ padding: '15px', color: 'var(--ink)' }}>{u.name}</td>
                               <td style={{ padding: '15px', color: 'var(--ink-soft)' }}>{u.role?.toUpperCase().replace(/_/g, ' ')}</td>
+                              <td style={{ padding: '15px', textAlign: 'center' }}>
+                                  {(() => {
+                                      // Linked by PIN, or by the email stamped on the user doc at creation.
+                                      const lg = staffLogins.find(l => (l.pin && String(l.pin) === String(u.pin || u.id))
+                                          || (u.outerEmail && String(l.email || '').toLowerCase() === String(u.outerEmail).toLowerCase()));
+                                      if (!lg) return <span title="No daily sign-in account — create one in the panel above, or they can't get past the login screen." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', letterSpacing: '.06em' }}>NONE</span>;
+                                      return <span title={`${lg.email}${lg.active === false ? ' (disabled)' : ''}`} style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: lg.active === false ? '#d9534f' : '#3a7d44' }}>{lg.active === false ? '⊘' : '✓'}</span>;
+                                  })()}
+                              </td>
                               <td style={{ padding: '15px', textAlign: 'center' }}>
                                   <input type="checkbox" checked={finPins.has(String(u.pin || u.id))} onChange={() => toggleFloorUser(u)} title="Show this person on finishing/chip employee selections" style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
                               </td>

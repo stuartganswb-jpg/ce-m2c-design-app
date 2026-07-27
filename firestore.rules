@@ -54,6 +54,10 @@ service cloud.firestore {
     // (createPortalUser & co. — Admin SDK). The CRM Portal Access panel reads it; admins only.
     match /portal_users/{document=**}           { allow read: if isAdmin(); allow write: if false; }
 
+    // 🔒 Staff daily sign-in accounts (OuterGate emails). Mirror of Firebase Auth, written ONLY by
+    // the createStaffLogin & co. callables (Admin SDK); HQ Admin → User Matrix reads it.
+    match /staff_logins/{document=**}           { allow read: if isAdmin(); allow write: if false; }
+
     // ---- Core PLM / CPQ ----
     match /Approved_Designs/{document=**}       { allow read, write: if isAuth(); }
     match /assembly_pins/{document=**}          { allow read, write: if isAuth(); }

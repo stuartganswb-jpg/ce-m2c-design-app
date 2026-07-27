@@ -744,6 +744,155 @@ exports.deletePortalUser = onCall({ enforceAppCheck: true }, async (request) => 
     return { ok: true };
 });
 
+// ============================================================================
+// 2b. STAFF DAILY SIGN-IN ACCOUNTS (OUTER GATE) — created from HQ Admin → User Matrix
+// ============================================================================
+//
+// Every staff member needs TWO identities: the OuterGate email/password account (the daily
+// sign-in, a real Firebase Auth user) and their hq_users PIN doc (role + permissions). The PIN
+// side has always been managed in the Admin tab; the email side was hand-made in the Firebase
+// console because creating an Auth user needs the Admin SDK, which a browser never has. These
+// callables close that gap — same shape as the portal-user set above, minus the customer claims.
+//
+// STAFF ACCOUNTS GET NO CUSTOM CLAIMS: the outer session only proves "a real person from an
+// allowed domain is here"; role/permissions still come from the PIN token authenticatePin mints.
+// The domain check is enforced HERE because an account outside ALLOWED_EMAIL_DOMAINS would be
+// created successfully and then be refused by authenticatePin forever — a silent dead end.
+const STAFF_LOGINS = 'staff_logins';
+
+const staffMirror = (uid, rec, extra) => Object.assign({
+    uid,
+    email: rec.email,
+    name: rec.displayName || rec.email,
+    active: rec.disabled !== true,
+}, extra || {});
+
+exports.createStaffLogin = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const { email, name, pin } = request.data || {};
+    const mail = String(email || '').trim().toLowerCase();
+    const who = String(name || '').trim();
+    const linkPin = String(pin || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) throw new HttpsError('invalid-argument', 'A valid email is required.');
+    const domain = mail.split('@')[1] || '';
+    if (!ALLOWED_EMAIL_DOMAINS.includes(domain)) {
+        throw new HttpsError('invalid-argument',
+            `${domain} is not an allowed company domain, so this account could never sign in. Allowed: ${ALLOWED_EMAIL_DOMAINS.join(', ')}.`);
+    }
+
+    const db = admin.firestore();
+    let userRec;
+    let adopted = false;
+    try {
+        userRec = await admin.auth().createUser({
+            email: mail,
+            displayName: who || mail,
+            password: crypto.randomBytes(24).toString('base64url'), // placeholder; they set their own via the link
+        });
+    } catch (e) {
+        if (e.code !== 'auth/email-already-exists') throw new HttpsError('internal', e.message || 'Could not create the login.');
+        // ADOPT: the original staff accounts were made by hand in the Firebase console, so they
+        // exist in Auth with no mirror doc. Linking one here grants nothing new — it just makes an
+        // account that already works manageable from the Admin tab.
+        userRec = await admin.auth().getUserByEmail(mail);
+        const claims = userRec.customClaims || {};
+        if (claims.customer === true) throw new HttpsError('already-exists', 'That email is a CUSTOMER portal login — manage it on the customer\'s CRM card, not here.');
+        adopted = true;
+        if (who && who !== userRec.displayName) await admin.auth().updateUser(userRec.uid, { displayName: who });
+    }
+
+    await db.collection(STAFF_LOGINS).doc(userRec.uid).set(staffMirror(userRec.uid, { email: mail, displayName: who || userRec.displayName, disabled: userRec.disabled }, {
+        pin: linkPin || null,
+        createdAt: Date.now(),
+        createdBy: String((request.auth.token && request.auth.token.name) || 'admin'),
+        adopted,
+    }), { merge: true });
+
+    // Stamp the email onto the person's PIN doc so the directory shows who still needs a login.
+    if (linkPin) await db.collection('hq_users').doc(linkPin).set({ outerEmail: mail, outerLoginUid: userRec.uid }, { merge: true });
+
+    const setupLink = await admin.auth().generatePasswordResetLink(mail);
+    return { uid: userRec.uid, setupLink, adopted };
+});
+
+// Fresh password-setup / reset link (new hires, forgotten passwords, re-invites).
+exports.getStaffLoginSetupLink = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const uid = String((request.data || {}).uid || '');
+    const snap = await admin.firestore().collection(STAFF_LOGINS).doc(uid).get();
+    if (!snap.exists) throw new HttpsError('not-found', 'Staff login not found.');
+    return { setupLink: await admin.auth().generatePasswordResetLink(snap.data().email) };
+});
+
+// Disable/enable a daily sign-in without deleting it (a disabled account cannot pass the gate,
+// which also kills PIN access — authenticatePin requires a fresh outer session).
+exports.setStaffLoginStatus = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const { uid, active } = request.data || {};
+    const id = String(uid || '');
+    const snap = await admin.firestore().collection(STAFF_LOGINS).doc(id).get();
+    if (!snap.exists) throw new HttpsError('not-found', 'Staff login not found.');
+    await admin.auth().updateUser(id, { disabled: active !== true });
+    await admin.firestore().collection(STAFF_LOGINS).doc(id).set({ active: active === true }, { merge: true });
+    return { ok: true };
+});
+
+exports.deleteStaffLogin = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const uid = String((request.data || {}).uid || '');
+    const db = admin.firestore();
+    const snap = await db.collection(STAFF_LOGINS).doc(uid).get();
+    if (!snap.exists) throw new HttpsError('not-found', 'Staff login not found.');
+    await admin.auth().deleteUser(uid).catch((e) => { if (e.code !== 'auth/user-not-found') throw new HttpsError('internal', e.message); });
+    const pin = snap.data().pin;
+    if (pin) await db.collection('hq_users').doc(String(pin)).set({ outerEmail: admin.firestore.FieldValue.delete(), outerLoginUid: admin.firestore.FieldValue.delete() }, { merge: true }).catch(() => {});
+    await db.collection(STAFF_LOGINS).doc(uid).delete();
+    return { ok: true };
+});
+
+// One-time reconciliation: list the Auth accounts on allowed company domains that have no mirror
+// doc yet (every user Stuart made in the console) so the Admin tab can adopt them in one click.
+exports.listUnlinkedStaffLogins = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const db = admin.firestore();
+    const known = new Set((await db.collection(STAFF_LOGINS).get()).docs.map((d) => d.id));
+    const found = [];
+    let pageToken;
+    do {
+        const page = await admin.auth().listUsers(1000, pageToken);
+        page.users.forEach((u) => {
+            const mail = String(u.email || '').toLowerCase();
+            const claims = u.customClaims || {};
+            if (!mail || claims.customer === true || known.has(u.uid)) return;
+            if (!ALLOWED_EMAIL_DOMAINS.includes(mail.split('@')[1] || '')) return;
+            found.push({ uid: u.uid, email: mail, name: u.displayName || mail, active: u.disabled !== true });
+        });
+        pageToken = page.pageToken;
+    } while (pageToken);
+    return { users: found };
+});
+
+// Adopt the accounts listUnlinkedStaffLogins found — writes mirror docs only, changes nothing
+// about the accounts themselves.
+exports.adoptStaffLogins = onCall({ enforceAppCheck: true }, async (request) => {
+    assertStaffAdmin(request);
+    const uids = Array.isArray((request.data || {}).uids) ? request.data.uids.map(String) : [];
+    const db = admin.firestore();
+    let linked = 0;
+    for (const uid of uids) {
+        const u = await admin.auth().getUser(uid).catch(() => null);
+        if (!u || (u.customClaims || {}).customer === true) continue;
+        const mail = String(u.email || '').toLowerCase();
+        if (!ALLOWED_EMAIL_DOMAINS.includes(mail.split('@')[1] || '')) continue;
+        await db.collection(STAFF_LOGINS).doc(uid).set(staffMirror(uid, { email: mail, displayName: u.displayName, disabled: u.disabled }, {
+            pin: null, adopted: true, createdAt: Date.now(),
+            createdBy: String((request.auth.token && request.auth.token.name) || 'admin'),
+        }), { merge: true });
+        linked++;
+    }
+    return { linked };
+});
+
 // ---- Customer-facing reads ----
 
 // Firestore 'in' queries cap at 30 values.
