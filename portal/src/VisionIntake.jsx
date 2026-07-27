@@ -11,6 +11,7 @@
 // The readouts run the VERBATIM fit-math copy (shared/bayMath.js). NOTHING shop-only renders —
 // no raw cuts, no saw angles, no drawings; staff derive those from this data in Vision.
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
 import { computeBayMath, safeProjOf } from './shared/bayMath.js';
@@ -630,14 +631,17 @@ export default function VisionIntake() {
         </div>
       )}
 
-      {/* Click-to-enlarge lightbox — the big, readable version of the current shape's diagram */}
-      {zoomDia && (
+      {/* Click-to-enlarge lightbox — rendered through createPortal(document.body): the page
+          wrapper's transform (the width breakout) would otherwise become the containing block
+          for position:fixed and the overlay would size against the wrapper, not the viewport. */}
+      {zoomDia && createPortal(
         <div onClick={() => setZoomDia(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,0.72)', zIndex: 4000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, cursor: 'zoom-out', padding: 20 }}>
-          <div style={{ background: '#faf8f3', border: '1px solid var(--line)', borderRadius: 2, padding: '20px 16px', width: 'min(1100px, 96vw)' }}>
+          <div style={{ background: '#faf8f3', border: '1px solid var(--line)', borderRadius: 2, padding: '20px 16px', width: 'min(1100px, 92vw)', maxHeight: '88vh', overflowY: 'auto' }}>
             <FitDiagram shape={sel.shape} />
           </div>
           <div style={{ color: '#fff', fontFamily: 'var(--mono, monospace)', fontSize: 11, letterSpacing: '.08em' }}>CLICK ANYWHERE TO CLOSE</div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

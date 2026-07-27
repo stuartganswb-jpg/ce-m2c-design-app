@@ -37,7 +37,10 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     // Browse paging (Stuart 2026-07-27: "no way for me to see the next 100") — the grid renders in
     // 100-card pages with SHOW MORE / SHOW ALL; a new search or chip pick resets to the first page.
     const [visibleCount, setVisibleCount] = useState(100);
-    useEffect(() => { setVisibleCount(100); }, [searchQuery, chipFilters]);
+    // 🌐 portal-tag browse filter (Stuart 2026-07-27: "show me all the images that are not yet
+    // tagged for the portal — no need to keep re-tagging ones that are already tagged").
+    const [portalTagFilter, setPortalTagFilter] = useState(''); // '' | 'UNTAGGED' | 'TAGGED'
+    useEffect(() => { setVisibleCount(100); }, [searchQuery, chipFilters, portalTagFilter]);
 
     // 🗑 BULK DELETE (Stuart 2026-07-27: legacy assets with unusable ids made the re-tagger skip
     // 95% — nuke & reimport). Deletes the SELECTED assets' records in 400-doc batches — with no
@@ -252,6 +255,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const searchTokens = String(searchQuery).toLowerCase().split(/\s+/).filter(Boolean);
     const filteredAssets = safeAssets.filter(asset => {
         if (asset?.category === 'PROGRAM_PRINT') return false; // prints live in `program_prints`, never the gallery (hides any legacy test docs)
+        if (portalTagFilter === 'UNTAGGED' && asset.portalVisible) return false;
+        if (portalTagFilter === 'TAGGED' && !asset.portalVisible) return false;
         if (chipFilters.type) {
             const chip = TYPE_CHIPS.find(c => c.label === chipFilters.type);
             if (chip && !chip.test(asset)) return false;
@@ -572,8 +577,19 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                         })}
                     </div>
                 ))}
-                {(chipFilters.type || chipFilters.dia || chipFilters.proj) && (
-                    <button onClick={() => setChipFilters({ type: '', dia: '', proj: '' })} style={{ padding: '5px 10px', background: 'transparent', color: theme.brass, border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', textDecoration: 'underline', cursor: 'pointer' }}>CLEAR FILTERS</button>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.15em', color: theme.inkSoft }}>🌐 PORTAL</span>
+                    {[['UNTAGGED', 'NOT YET TAGGED'], ['TAGGED', 'TAGGED']].map(([val, label]) => {
+                        const active = portalTagFilter === val;
+                        return (
+                            <button key={val} onClick={() => setPortalTagFilter(active ? '' : val)} title={val === 'UNTAGGED' ? 'Only assets NOT yet flagged for the portal — the flagging worklist for fresh imports.' : 'Only assets already flagged for the portal.'} style={{ padding: '5px 10px', background: active ? theme.brass : theme.paper, color: active ? '#fff' : theme.inkSoft, border: `1px solid ${active ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', cursor: 'pointer' }}>
+                                {label}
+                            </button>
+                        );
+                    })}
+                </div>
+                {(chipFilters.type || chipFilters.dia || chipFilters.proj || portalTagFilter) && (
+                    <button onClick={() => { setChipFilters({ type: '', dia: '', proj: '' }); setPortalTagFilter(''); }} style={{ padding: '5px 10px', background: 'transparent', color: theme.brass, border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', textDecoration: 'underline', cursor: 'pointer' }}>CLEAR FILTERS</button>
                 )}
             </div>
 

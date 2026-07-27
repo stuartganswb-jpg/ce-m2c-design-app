@@ -1576,7 +1576,7 @@ exports.portalAssets = onCall({ cors: true }, async (request) => {
         if (allowed.length && !cols.some((c) => allowed.includes(c))) return;
         const fab = a.fab || {};
         const fabSafe = {
-            role: fab.role || '', endTreatment: fab.endTreatment || '',
+            role: fab.role || '', pairedRole: fab.pairedRole || '', endTreatment: fab.endTreatment || '',
             pairedCode: fab.pairedCode || '', pairedName: fab.pairedName || '',
             plateCode: fab.plateCode || '', plateIsCover: !!fab.plateIsCover, plateOrientation: fab.plateOrientation || '',
             diaLabel: fab.diaLabel || '', projLabel: fab.projLabel || '',
