@@ -40,7 +40,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     // 🌐 portal-tag browse filter (Stuart 2026-07-27: "show me all the images that are not yet
     // tagged for the portal — no need to keep re-tagging ones that are already tagged").
     const [portalTagFilter, setPortalTagFilter] = useState(''); // '' | 'UNTAGGED' | 'TAGGED'
-    useEffect(() => { setVisibleCount(100); }, [searchQuery, chipFilters, portalTagFilter]);
+    const [fabIdFilter, setFabIdFilter] = useState(false); // only assets missing Fabricut # or color name
+    useEffect(() => { setVisibleCount(100); }, [searchQuery, chipFilters, portalTagFilter, fabIdFilter]);
 
     // 🗑 BULK DELETE (Stuart 2026-07-27: legacy assets with unusable ids made the re-tagger skip
     // 95% — nuke & reimport). Deletes the SELECTED assets' records in 400-doc batches — with no
@@ -257,6 +258,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         if (asset?.category === 'PROGRAM_PRINT') return false; // prints live in `program_prints`, never the gallery (hides any legacy test docs)
         if (portalTagFilter === 'UNTAGGED' && asset.portalVisible) return false;
         if (portalTagFilter === 'TAGGED' && !asset.portalVisible) return false;
+        if (fabIdFilter && (asset.fabCode || asset.fab?.fabCode) && asset.fab?.fabColorName) return false;
         if (chipFilters.type) {
             const chip = TYPE_CHIPS.find(c => c.label === chipFilters.type);
             if (chip && !chip.test(asset)) return false;
@@ -499,6 +501,9 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                     tags: derived.tags,
                     associatedParts: [...new Set([...(Array.isArray(asset.associatedParts) ? asset.associatedParts : []), ...derived.associatedParts])],
                 };
+                // Backfill the top-level Fabricut # (what the portal shows first) when the doc
+                // has none — pre-alignment imports; a hand-entered code is never clobbered.
+                if (derived.fab?.fabCode && !asset.fabCode) patch.fabCode = derived.fab.fabCode;
                 if (plateOverride) patch.patternId = plateOverride;
                 if (bulkRename && derived.name) patch.name = derived.name;
                 try {
@@ -588,8 +593,14 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                         );
                     })}
                 </div>
-                {(chipFilters.type || chipFilters.dia || chipFilters.proj || portalTagFilter) && (
-                    <button onClick={() => { setChipFilters({ type: '', dia: '', proj: '' }); setPortalTagFilter(''); }} style={{ padding: '5px 10px', background: 'transparent', color: theme.brass, border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', textDecoration: 'underline', cursor: 'pointer' }}>CLEAR FILTERS</button>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.15em', color: theme.inkSoft }}>FABRICUT</span>
+                    <button onClick={() => setFabIdFilter(f => !f)} title="Only assets missing the Fabricut part # or color name — pre-alignment imports. Select them and APPLY in bulk re-tag: the fields backfill from the library parts' CrossReference codes and the 4.5 finish names." style={{ padding: '5px 10px', background: fabIdFilter ? theme.brass : theme.paper, color: fabIdFilter ? '#fff' : theme.inkSoft, border: `1px solid ${fabIdFilter ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', cursor: 'pointer' }}>
+                        MISSING FAB ID
+                    </button>
+                </div>
+                {(chipFilters.type || chipFilters.dia || chipFilters.proj || portalTagFilter || fabIdFilter) && (
+                    <button onClick={() => { setChipFilters({ type: '', dia: '', proj: '' }); setPortalTagFilter(''); setFabIdFilter(false); }} style={{ padding: '5px 10px', background: 'transparent', color: theme.brass, border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', textDecoration: 'underline', cursor: 'pointer' }}>CLEAR FILTERS</button>
                 )}
             </div>
 

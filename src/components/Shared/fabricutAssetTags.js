@@ -204,7 +204,11 @@ export function buildComboMeta({ plateCode, pairedDoc, finishId, fabCode, fabCol
     const dia = plate?.dia || paired?.dia || '';
     const projLetter = paired?.projLetter || '';
     const fabCodes = [...new Set([...fabricutCodesOfDoc(plateDoc), ...fabricutCodesOfDoc(pairedDoc)])];
-    if (U(fabCode)) fabCodes.unshift(U(fabCode));
+    // The singular fabCode: the caller's (CrossReference-fed form / folder-sticky) wins; when
+    // none was passed — the bulk re-tag backfilling pre-alignment imports — derive it from the
+    // docs' own CrossReference codes, paired doc first (the batch conveyor's exact precedence).
+    const oneFabCode = U(fabCode) || fabricutCodeForFinish(pairedDoc, fin) || fabricutCodeForFinish(plateDoc, fin) || '';
+    if (oneFabCode) fabCodes.unshift(oneFabCode);
 
     const fab = {
         source: 'ASSET_TAGGER',
@@ -221,7 +225,7 @@ export function buildComboMeta({ plateCode, pairedDoc, finishId, fabCode, fabCol
         pairedRole: paired?.role || '', pairedDocId: paired?.docId || '',
         endTreatment: paired?.endTreatment || '',
         finishId: fin, ourFinishName, fabColorName: authColorName,
-        fabCode: U(fabCode) || '', fabCodes: [...new Set(fabCodes)],
+        fabCode: oneFabCode, fabCodes: [...new Set(fabCodes)],
     };
 
     const tags = [];
@@ -277,7 +281,10 @@ export function buildSingleMeta({ patternId, finishId, partIndex, finishLists })
         species: species || '', speciesLabel: SPECIES_LABELS[species] || '',
         // an arm's product image IS arm + standard backplate; CP is the upgrade
         includesBackplate: cat === 'BRACKET' ? true : null,
-        finishId: fin, ourFinishName, fabColorName: fabricutColorNameOf(fin, finishLists), fabCode: '',
+        finishId: fin, ourFinishName, fabColorName: fabricutColorNameOf(fin, finishLists),
+        // derived from the doc's own CrossReference codes (finish tier aware) — backfills
+        // pre-alignment imports on re-tag instead of leaving the singular code empty
+        fabCode: fabricutCodeForFinish(doc, fin),
         fabCodes: fabricutCodesOfDoc(doc), siblingCodes: siblings,
     };
     const tags = [];
