@@ -39,6 +39,11 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const [clientSku, setClientSku] = useState("");
 
     const [collectionName, setCollectionName] = useState("");
+    // Flag every import for the customer portal gallery under the selected COLLECTION — the same
+    // portalCollections/portalVisible stamp the gallery's bulk 🌐 FLAG FOR PORTAL writes, applied
+    // at import time so the re-tag pass isn't needed (Stuart 2026-07-27: "just add the check box
+    // on the batch processor... the customer id and color name are already there").
+    const [portalEnable, setPortalEnable] = useState(false);
     const [productType, setProductType] = useState("");
     const [notes, setNotes] = useState("");
     const [associatedParts, setAssociatedParts] = useState([]);
@@ -453,6 +458,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             associatedFinishes: Array.isArray(meta.associatedFinishes) ? meta.associatedFinishes : [],
             fabCode: String(meta.fabCode || '').toUpperCase(),
             ...(derived ? { fab: derived.fab, tags: derived.tags } : {}),
+            ...(meta.portalFlag ? { portalCollections: [meta.portalFlag], portalVisible: true } : {}),
             originalUrl: hiResUrl,
             thumbnailUrl: thumbUrl,
             url: thumbUrl,
@@ -467,11 +473,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         pairedDoc, crop: activeCrop,
         customerId, clientSku, collectionName, productType, notes,
         associatedParts, associatedFinishes,
+        portalFlag: portalEnable ? String(collectionName || '').trim().toUpperCase() : '',
     });
 
     const handleProcessAndNext = async (e) => {
         if (e) e.preventDefault();
         if (!patternId) return alert("You must provide a Pattern ID.");
+        if (portalEnable && !String(collectionName || '').trim()) return alert("Portal flagging needs a COLLECTION — the portal shows an asset only to customers entitled to its collection. Pick one (e.g. Fabricut H1) or un-tick the portal box.");
         if (queue[currentIndex]?.folder) {
             // Fabricut folder conveyor: hard gate — identify with OUR item # AND a Fabricut code.
             const missing = missingFor(metaFromForm());
@@ -507,6 +515,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const remainingInFolder = queue.filter((q, i) => i > currentIndex && q.folder && q.folder === queue[currentIndex]?.folder);
     const handleProcessFolder = async () => {
         const baseMeta = metaFromForm();
+        if (portalEnable && !baseMeta.portalFlag) return alert("Portal flagging needs a COLLECTION — pick one (e.g. Fabricut H1) or un-tick the portal box before running the folder.");
         const missing = missingFor(baseMeta);
         if (missing.length) return alert(`NOT IMPORTED — missing: ${missing.join(' · ')}.\nSet up the first image completely (our item #, finish, Fabricut code) before running the folder.`);
         const idxs = [currentIndex];
@@ -812,6 +821,11 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                 </select>
                             </div>
                         </div>
+
+                        <label title="Stamps portalCollections + portalVisible on every import — the same flag the gallery's bulk 🌐 button writes, so no re-tag pass is needed. Only customers entitled to the selected collection (CRM → Portal Access → Available Collections) see the image." style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.06em', color: portalEnable ? theme.brass : theme.inkSoft, border: `1px dashed ${portalEnable ? theme.brass : theme.line}`, padding: '9px 12px' }}>
+                            <input type="checkbox" checked={portalEnable} onChange={e => setPortalEnable(e.target.checked)} />
+                            🌐 MAKE AVAILABLE IN CUSTOMER PORTAL{portalEnable ? ` — UNDER ${String(collectionName || '').trim().toUpperCase() || '⚠ PICK A COLLECTION'}` : ''}
+                        </label>
 
                         <div>
                             <label style={labelStyle}>SEARCHABLE OPEN NOTES</label>

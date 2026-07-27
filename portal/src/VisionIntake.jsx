@@ -132,9 +132,11 @@ const FitDiagram = ({ shape }) => {
     <svg viewBox="0 0 460 178" style={{ width: '100%', display: 'block' }} aria-label="Straight rod with french returns diagram">
       <line x1="30" y1="24" x2="430" y2="24" stroke={DG.wall} strokeWidth="3" />
       <text x="230" y="14" textAnchor="middle" fill={DG.dim} style={dgTxt}>WALL / OPENING — YOUR MEASUREMENT</text>
-      {/* backplates on the wall, centered on the return legs — their outer edges = the system's outside */}
-      <rect x="46" y="27" width="36" height="6" fill="#a89f8d" />
-      <rect x="378" y="27" width="36" height="6" fill="#a89f8d" />
+      {/* backplates on the wall, centered on the return legs — their outer edges = the system's
+          outside. Width 25 (was 36 — Stuart 2026-07-27: "slightly too large to look realistic,
+          shrink left/right by 30%"); centers stay at the return legs (64 / 396). */}
+      <rect x="51.5" y="27" width="25" height="6" fill="#a89f8d" />
+      <rect x="383.5" y="27" width="25" height="6" fill="#a89f8d" />
       <line x1="60" y1="33" x2="96" y2="41" stroke={DG.dim} strokeWidth="1" />
       <text x="100" y="44" fill={DG.ink} style={dgTxt}>BACKPLATE ON THE WALL</text>
       {/* pole: the returns run 90° straight back to the wall, radiused only at the elbow */}
@@ -143,7 +145,7 @@ const FitDiagram = ({ shape }) => {
       <text x="352" y="57" textAnchor="end" fill={DG.ink} style={dgTxt}>FRENCH RETURN — 90° BACK TO THE WALL</text>
       <DimLine x1={64} x2={396} y={94} dash label="MAIN WALL C2C — CENTER OF RETURN / BACKPLATE" />
       <DimLine x1={62} x2={398} y={122} label="POLE O2O (EDGE-TO-EDGE — INCLUDES THE RETURNS)" />
-      <DimLine x1={46} x2={414} y={154} bold label="TOTAL SYSTEM O2O — TO THE BACKPLATE OUTER EDGES" />
+      <DimLine x1={51.5} x2={408.5} y={154} bold label="TOTAL SYSTEM O2O — TO THE BACKPLATE OUTER EDGES" />
     </svg>
   );
 };

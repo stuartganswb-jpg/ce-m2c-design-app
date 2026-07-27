@@ -41,7 +41,7 @@ const field = { width: '100%', padding: '10px 12px', border: '1px solid var(--li
 const row = { display: 'flex', gap: 12, flexWrap: 'wrap' };
 const cell = { flex: 1, minWidth: 160 };
 
-const EMPTY_KB = { poleId: '', poleQty: '', bracketId: '', bracketQty: '', centerBracketId: '', centerBracketQty: '', ringId: '', ringQty: '', finialId: '', finialQty: '' };
+const EMPTY_KB = { poleId: '', poleQty: '', bracketId: '', bracketQty: '', centerBracketId: '', centerBracketQty: '', ringId: '', ringQty: '', finialId: '', finialQty: '', cutRequired: false, cutFeeId: '', cutLen: '' };
 const KB_SLOTS = [
   { label: 'Pole', idKey: 'poleId', qtyKey: 'poleQty', poolKey: 'poles' },
   { label: 'Outer Brackets', idKey: 'bracketId', qtyKey: 'bracketQty', poolKey: 'outerBrackets' },
@@ -160,16 +160,32 @@ export default function QuickShip() {
   const itemById = (id) => items.find((it) => it.id === id);
   const setK = (k, v) => setKb((p) => ({ ...p, [k]: v }));
 
+  // Pole-cut fee (tab 7's Cut slot, portal-shaped): checkbox under the pole line; when on, the
+  // fee line rides at the POLE qty (one cut per pole) with the exact length in tab 7's own
+  // "cut @ <len>" note spelling. Fee shows by DESCRIPTION only — never the fee item code.
+  const cutFees = data?.cutFees || [];
+  const cutFeeSel = cutFees.find((f) => f.id === kb.cutFeeId) || cutFees[0] || null;
+
   const addToQuote = () => {
     const noQty = KB_SLOTS.filter((s) => kb[s.idKey] && !(parseInt(kb[s.qtyKey]) > 0)).map((s) => s.label);
     if (noQty.length) { setSubErr(`Enter a quantity for: ${noQty.join(', ')}.`); return; }
+    if (kb.cutRequired) {
+      if (!itemById(kb.poleId) || !(parseInt(kb.poleQty) > 0)) { setSubErr('A pole cut needs a pole — pick the pole and its quantity first.'); return; }
+      if (!kb.cutLen.trim()) { setSubErr('Enter the exact cut length for the pole cut.'); return; }
+      if (!cutFeeSel) { setSubErr('Cut service is not available right now — note the lengths in the notes box instead.'); return; }
+    }
     const lines = [];
     KB_SLOTS.forEach((s) => {
       const it = itemById(kb[s.idKey]);
       const qty = parseInt(kb[s.qtyKey]) || 0;
-      if (!it || !(qty > 0)) return;
-      const pack = packOf(it);
-      lines.push({ key: `${it.id}-${Date.now()}-${lines.length}`, id: it.id, code: codeOf(it), name: it.itemName || codeOf(it), qty, packUom: pack.uom, packSize: pack.size, rate: rateOf(it) });
+      if (it && qty > 0) {
+        const pack = packOf(it);
+        lines.push({ key: `${it.id}-${Date.now()}-${lines.length}`, id: it.id, code: codeOf(it), name: it.itemName || codeOf(it), qty, packUom: pack.uom, packSize: pack.size, rate: rateOf(it) });
+      }
+      // the cut fee rides directly under its pole line
+      if (s.idKey === 'poleId' && kb.cutRequired && it && qty > 0 && cutFeeSel) {
+        lines.push({ key: `${cutFeeSel.id}-${Date.now()}-${lines.length}`, id: cutFeeSel.id, code: '', name: `${cutFeeSel.name} — cut @ ${kb.cutLen.trim()}`, qty, packUom: '', packSize: 1, rate: cutFeeSel.rate, cut: true, cutLen: kb.cutLen.trim() });
+      }
     });
     if (!lines.length) { setSubErr('Pick at least one item and give it a quantity.'); return; }
     setSubErr(null);
@@ -185,7 +201,7 @@ export default function QuickShip() {
     setBusy(true); setSubErr(null);
     try {
       const res = await httpsCallable(functions, 'portalStockQuoteRequest')({
-        lines: cart.map((l) => ({ id: l.id, qty: l.qty })),
+        lines: cart.map((l) => (l.cut ? { id: l.id, qty: l.qty, cutLen: l.cutLen } : { id: l.id, qty: l.qty })),
         jobName: jobName.trim(), note, collection: scope,
       });
       setSubmitted({ quoteNo: res.data?.quoteNo || '', total: res.data?.total });
@@ -275,7 +291,38 @@ export default function QuickShip() {
                 </select>
               </div>
             </div>
-            {scope || data.collections.length === 1 ? KB_SLOTS.map(slotSelect) : <div className="empty">Pick a collection to see its stock.</div>}
+            {scope || data.collections.length === 1 ? (
+              <>
+                {slotSelect(KB_SLOTS[0])}
+                {/* Pole Cut Required — immediately under the pole line (Stuart 2026-07-27) */}
+                {cutFees.length > 0 && (
+                  <div style={{ margin: '-2px 0 14px', padding: '10px 12px', border: `1px dashed ${kb.cutRequired ? 'var(--brass, #b08d57)' : 'var(--line)'}`, borderRadius: 2 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: '0.88rem' }}>
+                      <input type="checkbox" checked={kb.cutRequired} onChange={(e) => setKb((p) => ({ ...p, cutRequired: e.target.checked }))} />
+                      Pole cut required
+                      {kb.cutRequired && cutFeeSel && <span style={{ color: 'var(--ink-soft)', fontSize: '0.78rem' }}>— {cutFeeSel.name} · {fmt$(cutFeeSel.rate)} per pole</span>}
+                    </label>
+                    {kb.cutRequired && (
+                      <div style={{ ...row, marginTop: 10, alignItems: 'flex-end' }}>
+                        {cutFees.length > 1 && (
+                          <div style={{ ...cell, flex: 2 }}>
+                            <label style={lbl}>Cut service</label>
+                            <select style={field} value={cutFeeSel?.id || ''} onChange={(e) => setKb((p) => ({ ...p, cutFeeId: e.target.value }))}>
+                              {cutFees.map((f) => <option key={f.id} value={f.id}>{f.name} — {fmt$(f.rate)}</option>)}
+                            </select>
+                          </div>
+                        )}
+                        <div style={{ ...cell, flex: 3 }}>
+                          <label style={lbl}>Exact cut length</label>
+                          <input style={field} value={kb.cutLen} onChange={(e) => setKb((p) => ({ ...p, cutLen: e.target.value }))} placeholder={'e.g. 84-1/2" or 84.5in'} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {KB_SLOTS.slice(1).map(slotSelect)}
+              </>
+            ) : <div className="empty">Pick a collection to see its stock.</div>}
             {subErr && <div className="empty" style={{ margin: '10px 0' }}>{subErr}</div>}
             <button className="btn" onClick={addToQuote} style={{ width: '100%' }}>Add to quote</button>
           </div>
@@ -295,8 +342,8 @@ export default function QuickShip() {
                     {cart.map((l) => (
                       <tr key={l.key} style={{ borderTop: '1px solid var(--line)' }}>
                         <td style={{ padding: '7px 4px' }}>
-                          <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '0.8rem' }}>{l.code}</div>
-                          <div style={{ color: 'var(--ink-soft)', fontSize: '0.78rem' }}>{l.name}</div>
+                          {l.code && <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '0.8rem' }}>{l.code}</div>}
+                          <div style={{ color: l.code ? 'var(--ink-soft)' : 'var(--ink)', fontSize: '0.78rem' }}>{l.name}</div>
                         </td>
                         <td style={{ padding: '7px 4px', whiteSpace: 'nowrap' }}>{l.qty}{l.packUom ? ` × ${l.packUom} (${eachQtyOf(l)} ea)` : ''}</td>
                         <td style={{ padding: '7px 4px', textAlign: 'right' }}>{fmt$(l.rate)}</td>

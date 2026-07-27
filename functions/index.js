@@ -1585,7 +1585,15 @@ const buildPortalStockCtx = async (db, customerId, crm) => {
             (s.styleOptions || []).forEach((o) => [o.partName, o.partId].forEach((v) => { const c = qsAlias.bareCode(v); if (c) target.add(c); }));
         }));
     }
-    return { allItems, index, sellable, collections, rateFor, faceOf, priceOf, outer, center, brand };
+    // Cut fee items — tab 7's feeItems(['CUT']) predicate verbatim: keyword across ALL brand
+    // parts (fees aren't usually "stocked"), never narrowed by collection or diameter.
+    const cutFees = allItems.filter((it) => {
+        const ms = it.manufacturingSpecs || {};
+        const cd = it.customData || {};
+        const hay = `${ms.productType || ''} ${it.productType || ''} ${it.itemName || ''} ${cd.feeType || ''}`.toUpperCase();
+        return hay.includes('CUT');
+    });
+    return { allItems, index, sellable, collections, rateFor, faceOf, priceOf, outer, center, brand, cutFees };
 };
 
 exports.portalStock = onCall({ cors: true }, async (request) => {
@@ -1642,6 +1650,9 @@ exports.portalStock = onCall({ cors: true }, async (request) => {
         packPrefs: { qsRingPack: crm.qsRingPack || '', qsFinialPack: crm.qsFinialPack || '', qsInsideMountPack: crm.qsInsideMountPack || '' },
         finishNames,
         customerName: crm.name || '',
+        // Pole-cut fee choices (Stuart 2026-07-27: "under the pole line add a field for Pole Cut
+        // Required") — DESCRIPTION + rate only, never the fee item code (the Measure & Fit rule).
+        cutFees: ctx.cutFees.slice(0, 12).map((it) => ({ id: it.id, name: it.itemName || String(it.legacyErpId || it.itemId || ''), rate: ctx.rateFor(it) })),
     };
 });
 
@@ -1660,10 +1671,27 @@ exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
     if (scope && !ctx.collections.includes(scope)) throw new HttpsError('permission-denied', 'This collection is not enabled on your account.');
 
     const byId = new Map(ctx.sellable.map((it) => [it.id, it]));
+    const cutById = new Map(ctx.cutFees.map((it) => [it.id, it]));
     const lines = [];
     for (const l of (Array.isArray(rawLines) ? rawLines : []).slice(0, 60)) {
-        const it = byId.get(String((l && l.id) || ''));
+        const id = String((l && l.id) || '');
         const qty = Math.floor(parseFloat(l && l.qty));
+        // Pole-cut fee line: never packed, note carries the exact length in tab 7's own
+        // "cut @ <len>" spelling so Load-into-cart round-trips it verbatim. The note is BUILT
+        // here from the sanitized length — the client can't inject arbitrary note text.
+        const cutIt = cutById.get(id);
+        if (cutIt && qty > 0 && qty <= 999) {
+            const cutLen = String((l && l.cutLen) || '').replace(/[^\w .,/"'-]/g, '').trim().slice(0, 60);
+            const cutErp = String(cutIt.legacyErpId || cutIt.itemId || '').toUpperCase();
+            lines.push({
+                itemId: cutIt.id, erp: cutErp, name: cutIt.itemName || cutErp,
+                aliasErp: '', faceItemId: null,
+                qty, packUom: '', packSize: 1, eachQty: qty,
+                rate: ctx.rateFor(cutIt), note: cutLen ? `cut @ ${cutLen}` : 'cut',
+            });
+            continue;
+        }
+        const it = byId.get(id);
         if (!it || !(qty > 0) || qty > 999) continue;
         const pack = qsPackForItem(it, crm);
         const face = ctx.faceOf(it, scope);
