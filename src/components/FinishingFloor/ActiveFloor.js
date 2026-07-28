@@ -977,6 +977,22 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                               {hasP && chip('Pole Bake', t.poleBake?.status)}
                               {chip('Hand Finish', t.hand?.status)}
                           </div>
+                          {/* ▶ OPEN IN MANUAL CONTROL (Stuart 2026-07-28: "we have a shortage of
+                              scanners right now") — the scan at the top of Manual Floor Control is
+                              just a way to pick the job; tapping it here does the same thing without
+                              a scanner. The per-step Start/Stop controls (each still PIN'd) open up
+                              top. Open to every operator — only Force Complete is supervisor-gated. */}
+                          {activeWOs.some(w => w.id === wo.id) && (
+                              <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
+                                  <button onClick={() => { setManualWoId(wo.id); setViewWo(null); setMachineViewOpen(false); }}
+                                      title="Load this job into Manual Floor Control — same as scanning its setup label"
+                                      style={{ width: '100%', padding: '16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                      ▶ Open in Manual Control — Start Steps
+                                  </button>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textAlign: 'center', marginTop: '8px', letterSpacing: '.04em' }}>No scanner needed · step Start/Stop opens at the top of the screen</div>
+                              </div>
+                          )}
+
                           {/* Supervisor override — a stranded order (steps stuck Pending, or a stock
                               build already assembled in NetSuite) goes straight to WMS Packing. */}
                           {(() => {
