@@ -19,7 +19,7 @@ export const code128BSvg = (text) => {
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} ${H}" preserveAspectRatio="none" fill="#000">${rects}</svg>`;
 };
 
-const PAGE_CSS = `@page{size:4in 2in;margin:0;} html,body{margin:0;padding:0;}
+const PAGE_CSS = `@page{size:auto;margin:0;} html,body{margin:0;padding:0;}
 .l{width:4in;height:2in;box-sizing:border-box;font-family:Arial,Helvetica,sans-serif;color:#000;page-break-after:always;overflow:hidden;}
 .l:last-child{page-break-after:auto;}`;
 const ITEM_CSS = `${PAGE_CSS}
@@ -47,41 +47,71 @@ const binLabelInner = (bin) => {
 };
 
 // ---- print dispatch --------------------------------------------------------------------
-// Desktop: render to a hidden iframe and print it (no popup, no extra tab).
-// Android (the WMS floor tablets): Chrome CANNOT print a hidden iframe — window.print()
-// from a frame prints the PARENT tab, which is why tablets showed a full-page screenshot
-// of the app instead of a 4×2 label. There the document opens as its own blob-URL tab
-// carrying an auto-print script, so the print dialog sees ONLY the correctly @page-sized
-// label document; the tab closes itself after printing.
-const IS_ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
-export const printHtmlDocument = (docHtml, { autoPrintDelay = 400, timeout = 120000 } = {}) => {
-    if (IS_ANDROID) {
-        const printScript = `<script>window.addEventListener('load',function(){setTimeout(function(){window.focus();window.print();},${autoPrintDelay})});window.onafterprint=function(){setTimeout(function(){window.close()},300)};<\/script>`;
-        const withPrint = docHtml.includes('</body>') ? docHtml.replace('</body>', printScript + '</body>') : docHtml + printScript;
-        try {
-            const url = URL.createObjectURL(new Blob([withPrint], { type: 'text/html' }));
-            const win = window.open(url, '_blank');
-            setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) { /* gone */ } }, timeout);
-            if (!win) { console.warn('printHtmlDocument: popup blocked'); return false; }
-            return true;
-        } catch (e) { console.warn('printHtmlDocument (android) error:', e); return false; }
-    }
+// NORMAL PRINT QUEUE (Stuart 2026-07-28: "we can't print the set up label... can you just use a
+// normal print queue"). Earlier this rendered the label into a hidden iframe on desktop and a
+// blob-URL tab on Android — both are fragile: the iframe silently prints the PARENT document in
+// some setups, and the tab is killed by pop-up blockers, so the operator clicks Print and nothing
+// happens. It now prints IN PAGE: the label markup is mounted on the live document behind a
+// print-only stylesheet that hides everything else, and window.print() runs on the page itself —
+// the same path as Ctrl-P, which every printer driver and tablet handles.
+// Paper: @page size is `auto`, so whatever the print dialog has selected is used (Letter, A4, or
+// 4x2 label stock). A station with a dedicated label printer can pin the exact label page with
+// localStorage 'labelPaper' = '4x2'.
+const HOST_ID = 'ce-label-print-root';
+const STYLE_ID = 'ce-label-print-style';
+const labelPaper = () => { try { return (localStorage.getItem('labelPaper') || '').toLowerCase(); } catch (e) { return ''; } };
+
+export const printHtmlDocument = (docHtml, { autoPrintDelay = 250, timeout = 120000 } = {}) => {
     try {
-        const iframe = document.createElement('iframe');
-        iframe.setAttribute('aria-hidden', 'true');
-        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
-        document.body.appendChild(iframe);
-        const cw = iframe.contentWindow;
-        cw.document.open(); cw.document.write(docHtml); cw.document.close();
-        const cleanup = () => { try { if (iframe.parentNode) document.body.removeChild(iframe); } catch (e) { /* gone */ } };
-        cw.onafterprint = cleanup;
-        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('label print failed:', e); } }, autoPrintDelay);
+        const css = [...String(docHtml).matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
+        const bodyMatch = String(docHtml).match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+        const body = bodyMatch ? bodyMatch[1] : String(docHtml);
+
+        document.getElementById(HOST_ID)?.remove();      // a previous run that never got cleaned up
+        document.getElementById(STYLE_ID)?.remove();
+
+        const host = document.createElement('div');
+        host.id = HOST_ID;
+        host.innerHTML = body;
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = `
+#${HOST_ID}{position:fixed;left:-10000px;top:0;width:0;height:0;overflow:hidden;}
+@media print{
+  html,body{margin:0 !important;padding:0 !important;background:#fff !important;}
+  body > *{display:none !important;}
+  body > #${HOST_ID}{display:block !important;position:static !important;width:auto !important;height:auto !important;overflow:visible !important;}
+  ${css}
+  ${labelPaper() === '4x2' ? '@page{size:4in 2in;margin:0;}' : ''}
+}`;
+        document.head.appendChild(style);
+        document.body.appendChild(host);
+
+        let done = false;
+        const cleanup = () => {
+            if (done) return; done = true;
+            window.removeEventListener('afterprint', cleanup);
+            try { host.remove(); style.remove(); } catch (e) { /* already gone */ }
+        };
+        window.addEventListener('afterprint', cleanup);
+
+        // Thumbnails on item labels load from Storage — print once they are in, so the label is
+        // never sent to the queue half-rendered (capped so a dead image can't block the job).
+        const imgs = [...host.querySelectorAll('img')].filter((i) => !i.complete);
+        const go = () => { try { window.print(); } catch (e) { console.warn('label print failed:', e); cleanup(); } };
+        if (!imgs.length) setTimeout(go, autoPrintDelay);
+        else {
+            let left = imgs.length, fired = false;
+            const ready = () => { if (!fired && --left <= 0) { fired = true; setTimeout(go, autoPrintDelay); } };
+            imgs.forEach((i) => { i.addEventListener('load', ready); i.addEventListener('error', ready); });
+            setTimeout(() => { if (!fired) { fired = true; go(); } }, 3000);
+        }
         setTimeout(cleanup, timeout);
         return true;
-    } catch (e) { console.warn('printDoc error:', e); return false; }
+    } catch (e) { console.warn('printHtmlDocument error:', e); return false; }
 };
 
-// Each label is its own 4x2 page.
+// Each label is its own page (4x2 of content; the page itself follows the selected paper).
 const printDoc = (title, css, bodies) => {
     if (!bodies || !bodies.length) return false;
     const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${css}</style></head><body>${bodies.join('')}</body></html>`;

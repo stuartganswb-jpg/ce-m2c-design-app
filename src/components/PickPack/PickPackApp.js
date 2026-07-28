@@ -9,7 +9,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
-import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels } from '../Shared/labelPrint';
+import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printHtmlDocument } from '../Shared/labelPrint';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
@@ -60,10 +60,12 @@ const BRAND_NETSUITE_MAP = {
     'leyla': { subsidiary: "5", location: "18" }
 };
 
-// --- LABEL PRINTING (device-aware) -------------------------------------------------------------
-// Label routing: ZPL labels auto-print to a Zebra (e.g. ZP505, 2×4) via the Zebra BrowserPrint local
-// agent when it's reachable; otherwise we fall back to the browser print dialog (the HTML label). A
-// station can FORCE the dialog (skip the Zebra attempt) with localStorage 'labelPrintMode' = 'html'.
+// --- LABEL PRINTING ----------------------------------------------------------------------------
+// Labels print through the browser's NORMAL print queue (Stuart 2026-07-28: "can you just use a
+// normal print queue rather than a zpl? we can't print the set up label"). The Zebra BrowserPrint
+// path — raw ZPL straight to a ZP505 with no dialog — needs a local agent installed and running on
+// the station; where it isn't, the attempt just burns a second and the operator sees nothing. It is
+// now OPT-IN per station: localStorage 'labelPrintMode' = 'zebra' restores auto-print to the Zebra.
 
 const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -83,11 +85,13 @@ const code128BSvg = (text) => {
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} ${H}" preserveAspectRatio="none" fill="#000">${rects}</svg>`;
 };
 
-// Render a label as a sized HTML page and send it to the browser print dialog. Uses a hidden iframe so
-// it isn't blocked by pop-up blockers and prints only the label (its own @page size drives the paper).
+// Render a label and send it to the browser's normal print queue via the shared printer in
+// Shared/labelPrint (in-page print — no hidden iframe, no pop-up tab, so nothing can swallow it).
+// `size: auto` lets the dialog's selected paper win; a label-printer station can pin the exact
+// 4x2 page with localStorage 'labelPaper' = '4x2'.
 const printHtmlLabel = ({ widthIn = 4, heightIn = 2, title = 'Label', html = '' }) => {
     const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>
-@page{size:${widthIn}in ${heightIn}in;margin:0;}
+@page{size:auto;margin:0;}
 html,body{margin:0;padding:0;}
 .label{width:${widthIn}in;height:${heightIn}in;box-sizing:border-box;padding:0.1in 0.15in;font-family:Arial,Helvetica,sans-serif;color:#000;display:flex;flex-direction:column;overflow:hidden;}
 .hdr{font-size:15pt;font-weight:800;letter-spacing:.4px;line-height:1.05;margin-bottom:1pt;}
@@ -98,19 +102,7 @@ html,body{margin:0;padding:0;}
 .bc svg{width:100%;height:0.42in;display:block;}
 .bctxt{font-size:8pt;text-align:center;letter-spacing:2px;margin-top:1pt;}
 </style></head><body><div class="label">${html}</div></body></html>`;
-    try {
-        const iframe = document.createElement('iframe');
-        iframe.setAttribute('aria-hidden', 'true');
-        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
-        document.body.appendChild(iframe);
-        const cw = iframe.contentWindow;
-        cw.document.open(); cw.document.write(doc); cw.document.close();
-        const cleanup = () => { try { if (iframe.parentNode) document.body.removeChild(iframe); } catch (e) { /* already gone */ } };
-        cw.onafterprint = cleanup;
-        setTimeout(() => { try { cw.focus(); cw.print(); } catch (e) { console.warn('Label print failed:', e); } }, 250);
-        setTimeout(cleanup, 60000); // fallback if onafterprint never fires
-        return true;
-    } catch (e) { console.warn('printHtmlLabel error:', e); return false; }
+    return printHtmlDocument(doc, { autoPrintDelay: 250, timeout: 60000 });
 };
 
 // Auto-print raw ZPL to a Zebra via the Zebra BrowserPrint local agent (USB/network printer, no dialog).
@@ -137,14 +129,18 @@ const printZplBrowserPrint = async (zpl) => {
     return false;
 };
 
-// Route a label: auto-print ZPL to the Zebra (BrowserPrint) when available, else the browser print
-// dialog. Set localStorage 'labelPrintMode' = 'html' to force the dialog and skip the Zebra attempt.
+// Route a label: the print dialog by default; ZPL straight to the Zebra only on stations that
+// opt in with localStorage 'labelPrintMode' = 'zebra' (falling back to the dialog if the local
+// BrowserPrint agent doesn't answer).
 const emitLabel = (zpl, htmlSpec) => {
-    let forced = '';
-    try { forced = (localStorage.getItem('labelPrintMode') || '').toLowerCase(); } catch (e) { /* localStorage unavailable */ }
-    if (forced === 'html' || forced === 'pc') { printHtmlLabel(htmlSpec); return 'html'; }
-    (async () => { const printed = await printZplBrowserPrint(zpl); if (!printed) printHtmlLabel(htmlSpec); })();
-    return 'zebra';
+    let mode = '';
+    try { mode = (localStorage.getItem('labelPrintMode') || '').toLowerCase(); } catch (e) { /* localStorage unavailable */ }
+    if (mode === 'zebra' || mode === 'zpl') {
+        (async () => { const printed = await printZplBrowserPrint(zpl); if (!printed) printHtmlLabel(htmlSpec); })();
+        return 'zebra';
+    }
+    printHtmlLabel(htmlSpec);
+    return 'html';
 };
 
 
