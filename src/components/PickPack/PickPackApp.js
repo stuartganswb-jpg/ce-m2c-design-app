@@ -243,6 +243,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [convertDestScan, setConvertDestScan] = useState("");
     const [convertMemo, setConvertMemo] = useState("");
     const [convertLot, setConvertLot] = useState(""); // lot/serial # for the finished assembly (lot-tracked assemblies require it)
+    const [convertDemandId, setConvertDemandId] = useState(null); // convert_demand doc this modal was opened from (cleared when its cart line converts)
+    const [convertDemands, setConvertDemands] = useState([]);     // convert_demand — "Needs Phosphating" to-dos routed from HQ Stock View (3-Tier)
     // Conversion Cart (batch phosphate): pull raw -> a WIP cart bin in one trip, then convert off the cart.
     const [convBatch, setConvBatch] = useState(null);   // the active open batch for this brand
     const [cartBin, setCartBin] = useState('PHOS-CART'); // WIP bin the raw is staged into
@@ -317,6 +319,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             setPlatingDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.brandId === activeBrand && d.status === 'open'));
         });
 
+        // "Needs Phosphating" to-dos routed from HQ Stock View's 3-Tier snapshot (raw core in stock →
+        // convert it to the /P). Same shape/lifecycle as plating_demand: open until the cart line builds.
+        const unsubConvDemand = onSnapshot(collection(db, "convert_demand"), (snap) => {
+            setConvertDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => d.brandId === activeBrand && d.status !== 'done'));
+        }, e => console.warn('convert demand listen failed (publish the convert_demand firestore rule)', e));
+
         // Plating fee schedule (by product type) — edited in HQ Admin. The plater PO/packing-list cost.
         const unsubFees = onSnapshot(doc(db, "system", "plating_fees"), (s) => setPlatingFees(s.exists() ? (s.data().rules || {}) : {}));
 
@@ -334,7 +342,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             setQuickShipOrders(rows);
         }, e => console.warn('quick ship orders listen failed', e));
 
-        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubFees(); unsubBatch(); unsubQS(); };
+        return () => { unsubParts(); unsubLists(); unsubPlating(); unsubFinishes(); unsubDemand(); unsubConvDemand(); unsubFees(); unsubBatch(); unsubQS(); };
     }, [activeBrand]);
 
     // Global, brand-agnostic feeds for the Chips control (orders + employees + paint recipes). Their OWN
@@ -1162,7 +1170,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
             alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}, received into ${receiveBin}).`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
-            setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot("");
+            // Converted straight through (no cart hop) — the HQ to-do that opened this is satisfied.
+            if (convertDemandId) await deleteDoc(doc(db, "convert_demand", convertDemandId)).catch(() => {});
+            setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); setConvertDemandId(null);
             pullNetSuiteStock();
         } catch (e) {
             console.error("Assembly build push failed:", e);
@@ -1312,7 +1322,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const batchId = convBatch?.id || `CBATCH-${activeBrand}-${Date.now()}`;
         const existingLines = convBatch?.lines || [];
         const base = convBatch || { id: batchId, brand: activeBrand, cartBin: bin, status: 'open', lines: [], createdAt: Date.now(), createdBy: operator?.name || 'Unknown' };
-        const line = { lineId: `L${Date.now()}`, rawId: convertBase.id, rawErpId: convertBase.erpId, rawName: convertBase.itemName, rawInternalId: convertBase.netSuiteInternalId, targetErpId: erpOf(convTarget), targetName: convTarget.itemName, targetInternalId: convTarget.netSuiteInternalId || null, qty, srcBin: src, status: 'on_cart', newBin: '' };
+        // demandId rides on the line when this pull answers an HQ "Needs Phosphating" to-do, so the
+        // to-do closes when the BUILD posts (not when it reaches the cart — it isn't done until then).
+        const line = { lineId: `L${Date.now()}`, rawId: convertBase.id, rawErpId: convertBase.erpId, rawName: convertBase.itemName, rawInternalId: convertBase.netSuiteInternalId, targetErpId: erpOf(convTarget), targetName: convTarget.itemName, targetInternalId: convTarget.netSuiteInternalId || null, qty, srcBin: src, status: 'on_cart', newBin: '', demandId: convertDemandId || null };
         try {
             setIsSyncing(true);
             // 1) Record the line FIRST — so a Firestore permission/write failure surfaces BEFORE any
@@ -1325,8 +1337,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 await updateDoc(doc(db, "conversion_batches", batchId), { lines: existingLines }).catch(() => {});
                 throw txErr;
             }
+            if (convertDemandId) await updateDoc(doc(db, "convert_demand", convertDemandId), { status: 'on_cart', cartBatchId: batchId, cartLineId: line.lineId, pulledAt: Date.now(), pulledBy: operator?.name || '' }).catch(() => {});
             writeLog(`Phosphate cart: pulled ${qty}× ${convertBase.erpId} ${src} → ${bin}.`, 'wms');
-            setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo("");
+            setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertDemandId(null);
             pullNetSuiteStock();
         } catch (e) { console.error('add to cart failed', e); alert("❌ Pull to cart failed:\n\n" + (e.message || e)); }
         finally { setIsSyncing(false); }
@@ -1353,6 +1366,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: newBin, memo: `Phos convert ${convBatch.cartBin || ''}` });
             const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
+            // The HQ to-do is satisfied only now, once the /P actually exists in NetSuite.
+            if (line.demandId) await deleteDoc(doc(db, "convert_demand", line.demandId)).catch(() => {});
             writeLog(`Phosphate convert: +${line.qty} ${line.targetErpId} / −${line.qty} ${line.rawErpId} (cart ${convBatch.cartBin || ''} → ${newBin || 'finished'}).`, 'wms');
             pullNetSuiteStock();
         } catch (e) { console.error('convert line failed', e); alert("❌ NetSuite rejected the build:\n\n" + (e.message || e) + "\n\nIf it still mentions the component list / inventory detail, the raw isn't in the cart bin in NetSuite yet (stage it first), or the field name differs (componentInventoryDetail) — paste the error and I'll correct it."); }
@@ -1970,6 +1985,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             binLocation: part.manufacturingSpecs?.binLocation || 'UNASSIGNED'
         };
     });
+
+    // Enriched item by ERP id, independent of the screen filters — a to-do routed from HQ must open its
+    // item even when the operator has a search term typed (the list-based lookups can't see past it).
+    const enrichedByErp = (erp) => {
+        const want = String(erp || '').toUpperCase();
+        const part = want && hqParts.find(p => erpOf(p) === want);
+        if (!part) return null;
+        return { ...part, erpId: want, netSuiteInternalId: part.netSuiteInternalId || null, onHand: nsStock[want]?.onHand || 0, binLocation: part.manufacturingSpecs?.binLocation || 'UNASSIGNED' };
+    };
 
     // COUNT tab rows: expand each inventory item into one row PER BIN that holds stock, so a physical
     // count adjusts ONLY the entered bin instead of the item's combined cross-bin total. Items with no
@@ -2763,6 +2787,39 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {activeTab === 'CONVERT' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
 
+                        {/* NEEDS PHOSPHATING — to-dos routed from HQ Stock View (3-Tier): the /P ran low,
+                            pull that many raw cores and convert them. Clicking one opens the convert modal
+                            already filled in; the to-do closes when the BUILD posts, not at the cart. */}
+                        {!convertBase && convertDemands.length > 0 && (
+                            <div style={{ background: '#fff', border: `1px solid ${theme.brass}`, padding: '20px 24px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Needs Phosphating · {convertDemands.length} to-do{convertDemands.length === 1 ? '' : 's'} routed from HQ</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {convertDemands.map(d => {
+                                        const onCart = d.status === 'on_cart';
+                                        const rawPart = enrichedByErp(d.baseErpId);
+                                        const tgtPart = enrichedByErp(d.targetErpId);
+                                        return (
+                                            <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderBottom: `1px solid ${theme.line}`, paddingBottom: '8px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
+                                                    {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs{d.woNum ? ` · ${d.woNum}` : ''}{d.createdBy ? ` · ${d.createdBy}` : ''}
+                                                    {rawPart && <span style={{ color: theme.inkSoft }}> · raw on hand {rawPart.onHand}</span>}
+                                                    {onCart && <span style={{ color: '#2f7d3b' }}> · ON CART — convert it above</span>}
+                                                </div>
+                                                <button onClick={() => {
+                                                    if (!rawPart) { alert(`${d.baseErpId} isn't in this brand's item list yet — Sync NetSuite Stock first, then try again.`); return; }
+                                                    setConvertBase(rawPart);
+                                                    setConvertTargetId(tgtPart ? tgtPart.id : "");
+                                                    setConvertTargetSearch(""); setConvertQty(String(d.qty || '')); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo("");
+                                                    setConvertLot(new Date().toLocaleDateString('en-CA'));
+                                                    setConvertDemandId(d.id);
+                                                }} disabled={isSyncing || onCart} style={{ padding: '10px 16px', background: onCart ? theme.paper2 : theme.brass, color: onCart ? theme.inkSoft : '#fff', border: onCart ? `1px solid ${theme.line}` : 'none', cursor: (isSyncing || onCart) ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>{onCart ? 'On cart' : 'Pull & Convert →'}</button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
                         {/* CONVERSION CART — pull raw → WIP cart bin in one trip, then convert off the cart */}
                         <div style={{ background: '#fff', border: `1px solid ${convBatch ? theme.brass : theme.line}`, padding: '20px 24px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: convBatch ? '16px' : '0' }}>
@@ -2891,7 +2948,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '20px', justifyContent: 'flex-end' }}>
-                                        <button onClick={() => { setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
+                                        <button onClick={() => { setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); setConvertDemandId(null); }} style={{ padding: '15px 30px', background: 'transparent', border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>Cancel</button>
                                         {(() => { const cartReady = !!convertBase && !!convTarget && !!convertBase.netSuiteInternalId && convQtyNum > 0 && convQtyNum <= convSrcQty && convSrcOk; return (
                                             <button onClick={addRawToCart} disabled={!cartReady || isSyncing} title="Pull this raw onto the phosphate cart (transfers it to the cart bin) instead of converting now" style={{ padding: '15px 24px', background: cartReady && !isSyncing ? theme.ink : theme.paper2, color: cartReady && !isSyncing ? '#fff' : theme.inkSoft, border: 'none', cursor: cartReady && !isSyncing ? 'pointer' : 'not-allowed', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase' }}>
                                                 {isSyncing ? 'Working…' : '➕ Add to Cart'}
@@ -2949,7 +3006,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: theme.brass }}>{item.binLocation}</td>
                                             <td style={{ padding: '16px', textAlign: 'center', fontFamily: theme.mono, fontSize: '1.2rem', color: theme.inkSoft }}>{item.onHand}</td>
                                             <td style={{ padding: '16px', textAlign: 'center' }}>
-                                                <button onClick={() => { setConvertBase(item); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(new Date().toLocaleDateString('en-CA')); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Convert →</button>
+                                                <button onClick={() => { setConvertBase(item); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(new Date().toLocaleDateString('en-CA')); setConvertDemandId(null); }} style={{ padding: '10px 18px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Convert →</button>
                                             </td>
                                         </tr>
                                     ))}

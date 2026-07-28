@@ -61,7 +61,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [onOrdModal, setOnOrdModal] = useState(null); // snapshot row → open PO/WO inbound detail popup
     const [cutModal, setCutModal] = useState(null);     // rod-cut order builder ({itemid, internalId, available, qty, target})
     const [snapWatch, setSnapWatch] = useState('');     // snapshot watchlist filter (catalog is growing)
-    const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants
+    const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants · TIER = raw + /P + plated read together
     const [snapSort, setSnapSort] = useState('item');   // 'item' (load order) | 'finish' (/SG · /N25 grouped — batch same-finish WOs)
     const [snapCat, setSnapCat] = useState('');         // snapshot category (productType) filter
     const [snapColl, setSnapColl] = useState('');       // snapshot collection filter
@@ -73,6 +73,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [ropSaving, setRopSaving] = useState(false);
     const [routeModal, setRouteModal] = useState(null); // in-house items WITH a vendor → per-item PO-vs-WO choice {buy, make, items}
     const [rawOrderQty, setRawOrderQty] = useState({});  // Raw Cores view: Order qty keyed by base ERP
+    const [tierOrderQty, setTierOrderQty] = useState({}); // 3-Tier view: Order qty keyed by ERP (raw base AND each variant)
     const [vendorModal, setVendorModal] = useState(null); // vendor confirmation before POs are cut {buy, make, shop, vendors, picks}
 
     // BUILDER STATE
@@ -1271,6 +1272,192 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         return n;
     };
 
+    // ---- SCENARIO 3: THE THREE-TIER VIEW (Stuart 2026-07-28) ----------------------------------
+    // Fabricut H1 is stocked at THREE levels and they only make sense read together:
+    //   H1-75DS      raw mill core                      → shop floor work order
+    //   H1-75DS/P    phosphated in-house base           → a CONVERT to-do on the WMS cart
+    //   H1-75DS/EP1  outsourced plated                  → a plating to-do on the WMS plating tab
+    // (any other suffix — a painted finish that stocks in its own right — is finished goods and
+    // routes to Finishing exactly like the FIN view does.)
+    // The tier of a variant is DERIVED from its suffix, never asked: "P" is the phosphate tier;
+    // a suffix matching a configured outsource finish (EP1, EP2…) is the plated tier; the rest is
+    // finished goods. Same rule the main grid's plated-line split already uses.
+    const TIER_PHOS = 'PHOS', TIER_PLATE = 'PLATE', TIER_FIN = 'FIN';
+    const tierOfItem = (itemid) => {
+        const id = String(itemid || '').toUpperCase();
+        const cut = id.lastIndexOf('/');
+        if (cut <= 0) return null;
+        const suffix = id.slice(cut + 1);
+        if (suffix === 'P') return TIER_PHOS;
+        return outsourceFinishes.some(f => finishCodeOf(f) === suffix) ? TIER_PLATE : TIER_FIN;
+    };
+    // Groups = one raw base + its variant rows, ONLY where a "/P" variant exists — that /P is what
+    // makes an item three-tier. Bases without one are ordinary raw cores and live on the RAW view.
+    // Demand on the base row is the sum of every variant (one core per finished unit), which is the
+    // same rollup rawCoreGroups does; the variant rows keep their own history.
+    // The filter is applied to the FAMILY, not to the individual tier rows: a family shows when any of
+    // its tiers matches, and then shows ALL of them. Filtering row-by-row would hide the /P (different
+    // category/watchlist than the plated SKU is entirely normal) and a half-family defeats the view —
+    // its whole purpose is reading the stock levels against each other.
+    const tierGroups = (filtered = false) => {
+        const byBase = new Map();
+        ((salesHist && salesHist.rows) || []).forEach(r => {
+            const id = String(r.itemid).toUpperCase();
+            const cut = id.lastIndexOf('/');
+            if (cut <= 0) return;
+            const pk = packMap.get(id);
+            if (pk && pk.isPack) return;   // EA history already carries pack consumption
+            const base = id.slice(0, cut);
+            let g = byBase.get(base);
+            if (!g) { g = { base, cells: salesHist.months.map(() => 0), total: 0, variants: [], hasPhos: false, anyMatch: false }; byBase.set(base, g); }
+            r.cells.forEach((c, i) => { g.cells[i] += (c.v || 0); });
+            g.total += (r.total || 0);
+            const tier = tierOfItem(id);
+            if (tier === TIER_PHOS) g.hasPhos = true;
+            if (snapRowOk(r)) g.anyMatch = true;
+            g.variants.push({ r, tier });
+        });
+        // /P first (it's the in-house base), then the plated tiers, then anything else.
+        const rank = { [TIER_PHOS]: 0, [TIER_PLATE]: 1, [TIER_FIN]: 2 };
+        return [...byBase.values()].filter(g => g.hasPhos && (!filtered || g.anyMatch)).map(g => ({
+            ...g,
+            variants: g.variants.sort((a, b) => (rank[a.tier] - rank[b.tier]) || String(a.r.itemid).localeCompare(String(b.r.itemid), undefined, { numeric: true, sensitivity: 'base' }))
+        })).sort((a, b) => a.base.localeCompare(b.base, undefined, { numeric: true, sensitivity: 'base' }));
+    };
+
+    // /P ordered → a CONVERT to-do on the WMS Convert tab (raw is pulled to the phosphate cart, then
+    // the assembly build posts). No NetSuite write happens here — the demand doc is the work request;
+    // the operator's convert is what moves stock, so this can never race the ns_outbox.
+    const createConvertDemands = async (rows) => {
+        let n = 0;
+        for (let i = 0; i < rows.length; i++) {
+            const { r, info, qty, baseErp, baseInfo } = rows[i];
+            const demandId = `CVD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
+            await setDoc(doc(db, 'convert_demand', demandId), {
+                id: demandId, brandId: activeBrand, status: 'open',
+                woNum: `CVW-${activeBrand.toUpperCase()}-${(Date.now() + i).toString().slice(-6)}`,
+                baseErpId: baseErp, baseItemId: baseInfo?.part?.id || null,
+                baseInternalId: baseInfo?.iid || null, baseAvailAtRequest: baseInfo?.available ?? null,
+                targetErpId: String(r.itemid).toUpperCase(), targetItemId: info.part?.id || null,
+                targetInternalId: r.internalId ? String(r.internalId) : null,
+                qty, source: 'stockview',
+                note: `Stock replenish · ${String(r.itemid).toUpperCase()} avail ${info.available} · min ${info.minOnHand}`,
+                createdBy: String(currentUser?.name || currentUser || ''), createdAt: Date.now()
+            });
+            addLog(`⇄ Convert demand ${baseErp} → ${r.itemid} ×${qty} (WMS Convert tab).`, 'info');
+            n++;
+        }
+        return n;
+    };
+    // Plated tier ordered → the SAME "Needs Plating" queue the main grid already writes (the base is
+    // pulled to WIP-Plating and ships to the plater), reusing that doc shape verbatim so PickPack
+    // needs no new reader for it.
+    const createPlatingDemands = async (rows) => {
+        let n = 0;
+        for (let i = 0; i < rows.length; i++) {
+            const { r, qty, baseErp, baseInfo } = rows[i];
+            const erp = String(r.itemid).toUpperCase();
+            const suffix = erp.slice(erp.lastIndexOf('/') + 1);
+            const fin = outsourceFinishes.find(f => finishCodeOf(f) === suffix);
+            const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
+            await setDoc(doc(db, 'plating_demand', demandId), {
+                id: demandId, brandId: activeBrand, status: 'open',
+                woNum: `PLW-${activeBrand.toUpperCase()}-${(Date.now() + i).toString().slice(-6)}`,
+                baseItemId: baseInfo?.part?.id || null, baseErpId: baseErp, targetErpId: erp,
+                finishCode: suffix, finishName: (fin && fin.name) || '', qty,
+                source: 'stockview', createdBy: String(currentUser?.name || currentUser || ''), createdAt: Date.now()
+            });
+            addLog(`⚡ Plating demand ${baseErp} → ${erp} ×${qty} (WMS Plating tab).`, 'info');
+            n++;
+        }
+        return n;
+    };
+
+    // One execute for the whole tier batch. buy/shop are the RAW base rows (routed by the same rule
+    // the Raw Cores view uses); conv/plate/fin are the variant rows.
+    const executeTierOrders = async ({ buy = [], shop = [], conv = [], plate = [], fin = [] }) => {
+        setGenBusy(true);
+        try {
+            const poResult = buy.length ? await createStockPOs(buy) : { made: [], unmatched: [] };
+            const shopWos = shop.length ? await createStockShopWOs(shop) : 0;
+            const convN = conv.length ? await createConvertDemands(conv) : 0;
+            const plateN = plate.length ? await createPlatingDemands(plate) : 0;
+            const finWos = fin.length ? await createStockFinWOs(fin) : 0;
+            setTierOrderQty({});
+            const lines = [
+                ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
+                ...(shopWos ? [`• ${shopWos} raw core work order(s) → RTG Dispatch (Push to Shop there)`] : []),
+                ...(convN ? [`• ${convN} convert to-do(s) → WMS · Convert tab ("Needs Phosphating")`] : []),
+                ...(plateN ? [`• ${plateN} plating to-do(s) → WMS · Plating tab ("Needs Plating")`] : []),
+                ...(finWos ? [`• ${finWos} finishing work order(s) → RTG Dispatch (release to Finishing there)`] : []),
+            ];
+            if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
+        } catch (e) {
+            addLog(`Tier orders failed: ${e.message}`, 'error');
+            // convert_demand is a NEW collection — until its firestore rule is published, its writes
+            // come back permission-denied while everything else in the batch succeeds. Say so plainly.
+            const perm = /permission|insufficient/i.test(String(e.message || e));
+            alert('Failed to generate tier orders:\n\n' + (e.message || e) + (perm ? '\n\n→ If this happened on a /P row, publish the `convert_demand` firestore rule (Cloud Shell: firebase deploy --only firestore:rules).' : ''));
+        }
+        setGenBusy(false);
+    };
+
+    const generateTierOrders = async () => {
+        const qtyOf = (erp) => parseInt(tierOrderQty[String(erp).toUpperCase()]) || 0;
+        const groups = tierGroups();
+        const buy = [], shop = [], conv = [], plate = [], fin = [], unlinked = [], shortWarn = [];
+        groups.forEach(g => {
+            const baseInfo = rawInfoOf(g);
+            const baseQty = qtyOf(g.base);
+            if (baseQty > 0) {
+                if (!baseInfo.part) unlinked.push(g.base);
+                else {
+                    const x = { r: { itemid: g.base, internalId: baseInfo.iid }, info: baseInfo, qty: baseQty };
+                    const specs = baseInfo.part.manufacturingSpecs || {};
+                    const vendorName = String(specs.vendorName || '').trim();
+                    // Same rule as the Raw Cores router — an assembly is BUILT here whatever isInHouse says.
+                    const isAssembly = baseInfo.part.partClass === 'Assembly' || baseInfo.part.partClass === 'Master Assembly' || baseInfo.part.netSuiteRecordType === 'assemblyitem';
+                    if (isAssembly) shop.push(x);
+                    else if (specs.isInHouse === false || vendorName) buy.push({ ...x, vendorOverride: vendorName });
+                    else shop.push(x);
+                }
+            }
+            g.variants.forEach(({ r, tier }) => {
+                const qty = qtyOf(r.itemid);
+                if (qty <= 0) return;
+                const info = reorderFor(r);
+                if (!info.part) { unlinked.push(String(r.itemid)); return; }
+                const row = { r, info, qty, baseErp: g.base, baseInfo };
+                if (tier === TIER_PHOS) conv.push(row);
+                else if (tier === TIER_PLATE) plate.push(row);
+                else fin.push(row);
+            });
+            // Convert + plating both EAT THE RAW CORE. Flag it when the raw on hand (plus what's
+            // inbound, plus whatever was typed on the base row right here) can't cover them — no WO
+            // is auto-created, because the base row on this very screen is where that call is made
+            // and a silent extra WO would double-order it.
+            const eats = [...conv, ...plate].filter(x => x.baseErp === g.base).reduce((s, x) => s + x.qty, 0);
+            const coverage = (baseInfo.available || 0) + (baseInfo.onOrd || 0) + baseQty;
+            if (eats > coverage) shortWarn.push(`${g.base}: ${eats} needed vs ${coverage} covered (short ${eats - coverage})`);
+        });
+        if (unlinked.length) alert(`⚠️ ${unlinked.length} row(s) have no Master Library part and were skipped:\n\n${unlinked.slice(0, 10).map(x => `• ${x}`).join('\n')}`);
+        if (!buy.length && !shop.length && !conv.length && !plate.length && !fin.length) return alert('Enter an Order quantity on at least one tier row first.');
+        const pieces = [];
+        if (buy.length) pieces.push(`${buy.length} raw core(s) → vendor PO (vendor confirmed next)`);
+        if (shop.length) pieces.push(`${shop.length} raw core(s) → shop-floor work order`);
+        if (conv.length) pieces.push(`${conv.length} /P item(s) → WMS Convert to-do (phosphate)`);
+        if (plate.length) pieces.push(`${plate.length} plated item(s) → WMS Plating to-do`);
+        if (fin.length) pieces.push(`${fin.length} finished item(s) → Finishing work order`);
+        const warn = shortWarn.length ? `\n\n⚠ RAW CORE SHORT for the convert/plating you're asking for:\n${shortWarn.map(s => `• ${s}`).join('\n')}\n\nOrder the raw base on its own row too, or the floor will run out mid-batch.` : '';
+        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}${warn}\n\nWork orders and POs stage in RTG Dispatch; convert/plating to-dos appear on the WMS tabs. Nothing reaches NetSuite until it's dispatched or the operator posts the move.`)) return;
+        if (!buy.length) return executeTierOrders({ shop, conv, plate, fin });
+        setGenBusy(true);
+        let nsVendors = [];
+        try { nsVendors = await loadNsVendors(); } catch (e) { /* picker falls back to free text */ }
+        setGenBusy(false);
+        setVendorModal({ buy, shop, vendors: nsVendors, tier: { conv, plate, fin } });
+    };
+
     const executeOrders = async (buy, make) => {
         const pieces = [];
         if (buy.length) pieces.push(`${new Set(buy.map(x => String(x.info.part?.manufacturingSpecs?.vendorName || '').trim())).size} vendor PO(s) covering ${buy.length} item(s)`);
@@ -1522,6 +1709,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // variant starts with it).
                 const rawRows = snapView !== 'RAW' ? [] : rawCoreGroups(true);
                 const rawInfo = rawInfoOf;
+                // 3-TIER view (Stuart 2026-07-28): the same filtered variant rows, grouped under their
+                // raw base — but only for bases that HAVE a /P, which is what makes an item three-tier.
+                const tierRows = snapView !== 'TIER' ? [] : tierGroups(true);
+                const shownCount = snapView === 'RAW' ? rawRows.length : snapView === 'TIER' ? tierRows.length : rows.length;
                 const gt = salesHist.months.map((m, i) => rows.reduce((s, r) => s + (r.cells[i]?.v || 0), 0));
                 const gtTotal = rows.reduce((s, r) => s + r.total, 0);
                 const reo = rows.map(r => reorderFor(r));
@@ -1569,19 +1760,20 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 <div style={{ display: 'flex', border: '1px solid var(--line)' }}>
                                     <button onClick={() => setSnapView('FIN')} style={{ padding: '9px 14px', background: snapView === 'FIN' ? 'var(--ink)' : '#fff', color: snapView === 'FIN' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Finished Items</button>
                                     <button onClick={() => { setSnapView('RAW'); if (!rawStock) loadRawStock(); }} title="Demand rolled up to the RAW core behind each finish variant (…/BL + /CP + /SG → base item) — set core ROPs so finishing never runs out of parts" style={{ padding: '9px 14px', background: snapView === 'RAW' ? 'var(--ink)' : '#fff', color: snapView === 'RAW' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Raw Cores (BOM)</button>
+                                    <button onClick={() => { setSnapView('TIER'); if (!rawStock) loadRawStock(); }} title="Three-tier items (Fabricut H1): the raw mill core, its /P phosphated base and the plated /EP tiers read together, each with its own Order column — raw → shop floor, /P → WMS Convert, plated → WMS Plating" style={{ padding: '9px 14px', background: snapView === 'TIER' ? 'var(--ink)' : '#fff', color: snapView === 'TIER' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>3-Tier (raw · /P · plated)</button>
                                 </div>
                                 <div style={{ display: 'flex', border: '1px solid var(--line)' }} title="Row order — Finish groups /SG · /N25 · … together so same-finish work orders go out as one batch">
                                     <button onClick={() => setSnapSort('item')} style={{ padding: '9px 14px', background: snapSort === 'item' ? 'var(--ink)' : '#fff', color: snapSort === 'item' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Item #</button>
                                     <button onClick={() => setSnapSort('finish')} style={{ padding: '9px 14px', background: snapSort === 'finish' ? 'var(--ink)' : '#fff', color: snapSort === 'finish' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Finish</button>
                                 </div>
                                 <button onClick={loadOpenWos} title="Every work order not closed — floor phase, NetSuite WO/build state, pack status — with repair actions (↩ reset to Setup after deleting a wrong NetSuite build, ✕ close)" style={{ padding: '9px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>📋 Open WOs</button>
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${snapView === 'RAW' ? rawRows.length : rows.length} item${(snapView === 'RAW' ? rawRows.length : rows.length) === 1 ? '' : 's'}`}</span>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{salesHist.loading ? 'Loading…' : `${shownCount} ${snapView === 'TIER' ? (shownCount === 1 ? 'family' : 'families') : (shownCount === 1 ? 'item' : 'items')}`}</span>
                                 {Object.keys(ropEdits).length > 0 && (
                                     <button onClick={saveRops} disabled={ropSaving} title="Write the edited re-order points to the Master Library (manufacturingSpecs.reorderPoint)" style={{ padding: '9px 16px', background: ropSaving ? 'var(--paper-2)' : 'var(--brass)', color: ropSaving ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: ropSaving ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{ropSaving ? 'Saving…' : `⬆ Save ${Object.keys(ropEdits).length} ROP(s)`}</button>
                                 )}
                                 <button onClick={lockRetiredByInternalId} disabled={!salesHist.withOld} title="Notate the OLD counterparts by NetSuite internal ID and hide them app-wide" style={{ marginLeft: 'auto', padding: '9px 16px', background: salesHist.withOld ? 'var(--brass)' : 'var(--paper-2)', color: salesHist.withOld ? '#fff' : 'var(--ink-soft)', border: salesHist.withOld ? 'none' : '1px solid var(--line)', cursor: salesHist.withOld ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🔒 Lock {salesHist.withOld || ''} OLD</button>
                                 <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
-                                <button onClick={snapView === 'RAW' ? generateRawOrders : generateOrders} disabled={genBusy || (snapView === 'RAW' ? !rawRows.length : !rows.length)} title={snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : '⚙ Generate Orders (PO + WO)')}</button>
+                                <button onClick={snapView === 'RAW' ? generateRawOrders : snapView === 'TIER' ? generateTierOrders : generateOrders} disabled={genBusy || !shownCount} title={snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : snapView === 'TIER' ? 'Route every tier row with an Order qty by what it IS: raw core → shop-floor WO (or a vendor PO if it\'s bought), /P → WMS Convert to-do, plated → WMS Plating to-do, finished → Finishing WO.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : snapView === 'TIER' ? '⚙ Generate Tier Orders' : '⚙ Generate Orders (PO + WO)')}</button>
                             </div>
 
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
@@ -1589,6 +1781,103 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Querying NetSuite sales history…</div>
                                 ) : salesHist.error ? (
                                     <div style={{ padding: '32px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '12px' }}>Failed: {salesHist.error}</div>
+                                ) : snapView === 'TIER' ? (
+                                    /* 3-TIER: raw core + its /P + its plated tiers, one block per family.
+                                       Every tier keeps its OWN Order box because they are genuinely
+                                       different work — milling, phosphating, plating — and the whole
+                                       point of the view is seeing all three stock levels at once. */
+                                    rawStock?.loading ? (
+                                        <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Pulling raw-core stock from NetSuite…</div>
+                                    ) : tierRows.length === 0 ? (
+                                        <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>No three-tier families{term || snapWatch || snapCat || snapColl ? ' match the current filters' : ''} — a family shows here once its “/P” phosphated item is stocked alongside the raw core.</div>
+                                    ) : (
+                                        <>
+                                            {rawStock?.error && <div style={{ padding: '10px 16px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px', borderBottom: '1px solid var(--line)' }}>⚠ Raw-core stock pull failed ({rawStock.error}) — the raw row's Avail/On-Ord may be blank.</div>}
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
+                                                <thead style={{ position: 'sticky', top: 0, background: 'var(--paper)', zIndex: 5 }}>
+                                                    <tr>
+                                                        <th style={{ padding: '8px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', borderBottom: '2px solid var(--ink)', position: 'sticky', left: 0, background: 'var(--paper)' }}>Item · tier</th>
+                                                        {salesHist.months.map(m => <th key={m.key} style={monthTh}>{m.label}</th>)}
+                                                        <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '1px solid var(--line)' }}>Total</th>
+                                                        <th style={monthTh}>Avg/mo</th>
+                                                        <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '2px solid var(--ink)' }} title="NetSuite quantity available for THIS tier">Avail</th>
+                                                        <th style={{ ...monthTh, color: '#3f7fc4' }} title="Open POs / work orders for this tier">On Ord</th>
+                                                        <th style={monthTh} title="Raw core: 6 months of the family's combined demand · variant tiers use their own Min-OH rule">Min OH</th>
+                                                        <th style={{ ...monthTh, color: '#d9534f' }} title="Deficit vs (ROP or Min OH) counting stock on order">Short</th>
+                                                        <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '1px solid var(--line)' }} title="Manual order qty per tier — the destination is on the right of each row">Order</th>
+                                                        <th style={{ ...monthTh, textAlign: 'left' }} title="Where an order on this row goes — derived from what the item is, never asked">Routes to</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {tierRows.map(g => {
+                                                        const bi = rawInfo(g);
+                                                        const monthCount = salesHist.months.length;
+                                                        const qtyCell = (erp, enabled, hint) => (
+                                                            <td style={{ ...numTd, borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>
+                                                                <input type="number" min="0" value={tierOrderQty[erp] ?? ''} placeholder="0" disabled={!enabled} title={enabled ? hint : 'No Master Library part — link it before ordering'}
+                                                                    onChange={e => setTierOrderQty(prev => ({ ...prev, [erp]: e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0) }))}
+                                                                    style={{ width: '62px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: (parseInt(tierOrderQty[erp]) > 0) ? '2px solid #3a7d44' : '1px solid var(--line)', outline: 'none', background: enabled ? '#fff' : 'var(--paper-2)' }} />
+                                                            </td>
+                                                        );
+                                                        const routeTd = (label, color, title) => <td style={{ ...numTd, textAlign: 'left', color, fontSize: '10px', whiteSpace: 'nowrap' }} title={title}>{label}</td>;
+                                                        // Raw base routing — identical rule to the Raw Cores view.
+                                                        const bp = bi.part, bsp = bp?.manufacturingSpecs || {};
+                                                        const bAsm = !!bp && (bp.partClass === 'Assembly' || bp.partClass === 'Master Assembly' || bp.netSuiteRecordType === 'assemblyitem');
+                                                        const bBuy = !!bp && !bAsm && (bsp.isInHouse === false || bi.vendored);
+                                                        return (
+                                                            <React.Fragment key={g.base}>
+                                                                <tr style={{ borderTop: '2px solid var(--ink)' }}>
+                                                                    <td style={{ padding: '9px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', fontWeight: 700, borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }} title={`Raw mill core · feeds ${g.variants.length} tier(s)`}>
+                                                                        {g.base}
+                                                                        <span style={{ marginLeft: '8px', fontWeight: 400, fontSize: '9px', color: 'var(--ink-soft)' }}>RAW CORE</span>
+                                                                        {!bp && <span title="No matching Master Library part — sync it to get stock + ordering" style={{ color: '#d9534f', fontSize: '9px' }}> · UNLINKED</span>}
+                                                                    </td>
+                                                                    {g.cells.map((v, i) => <td key={salesHist.months[i].key} style={{ ...numTd, color: v ? 'var(--ink)' : 'var(--line)' }} title="Combined demand of every tier below — one core per finished unit">{v || '·'}</td>)}
+                                                                    <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>{g.total || '·'}</td>
+                                                                    <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{(g.total / 12).toFixed(1)}</td>
+                                                                    <td style={{ ...numTd, fontWeight: 700, color: bi.available <= bi.threshold ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{bi.iid ? bi.available : '—'}</td>
+                                                                    <td style={{ ...numTd }}>{bi.onOrd > 0 ? <button onClick={() => setOnOrdModal({ itemid: g.base, onOrd: bi.onOrd, onOrdLines: bi.onOrdLines })} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{bi.onOrd}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
+                                                                    <td style={{ ...numTd, color: 'var(--ink-soft)' }} title="6 months of the family's combined demand">{bi.minOnHand || '·'}</td>
+                                                                    <td style={{ ...numTd, fontWeight: 600, color: bi.shortfall > 0 ? '#d9534f' : 'var(--line)' }}>{bi.shortfall || '·'}</td>
+                                                                    {qtyCell(g.base, !!bp, bAsm || !bBuy ? 'Raw core → shop-floor work order (staged in RTG)' : 'Bought core → vendor confirmation, then one PO per vendor')}
+                                                                    {bAsm ? routeTd('⚒ SHOP WO', '#3a7d44', 'Assembly — we build it here, so an order becomes a shop-floor work order')
+                                                                        : bBuy ? routeTd(bi.vendored ? '🏷 VENDOR PO' : '⚠ NO VENDOR', bi.vendored ? '#3f7fc4' : '#d9534f', bi.vendored ? 'Bought — confirms the vendor, then joins that vendor\'s PO' : 'Flagged outsourced but has NO vendor — you\'ll be asked to pick one or switch it to in-house')
+                                                                            : routeTd('⚒ SHOP WO', 'var(--ink-soft)', 'Made in-house — an order becomes a shop-floor work order')}
+                                                                </tr>
+                                                                {g.variants.map(({ r, tier }) => {
+                                                                    const vi = reorderFor(r);
+                                                                    const erp = String(r.itemid).toUpperCase();
+                                                                    const vShort = Math.max(0, (vi.threshold || 0) - (vi.available + vi.onOrd));
+                                                                    const tierLabel = tier === TIER_PHOS ? 'PHOSPHATED' : tier === TIER_PLATE ? 'PLATED (outsourced)' : 'FINISHED';
+                                                                    return (
+                                                                        <tr key={erp}>
+                                                                            <td style={{ padding: '7px 12px 7px 30px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>
+                                                                                ↳ {erp}
+                                                                                <span style={{ marginLeft: '8px', fontSize: '9px', color: tier === TIER_PHOS ? 'var(--brass)' : tier === TIER_PLATE ? '#3f7fc4' : 'var(--ink-soft)' }}>{tierLabel}</span>
+                                                                                {!vi.part && <span title="No matching Master Library part" style={{ color: '#d9534f', fontSize: '9px' }}> · UNLINKED</span>}
+                                                                            </td>
+                                                                            {r.cells.map((c, i) => <td key={salesHist.months[i].key} style={{ ...numTd, color: c.v ? (c.src === 'old' ? OLD_BLUE : 'var(--ink)') : 'var(--line)' }}>{c.v || '·'}</td>)}
+                                                                            <td style={{ ...numTd, fontWeight: 600, color: 'var(--ink)', borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>{r.total || '·'}</td>
+                                                                            <td style={{ ...numTd, color: 'var(--ink-soft)' }}>{(r.total / 12).toFixed(1)}</td>
+                                                                            <td style={{ ...numTd, color: vi.available <= vi.threshold ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{vi.available}</td>
+                                                                            <td style={{ ...numTd }}>{r.onOrd > 0 ? <button onClick={() => setOnOrdModal(r)} title="Open POs / work orders — click for detail" style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{Math.round(r.onOrd)}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
+                                                                            <td style={{ ...numTd, color: 'var(--ink-soft)' }} title={vi.minRule}>{vi.minOnHand || '·'}</td>
+                                                                            <td style={{ ...numTd, fontWeight: 600, color: vShort > 0 ? '#d9534f' : 'var(--line)' }}>{vShort || '·'}</td>
+                                                                            {qtyCell(erp, !!vi.part, tier === TIER_PHOS ? 'Phosphate this many from the raw core — lands on the WMS Convert tab' : tier === TIER_PLATE ? 'Send this many out to be plated — lands on the WMS Plating tab' : 'Finished goods → Finishing work order (staged in RTG)')}
+                                                                            {tier === TIER_PHOS ? routeTd('⇄ WMS CONVERT', 'var(--brass)', 'Pull the raw core to the phosphate cart and build the /P — WMS · Convert tab')
+                                                                                : tier === TIER_PLATE ? routeTd('⚡ WMS PLATING', '#3f7fc4', 'Pull the raw core to WIP-Plating and ship it to the plater — WMS · Plating tab')
+                                                                                    : routeTd('🎨 FINISHING WO', 'var(--ink-soft)', 'Finished goods — an RTG-parked work order releases to the Finishing Floor')}
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                                <tr><td colSpan={monthCount + 9} style={{ height: '6px', background: 'var(--paper)', borderBottom: '1px solid var(--line)' }} /></tr>
+                                                            </React.Fragment>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </>
+                                    )
                                 ) : snapView === 'RAW' ? (
                                     rawStock?.loading ? (
                                         <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Pulling raw-core stock from NetSuite…</div>
@@ -1979,7 +2268,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     const m = vendorModal; setVendorModal(null);
                                     const buys = m.buy.filter(x => x.vendorOverride && x.vendorOverride !== '__MAKE__');
                                     const shops = [...m.shop, ...m.buy.filter(x => x.vendorOverride === '__MAKE__')];
-                                    executeRawOrders(buys, shops);
+                                    // Opened from the 3-Tier view, the rest of the batch (convert /
+                                    // plating / finishing to-dos) rides on the modal and goes out with it.
+                                    if (m.tier) executeTierOrders({ ...m.tier, buy: buys, shop: shops });
+                                    else executeRawOrders(buys, shops);
                                 }} style={{ padding: '12px 22px', background: '#3a7d44', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Create {groups.size} PO{groups.size === 1 ? '' : 's'}{(vendorModal.shop.length + madeHere.length) ? ` + ${vendorModal.shop.length + madeHere.length} WO` : ''} →</button>
                             </div>
                         </div>

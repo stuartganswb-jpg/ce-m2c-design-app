@@ -1,8 +1,8 @@
 # Stock View (HQ 12.5) — Three-Scenario Redesign
 
-**Spec'd:** 2026-07-28 from Stuart's description · **Updated:** 2026-07-28 evening
-**Status:** Scenario 2 core SHIPPED · Scenario 3 (Fabricut H1) is the next build · two smaller items queued behind it
-**Files:** `src/components/HQ/StockViewTab.js` (~2300 ln), `src/components/HQ/RTGDispatchTab.js` (1579 ln), `src/components/PickPack/PickPackApp.js` (CONVERT tab ~2766)
+**Spec'd:** 2026-07-28 from Stuart's description · **Updated:** 2026-07-28 (scenario 3 shipped)
+**Status:** Scenarios 2 + 3 SHIPPED · scenario 1 auto-release is the next build · two smaller items queued behind it
+**Files:** `src/components/HQ/StockViewTab.js` (~2600 ln), `src/components/HQ/RTGDispatchTab.js` (1579 ln), `src/components/PickPack/PickPackApp.js` (CONVERT tab ~2800), `firestore.rules`
 
 ---
 
@@ -113,14 +113,21 @@ Stocked *complete* in bins, pulled and shipped.
 1. **"Open POs by vendor"** button on Stock View.
 2. PO → RTG → NetSuite returns a real PO# → **email it to the vendor** and **log it on the vendor's CRM card** (External Coop).
 
-## Scenario 3 — Fabricut H1 (three-tier) — ⏭ NEXT BUILD
+## Scenario 3 — Fabricut H1 (three-tier) — ✅ SHIPPED 2026-07-28
 
 `H1-75DS` (raw) · `H1-75DS/P` (phosphated in-house base feeding ALL in-house paint finishes P01, P02…) · `H1-75DS/EP1` (outsourced plated).
 
-1. **A paired view**: raw item with its `/P` immediately beneath it — `H1-75DS` then `H1-75DS/P` — so both stock levels read together. Stuart wants this as its own button alongside Finished / Raw Cores.
-2. Order the **raw** `H1-75DS` → RTG → auto to **Shop Floor** (the `createStockShopWOs` path already exists).
-3. Order the **`/P`** → creates **demand on the WMS CONVERT tab** (`PickPackApp.js` ~2766, which already has the raw→phosphate cart flow with `addRawToCart`) — needs a new panel listing what to pull and phosphate.
-4. The **`/EP1`** plated tier behaves like scenario 1 (stocked, watched, replenished). The main grid already routes plated suffixes to `plating_demand` (matched via `outsourceFinishes` suffix) — reuse that mechanism rather than rebuilding it.
+**⚠ ONE DEPLOY STEP OUTSTANDING:** `convert_demand` is a new collection. Its rule is in `firestore.rules` but rules do NOT auto-deploy — until Cloud Shell runs `firebase deploy --only firestore:rules --project ce-m2c-design-collab`, ordering a `/P` row fails permission-denied (the generator says so explicitly when it does).
+
+- **`3-Tier (raw · /P · plated)`** — third snapshot view button beside Finished / Raw Cores. One block per FAMILY: the raw core row (bold, its demand = the combined demand of every tier below it, since one core is consumed per finished unit), then its tiers indented — `/P` first, then plated, then any other finished variant. A family qualifies by HAVING a `/P`; plain raw cores stay on the RAW view.
+- **The filter applies to the FAMILY, not the row.** A family shows when ANY tier matches the search/watchlist/category/collection, and then shows all of its tiers — the `/P` routinely carries a different category than the plated SKU, and half a family defeats a view whose whole point is reading the levels against each other.
+- **Tier is DERIVED from the suffix**, never asked: `P` → phosphate · a suffix matching a configured `hq_outsource_finishes` code (EP1, EP2…) → plated · anything else → finished goods. Same rule the main grid's plated-line split already uses.
+- **Every tier has its own Order box, and each routes by what it is** (chip in the "Routes to" column, visible before generating): raw → shop-floor WO via `createStockShopWOs` (or the vendor-confirm modal → PO if it's genuinely bought — the assembly-is-built-here rule from scenario 2 is reused verbatim) · `/P` → `convert_demand` doc → **WMS Convert tab** · plated → `plating_demand` doc (the main grid's exact shape, so PickPack needed no new reader) → **WMS Plating tab** · finished → `createStockFinWOs` → Finishing.
+- **Raw-shortfall warning, not a silent second WO.** Convert and plating both eat the raw core, so the confirm dialog names any family where (convert + plating qty) exceeds (raw avail + on order + whatever was typed on the raw row right there). No auto-WO: the raw row is on the same screen, and an invisible extra WO would double-order it.
+- **WMS side (`PickPackApp.js`)**: a **"Needs Phosphating"** panel at the top of the CONVERT tab lists the open to-dos (with the raw's live on-hand); "Pull & Convert →" opens the convert modal already filled in (raw, `/P` target, qty). The to-do is marked `on_cart` when the raw reaches the phosphate cart and is **deleted only when the assembly build actually posts** — cart hop or straight-through convert, both close it. Item lookup is filter-independent (`enrichedByErp`), so a typed search can't hide the item a to-do points at.
+- All of it stages: nothing here writes to NetSuite. WOs/POs land in RTG (so `ns_outbox` serializes), and the convert/plating to-dos are work requests — the operator's own move is the NetSuite write.
+
+**Remaining for scenario 3:** none blocking. Optional polish once Stuart uses it: a badge/count of open `convert_demand` on the HQ side, and closing a to-do that was satisfied by hand.
 
 ## Cross-cutting
 
@@ -131,8 +138,8 @@ Stocked *complete* in bins, pulled and shipped.
 ## Build order (Stuart picked this)
 
 1. ~~Scenario 2 ordering unlock + vendor confirm + auto-route~~ ✅ done
-2. **Scenario 3** — Fabricut H1 paired view + Convert demand ← **start here**
-3. Scenario 1 auto-release (small, scoped to `SALES_SNAPSHOT` + `Stock`)
+2. ~~Scenario 3 — Fabricut H1 paired view + Convert demand~~ ✅ done (deploy the firestore rule)
+3. **Scenario 1 auto-release** (small, scoped to `SALES_SNAPSHOT` + `Stock`) ← **start here**
 4. Open POs by vendor + CRM/vendor logging + PO email
 
 ---
