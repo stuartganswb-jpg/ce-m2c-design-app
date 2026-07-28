@@ -70,6 +70,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [ropEdits, setRopEdits] = useState({});       // erp(base) -> edited ROP (pushed to Master Library manufacturingSpecs.reorderPoint)
     const [ropSaving, setRopSaving] = useState(false);
     const [routeModal, setRouteModal] = useState(null); // in-house items WITH a vendor → per-item PO-vs-WO choice {buy, make, items}
+    const [rawOrderQty, setRawOrderQty] = useState({});  // Raw Cores view: Order qty keyed by base ERP
+    const [vendorModal, setVendorModal] = useState(null); // vendor confirmation before POs are cut {buy, make, shop, vendors, picks}
 
     // BUILDER STATE
     const [activeBuilder, setActiveBuilder] = useState("PO"); // 'PO' or 'WO'
@@ -1126,7 +1128,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const vendors = await loadNsVendors();
         const byVendor = new Map();
         buyList.forEach(x => {
-            const v = String(x.info.part?.manufacturingSpecs?.vendorName || '').trim();
+            // x.vendorOverride = the vendor CONFIRMED in the vendor modal; the item's stored
+            // vendorName is only the default. Grouping is by the confirmed name, so a batch of 30
+            // items across several vendors still collapses to ONE PO per vendor.
+            const v = String(x.vendorOverride || x.info.part?.manufacturingSpecs?.vendorName || '').trim();
             if (!byVendor.has(v)) byVendor.set(v, []);
             byVendor.get(v).push(x);
         });
@@ -1161,6 +1166,78 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         return { made, unmatched };
     };
+    // Raw-core rollup, hoisted to component scope so the TABLE and the ORDER GENERATOR read the
+    // exact same groups (they used to live inside the render, which is why ordering couldn't work
+    // from this view). Demand for every finish variant rolls into its BOM base.
+    const rawCoreGroups = () => {
+        const byBase = new Map();
+        ((salesHist && salesHist.rows) || []).forEach(r => {
+            const id = String(r.itemid);
+            const cut = id.lastIndexOf('/');
+            if (cut <= 0) return;
+            const base = id.slice(0, cut).toUpperCase();
+            // EA history already contains pack consumption — counting PACK rows too would double.
+            const pk = packMap.get(id.toUpperCase());
+            if (pk && pk.isPack) return;
+            let g = byBase.get(base);
+            if (!g) { g = { base, cells: salesHist.months.map(() => 0), total: 0, orders: 0, variants: [] }; byBase.set(base, g); }
+            r.cells.forEach((c, i) => { g.cells[i] += (c.v || 0); });
+            g.total += (r.total || 0); g.orders += r.orders; g.variants.push(id);
+        });
+        return [...byBase.values()].sort((a, b) => a.base.localeCompare(b.base, undefined, { numeric: true, sensitivity: 'base' }));
+    };
+    // Core default Min OH = 6 MONTHS of combined variant demand — this screen's whole purpose is
+    // that the cores feeding finishing never run dry. An explicit ROP overrides it.
+    const rawInfoOf = (g) => {
+        const part = partByKey['erp:' + g.base];
+        const iid = part?.netSuiteInternalId ? String(part.netSuiteInternalId) : null;
+        const available = (iid && rawStock?.availById) ? Math.round(rawStock.availById[iid] || 0) : 0;
+        const inb = (iid && rawStock?.inboundById) ? rawStock.inboundById[iid] : null;
+        const onOrd = inb ? Math.round(inb.qty) : 0;
+        const specs = part?.manufacturingSpecs || {};
+        const minOnHand = Math.round(g.total / 2);
+        const ropRaw = specs.reorderPoint;
+        const rop = (ropRaw === '' || ropRaw === undefined || ropRaw === null) ? null : (parseInt(ropRaw) || 0);
+        const threshold = (rop !== null && rop > 0) ? rop : minOnHand;
+        const shortfall = Math.max(0, threshold - (available + onOrd));
+        return { part, iid, available, onOrd, onOrdLines: inb ? inb.lines : [], minOnHand, rop, threshold, shortfall, vendored: !!String(specs.vendorName || '').trim() };
+    };
+    // Order-generator shape: matches the Finished view's {r, info, qty} so createStockPOs is reused
+    // verbatim (r.internalId becomes the PO line's NetSuite item id).
+    const rawOrderRows = () => rawCoreGroups().map(g => {
+        const info = rawInfoOf(g);
+        return { r: { itemid: g.base, internalId: info.iid }, info, qty: parseInt(rawOrderQty[g.base]) || 0 };
+    });
+
+    // RAW CORES → SHOP FLOOR (Stuart 2026-07-28). A raw core is an unfinished base (HAFICBR1S,
+    // H1-75DS) — it gets milled/fabricated, never painted, so it routes to the SHOP floor, not
+    // Finishing. No pre-built payload is needed: RTG's pushToShop builds the shop doc itself
+    // (routeTo MILLING for stock), unlike the finishing path which parks a verbatim finPayload.
+    // The WO still lands in RTG first so ns_outbox serializes the NetSuite write.
+    const createStockShopWOs = async (toMake) => {
+        let n = 0;
+        const reqDate = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+        for (const { r, info, qty } of toMake) {
+            const stamp = Date.now().toString().slice(-6);
+            const safeErp = String(r.itemid).replace(/[^A-Za-z0-9]+/g, '-');
+            const woId = `WO-CORE-${safeErp}-${stamp}-${n}`;
+            await setDoc(doc(db, "hq_work_orders", woId), {
+                id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
+                source: 'RAW_CORES', routeTo: 'SHOP',
+                erpId: r.itemid, partErpId: r.itemid,
+                nsItemId: r.internalId ? String(r.internalId) : null,
+                hqJobId: info.part?.id || null,
+                qty, totalParts: qty, reqDate, customer: 'Internal Stock',
+                routingType: info.part?.routingType || 'Standard',
+                rootItem: r.itemid,
+                note: `Raw core replenish · avail ${info.available} · threshold ${info.threshold ?? info.minOnHand ?? 0}`,
+                createdAt: Date.now(), createdBy: currentUser || ''
+            }, { merge: true });
+            n++;
+        }
+        return n;
+    };
+
     const executeOrders = async (buy, make) => {
         const pieces = [];
         if (buy.length) pieces.push(`${new Set(buy.map(x => String(x.info.part?.manufacturingSpecs?.vendorName || '').trim())).size} vendor PO(s) covering ${buy.length} item(s)`);
@@ -1180,6 +1257,56 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         } catch (e) { addLog(`Generate orders failed: ${e.message}`, 'error'); alert('Failed to generate orders:\n\n' + (e.message || e)); }
         setGenBusy(false);
     };
+    // ---- RAW CORES ORDERING (Stuart 2026-07-28) ----------------------------------------------
+    // The Raw Cores view used to be read-only ("sets thresholds only"). It now orders the same way
+    // the Finished view does, with two differences: MADE cores go to the SHOP floor (they're
+    // unfinished bases), and every BOUGHT core passes through a vendor-confirmation step before
+    // any PO is cut — Stuart's rule, because the stored vendor is a default, not a decision.
+    const executeRawOrders = async (buy, shop) => {
+        const pieces = [];
+        if (buy.length) pieces.push(`${new Set(buy.map(x => String(x.vendorOverride || x.info.part?.manufacturingSpecs?.vendorName || '').trim())).size} vendor PO(s) covering ${buy.length} item(s)`);
+        if (shop.length) pieces.push(`${shop.length} shop-floor work order(s)`);
+        if (!pieces.length) return alert('Nothing to generate.');
+        setGenBusy(true);
+        try {
+            const poResult = buy.length ? await createStockPOs(buy) : { made: [], unmatched: [] };
+            const wos = shop.length ? await createStockShopWOs(shop) : 0;
+            setRawOrderQty({});
+            const lines = [
+                ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
+                ...(wos ? [`• ${wos} core work order(s) → RTG Dispatch (Push to Shop there)`] : []),
+            ];
+            if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
+        } catch (e) { addLog(`Raw core orders failed: ${e.message}`, 'error'); alert('Failed to generate core orders:\n\n' + (e.message || e)); }
+        setGenBusy(false);
+    };
+
+    const generateRawOrders = async () => {
+        const groups = rawOrderRows();
+        const toMake = groups.filter(x => x.qty > 0);
+        if (!toMake.length) return alert('Enter an Order quantity on at least one raw core first.');
+        const buy = [], shop = [], unlinked = [];
+        toMake.forEach(x => {
+            if (!x.info.part) { unlinked.push(x); return; }
+            const specs = x.info.part.manufacturingSpecs || {};
+            const vendorName = String(specs.vendorName || '').trim();
+            // Outsourced, or in-house-but-vendored: both are PO candidates — the vendor modal is
+            // where the operator decides (it offers "make in-house instead" per row).
+            if (specs.isInHouse === false || vendorName) buy.push({ ...x, vendorOverride: vendorName });
+            else shop.push(x);
+        });
+        if (unlinked.length) alert(`⚠️ ${unlinked.length} core(s) have no Master Library part and were skipped:\n\n${unlinked.slice(0, 10).map(x => `• ${x.r.itemid}`).join('\n')}`);
+        if (!buy.length && !shop.length) return;
+        if (!buy.length) return executeRawOrders([], shop);
+        // Vendor confirmation gate — load the NetSuite-synced vendor list so the picker offers
+        // real, resolvable names (a name that doesn't resolve can't become a PO).
+        setGenBusy(true);
+        let nsVendors = [];
+        try { nsVendors = await loadNsVendors(); } catch (e) { /* picker falls back to free text */ }
+        setGenBusy(false);
+        setVendorModal({ buy, shop, vendors: nsVendors });
+    };
+
     // Router: split the entered rows by sourcing; in-house items that ALSO have a vendor go to the
     // per-item PO-vs-WO chooser first.
     const generateOrders = () => {
@@ -1357,44 +1484,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // RAW-CORES view (Stuart 2026-07-17): demand rolled up to the BASE item behind the
                 // finish variants (suffix rule — everything before the last "/"; 1 core consumed per
                 // finished unit). Rows without a "/" have no separate core and are excluded.
-                const rawRows = (() => {
-                    if (snapView !== 'RAW') return [];
-                    const byBase = new Map();
-                    (salesHist.rows || []).forEach(r => {
-                        const id = String(r.itemid);
-                        const cut = id.lastIndexOf('/');
-                        if (cut <= 0) return;
-                        const base = id.slice(0, cut).toUpperCase();
-                        // EA history is the full single-unit truth (pack consumption mirrors into
-                        // it) — so the -EA row feeds the core ×1 and PACK rows are skipped
-                        // entirely (already inside the EA numbers; counting them doubles).
-                        const pk = packMap.get(id.toUpperCase());
-                        if (pk && pk.isPack) return;
-                        let g = byBase.get(base);
-                        if (!g) { g = { base, cells: salesHist.months.map(() => 0), total: 0, orders: 0, variants: [] }; byBase.set(base, g); }
-                        r.cells.forEach((c, i) => { g.cells[i] += (c.v || 0); });
-                        g.total += (r.total || 0); g.orders += r.orders; g.variants.push(id);
-                    });
-                    return [...byBase.values()]
-                        .filter(g => !term || g.base.includes(term))
-                        .sort((a, b) => a.base.localeCompare(b.base, undefined, { numeric: true, sensitivity: 'base' }));
-                })();
-                // Core default Min OH = 6 MONTHS of the combined variant demand — the sub-screen's
-                // whole purpose: never, ever run out of the cores that feed finishing. ROP overrides.
-                const rawInfo = (g) => {
-                    const part = partByKey['erp:' + g.base];
-                    const iid = part?.netSuiteInternalId ? String(part.netSuiteInternalId) : null;
-                    const available = (iid && rawStock?.availById) ? Math.round(rawStock.availById[iid] || 0) : 0;
-                    const inb = (iid && rawStock?.inboundById) ? rawStock.inboundById[iid] : null;
-                    const onOrd = inb ? Math.round(inb.qty) : 0;
-                    const specs = part?.manufacturingSpecs || {};
-                    const minOnHand = Math.round(g.total / 2);
-                    const ropRaw = specs.reorderPoint;
-                    const rop = (ropRaw === '' || ropRaw === undefined || ropRaw === null) ? null : (parseInt(ropRaw) || 0);
-                    const threshold = (rop !== null && rop > 0) ? rop : minOnHand;
-                    const shortfall = Math.max(0, threshold - (available + onOrd));
-                    return { part, iid, available, onOrd, onOrdLines: inb ? inb.lines : [], minOnHand, rop, threshold, shortfall, vendored: !!String(specs.vendorName || '').trim() };
-                };
+                const rawRows = snapView !== 'RAW' ? [] : rawCoreGroups().filter(g => !term || g.base.includes(term));
+                const rawInfo = rawInfoOf;
                 const gt = salesHist.months.map((m, i) => rows.reduce((s, r) => s + (r.cells[i]?.v || 0), 0));
                 const gtTotal = rows.reduce((s, r) => s + r.total, 0);
                 const reo = rows.map(r => reorderFor(r));
@@ -1441,7 +1532,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 )}
                                 <button onClick={lockRetiredByInternalId} disabled={!salesHist.withOld} title="Notate the OLD counterparts by NetSuite internal ID and hide them app-wide" style={{ marginLeft: 'auto', padding: '9px 16px', background: salesHist.withOld ? 'var(--brass)' : 'var(--paper-2)', color: salesHist.withOld ? '#fff' : 'var(--ink-soft)', border: salesHist.withOld ? 'none' : '1px solid var(--line)', cursor: salesHist.withOld ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🔒 Lock {salesHist.withOld || ''} OLD</button>
                                 <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
-                                <button onClick={generateOrders} disabled={genBusy || !rows.length || snapView === 'RAW'} title={snapView === 'RAW' ? 'Ordering runs from the Finished view — the Raw Cores view sets thresholds (ROPs); low cores then flag on the main stock grid' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: (genBusy || snapView === 'RAW') ? 'var(--paper-2)' : '#3a7d44', color: (genBusy || snapView === 'RAW') ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : (snapView === 'RAW' ? 'not-allowed' : 'pointer'), fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : '⚙ Generate Orders (PO + WO)'}</button>
+                                <button onClick={snapView === 'RAW' ? generateRawOrders : generateOrders} disabled={genBusy || (snapView === 'RAW' ? !rawRows.length : !rows.length)} title={snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : '⚙ Generate Orders (PO + WO)')}</button>
                             </div>
 
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
@@ -1470,6 +1561,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         <th style={monthTh} title="Core default: 6 MONTHS of the combined variant demand — never run out of the cores that feed finishing">Min OH</th>
                                                         <th style={{ ...monthTh, color: 'var(--brass)' }} title="Core re-order point — ⬆ Save pushes to the Master Library; low cores then flag on the main stock grid">ROP</th>
                                                         <th style={{ ...monthTh, color: '#d9534f' }} title="Deficit vs (ROP or Min OH) counting stock on order">Short</th>
+                                                        <th style={{ ...monthTh, color: 'var(--ink)', borderLeft: '1px solid var(--line)' }} title="Manual order qty. Bought cores confirm their vendor, then group into one PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.">Order</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1489,6 +1581,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                             <td style={{ ...numTd, color: 'var(--ink-soft)' }} title="6 months of combined variant demand">{ri.minOnHand || '·'}</td>
                                                             <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[g.base] ?? (ri.rop ?? '')} placeholder="—" disabled={!ri.part} title={ri.part ? 'Core re-order point — ⬆ Save pushes to the Master Library' : 'No matching Master Library part'} onChange={e => setRopEdits(prev => ({ ...prev, [g.base]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[g.base] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: ri.part ? '#fff' : 'var(--paper-2)' }} /></td>
                                                             <td style={{ ...numTd, fontWeight: 600, color: ri.shortfall > 0 ? '#d9534f' : 'var(--line)' }}>{ri.shortfall || '·'}</td>
+                                                            <td style={{ ...numTd, borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>
+                                                                <input type="number" min="0" value={rawOrderQty[g.base] ?? ''} placeholder="0" disabled={!ri.part}
+                                                                    title={!ri.part ? 'No Master Library part — link it before ordering' : (ri.part.manufacturingSpecs?.isInHouse === false || ri.vendored ? 'Bought core → vendor confirmation, then one PO per vendor' : 'In-house core → shop-floor work order')}
+                                                                    onChange={e => setRawOrderQty(prev => ({ ...prev, [g.base]: e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0) }))}
+                                                                    style={{ width: '62px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: (parseInt(rawOrderQty[g.base]) > 0) ? '2px solid #3a7d44' : '1px solid var(--line)', outline: 'none', background: ri.part ? '#fff' : 'var(--paper-2)' }} />
+                                                            </td>
                                                         </tr>
                                                         );
                                                     })}
@@ -1773,6 +1871,64 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             })()}
 
             {/* 🔀 PO-vs-WO CHOOSER — in-house items that ALSO carry a vendor: pick sourcing per item */}
+            {/* VENDOR CONFIRMATION (Stuart 2026-07-28) — every bought core passes through here before
+                a PO exists. The stored vendor is only a default; the operator confirms it, can switch
+                to any NetSuite-synced vendor, or send the core to the shop floor instead. The live
+                grouping preview shows exactly how many POs the batch will produce. */}
+            {vendorModal && (() => {
+                const picks = vendorModal.buy;
+                const kept = picks.filter(x => x.vendorOverride !== '__MAKE__');
+                const groups = new Map();
+                kept.forEach(x => { const v = String(x.vendorOverride || '').trim() || '(no vendor)'; groups.set(v, (groups.get(v) || 0) + 1); });
+                const madeHere = picks.filter(x => x.vendorOverride === '__MAKE__');
+                const unresolved = kept.filter(x => !String(x.vendorOverride || '').trim());
+                const setPick = (idx, val) => setVendorModal(m => ({ ...m, buy: m.buy.map((x, i) => i === idx ? { ...x, vendorOverride: val } : x) }));
+                return (
+                    <div onClick={() => setVendorModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '860px', maxWidth: '96vw', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.25)' }}>
+                            <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)' }}>Confirm vendors</div>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '4px', letterSpacing: '.06em' }}>
+                                    {kept.length} core(s) → <span style={{ color: 'var(--ink)' }}>{groups.size} purchase order{groups.size === 1 ? '' : 's'}</span>
+                                    {madeHere.length ? ` · ${madeHere.length} switched to shop floor` : ''}
+                                    {vendorModal.shop.length ? ` · ${vendorModal.shop.length} already in-house` : ''}
+                                </div>
+                            </div>
+                            <div style={{ padding: '18px 26px' }}>
+                                {picks.map((x, i) => {
+                                    const stored = String(x.info.part?.manufacturingSpecs?.vendorName || '').trim();
+                                    const cur = x.vendorOverride === '__MAKE__' ? '__MAKE__' : String(x.vendorOverride || '');
+                                    const resolves = cur && cur !== '__MAKE__' && !!resolveVendorRec(vendorModal.vendors, cur);
+                                    return (
+                                        <div key={x.r.itemid} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '9px 0', borderBottom: '1px solid var(--paper-2)' }}>
+                                            <span style={{ width: '190px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{x.r.itemid}</span>
+                                            <span style={{ width: '54px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', textAlign: 'right' }}>×{x.qty}</span>
+                                            <select value={cur} onChange={e => setPick(i, e.target.value)} style={{ flex: 1, padding: '8px', border: `1px solid ${cur === '__MAKE__' ? 'var(--brass)' : (resolves ? 'var(--line)' : '#d9534f')}`, outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
+                                                <option value="">— pick a vendor —</option>
+                                                {stored && !vendorModal.vendors.some(v => String(v.name || '').toUpperCase() === stored.toUpperCase()) && <option value={stored}>{stored} (stored — not NetSuite-synced)</option>}
+                                                {vendorModal.vendors.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
+                                                <option value="__MAKE__">⚒ Make in-house instead → shop floor</option>
+                                            </select>
+                                            {cur && cur !== '__MAKE__' && !resolves && <span title="This name doesn't match a NetSuite-synced vendor, so no PO can be created for it. Sync vendors in 11.1 or pick another." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f' }}>UNRESOLVED</span>}
+                                        </div>
+                                    );
+                                })}
+                                {unresolved.length > 0 && <div style={{ marginTop: '14px', fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}>⚠ {unresolved.length} core(s) still need a vendor — they'll be skipped.</div>}
+                            </div>
+                            <div style={{ padding: '16px 26px', borderTop: '1px solid var(--line)', display: 'flex', gap: '12px', justifyContent: 'flex-end', background: 'var(--paper)' }}>
+                                <button onClick={() => setVendorModal(null)} style={{ padding: '12px 22px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Cancel</button>
+                                <button onClick={() => {
+                                    const m = vendorModal; setVendorModal(null);
+                                    const buys = m.buy.filter(x => x.vendorOverride && x.vendorOverride !== '__MAKE__');
+                                    const shops = [...m.shop, ...m.buy.filter(x => x.vendorOverride === '__MAKE__')];
+                                    executeRawOrders(buys, shops);
+                                }} style={{ padding: '12px 22px', background: '#3a7d44', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Create {groups.size} PO{groups.size === 1 ? '' : 's'}{(vendorModal.shop.length + madeHere.length) ? ` + ${vendorModal.shop.length + madeHere.length} WO` : ''} →</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {routeModal && (
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div style={{ background: '#fff', padding: '32px', width: '720px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
