@@ -63,6 +63,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [snapWatch, setSnapWatch] = useState('');     // snapshot watchlist filter (catalog is growing)
     const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants
     const [snapSort, setSnapSort] = useState('item');   // 'item' (load order) | 'finish' (/SG · /N25 grouped — batch same-finish WOs)
+    const [snapCat, setSnapCat] = useState('');         // snapshot category (productType) filter
+    const [snapColl, setSnapColl] = useState('');       // snapshot collection filter
     const [convSugFor, setConvSugFor] = useState(null); // row itemid with the ⇄ donor picker open
     const [convSugMap, setConvSugMap] = useState({});   // itemid → { from, qty } — rides onto the WO as a SUGGESTION (Setup Queue converts)
     const [openWos, setOpenWos] = useState(null);       // 📋 Open WOs cleanup panel { loading, rows, error }
@@ -1166,12 +1168,43 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         return { made, unmatched };
     };
+    // ONE snapshot filter predicate, shared by the Finished table, the Raw Cores rollup and the CSV
+    // (Stuart 2026-07-28: "when i switch view to raw the filter no longer really filters" — the
+    // rollup was reading the UNFILTERED rows, so only the search box appeared to work there).
+    // Category/collection come off the resolved Master Library part, same fields the main grid uses.
+    const snapPartOf = (r) => partByKey['id:' + String(r.internalId)] || partByKey['erp:' + String(r.itemid).toUpperCase()];
+    const snapWatchOf = (r) => {
+        const s = snapPartOf(r)?.manufacturingSpecs || {};
+        const nsW = s.customData?.watchlist && s.customData.watchlist !== 'N/A' ? s.customData.watchlist : '';
+        return String(s.watchList || nsW || 'NONE').toUpperCase();
+    };
+    const snapRowOk = (r) => {
+        const term = salesHistSearch.trim().toUpperCase();
+        if (term && !String(r.itemid).toUpperCase().includes(term)) return false;
+        if (snapWatch && snapWatchOf(r) !== snapWatch.toUpperCase()) return false;
+        if (!snapCat && !snapColl) return true;
+        const part = snapPartOf(r);
+        const sp = part?.manufacturingSpecs || {};
+        if (snapCat) {
+            const pt = String(sp.productType || part?.productType || '').toUpperCase();
+            if (pt !== snapCat.toUpperCase()) return false;
+        }
+        if (snapColl) {
+            const cols = (sp.collections || (sp.customData?.collection ? [sp.customData.collection] : [])).map(c => String(c || '').toUpperCase());
+            if (!cols.includes(snapColl.toUpperCase())) return false;
+        }
+        return true;
+    };
+
     // Raw-core rollup, hoisted to component scope so the TABLE and the ORDER GENERATOR read the
     // exact same groups (they used to live inside the render, which is why ordering couldn't work
     // from this view). Demand for every finish variant rolls into its BOM base.
-    const rawCoreGroups = () => {
+    // `filtered` is opt-in: the TABLE passes true so the view obeys the filters, while the ORDER
+    // GENERATOR passes false — a qty typed under one filter must never vanish because the filter
+    // changed before Generate (inputs only exist on visible rows, so nothing unseen can be ordered).
+    const rawCoreGroups = (filtered = false) => {
         const byBase = new Map();
-        ((salesHist && salesHist.rows) || []).forEach(r => {
+        ((salesHist && salesHist.rows) || []).filter(r => !filtered || snapRowOk(r)).forEach(r => {
             const id = String(r.itemid);
             const cut = id.lastIndexOf('/');
             if (cut <= 0) return;
@@ -1470,17 +1503,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             {salesHist && (() => {
                 const OLD_BLUE = '#3f7fc4';
                 const term = salesHistSearch.trim().toUpperCase();
-                // Watchlist of a snapshot row = its matched library part's watchlist (same resolution
-                // as the main grid) — the catalog is growing, so the report needs this narrowing.
-                const watchOf = (r) => {
-                    const part = partByKey['id:' + String(r.internalId)] || partByKey['erp:' + String(r.itemid).toUpperCase()];
-                    const s = part?.manufacturingSpecs || {};
-                    const nsW = s.customData?.watchlist && s.customData.watchlist !== 'N/A' ? s.customData.watchlist : '';
-                    return String(s.watchList || nsW || 'NONE').toUpperCase();
-                };
-                const rowsFiltered = (salesHist.rows || []).filter(r =>
-                    (!term || String(r.itemid).toUpperCase().includes(term)) &&
-                    (snapWatch === '' || watchOf(r) === snapWatch.toUpperCase()));
+                // (watchlist resolution moved to component-scope snapWatchOf, inside snapRowOk —
+                // the Raw Cores rollup needs the same rule.)
+                const rowsFiltered = (salesHist.rows || []).filter(snapRowOk);
                 // Sort toggle (Stuart 2026-07-20): FINISH groups /SG · /N25 · … together so
                 // same-finish work orders can be issued as one batch; ITEM # = default order.
                 const rows = snapSort === 'finish'
@@ -1491,7 +1516,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // RAW-CORES view (Stuart 2026-07-17): demand rolled up to the BASE item behind the
                 // finish variants (suffix rule — everything before the last "/"; 1 core consumed per
                 // finished unit). Rows without a "/" have no separate core and are excluded.
-                const rawRows = snapView !== 'RAW' ? [] : rawCoreGroups().filter(g => !term || g.base.includes(term));
+                // Filters applied at the VARIANT row before rollup, so watchlist/category/collection
+                // work here exactly as they do on the Finished view (a base surfaces when any of its
+                // variants matches — which also makes a search for the base code work, since every
+                // variant starts with it).
+                const rawRows = snapView !== 'RAW' ? [] : rawCoreGroups(true);
                 const rawInfo = rawInfoOf;
                 const gt = salesHist.months.map((m, i) => rows.reduce((s, r) => s + (r.cells[i]?.v || 0), 0));
                 const gtTotal = rows.reduce((s, r) => s + r.total, 0);
@@ -1524,6 +1553,19 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <option value="NONE">None / Unassigned</option>
                                     {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
                                 </select>
+                                {/* Category + collection (Stuart 2026-07-28: "it is getting large") —
+                                    same option lists the main grid uses, and they apply to BOTH views. */}
+                                <select value={snapCat} onChange={e => setSnapCat(e.target.value)} title="Filter by the item's category (product type)" style={{ padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem', background: snapCat ? 'var(--paper-2)' : '#fff' }}>
+                                    <option value="">All Categories</option>
+                                    {dynamicProdTypes.map(pt => <option key={pt} value={pt}>{pt}</option>)}
+                                </select>
+                                <select value={snapColl} onChange={e => setSnapColl(e.target.value)} title="Filter by collection" style={{ padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem', background: snapColl ? 'var(--paper-2)' : '#fff' }}>
+                                    <option value="">All Collections</option>
+                                    {dynamicCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                                {(snapWatch || snapCat || snapColl || salesHistSearch) && (
+                                    <button onClick={() => { setSnapWatch(''); setSnapCat(''); setSnapColl(''); setSalesHistSearch(''); }} title="Clear every snapshot filter" style={{ padding: '9px 12px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>✕ Clear</button>
+                                )}
                                 <div style={{ display: 'flex', border: '1px solid var(--line)' }}>
                                     <button onClick={() => setSnapView('FIN')} style={{ padding: '9px 14px', background: snapView === 'FIN' ? 'var(--ink)' : '#fff', color: snapView === 'FIN' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Finished Items</button>
                                     <button onClick={() => { setSnapView('RAW'); if (!rawStock) loadRawStock(); }} title="Demand rolled up to the RAW core behind each finish variant (…/BL + /CP + /SG → base item) — set core ROPs so finishing never runs out of parts" style={{ padding: '9px 14px', background: snapView === 'RAW' ? 'var(--ink)' : '#fff', color: snapView === 'RAW' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Raw Cores (BOM)</button>
