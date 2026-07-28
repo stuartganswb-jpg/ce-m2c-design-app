@@ -40,8 +40,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     // 🌐 portal-tag browse filter (Stuart 2026-07-27: "show me all the images that are not yet
     // tagged for the portal — no need to keep re-tagging ones that are already tagged").
     const [portalTagFilter, setPortalTagFilter] = useState(''); // '' | 'UNTAGGED' | 'TAGGED'
-    const [fabIdFilter, setFabIdFilter] = useState(false); // only assets missing Fabricut # or color name
-    useEffect(() => { setVisibleCount(100); }, [searchQuery, chipFilters, portalTagFilter, fabIdFilter]);
+    const [fabMissFilter, setFabMissFilter] = useState(''); // '' | 'CODE' | 'COLOR' — which Fabricut field is missing
+    useEffect(() => { setVisibleCount(100); }, [searchQuery, chipFilters, portalTagFilter, fabMissFilter]);
 
     // 🗑 BULK DELETE (Stuart 2026-07-27: legacy assets with unusable ids made the re-tagger skip
     // 95% — nuke & reimport). Deletes the SELECTED assets' records in 400-doc batches — with no
@@ -258,7 +258,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
         if (asset?.category === 'PROGRAM_PRINT') return false; // prints live in `program_prints`, never the gallery (hides any legacy test docs)
         if (portalTagFilter === 'UNTAGGED' && asset.portalVisible) return false;
         if (portalTagFilter === 'TAGGED' && !asset.portalVisible) return false;
-        if (fabIdFilter && (asset.fabCode || asset.fab?.fabCode) && asset.fab?.fabColorName) return false;
+        if (fabMissFilter === 'CODE' && (asset.fabCode || asset.fab?.fabCode)) return false;
+        if (fabMissFilter === 'COLOR' && asset.fab?.fabColorName) return false;
         if (chipFilters.type) {
             const chip = TYPE_CHIPS.find(c => c.label === chipFilters.type);
             if (chip && !chip.test(asset)) return false;
@@ -456,12 +457,17 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     };
 
     // THE PLATE RULE, surfaced: backplate ships $0 inside the arm price; coverplate is the upgrade.
+    // BASIC brackets take no plate at all (1.6 isBasic) — detected via fab.isBasic on re-tagged
+    // docs, or the item name riding in the tags on older ones, so no re-tag pass is required.
     const plateBadgeOf = (asset) => {
         const f = asset?.fab;
         if (!f) return null;
         if (f.plateKind) return f.plateIsCover
             ? { txt: 'COVERPLATE · UPGRADE', bg: theme.brass }
             : { txt: 'BACKPLATE · INCL. W/ ARM', bg: theme.inkSoft };
+        const isBasic = f.isBasic === true || f.includesBackplate === false
+            || /\bBASIC\b/.test(`${asset?.name || ''} ${(Array.isArray(asset?.tags) ? asset.tags : []).join(' ')}`.toUpperCase());
+        if (isBasic && (f.role === 'BRACKET' || f.includesBackplate)) return { txt: 'BASIC — NO BACKPLATE / COVERPLATE', bg: theme.inkSoft };
         if (f.role === 'BRACKET' || f.includesBackplate) return { txt: 'INCL. BACKPLATE · CP UPGRADE AVAIL.', bg: theme.inkSoft };
         return null;
     };
@@ -595,12 +601,17 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 </div>
                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                     <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.15em', color: theme.inkSoft }}>FABRICUT</span>
-                    <button onClick={() => setFabIdFilter(f => !f)} title="Only assets missing the Fabricut part # or color name — pre-alignment imports. Select them and APPLY in bulk re-tag: the fields backfill from the library parts' CrossReference codes and the 4.5 finish names." style={{ padding: '5px 10px', background: fabIdFilter ? theme.brass : theme.paper, color: fabIdFilter ? '#fff' : theme.inkSoft, border: `1px solid ${fabIdFilter ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', cursor: 'pointer' }}>
-                        MISSING FAB ID
-                    </button>
+                    {[['CODE', 'MISSING FAB #', 'Only assets with no Fabricut part # — bulk APPLY backfills it from the library parts’ CrossReference codes.'], ['COLOR', 'MISSING COLOR NAME', 'Only assets with no Fabricut color name. The name comes from 4.5 Master Finishes → the finish’s client mapping row for customer Fabricut — enter it there, then bulk APPLY to stamp these.']].map(([val, label, tip]) => {
+                        const active = fabMissFilter === val;
+                        return (
+                            <button key={val} onClick={() => setFabMissFilter(active ? '' : val)} title={tip} style={{ padding: '5px 10px', background: active ? theme.brass : theme.paper, color: active ? '#fff' : theme.inkSoft, border: `1px solid ${active ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', cursor: 'pointer' }}>
+                                {label}
+                            </button>
+                        );
+                    })}
                 </div>
-                {(chipFilters.type || chipFilters.dia || chipFilters.proj || portalTagFilter || fabIdFilter) && (
-                    <button onClick={() => { setChipFilters({ type: '', dia: '', proj: '' }); setPortalTagFilter(''); setFabIdFilter(false); }} style={{ padding: '5px 10px', background: 'transparent', color: theme.brass, border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', textDecoration: 'underline', cursor: 'pointer' }}>CLEAR FILTERS</button>
+                {(chipFilters.type || chipFilters.dia || chipFilters.proj || portalTagFilter || fabMissFilter) && (
+                    <button onClick={() => { setChipFilters({ type: '', dia: '', proj: '' }); setPortalTagFilter(''); setFabMissFilter(''); }} style={{ padding: '5px 10px', background: 'transparent', color: theme.brass, border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', textDecoration: 'underline', cursor: 'pointer' }}>CLEAR FILTERS</button>
                 )}
             </div>
 
@@ -809,6 +820,13 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                             displayAssets.map(asset => {
                                 const badge = plateBadgeOf(asset);
                                 const isSel = bulkSelected.has(asset.id);
+                                // Name exactly WHICH Fabricut field is missing — only on assets
+                                // that carry Fabricut identity at all, so non-Fabricut uploads
+                                // don't all scream red.
+                                const fabMissing = (asset.fab || asset.fabCode) ? [
+                                    ...(!(asset.fabCode || asset.fab?.fabCode) ? ['FAB #'] : []),
+                                    ...(!asset.fab?.fabColorName ? ['COLOR NAME'] : []),
+                                ].join(' + ') : '';
                                 return (
                                 <div key={asset.id} onClick={() => bulkMode ? toggleBulk(asset.id) : openModal(asset)} style={{ border: `1px solid ${isSel ? theme.brass : theme.line}`, borderRadius: '2px', overflow: 'hidden', cursor: 'pointer', display: 'flex', flexDirection: 'column', transition: 'all 0.2s', background: '#fff', boxShadow: isSel ? `0 0 0 2px ${theme.brass}` : 'none' }} onMouseOver={e => { e.currentTarget.style.borderColor = theme.brass; e.currentTarget.style.boxShadow = isSel ? `0 0 0 2px ${theme.brass}` : '0 4px 12px rgba(0,0,0,0.05)'; }} onMouseOut={e => { e.currentTarget.style.borderColor = isSel ? theme.brass : theme.line; e.currentTarget.style.boxShadow = isSel ? `0 0 0 2px ${theme.brass}` : 'none'; }}>
 
@@ -836,7 +854,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                         )}
                                     </div>
 
-                                    {(badge || asset.fab?.pairedCode || asset.fab?.endTreatment) && (
+                                    {(badge || asset.fab?.pairedCode || asset.fab?.endTreatment || fabMissing) && (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '6px 8px', background: theme.paper, borderTop: `1px solid ${theme.line}` }}>
                                             {(asset.fab?.endTreatment || asset.fab?.pairedCode) && (
                                                 <span style={{ fontSize: '9px', fontFamily: theme.mono, color: theme.ink, letterSpacing: '.04em' }}>
@@ -844,6 +862,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                                 </span>
                                             )}
                                             {badge && <span style={{ fontSize: '8px', fontFamily: theme.mono, color: '#fff', background: badge.bg, padding: '2px 5px', alignSelf: 'flex-start', letterSpacing: '.06em' }}>{badge.txt}</span>}
+                                            {fabMissing && <span title="What the MISSING chips are catching. FAB # backfills via bulk APPLY (CrossReference codes on the library part); COLOR NAME needs the Fabricut client-name row in 4.5 Master Finishes, then APPLY." style={{ fontSize: '8px', fontFamily: theme.mono, color: '#d9534f', letterSpacing: '.06em' }}>⚠ MISSING: {fabMissing}</span>}
                                         </div>
                                     )}
 

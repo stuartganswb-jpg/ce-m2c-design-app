@@ -267,6 +267,10 @@ export function buildSingleMeta({ patternId, finishId, partIndex, finishLists })
     const ourFinishName = ourFinishNameOf(fin, finishLists);
     const et = endTreatmentOf({ part: doc });
     const cat = normalizeCategory(doc?.manufacturingSpecs?.productType) || suggestTagsFromName(doc?.itemName).category || '';
+    // BASIC brackets take NO backplate/coverplate (the 1.6 isBasic rule — that flag lives on
+    // assembly PINS the gallery never loads, so the item name is the available signal here;
+    // Fabricut's line literally names them "Basic Bracket").
+    const isBasic = cat === 'BRACKET' && /\bBASIC\b/.test(U(doc?.itemName || ''));
     // size siblings: the base-pattern photo serves every diameter/projection of the same style
     const siblings = sk ? partIndex.list.filter(p => {
         const s = p?.manufacturingSpecs?.customData?.sizeKey;
@@ -279,8 +283,10 @@ export function buildSingleMeta({ patternId, finishId, partIndex, finishLists })
         projLetter: sk?.projLetter || '', projLabel: PROJ_LABELS[sk?.projLetter] || '',
         role: cat, endTreatment: et || '',
         species: species || '', speciesLabel: SPECIES_LABELS[species] || '',
-        // an arm's product image IS arm + standard backplate; CP is the upgrade
-        includesBackplate: cat === 'BRACKET' ? true : null,
+        // an arm's product image IS arm + standard backplate; CP is the upgrade — EXCEPT basic
+        // brackets, which take no plate at all
+        includesBackplate: cat === 'BRACKET' ? !isBasic : null,
+        isBasic: cat === 'BRACKET' ? isBasic : null,
         finishId: fin, ourFinishName, fabColorName: fabricutColorNameOf(fin, finishLists),
         // derived from the doc's own CrossReference codes (finish tier aware) — backfills
         // pre-alignment imports on re-tag instead of leaving the singular code empty
@@ -289,7 +295,7 @@ export function buildSingleMeta({ patternId, finishId, partIndex, finishLists })
     };
     const tags = [];
     pushTag(tags, partCodeOf(doc), doc.itemName, cat, END_TREATMENT_LABELS[et]);
-    if (cat === 'BRACKET') pushTag(tags, 'BRACKET ARM', 'INCLUDES BACKPLATE');
+    if (cat === 'BRACKET') { if (isBasic) pushTag(tags, 'BRACKET ARM', 'BASIC', 'NO BACKPLATE'); else pushTag(tags, 'BRACKET ARM', 'INCLUDES BACKPLATE'); }
     pushTag(tags, fab.diaLabel, fab.projLabel, PROJECTION_BY_LETTER[sk?.projLetter], fab.speciesLabel);
     pushTag(tags, fin, ourFinishName, fab.fabColorName);
     fab.fabCodes.forEach(c => pushTag(tags, c));

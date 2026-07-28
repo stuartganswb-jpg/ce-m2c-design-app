@@ -22,7 +22,7 @@ const identityOf = (a) => [
   a.fab?.plateCode ? `${a.fab.plateIsCover ? 'COVERPLATE' : 'BACKPLATE'} ${a.fab.plateCode}${a.fab.plateOrientation ? ` (${a.fab.plateOrientation})` : ''}` : null,
   a.fab?.diaLabel || null,
   a.fab?.projLabel || null,
-  a.fab?.ourFinishName || a.fab?.fabColorName || null,
+  a.fab?.fabColorName || a.fab?.ourFinishName || null, // THEIR color name first (Fabricut-first surface)
 ].filter(Boolean).join(' · ');
 
 // FABRICUT-FIRST display: their part # prominent, ours in parentheses.

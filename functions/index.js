@@ -1783,6 +1783,33 @@ exports.portalAssets = onCall({ cors: true }, async (request) => {
     const allowed = (Array.isArray(crm.portalCollections) ? crm.portalCollections : [])
         .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean);
 
+    // Finish names resolve LIVE from the finish lists (Shared/fabricutAssetTags semantics, CJS):
+    // FABRICUT'S color name = the finish's clientMapping row for customer Fabricut (4.5 Master
+    // Finishes); ours = the finish's own name. Live fallback means entering the name in 4.5 once
+    // fixes every already-imported asset on the portal — no re-tag pass required.
+    const UP = (v) => String(v || '').trim().toUpperCase();
+    const finishLists = [];
+    const mfSnap2 = await db.collection('system').doc('master_finishes').get();
+    finishLists.push((mfSnap2.exists && mfSnap2.data().finishes) || []);
+    for (const colName of ['hq_global_finishes', 'hq_outsource_finishes', 'hq_inhouse_finishes']) {
+        const s = await db.collection(colName).get();
+        finishLists.push(s.docs.map((x) => x.data()));
+    }
+    const finNames = new Map(); // CODE -> { fab, ours } (first list wins, like the internal scan order)
+    finishLists.forEach((list) => (Array.isArray(list) ? list : []).forEach((f) => {
+        [UP(f && f.code), UP(f && f.id)].filter(Boolean).forEach((key) => {
+            const cur = finNames.get(key) || { fab: '', ours: '' };
+            if (!cur.ours && f && f.name) cur.ours = UP(f.name);
+            if (!cur.fab) {
+                const rows = Array.isArray(f && f.clientMapping) ? f.clientMapping : [];
+                const hit = rows.find((m) => UP(m && m.customerId).includes('FABRICUT'));
+                if (hit && hit.clientFinishName) cur.fab = UP(hit.clientFinishName);
+            }
+            finNames.set(key, cur);
+        });
+    }));
+    const namesFor = (finishId) => finNames.get(UP(finishId).replace(/^EP0+(\d+)$/, 'EP$1')) || { fab: '', ours: '' };
+
     const snap = await db.collection('global_assets').where('portalVisible', '==', true).get();
     const assets = [];
     snap.forEach((d) => {
@@ -1791,12 +1818,13 @@ exports.portalAssets = onCall({ cors: true }, async (request) => {
         if (!cols.length) return; // flag without a collection = not addressable, never shown
         if (allowed.length && !cols.some((c) => allowed.includes(c))) return;
         const fab = a.fab || {};
+        const liveNames = namesFor(a.finishId || fab.finishId);
         const fabSafe = {
             role: fab.role || '', pairedRole: fab.pairedRole || '', endTreatment: fab.endTreatment || '',
             pairedCode: fab.pairedCode || '', pairedName: fab.pairedName || '',
             plateCode: fab.plateCode || '', plateIsCover: !!fab.plateIsCover, plateOrientation: fab.plateOrientation || '',
             diaLabel: fab.diaLabel || '', projLabel: fab.projLabel || '',
-            fabCode: fab.fabCode || '', fabColorName: fab.fabColorName || '', ourFinishName: fab.ourFinishName || '',
+            fabCode: fab.fabCode || '', fabColorName: fab.fabColorName || liveNames.fab, ourFinishName: fab.ourFinishName || liveNames.ours,
         };
         const blob = [a.name, a.patternId, a.finishId, a.fabCode, ...Object.values(fabSafe).filter((v) => typeof v === 'string'), ...(Array.isArray(a.tags) ? a.tags : []), ...cols]
             .filter(Boolean).join(' ').toLowerCase();
