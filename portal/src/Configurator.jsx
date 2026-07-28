@@ -481,7 +481,6 @@ export default function Configurator({ flowId, flowName, onExit }) {
   // The server validates the override (only FAB_ levels, only for FAB_-assigned customers).
   const [viewLevel, setViewLevel] = useState('');
   const [presBusy, setPresBusy] = useState(false);
-  const [fitInfo, setFitInfo] = useState(null); // viewer framing readout (temporary diagnostic)
 
   const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
   const setQty = (k, v) => setQuantities((q) => ({ ...q, [k]: v }));
@@ -796,11 +795,11 @@ export default function Configurator({ flowId, flowName, onExit }) {
                   <StudioRig />
                   {/* No scale wrapper: DynamicModel frames itself (scale + centre + broadside)
                       and folds the diameter cue into how much of the frame it fills. */}
-                  <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} fitSizeScale={sizeScale} onFit={setFitInfo} />
+                  <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} fitSizeScale={sizeScale} />
                 </Suspense>
                 <OrbitControls makeDefault />
               </Canvas>
-              <span className="viewer-hint">Drag to rotate · scroll to zoom{fitInfo ? ` · fit ${Math.round(fitInfo.span * 100)}%/${Math.round(fitInfo.target * 100)}% · d${fitInfo.dist.toFixed(1)} a${fitInfo.aspect.toFixed(2)} r${fitInfo.radius.toFixed(1)} m${fitInfo.meshes}${fitInfo.cappedBySphere ? ' cap' : ''}` : ''}</span>
+              <span className="viewer-hint">Drag to rotate · scroll to zoom</span>
             </div>
           ) : (
             <div className="empty">This product doesn't have a 3D model yet.</div>

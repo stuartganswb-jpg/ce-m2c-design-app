@@ -1392,12 +1392,55 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
     const crm = crmSnap.exists ? crmSnap.data() : {};
     const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
     if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'Not enabled on your account.');
-    await assertCollectionAllowed(db, crm, null, flowId);
+    const flowSnap = await db.collection('cpq_flows').doc(String(flowId || '')).get();
+    const flowDoc = flowSnap.exists ? flowSnap.data() : {};
+    await assertCollectionAllowed(db, crm, flowSnap.exists ? flowDoc : null, flowId);
 
     const email = String((request.auth.token && request.auth.token.email) || '');
     const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
     const submitterName = (puSnap.exists && puSnap.data().name) || email;
     const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
+
+    // CPQ CART SNAPSHOT (Stuart 2026-07-28: "quote arrived in HQ at CRM but does not reopen in
+    // CPQ"). Reopen-in-CPQ reads job.cpqData.cartItems and restores exactly five fields —
+    // flowId, assemblyId, dynamicConfigParams, stepQuantities, dimensionInputs (see
+    // Shared/reopenQuote.js -> CPQTab.handleEditCartItem). A portal request carried only raw
+    // selections, so the guard rejected it. Build that same line here and staff reopen the
+    // customer's configuration with zero re-entry — no CRM or CPQ changes needed.
+    const rawParams = (selections && selections.params) || {};
+    const dynamicConfigParams = {};
+    const dimensionInputs = {};
+    Object.entries(rawParams).forEach(([k, v]) => {
+        const m = /^(.*)__dims$/.exec(k);          // the portal sends measurements as `${stepId}__dims`
+        if (m && v && typeof v === 'object') dimensionInputs[m[1]] = v;
+        else if (typeof v === 'string') dynamicConfigParams[k] = v;
+    });
+    const stepQuantities = {};
+    Object.entries((selections && selections.quantities) || {}).forEach(([k, v]) => {
+        if (typeof v === 'string' || typeof v === 'number') stepQuantities[k] = String(v);
+    });
+    let assemblyName = String(flowName || '');
+    const asmId = String(flowDoc.linkedAssemblyId || '');
+    if (asmId) {
+        const asmSnap = await db.collection('Approved_Designs').doc(asmId).get();
+        if (asmSnap.exists) assemblyName = asmSnap.data().itemName || assemblyName;
+    }
+    const cartItem = {
+        id: `PORTAL-${quoteNo}`,
+        masterQuoteId: quoteNo,
+        assemblyId: asmId,
+        assemblyName: assemblyName || 'Configured Item',
+        sidemark: 'Portal request',
+        flowId: String(flowId || ''),
+        qty: 1,
+        priceLevel: String(crm.portalPriceLevel || 'STANDARD'),
+        pricing: {},
+        pricingBreakdown: [],
+        dynamicConfigParams,
+        stepQuantities,
+        dimensionInputs,
+        fromPortal: true,
+    };
 
     const ref = db.collection('jobs').doc(quoteNo);
     await ref.set({
@@ -1418,6 +1461,7 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
             // context for staff; the staff quote itself still prices at the assigned level.
             viewedLevel: ['FAB_COST', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(String(viewedLevel || '')) ? String(viewedLevel) : '',
         },
+        cpqData: { cartItems: [cartItem] },
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         dateSaved: new Date().toISOString(),
     });
