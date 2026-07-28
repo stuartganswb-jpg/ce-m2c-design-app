@@ -2,8 +2,8 @@
 // renders identically to HQ. Pure three.js; no Firestore. The per-finish PBR registry (metal vs
 // paint vs wood light response) is built from the finish list the BFF sends, using the SAME static
 // rules as src/components/Shared/studioScene.js so material response matches exactly.
-import React, { useEffect, useMemo } from 'react';
-import { useThree } from '@react-three/fiber';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { useThree, useFrame } from '@react-three/fiber';
 import { useGLTF, Environment, ContactShadows, Lightformer } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -38,26 +38,37 @@ export function visibleBoxOf(root) {
 // still small on start and the hidden cropping line is still there"). Moving the camera proved
 // unreliable here: R3F re-applies the Canvas `camera` prop on re-render, OrbitControls mounts
 // outside the Suspense boundary and re-targets, and any tight near/far clip slices a long rod
-// diagonally. Scaling + centering the model instead is deterministic: the product always ends up
-// TARGET_SIZE units at the origin, framed by the default camera, well inside the default clip
-// planes, and orbiting is centered because the model sits at the controls' default target.
-// The group this drives must carry NO scale/position props from React (they would fight it).
-// The model is sized so its BOUNDING SPHERE fills FILL of the frustum at the camera's starting
-// distance, and centered on the origin (= OrbitControls' default target). Sphere, not box: the
-// customer drags to rotate, and only a sphere fit guarantees the product stays fully framed at
-// EVERY orbit angle — a box fit that just fills the frame head-on swings out of view when turned.
-// Scale is computed from the STARTING distance, never the live camera, so a refit after a
-// selection change doesn't undo the customer's own zoom.
-// The group is also turned so the product's LONG axis lies broadside to the camera. The default
-// camera sits on the [5,5,5] diagonal, which looks nearly straight down a rod's axis — the rod
-// foreshortens to a stub and wastes the frame. Turning it broadside is free (we already own this
-// group's transform) and buys ~40% more on-screen length with no clipping risk.
+// diagonally (that clip plane IS the "hidden cropping line"). Sizing the MODEL instead is
+// deterministic — it lands in front of the default camera, centred on the controls' default
+// target, nowhere near the default clip planes. Three properties:
+//   - BOUNDING-SPHERE fit, not box: the customer drags to rotate, and only a sphere fit keeps the
+//     product framed at EVERY angle; a box fit looks right head-on and swings out when turned.
+//   - BROADSIDE yaw: the [5,5,5] camera looks nearly down a rod's axis, foreshortening it to a
+//     stub; turning the long axis across the screen costs nothing and buys ~40% more length.
+//   - Scale from the STARTING distance, never the live camera, so a refit never undoes the
+//     customer's own scroll-zoom.
+// It POLLS rather than firing once on a timer: DynamicModel defers applying visibility until every
+// finish texture has loaded, so a one-shot fit measures the model while all the hidden option
+// meshes are still visible — a huge box, a rod shrunk to a speck, and no second chance. Each poll
+// compares a cheap signature of the visible bounds and only re-fits when the geometry actually
+// changed (the fit is idempotent, so a settled model costs one Box3 walk every 12 frames).
+// The group this drives must carry NO transform props from React — they would fight it.
 const START_CAM = [5, 5, 5]; // Canvas camera={{ position: [5, 5, 5] }}
 const START_DIST = Math.hypot(START_CAM[0], START_CAM[1], START_CAM[2]);
-const FILL = 0.95;
+const POLL_FRAMES = 12; // ~5x/sec — re-measure until the geometry settles
+
+// How much of the frustum the product fills — nudged by the rod diameter so a 1-3/8" system reads
+// visibly heftier than a 3/4" one (Stuart 2026-07-28: "i would still like a slight visual change
+// between diameters"). sizeScale is the render scale normalised to the master GLB's own diameter,
+// so log-relative to 1 keeps this monotonic for flows generated off any master. Capped at 0.95 —
+// the value verified to keep the product inside the frame at every orbit angle.
+const fillForScale = (sizeScale) => {
+  const t = Math.log(Math.max(Number(sizeScale) || 1, 1e-3)) / Math.log(1.85);
+  return 0.90 + 0.05 * Math.max(-1, Math.min(1, t));
+};
 
 // Rotation about Y that turns the model's longest horizontal axis perpendicular to the camera's
-// horizontal look direction (three's rotation.y maps (x,z) → (x cos a + z sin a, −x sin a + z cos a)).
+// horizontal look direction (three's rotation.y maps (x,z) -> (x cos a + z sin a, -x sin a + z cos a)).
 function broadsideYawFor(size, camPos) {
   const along = size.x >= size.z ? { x: 1, z: 0 } : { x: 0, z: 1 };   // the long axis at identity
   const hx = camPos[0], hz = camPos[2];
@@ -66,46 +77,61 @@ function broadsideYawFor(size, camPos) {
   return Math.atan2(along.z, along.x) - Math.atan2(want.z, want.x);
 }
 
-export function FitModelToView({ url, trigger, targetName = 'fit-target' }) {
-  useGLTF(url, DRACO_URL); // suspends on the SAME cached GLB as DynamicModel → runs when it's live
-  const scene = useThree((s) => s.scene);
+// Cheap change-detector for the visible geometry (bounds + visible mesh count).
+export function fitSignatureOf(root) {
+  const box = visibleBoxOf(root);
+  if (box.isEmpty()) return 'empty';
+  let n = 0;
+  const count = (o) => { if (o.visible === false) return; if (o.isMesh) n++; for (const c of o.children) count(c); };
+  count(root);
+  const r = (v) => v.toFixed(3);
+  return `${r(box.min.x)},${r(box.min.y)},${r(box.min.z)},${r(box.max.x)},${r(box.max.y)},${r(box.max.z)},${n}`;
+}
+
+// The fit itself, split out so it can be exercised outside React.
+export function applyFit(root, { fill, aspect = 1, fov = 50 }) {
+  root.scale.setScalar(1);
+  root.position.set(0, 0, 0);
+  root.rotation.y = 0;
+  root.updateWorldMatrix(true, true);
+  const box = visibleBoxOf(root);
+  if (box.isEmpty()) return false;
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = box.getBoundingSphere(new THREE.Sphere(center)).radius;
+  if (!(radius > 0)) return false;
+  // Half-angle of the tightest frustum direction (vertical fov, horizontal via aspect).
+  const vHalf = (fov * Math.PI) / 360;
+  const half = Math.min(vHalf, Math.atan(Math.tan(vHalf) * (aspect > 0 ? aspect : 1)));
+  const s = (START_DIST * Math.sin(half) * fill) / radius;
+  const yaw = broadsideYawFor(box.getSize(new THREE.Vector3()), START_CAM);
+  root.rotation.y = yaw;
+  root.scale.setScalar(s);
+  const offset = center.clone().multiplyScalar(s).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+  root.position.set(-offset.x, -offset.y, -offset.z);
+  root.updateWorldMatrix(true, true);
+  return true;
+}
+
+export function FitModelToView({ url, sizeScale = 1, targetName = 'fit-target' }) {
+  useGLTF(url, DRACO_URL); // suspends on the SAME cached GLB as DynamicModel -> runs when it's live
   const camera = useThree((s) => s.camera);
-  useEffect(() => {
-    const t = setTimeout(() => {
-      try {
-        const root = scene.getObjectByName(targetName);
-        if (!root) return;
-        // Measure at identity — never measure through our own transform. Restore on a miss so a
-        // not-yet-populated scene can't flash the model at raw GLB scale.
-        const prevScale = root.scale.x;
-        const prevPos = root.position.clone();
-        const prevYaw = root.rotation.y;
-        const restore = () => { root.scale.setScalar(prevScale); root.position.copy(prevPos); root.rotation.y = prevYaw; root.updateWorldMatrix(true, true); };
-        root.scale.setScalar(1);
-        root.position.set(0, 0, 0);
-        root.rotation.y = 0;
-        root.updateWorldMatrix(true, true);
-        const box = visibleBoxOf(root);
-        if (box.isEmpty()) { restore(); return; }
-        const center = box.getCenter(new THREE.Vector3());
-        const radius = box.getBoundingSphere(new THREE.Sphere(center)).radius;
-        if (!(radius > 0)) { restore(); return; }
-        // Half-angle of the tightest frustum direction (vertical fov, horizontal via aspect).
-        const vHalf = ((camera.isPerspectiveCamera ? camera.fov : 50) * Math.PI) / 360;
-        const aspect = camera.aspect > 0 ? camera.aspect : 1;
-        const half = Math.min(vHalf, Math.atan(Math.tan(vHalf) * aspect));
-        const s = (START_DIST * Math.sin(half) * FILL) / radius;
-        // Turn broadside, then place the (rotated) centre on the origin so orbiting stays centred.
-        const yaw = broadsideYawFor(box.getSize(new THREE.Vector3()), START_CAM);
-        root.rotation.y = yaw;
-        root.scale.setScalar(s);
-        const offset = center.clone().multiplyScalar(s).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-        root.position.set(-offset.x, -offset.y, -offset.z);
-        root.updateWorldMatrix(true, true);
-      } catch (e) { /* viewer torn down mid-fit */ }
-    }, 120);
-    return () => clearTimeout(t);
-  }, [url, trigger, scene, camera, targetName]);
+  const scene = useThree((s) => s.scene);
+  const sig = useRef(null);   // signature we last fitted to; null = fit on the next poll
+  const tick = useRef(0);
+  useEffect(() => { sig.current = null; }, [url, sizeScale]); // re-fit when the product/diameter changes
+  useFrame(() => {
+    if (++tick.current % POLL_FRAMES !== 0) return;
+    try {
+      const root = scene.getObjectByName(targetName);
+      if (!root) return;
+      const now = fitSignatureOf(root);
+      if (now === 'empty' || now === sig.current) return;   // nothing visible yet, or already settled
+      const prev = { s: root.scale.x, p: root.position.clone(), y: root.rotation.y };
+      const ok = applyFit(root, { fill: fillForScale(sizeScale), aspect: camera.aspect, fov: camera.isPerspectiveCamera ? camera.fov : 50 });
+      if (!ok) { root.scale.setScalar(prev.s); root.position.copy(prev.p); root.rotation.y = prev.y; root.updateWorldMatrix(true, true); return; }
+      sig.current = fitSignatureOf(root);   // post-fit signature — the fit is idempotent, so this settles
+    } catch (e) { /* viewer torn down mid-fit */ }
+  });
   return null;
 }
 

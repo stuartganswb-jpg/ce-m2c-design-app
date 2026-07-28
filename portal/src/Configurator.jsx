@@ -799,7 +799,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
                       <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} />
                     </group>
                   </group>
-                  <FitModelToView url={cadUrl} trigger={`${sizeScale}|${JSON.stringify(visibilityOverrides)}|${JSON.stringify(cloneSpecs)}`} />
+                  <FitModelToView url={cadUrl} sizeScale={sizeScale} />
                 </Suspense>
                 <OrbitControls makeDefault />
               </Canvas>
