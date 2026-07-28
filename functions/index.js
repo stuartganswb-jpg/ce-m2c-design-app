@@ -1795,9 +1795,19 @@ exports.portalAssets = onCall({ cors: true }, async (request) => {
         const s = await db.collection(colName).get();
         finishLists.push(s.docs.map((x) => x.data()));
     }
-    const finNames = new Map(); // CODE -> { fab, ours } (first list wins, like the internal scan order)
+    // Key candidates mirror Shared/fabricutAssetTags.finishKeysOf: the code, the FIN--stripped
+    // doc id (outsource docs are keyed FIN-<CODE>), and the leading token of the name (older
+    // outsource rows were created name-first with an empty code) — every key EP-zero-normalized
+    // (EP03 ≡ EP3), which is what silently missed the outsourced EP finishes.
+    const normFinKey = (v) => UP(v).replace(/^EP0+(\d+)$/, 'EP$1');
+    const finNames = new Map(); // KEY -> { fab, ours } (first list wins, like the internal scan order)
     finishLists.forEach((list) => (Array.isArray(list) ? list : []).forEach((f) => {
-        [UP(f && f.code), UP(f && f.id)].filter(Boolean).forEach((key) => {
+        const cands = [
+            normFinKey(f && f.code),
+            normFinKey(String((f && f.id) || '').replace(/^FIN-/i, '')),
+            normFinKey(String((f && f.name) || '').split(/[^A-Za-z0-9]+/)[0]),
+        ].filter(Boolean);
+        [...new Set(cands)].forEach((key) => {
             const cur = finNames.get(key) || { fab: '', ours: '' };
             if (!cur.ours && f && f.name) cur.ours = UP(f.name);
             if (!cur.fab) {
@@ -1808,7 +1818,7 @@ exports.portalAssets = onCall({ cors: true }, async (request) => {
             finNames.set(key, cur);
         });
     }));
-    const namesFor = (finishId) => finNames.get(UP(finishId).replace(/^EP0+(\d+)$/, 'EP$1')) || { fab: '', ours: '' };
+    const namesFor = (finishId) => finNames.get(normFinKey(finishId)) || { fab: '', ours: '' };
 
     const snap = await db.collection('global_assets').where('portalVisible', '==', true).get();
     const assets = [];

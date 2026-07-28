@@ -138,15 +138,30 @@ export function fabricutCodesOfDoc(doc) {
     return [...out];
 }
 
+// Every key a finish doc can be addressed by: its code, its doc id with the FIN- prefix
+// stripped (outsource docs are keyed FIN-<CODE>), and the leading token of its display name
+// (older outsource rows were created name-first with an empty code) — all EP-zero-normalized
+// (EP03 ≡ EP3: render filenames and older 4.5 rows disagree on the padding while asset docs
+// normalize to EP3, which silently missed every outsourced EP lookup).
+const normFinKey = (v) => U(v).replace(/^EP0+(\d+)$/, 'EP$1');
+const finishKeysOf = (f) => {
+    const keys = new Set();
+    const add = (v) => { const k = normFinKey(v); if (k) keys.add(k); };
+    add(f?.code);
+    add(String(f?.id || '').replace(/^FIN-/i, ''));
+    add(String(f?.name || '').split(/[^A-Za-z0-9]+/)[0]);
+    return keys;
+};
+
 // FABRICUT'S OWN color name for a finish — the clientMapping row tab 4.5's Master Finish editor
 // stores for the CRM customer "Fabricut" ({ customerId, clientFinishName }). AUTHORITATIVE over
 // render filenames (those carry typos); returns '' until the names are loaded in 4.5.
 export function fabricutColorNameOf(finishId, finishLists) {
-    const c = U(finishId).replace(/^EP0+(\d+)$/, 'EP$1');
+    const c = normFinKey(finishId);
     if (!c) return '';
     for (const list of finishLists || []) {
         for (const f of (Array.isArray(list) ? list : [])) {
-            if (U(f?.code) !== c && U(f?.id) !== c) continue;
+            if (!finishKeysOf(f).has(c)) continue;
             const hit = (Array.isArray(f?.clientMapping) ? f.clientMapping : []).find(m => U(m?.customerId).includes('FABRICUT'));
             if (hit?.clientFinishName) return U(hit.clientFinishName);
         }
@@ -157,11 +172,11 @@ export function fabricutColorNameOf(finishId, finishLists) {
 // Our color name for a finish id, scanned across whatever finish lists the caller has loaded
 // (master_finishes doc's finishes[], hq_global/outsource/inhouse collections).
 export function ourFinishNameOf(finishId, finishLists) {
-    const c = U(finishId);
+    const c = normFinKey(finishId);
     if (!c) return '';
     for (const list of finishLists || []) {
         for (const f of (Array.isArray(list) ? list : [])) {
-            if (U(f?.code) === c || U(f?.id) === c) return U(f?.name || '');
+            if (finishKeysOf(f).has(c)) return U(f?.name || '');
         }
     }
     return '';
