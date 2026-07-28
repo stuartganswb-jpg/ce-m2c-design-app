@@ -3,23 +3,55 @@
 // paint vs wood light response) is built from the finish list the BFF sends, using the SAME static
 // rules as src/components/Shared/studioScene.js so material response matches exactly.
 import React, { useEffect, useMemo } from 'react';
-import { useGLTF, Environment, ContactShadows, Lightformer, useBounds } from '@react-three/drei';
+import { useThree } from '@react-three/fiber';
+import { useGLTF, Environment, ContactShadows, Lightformer } from '@react-three/drei';
 import * as THREE from 'three';
 
 const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/';
 
-// Camera refit — <Bounds fit> measures on MOUNT, which is before Suspense resolves the GLB, so
-// it frames an empty group and the model appears tiny ("starts too far out", Stuart 2026-07-27).
-// This helper suspends on the SAME cached GLB as DynamicModel, so it mounts exactly when the
-// model is live in the tree — then re-measures and fits. `trigger` refits on later changes too
-// (e.g. the diameter render scale).
-export function RefitOnModel({ url, trigger }) {
+// Camera fit over the VISIBLE geometry only (Stuart 2026-07-27: "still zoomed way out… a split
+// crops the rotated pole"). The master GLB carries EVERY option's meshes with visibility toggles,
+// and drei's <Bounds> measures hidden meshes too — so it framed the whole invisible option cloud
+// (model tiny) and its `clip` pinned near/far to that box (the diagonal crop). This walks only
+// visible nodes, frames their box, and sets generous clip planes. Suspends on the SAME cached GLB
+// as DynamicModel so it runs exactly when the model is live; `trigger` refits on selection /
+// diameter changes.
+export function FitToVisible({ url, trigger, margin = 1.25 }) {
   useGLTF(url, DRACO_URL);
-  const bounds = useBounds();
+  const camera = useThree((s) => s.camera);
+  const scene = useThree((s) => s.scene);
+  const controls = useThree((s) => s.controls);
   useEffect(() => {
-    const t = setTimeout(() => { try { bounds.refresh().clip().fit(); } catch (e) { /* viewer gone */ } }, 80);
+    const t = setTimeout(() => {
+      try {
+        scene.updateWorldMatrix(true, true);
+        const box = new THREE.Box3();
+        const tmp = new THREE.Box3();
+        const walk = (o) => {
+          if (o.visible === false) return; // an invisible parent hides the whole subtree
+          if (o.isMesh && o.geometry) {
+            if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+            if (o.geometry.boundingBox) { tmp.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld); box.union(tmp); }
+          }
+          for (const c of o.children) walk(c);
+        };
+        walk(scene);
+        if (box.isEmpty()) return;
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z) || 1;
+        const fov = ((camera.fov || 50) * Math.PI) / 180;
+        const dist = (maxDim / (2 * Math.tan(fov / 2))) * margin;
+        const dir = new THREE.Vector3(1, 0.45, 1).normalize();
+        camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
+        camera.near = Math.max(dist / 500, 0.01);
+        camera.far = dist * 500;
+        camera.updateProjectionMatrix();
+        if (controls) { controls.target.copy(center); controls.update(); } else camera.lookAt(center);
+      } catch (e) { /* viewer torn down mid-fit */ }
+    }, 120);
     return () => clearTimeout(t);
-  }, [url, trigger, bounds]);
+  }, [url, trigger, camera, scene, controls]);
   return null;
 }
 

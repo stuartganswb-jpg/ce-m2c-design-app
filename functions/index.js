@@ -1209,6 +1209,10 @@ const sanitizeStep = (s, feeNameOf) => ({
     subGeometryMap: s.subGeometryMap || null,
     mountSelector: s.mountSelector || null,
     mountPosition: s.mountPosition || '',
+    // The dimensional-input calculator (calc_straight_pole / calc_french_return_1in / …) — without
+    // it the portal's finished-size field computes qty as 1 (Stuart 2026-07-27: "the dimensional
+    // input does not populate the rod qty").
+    calculatorTemplate: s.calculatorTemplate || '',
     hideQty: !!s.hideQty,
     isCenterClone: !!s.isCenterClone,
     styleOptions: (s.styleOptions || []).map((o) => ({

@@ -4,10 +4,10 @@
 // is confirmed by the team on quote request (exact configured pricing is a later iteration).
 import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, Bounds } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
-import { DynamicModel, StudioRig, buildPbrRegistry, RefitOnModel } from './cpqRender.jsx';
+import { DynamicModel, StudioRig, buildPbrRegistry, FitToVisible } from './cpqRender.jsx';
 import { sizeSelectionsOf, isReturnOption, returnsAllowedFor, projAllowedAtDia, renderScaleOf } from './shared/sizeMatrix';
 
 const SIZE_TYPE = 'SIZE_SELECT';
@@ -316,8 +316,10 @@ function StepControl({ step, params, setParam, quantities, setQty, finishes, siz
   ) : null;
 
   // DIMENSIONAL INPUT (matches HQ): on calculator steps the customer types the finished size in
-  // inches and the purchase quantity (feet) computes itself — 100.25" → 9 ft.
-  const template = step.calculatorTemplate || '';
+  // inches and the purchase quantity (feet) computes itself — 100.25" → 9 ft. A calc-typed step
+  // with no template (older BFF payloads) falls back to the straight-pole math (ceil(len / 12))
+  // so the qty always computes instead of sticking at 1.
+  const template = step.calculatorTemplate || ((step.type === 'DIMENSIONS' || step.type === 'VISUAL_DIMENSIONS') ? 'calc_straight_pole' : '');
   const isCalc = !!template || step.type === 'DIMENSIONS' || step.type === 'VISUAL_DIMENSIONS';
   const dm = (dims && dims[step.id]) || { length: '', type: 'O2O', wallA: '', wallB: '', wallC: '' };
   const dimLbl = { flex: 1, fontSize: '0.75rem', color: 'var(--ink-soft)' };
@@ -656,25 +658,43 @@ export default function Configurator({ flowId, flowName, onExit }) {
         });
         return (Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [''])[0];
       })();
-      const itemNos = lines.map((l) => String(l.itemNo || '').trim().toUpperCase()).filter(Boolean);
+      const itemNos = [...new Set(lines.map((l) => String(l.itemNo || '').trim().toUpperCase()).filter(Boolean))];
       const scored = assets.map((a) => {
         const blob = a.blob || '';
-        let hits = 0;
+        let hits = 0; let firstCode = '';
         itemNos.forEach((no) => {
           const [base, fin] = no.split('/');
           if (!base || !blob.includes(base.toLowerCase())) return;
           if (fin && !blob.includes(fin.toLowerCase())) return;
-          hits++;
+          hits++; if (!firstCode) firstCode = base;
         });
         if (!hits) return null;
         let score = hits * 10;
-        if (domFin && blob.includes(String(domFin).toLowerCase())) score += 5;
         if (a.fab?.pairedCode && a.fab?.plateCode) score += 2; // the arm + backplate combo shot
-        return { a, score };
+        return { a, score, code: firstCode };
       }).filter(Boolean).sort((x, y) => y.score - x.score);
+      // The quote's finish is a HARD filter — at their price levels the line item #s are bare
+      // Fabricut codes (no finish suffix), and without this every finish variant of the same
+      // bracket matched (Stuart 2026-07-27: "it returned a lot of the same bracket… it should
+      // have just been in the one color from the quote"). Falls back to all matches only if the
+      // gallery has nothing in that finish.
+      const inFinish = domFin ? scored.filter(({ a }) => (a.blob || '').includes(String(domFin).toLowerCase())) : scored;
+      const pool = inFinish.length ? inFinish : scored;
+      // One image per item # first, so a single bracket can never fill the page; leftovers fill
+      // remaining slots after every code is represented.
       const picks = [];
       const seen = new Set();
-      for (const { a } of scored) { if (!seen.has(a.id)) { seen.add(a.id); picks.push(a); if (picks.length >= 8) break; } }
+      const codeUsed = {};
+      for (const { a, code } of pool) {
+        if (seen.has(a.id) || codeUsed[code]) continue;
+        seen.add(a.id); codeUsed[code] = true; picks.push(a);
+        if (picks.length >= 8) break;
+      }
+      for (const { a } of pool) {
+        if (picks.length >= 8) break;
+        if (seen.has(a.id)) continue;
+        seen.add(a.id); picks.push(a);
+      }
       openPresentation(lines, picks);
     } catch (e) {
       alert('Could not gather the gallery images right now — please try again shortly.');
@@ -772,12 +792,10 @@ export default function Configurator({ flowId, flowName, onExit }) {
               <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]}>
                 <Suspense fallback={null}>
                   <StudioRig />
-                  <Bounds fit clip margin={1.15}>
-                    <group scale={sizeScale}>
-                      <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} />
-                    </group>
-                    <RefitOnModel url={cadUrl} trigger={sizeScale} />
-                  </Bounds>
+                  <group scale={sizeScale}>
+                    <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} />
+                  </group>
+                  <FitToVisible url={cadUrl} trigger={`${sizeScale}|${JSON.stringify(visibilityOverrides)}`} />
                 </Suspense>
                 <OrbitControls makeDefault />
               </Canvas>
