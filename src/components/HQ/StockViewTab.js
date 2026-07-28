@@ -1288,10 +1288,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const buy = [], shop = [], unlinked = [];
         toMake.forEach(x => {
             if (!x.info.part) { unlinked.push(x); return; }
-            const specs = x.info.part.manufacturingSpecs || {};
+            const part = x.info.part;
+            const specs = part.manufacturingSpecs || {};
             const vendorName = String(specs.vendorName || '').trim();
-            // Outsourced, or in-house-but-vendored: both are PO candidates — the vendor modal is
-            // where the operator decides (it offers "make in-house instead" per row).
+            // AN ASSEMBLY IS BUILT HERE — never a PO candidate, whatever the isInHouse flag says
+            // (Stuart 2026-07-28: H2-138LBE, an assembly we make, was asking for a vendor). This is
+            // the same exclusion the Min-OH rule already uses at isOutsourced above; 'Master
+            // Assembly' is included too, since it is equally something we build.
+            const isAssembly = part.partClass === 'Assembly' || part.partClass === 'Master Assembly' || part.netSuiteRecordType === 'assemblyitem';
+            if (isAssembly) { shop.push(x); return; }
+            // Otherwise: outsourced, or in-house-but-vendored — both are PO candidates, and the
+            // vendor modal is where the operator decides (it offers "make in-house instead").
             if (specs.isInHouse === false || vendorName) buy.push({ ...x, vendorOverride: vendorName });
             else shop.push(x);
         });
@@ -1570,7 +1577,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         return (
                                                         <tr key={g.base}>
                                                             <td style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }} title={`Feeds: ${g.variants.join(', ')}`}>
-                                                                {g.base}{!ri.part && <span title="No matching Master Library part — sync it to get stock + ROP" style={{ color: '#d9534f', fontSize: '9px' }}> · UNLINKED</span>}{ri.part && ri.vendored && <span style={{ color: '#3f7fc4', fontSize: '9px' }}> · VENDOR</span>}
+                                                                {g.base}{!ri.part && <span title="No matching Master Library part — sync it to get stock + ROP" style={{ color: '#d9534f', fontSize: '9px' }}> · UNLINKED</span>}
+                                                                {/* Where an Order qty on this row will actually go — visible BEFORE generating, so a
+                                                                    mis-flagged item is caught here rather than in the vendor modal. */}
+                                                                {ri.part && (() => {
+                                                                    const p = ri.part, sp = p.manufacturingSpecs || {};
+                                                                    const asm = p.partClass === 'Assembly' || p.partClass === 'Master Assembly' || p.netSuiteRecordType === 'assemblyitem';
+                                                                    if (asm) return <span title="Assembly — we build it here, so an order becomes a shop-floor work order" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM → WO</span>;
+                                                                    if (sp.isInHouse === false || ri.vendored) return <span title={ri.vendored ? `Bought — confirms the vendor, then joins that vendor's PO` : 'Flagged outsourced but has NO vendor — you\'ll be asked to pick one or switch it to in-house'} style={{ color: ri.vendored ? '#3f7fc4' : '#d9534f', fontSize: '9px' }}> · {ri.vendored ? 'VENDOR → PO' : 'NO VENDOR'}</span>;
+                                                                    return <span title="Made in-house — an order becomes a shop-floor work order" style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · WO</span>;
+                                                                })()}
                                                             </td>
                                                             {g.cells.map((v, i) => <td key={salesHist.months[i].key} style={{ ...numTd, color: v ? 'var(--ink)' : 'var(--line)' }}>{v || '·'}</td>)}
                                                             <td style={{ ...numTd, fontWeight: 700, color: 'var(--ink)', borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>{g.total || '·'}</td>
