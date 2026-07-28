@@ -41,6 +41,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     // tagged for the portal — no need to keep re-tagging ones that are already tagged").
     const [portalTagFilter, setPortalTagFilter] = useState(''); // '' | 'UNTAGGED' | 'TAGGED'
     const [fabMissFilter, setFabMissFilter] = useState(''); // '' | 'CODE' | 'COLOR' — which Fabricut field is missing
+    const [showCustIds, setShowCustIds] = useState(false); // stamp the customer's part # bottom-right on every card
     useEffect(() => { setVisibleCount(100); }, [searchQuery, chipFilters, portalTagFilter, fabMissFilter]);
 
     // 🗑 BULK DELETE (Stuart 2026-07-27: legacy assets with unusable ids made the re-tagger skip
@@ -100,7 +101,7 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
 
-    const [metaForm, setMetaForm] = useState({ name: '', collection: '', productType: '', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [] });
+    const [metaForm, setMetaForm] = useState({ name: '', collection: '', productType: '', patternId: '', finishId: '', customerId: '', clientSku: '', notes: '', associatedParts: [], associatedFinishes: [], fabCode: '', fabColorName: '' });
     const [uploadFile, setUploadFile] = useState(null);
     const fileInputRef = useRef(null);
 
@@ -428,6 +429,8 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
     const handleUpdateMetadata = async () => {
         if (!activeAsset || !activeAsset.id) return;
         try {
+            const fc = String(metaForm.fabCode || '').toUpperCase().trim();
+            const fcn = String(metaForm.fabColorName || '').toUpperCase().trim();
             await updateDoc(doc(db, "global_assets", activeAsset.id), {
                 name: String(metaForm.name).toUpperCase(),
                 collection: metaForm.collection,
@@ -438,9 +441,14 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                 clientSku: String(metaForm.clientSku).toUpperCase(),
                 notes: metaForm.notes,
                 associatedParts: Array.isArray(metaForm.associatedParts) ? metaForm.associatedParts : [],
-                associatedFinishes: Array.isArray(metaForm.associatedFinishes) ? metaForm.associatedFinishes : []
+                associatedFinishes: Array.isArray(metaForm.associatedFinishes) ? metaForm.associatedFinishes : [],
+                // Fabricut identity is hand-editable here (the one-off fix for pre-alignment
+                // imports) — dot paths create/patch the fab map without clobbering the rest of it.
+                fabCode: fc,
+                'fab.fabCode': fc,
+                'fab.fabColorName': fcn
             });
-            setActiveAsset(prev => ({ ...prev, ...metaForm }));
+            setActiveAsset(prev => ({ ...prev, ...metaForm, fabCode: fc, fab: { ...(prev.fab || {}), fabCode: fc, fabColorName: fcn } }));
             alert("Metadata updated!");
         } catch (error) { console.error(error); alert("Failed to update."); }
     };
@@ -536,7 +544,9 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
             clientSku: asset?.clientSku || asset?.customerPartId || '',
             notes: asset?.notes || '',
             associatedParts: Array.isArray(asset?.associatedParts) ? asset.associatedParts : [],
-            associatedFinishes: Array.isArray(asset?.associatedFinishes) ? asset.associatedFinishes : []
+            associatedFinishes: Array.isArray(asset?.associatedFinishes) ? asset.associatedFinishes : [],
+            fabCode: asset?.fabCode || asset?.fab?.fabCode || '',
+            fabColorName: asset?.fab?.fabColorName || ''
         });
         setActiveAsset(asset);
         
@@ -610,6 +620,9 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                         );
                     })}
                 </div>
+                <button onClick={() => setShowCustIds(s => !s)} title="Stamp the customer's part # (Fabricut code) on the bottom-right of every card." style={{ padding: '5px 10px', background: showCustIds ? theme.ink : theme.paper, color: showCustIds ? '#fff' : theme.inkSoft, border: `1px solid ${showCustIds ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', cursor: 'pointer' }}>
+                    SHOW CUSTOMER IDS
+                </button>
                 {(chipFilters.type || chipFilters.dia || chipFilters.proj || portalTagFilter || fabMissFilter) && (
                     <button onClick={() => { setChipFilters({ type: '', dia: '', proj: '' }); setPortalTagFilter(''); setFabMissFilter(''); }} style={{ padding: '5px 10px', background: 'transparent', color: theme.brass, border: 'none', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.06em', textDecoration: 'underline', cursor: 'pointer' }}>CLEAR FILTERS</button>
                 )}
@@ -847,6 +860,12 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                             {String(asset.patternId || '')}{asset.finishId ? `/${String(asset.finishId)}` : ''}
                                         </div>
 
+                                        {showCustIds && (asset.fabCode || asset.fab?.fabCode) && (
+                                            <div style={{ position: 'absolute', bottom: '8px', right: '8px', color: '#fff', fontFamily: theme.mono, fontSize: '10px', background: theme.ink, padding: '4px 8px', zIndex: 2 }}>
+                                                {String(asset.fabCode || asset.fab?.fabCode)}
+                                            </div>
+                                        )}
+
                                         {(asset.clientSku || asset.customerPartId) && (
                                             <div style={{ position: 'absolute', top: '8px', right: '8px', color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.05em', background: theme.inkSoft, padding: '3px 6px', zIndex: 2 }}>
                                                 CUST: {String(asset.clientSku || asset.customerPartId)}
@@ -961,6 +980,9 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                               activeAsset.fab.ourFinishName || activeAsset.fab.fabColorName || null,
                                             ].filter(Boolean).join(' · ')}
                                         </span>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: activeAsset.fab.fabColorName ? theme.inkSoft : '#d9534f' }}>
+                                            FABRICUT COLOR: {activeAsset.fab.fabColorName || '⚠ none — enter it below or in 4.5 Master Finishes'}
+                                        </span>
                                         {plateBadgeOf(activeAsset) && (
                                             <span style={{ fontSize: '9px', fontFamily: theme.mono, color: '#fff', background: plateBadgeOf(activeAsset).bg, padding: '3px 6px', alignSelf: 'flex-start', letterSpacing: '.06em' }}>{plateBadgeOf(activeAsset).txt}</span>
                                         )}
@@ -985,6 +1007,19 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ flex: 1 }}>
                                         <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>FINISH ID</label>
                                         <input type="text" value={metaForm.finishId} onChange={e => setMetaForm({...metaForm, finishId: e.target.value})} style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, textTransform: 'uppercase' }} />
+                                    </div>
+                                </div>
+
+                                {/* Fabricut identity, hand-editable — SAVE writes these to the doc (top-level fabCode +
+                                    fab.fabCode/fab.fabColorName), the one-off fix when the derived backfill has no source */}
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>FABRICUT PART #</label>
+                                        <input type="text" value={metaForm.fabCode} onChange={e => setMetaForm({...metaForm, fabCode: e.target.value})} placeholder="e.g. H3569F PREMIUM" style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, textTransform: 'uppercase' }} />
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' }}>FABRICUT COLOR NAME</label>
+                                        <input type="text" value={metaForm.fabColorName} onChange={e => setMetaForm({...metaForm, fabColorName: e.target.value})} placeholder="e.g. SATIN NICKEL" style={{ width: '100%', padding: '12px', border: `1px solid ${theme.line}`, boxSizing: 'border-box', fontFamily: theme.sans, textTransform: 'uppercase' }} />
                                     </div>
                                 </div>
                                 

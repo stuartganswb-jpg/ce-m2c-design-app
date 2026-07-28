@@ -16,18 +16,21 @@ import { functions } from './firebase';
 
 const END_LABELS = { FRENCH_RETURN: 'FRENCH RETURN', MITER_RETURN: 'MITER RETURN', INSIDE_MOUNT: 'INSIDE MOUNT', FINIAL: 'FINIAL' };
 
-// The one-line identity under each image — mirrors the internal gallery's summary line.
+// The detail line under each title — combo/plate description + dims. The COLOR lives on the
+// TITLE line instead (Stuart 2026-07-27: "the description is so long the color is not
+// displayed — display their pattern and color first"), so a long combo name can never push it
+// out of a truncating row.
 const identityOf = (a) => [
   END_LABELS[a.fab?.endTreatment] || a.fab?.pairedName || null,
   a.fab?.plateCode ? `${a.fab.plateIsCover ? 'COVERPLATE' : 'BACKPLATE'} ${a.fab.plateCode}${a.fab.plateOrientation ? ` (${a.fab.plateOrientation})` : ''}` : null,
   a.fab?.diaLabel || null,
   a.fab?.projLabel || null,
-  a.fab?.fabColorName || a.fab?.ourFinishName || null, // THEIR color name first (Fabricut-first surface)
 ].filter(Boolean).join(' · ');
 
-// FABRICUT-FIRST display: their part # prominent, ours in parentheses.
+// FABRICUT-FIRST display: their part # + THEIR color name lead; our id only behind the toggle.
 const fabNoOf = (a) => String(a.fabCode || '').trim();
 const ourNoOf = (a) => String(a.name || '').trim();
+const colorOf = (a) => String(a.fab?.fabColorName || a.fab?.ourFinishName || '').trim();
 
 const hasTag = (a, t) => Array.isArray(a?.tags) && a.tags.includes(t);
 // The four customer-meaningful types (mirrors the internal TYPE_CHIPS predicates).
@@ -92,6 +95,7 @@ export default function Gallery() {
   const [diaFilter, setDiaFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [labelSide, setLabelSide] = useState('FAB'); // which part # to imprint: 'FAB' | 'OURS'
+  const [showVendorId, setShowVendorId] = useState(false); // reveal our (vendor) part #s next to Fabricut's
   const [zoom, setZoom] = useState(null); // the asset opened full-size
 
   useEffect(() => {
@@ -142,6 +146,9 @@ export default function Gallery() {
           <option value="">Type — any</option>
           {TYPE_FILTERS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
         </select>
+        <button onClick={() => setShowVendorId((s) => !s)} style={{ flex: '0 0 auto', padding: '12px 14px', fontFamily: 'var(--mono, monospace)', fontSize: '0.7rem', letterSpacing: '.08em', border: `1px solid ${showVendorId ? 'var(--brass, #b08d57)' : 'var(--line)'}`, background: showVendorId ? 'var(--brass, #b08d57)' : '#fff', color: showVendorId ? '#fff' : 'var(--ink-soft)', borderRadius: 2, cursor: 'pointer' }}>
+          {showVendorId ? 'HIDE' : 'SHOW'} VENDOR ID
+        </button>
       </div>
       {shown.length === 0 ? (
         <div className="empty">Nothing matches — every search word must match; try fewer words or clear the filters.</div>
@@ -155,7 +162,8 @@ export default function Gallery() {
               <div style={{ padding: '10px 12px' }}>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   <b style={{ fontFamily: 'var(--mono, monospace)' }}>{fabNoOf(a) || ourNoOf(a)}</b>
-                  {fabNoOf(a) && ourNoOf(a) && <span style={{ color: 'var(--ink-soft)', fontSize: '0.78rem' }}> ({ourNoOf(a)})</span>}
+                  {colorOf(a) && <span> · {colorOf(a)}</span>}
+                  {showVendorId && fabNoOf(a) && ourNoOf(a) && <span style={{ color: 'var(--ink-soft)', fontSize: '0.78rem' }}> ({ourNoOf(a)})</span>}
                 </div>
                 <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '0.68rem', color: 'var(--ink-soft)', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {identityOf(a) || ' '}
@@ -172,7 +180,8 @@ export default function Gallery() {
           <div style={{ background: '#faf8f3', border: '1px solid var(--line)', borderRadius: 2, padding: '12px 18px', maxWidth: '86vw', textAlign: 'center', cursor: 'default' }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontSize: '1.05rem', color: 'var(--ink)' }}>
               <b style={{ fontFamily: 'var(--mono, monospace)' }}>{fabNoOf(zoom) || ourNoOf(zoom)}</b>
-              {fabNoOf(zoom) && ourNoOf(zoom) && <span style={{ color: 'var(--ink-soft)', fontSize: '0.85rem' }}> ({ourNoOf(zoom)})</span>}
+              {colorOf(zoom) && <span> · {colorOf(zoom)}</span>}
+              {showVendorId && fabNoOf(zoom) && ourNoOf(zoom) && <span style={{ color: 'var(--ink-soft)', fontSize: '0.85rem' }}> ({ourNoOf(zoom)})</span>}
             </div>
             {identityOf(zoom) && <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '0.72rem', color: 'var(--ink-soft)', marginTop: 4 }}>{identityOf(zoom)}</div>}
             {(zoom.tags || []).length > 0 && (
