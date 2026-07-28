@@ -451,6 +451,39 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           await manualTask(wo, act.key, act.action, actor);
       }
   };
+  // PER-STEP MANUAL CONTROLS (Stuart 2026-07-28: "i need a manual step to start and stop every
+  // step in the recipe, they are currently getting hung up as pending in between").
+  // Manual mode used to offer ONE button — whatever the engine decided came next — so a job whose
+  // real state didn't match that guess (hand finished before the sled steps, a task stopped
+  // mid-coat) had no way forward and sat Pending. Now EVERY task in the coat carries its own
+  // PIN'd control:
+  //   Pending  → ▶ Start
+  //   Running  → ■ Stop  = the step RAN and is DONE (elapsed minutes logged) — this is the bit
+  //                        that keeps things moving; the old Stop dropped it back to Pending,
+  //                        which is precisely how jobs got stuck.
+  //   Complete → ✓ with ↺ to put a mis-tap back to Pending.
+  // The coat-advance button is unchanged and still runs the final-coat QC gate.
+  const manualStepBtn = (wo, key, label) => {
+      const tk = (wo.tasks || {})[key] || {};
+      const st = tk.status || 'Pending';
+      const mins = (st === 'Running' && tk.startTime) ? Math.floor((now - tk.startTime) / 60000) : null;
+      const run = async (action) => { const a = await pinActor(); if (a) await manualTask(wo, key, action, a); };
+      const base = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer', padding: '9px 12px' };
+      return (
+          <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', border: '1px solid var(--line)', padding: '4px 6px', background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', letterSpacing: '.06em' }}>{label}</span>
+              {st === 'Running' && mins !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{mins}m</span>}
+              {st === 'Pending' && <button onClick={() => run('START')} style={{ ...base, background: 'var(--ink)', color: '#fff', border: 'none' }}>▶ Start</button>}
+              {st === 'Running' && <button onClick={() => run('COMPLETE')} title="The step ran and is done — logs the elapsed time" style={{ ...base, background: 'var(--brass)', color: '#fff', border: 'none' }}>■ Stop</button>}
+              {st === 'Complete' && (
+                  <>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓</span>
+                      <button onClick={() => run('STOP')} title="Mis-tap? Put this step back to Pending" style={{ ...base, padding: '6px 8px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)' }}>↺</button>
+                  </>
+              )}
+          </span>
+      );
+  };
   // ===== END MANUAL MODE =====
   // Which WO tasks a station's panel controls.
   const stationTargets = (st) => {
@@ -541,11 +574,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                 const step = len && idx < len ? r.steps[idx] : null;
                 const pAct = nextPartsAction(manualWo);
                 const poAct = nextPoleAction(manualWo);
-                const elapsedOf = (tk) => (tk && tk.startTime) ? Math.floor((now - tk.startTime) / 60000) : null;
-                const chip = (label, st) => (
-                    <span key={label} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '4px 8px', border: '1px solid var(--line)', color: st === 'Complete' ? '#3a7d44' : (st === 'Running' ? 'var(--brass)' : 'var(--ink-soft)'), background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>{label} {st === 'Complete' ? '✓' : (st === 'Running' ? '▶' : '·')}</span>
-                );
-                const t = manualWo.tasks || {};
+                // (status chips + elapsed now live inside manualStepBtn, which also carries the controls)
                 return (
                     <div style={{ padding: '20px 30px' }}>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap', marginBottom: '6px' }}>
@@ -558,21 +587,28 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '10px' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>Small parts</span>
-                            {step && step.app !== 'Hand Applied' ? [chip('Setup', t.spinSetup?.status), chip('Spray', t.spinSpray?.status), chip('Bake', t.spinBake?.status)] : (step ? chip('Hand', t.hand?.status) : null)}
-                            {pAct && pAct.running && elapsedOf(pAct.running) !== null && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}>{elapsedOf(pAct.running)}m</span>}
+                            {/* Every step of this coat, each with its own PIN'd Start / Stop — no
+                                waiting on the engine's single "next" guess. */}
+                            {step && step.app !== 'Hand Applied'
+                                ? [manualStepBtn(manualWo, 'spinSetup', 'Setup'), manualStepBtn(manualWo, 'spinSpray', 'Spray'), manualStepBtn(manualWo, 'spinBake', 'Bake')]
+                                : (step ? manualStepBtn(manualWo, 'hand', 'Hand') : null)}
                             <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
-                                {pAct && pAct.running && <button onClick={async () => { const a = await pinActor(); if (a) manualTask(manualWo, pAct.key, 'STOP', a); }} style={{ padding: '10px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>⏸ Stop</button>}
-                                {pAct ? <button onClick={() => runManualAction(manualWo, pAct, 'parts')} style={{ padding: '12px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{pAct.label}</button> : <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓ parts complete</span>}
+                                {pAct && pAct.advance
+                                    ? <button onClick={() => runManualAction(manualWo, pAct, 'parts')} style={{ padding: '12px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{pAct.label}</button>
+                                    : !pAct ? <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓ parts complete</span>
+                                    : <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>finish the steps to advance the coat</span>}
                             </span>
                         </div>
                         {woHasPoles(manualWo) && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>Poles</span>
-                                {chip('Spray', t.poleSpray?.status)}{chip('Bake', t.poleBake?.status)}
+                                {manualStepBtn(manualWo, 'poleSpray', 'Spray')}{manualStepBtn(manualWo, 'poleBake', 'Bake')}
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>coat {Math.min(poleIdxOf(manualWo) + 1, len || 1)}/{len || 1}</span>
                                 <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
-                                    {poAct && poAct.running && <button onClick={async () => { const a = await pinActor(); if (a) manualTask(manualWo, poAct.key, 'STOP', a); }} style={{ padding: '10px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>⏸ Stop</button>}
-                                    {poAct ? <button onClick={() => runManualAction(manualWo, poAct, 'poles')} style={{ padding: '12px 20px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{poAct.label}</button> : <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓ poles complete</span>}
+                                    {poAct && poAct.advance
+                                        ? <button onClick={() => runManualAction(manualWo, poAct, 'poles')} style={{ padding: '12px 20px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{poAct.label}</button>
+                                        : !poAct ? <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44' }}>✓ poles complete</span>
+                                        : <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>finish the steps to advance the coat</span>}
                                 </span>
                             </div>
                         )}
