@@ -3,7 +3,7 @@
 // paint vs wood light response) is built from the finish list the BFF sends, using the SAME static
 // rules as src/components/Shared/studioScene.js so material response matches exactly.
 import React, { useEffect, useMemo, useRef } from 'react';
-import { useThree, useFrame } from '@react-three/fiber';
+import { useThree } from '@react-three/fiber';
 import { useGLTF, Environment, ContactShadows, Lightformer } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -47,12 +47,11 @@ export function visibleBoxOf(root) {
 //     stub; turning the long axis across the screen costs nothing and buys ~40% more length.
 //   - Scale from the STARTING distance, never the live camera, so a refit never undoes the
 //     customer's own scroll-zoom.
-// It POLLS rather than firing once on a timer: DynamicModel defers applying visibility until every
-// finish texture has loaded, so a one-shot fit measures the model while all the hidden option
-// meshes are still visible — a huge box, a rod shrunk to a speck, and no second chance. Each poll
-// compares a cheap signature of the visible bounds and only re-fits when the geometry actually
-// changed (the fit is idempotent, so a settled model costs one Box3 walk every 12 frames).
-// The group this drives must carry NO transform props from React — they would fight it.
+// WHERE it runs matters as much as the maths: DynamicModel defers applying visibility until every
+// finish texture has loaded, so anything that fits earlier measures the model with the whole
+// invisible option cloud still visible — a huge box, the rod shrunk to a speck. The fit is
+// therefore called from inside that same override pass (see DynamicModel), the one code path we
+// can prove runs at the right moment, on a group that component owns outright.
 const START_CAM = [5, 5, 5]; // Canvas camera={{ position: [5, 5, 5] }}
 const START_DIST = Math.hypot(START_CAM[0], START_CAM[1], START_CAM[2]);
 const POLL_FRAMES = 12; // ~5x/sec — re-measure until the geometry settles
@@ -77,17 +76,6 @@ function broadsideYawFor(size, camPos) {
   return Math.atan2(along.z, along.x) - Math.atan2(want.z, want.x);
 }
 
-// Cheap change-detector for the visible geometry (bounds + visible mesh count).
-export function fitSignatureOf(root) {
-  const box = visibleBoxOf(root);
-  if (box.isEmpty()) return 'empty';
-  let n = 0;
-  const count = (o) => { if (o.visible === false) return; if (o.isMesh) n++; for (const c of o.children) count(c); };
-  count(root);
-  const r = (v) => v.toFixed(3);
-  return `${r(box.min.x)},${r(box.min.y)},${r(box.min.z)},${r(box.max.x)},${r(box.max.y)},${r(box.max.z)},${n}`;
-}
-
 // The fit itself, split out so it can be exercised outside React.
 export function applyFit(root, { fill, aspect = 1, fov = 50 }) {
   root.scale.setScalar(1);
@@ -110,29 +98,6 @@ export function applyFit(root, { fill, aspect = 1, fov = 50 }) {
   root.position.set(-offset.x, -offset.y, -offset.z);
   root.updateWorldMatrix(true, true);
   return true;
-}
-
-export function FitModelToView({ url, sizeScale = 1, targetName = 'fit-target' }) {
-  useGLTF(url, DRACO_URL); // suspends on the SAME cached GLB as DynamicModel -> runs when it's live
-  const camera = useThree((s) => s.camera);
-  const scene = useThree((s) => s.scene);
-  const sig = useRef(null);   // signature we last fitted to; null = fit on the next poll
-  const tick = useRef(0);
-  useEffect(() => { sig.current = null; }, [url, sizeScale]); // re-fit when the product/diameter changes
-  useFrame(() => {
-    if (++tick.current % POLL_FRAMES !== 0) return;
-    try {
-      const root = scene.getObjectByName(targetName);
-      if (!root) return;
-      const now = fitSignatureOf(root);
-      if (now === 'empty' || now === sig.current) return;   // nothing visible yet, or already settled
-      const prev = { s: root.scale.x, p: root.position.clone(), y: root.rotation.y };
-      const ok = applyFit(root, { fill: fillForScale(sizeScale), aspect: camera.aspect, fov: camera.isPerspectiveCamera ? camera.fov : 50 });
-      if (!ok) { root.scale.setScalar(prev.s); root.position.copy(prev.p); root.rotation.y = prev.y; root.updateWorldMatrix(true, true); return; }
-      sig.current = fitSignatureOf(root);   // post-fit signature — the fit is idempotent, so this settles
-    } catch (e) { /* viewer torn down mid-fit */ }
-  });
-  return null;
 }
 
 // ---- PBR registry (copied verbatim from studioScene.js) -------------------------------------
@@ -186,9 +151,32 @@ const pbrForTexture = (registry, url) => ({ envMapIntensity: DEFAULT_ENVMAP_INTE
 const globalTextureCache = {};
 
 // ---- DynamicModel (ported from CPQTab.js:125-350) -------------------------------------------
-export function DynamicModel({ url, textureOverrides, visibilityOverrides, cloneSpecs, pbrRegistry }) {
+export function DynamicModel({ url, textureOverrides, visibilityOverrides, cloneSpecs, pbrRegistry, fitSizeScale }) {
   const { scene } = useGLTF(url, DRACO_URL);
   const clonedScene = useMemo(() => scene.clone(true), [scene]);
+
+  // THE FIT LIVES HERE — deliberately (Stuart 2026-07-28, third attempt). It was previously a
+  // sibling component driving the group by name from a useFrame poll; that never took effect in
+  // production. This runs in the ONE place we can prove executes at the right moment: the same
+  // pass that applies visibility and finishes, which demonstrably works. `fitRef` is a group this
+  // component owns outright — React sets no transform props on it, so nothing fights the fit.
+  const fitRef = useRef(null);
+  const camera = useThree((s) => s.camera);
+  const doFit = React.useCallback(() => {
+    const root = fitRef.current;
+    if (!root) return;
+    try {
+      applyFit(root, {
+        fill: fillForScale(fitSizeScale),
+        aspect: camera && camera.aspect > 0 ? camera.aspect : 1,
+        fov: camera && camera.isPerspectiveCamera ? camera.fov : 50,
+      });
+    } catch (e) { /* viewer torn down mid-fit */ }
+  }, [camera, fitSizeScale]);
+  const doFitRef = useRef(doFit);
+  doFitRef.current = doFit;
+  // Diameter change (or a camera swap) re-frames without waiting for a texture pass.
+  useEffect(() => { doFit(); }, [doFit]);
 
   const texStr = JSON.stringify(textureOverrides);
   const visStr = JSON.stringify(visibilityOverrides);
@@ -318,6 +306,11 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
           if (group.children.length) clonedScene.add(group);
         }
       } catch (e) { /* clone skipped */ }
+
+      // Re-frame now that visibility is settled — this is the moment the one-shot timer used to
+      // miss (the pass is deferred until every finish texture has loaded).
+      doFitRef.current();
+      setTimeout(() => doFitRef.current(), 60); // once more after matrices/clones settle
     };
 
     const uniqueUrls = [...new Set(Object.values(textureOverrides || {}))].filter(Boolean);
@@ -336,7 +329,7 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
     });
   }, [clonedScene, texStr, visStr, cloneStr]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return <primitive object={clonedScene} />;
+  return <group ref={fitRef}><primitive object={clonedScene} /></group>;
 }
 
 // StudioRig (copied verbatim from studioScene.js).
