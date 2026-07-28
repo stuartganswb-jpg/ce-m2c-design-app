@@ -1382,7 +1382,7 @@ exports.reserveQuoteNo = onCall({ enforceAppCheck: true }, async (request) => {
 // 'PORTAL_REQUEST' for the team to price and confirm in CPQ — nothing is priced or pushed here.
 exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
-    const { flowId, flowName, selections, note } = request.data || {};
+    const { flowId, flowName, selections, note, viewedLevel } = request.data || {};
     const db = admin.firestore();
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
     const crm = crmSnap.exists ? crmSnap.data() : {};
@@ -1410,6 +1410,9 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
             selections: selections || {},
             note: String(note || '').slice(0, 2000),
             byEmail: email,
+            // Which of their price-ladder levels the customer was VIEWING when they sent this —
+            // context for staff; the staff quote itself still prices at the assigned level.
+            viewedLevel: ['FAB_COST', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(String(viewedLevel || '')) ? String(viewedLevel) : '',
         },
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         dateSaved: new Date().toISOString(),
@@ -1882,7 +1885,14 @@ exports.portalResolve = onCall({ cors: true }, async (request) => {
 
     // The customer NEVER sees cost: force any non-safe level back to STANDARD server-side.
     let priceLevel = String(crm.portalPriceLevel || 'STANDARD');
-    if (!['STANDARD', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(priceLevel)) priceLevel = 'STANDARD';
+    if (!['STANDARD', 'FAB_COST', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(priceLevel)) priceLevel = 'STANDARD';
+    // Customer view toggle (Stuart 2026-07-27): a Fabricut-leveled customer may flip the quote
+    // VIEW between the three levels of their own ladder — their cost (CE → them), their
+    // wholesale (MSRP ÷ 2), their retail (MSRP). All three are THE CUSTOMER'S numbers; STANDARD
+    // (our pricing) is never reachable from the portal, and customers not assigned a FAB_ level
+    // get no toggle at all.
+    const reqLevel = String((request.data && request.data.priceLevel) || '');
+    if (['FAB_COST', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(reqLevel) && priceLevel.indexOf('FAB_') === 0) priceLevel = reqLevel;
 
     let assembly = null;
     if (flow.linkedAssemblyId) {

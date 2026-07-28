@@ -7,11 +7,15 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
-import { DynamicModel, StudioRig, buildPbrRegistry } from './cpqRender.jsx';
+import { DynamicModel, StudioRig, buildPbrRegistry, RefitOnModel } from './cpqRender.jsx';
 import { sizeSelectionsOf, isReturnOption, returnsAllowedFor, projAllowedAtDia, renderScaleOf } from './shared/sizeMatrix';
 
 const SIZE_TYPE = 'SIZE_SELECT';
 const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+// The customer's own price ladder (Fabricut-leveled accounts): their cost / wholesale / retail.
+const LEVEL_LABELS = { FAB_COST: 'Your cost', FAB_WHOLESALE: 'Wholesale', FAB_RETAIL: 'Retail' };
+const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // Finish lookup by id across the palette (in-house + outsourced).
 const findFinish = (finishes, id) => finishes.find((f) => f.id === id) || null;
@@ -470,6 +474,11 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const [price, setPrice] = useState(null); // { level, total, lines }
   const [stepOptions, setStepOptions] = useState({}); // { [stepId]: { options, subOptions } }
   const [pricing, setPricing] = useState(false);
+  // Price-ladder view toggle (Stuart 2026-07-27): a Fabricut-leveled customer flips the quote
+  // view between THEIR three levels — cost / wholesale / retail. '' = the assigned default.
+  // The server validates the override (only FAB_ levels, only for FAB_-assigned customers).
+  const [viewLevel, setViewLevel] = useState('');
+  const [presBusy, setPresBusy] = useState(false);
 
   const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
   const setQty = (k, v) => setQuantities((q) => ({ ...q, [k]: v }));
@@ -510,13 +519,13 @@ export default function Configurator({ flowId, flowName, onExit }) {
     if (!data) return;
     setPricing(true);
     const t = setTimeout(() => {
-      httpsCallable(functions, 'portalResolve')({ flowId, selections: { params, quantities } })
+      httpsCallable(functions, 'portalResolve')({ flowId, selections: { params, quantities }, ...(viewLevel ? { priceLevel: viewLevel } : {}) })
         .then((res) => { setPrice(res.data.price); if (res.data.stepOptions) setStepOptions(res.data.stepOptions); })
         .catch(() => {})
         .finally(() => setPricing(false));
     }, 450);
     return () => clearTimeout(t);
-  }, [flowId, params, quantities, data]);
+  }, [flowId, params, quantities, data, viewLevel]);
 
   const allSteps = data?.flow?.steps || [];
   const finishes = data?.finishes || [];
@@ -617,12 +626,112 @@ export default function Configurator({ flowId, flowName, onExit }) {
       // The entered dimensions ride the request as `${stepId}__dims` params — the pricing engine
       // ignores unknown keys, but the team sees the exact finished size the customer typed.
       const dimParams = Object.fromEntries(Object.entries(dims).map(([sid, v]) => [`${sid}__dims`, v]));
-      const res = await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params: { ...params, ...dimParams }, quantities }, note });
+      const res = await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params: { ...params, ...dimParams }, quantities }, note, viewedLevel: price?.level || '' });
       setSubmitted(true);
       setSubmittedNo(res.data?.quoteNo || null);
     } catch (e) {
       alert('Could not send your request: ' + (e.message || e));
     } finally { setSubmitting(false); }
+  };
+
+  // ---- Presentation (Stuart 2026-07-27: "take the quote and combine together with any images
+  // from the asset gallery that match what is on the quote… align them to the right hand side of
+  // a landscape page with the quote on the left") ---------------------------------------------
+  // Matching runs on the SAME entitled gallery feed the Gallery tab shows (portalAssets): a line's
+  // item # (Fabricut code at their levels, ours at standard) is looked up in each asset's server-
+  // built identity blob; assets depicting MORE of the quote (the arm+backplate combo shots carry
+  // both codes) rank higher, finish-matched images beat off-finish ones.
+  const generatePresentation = async () => {
+    if (presBusy) return;
+    setPresBusy(true);
+    try {
+      const res = await httpsCallable(functions, 'portalAssets')();
+      const assets = res.data?.assets || [];
+      const lines = (price?.lines || []).filter((l) => (l.total || 0) !== 0);
+      const domFin = (() => {
+        const counts = {};
+        Object.values(params).forEach((v) => {
+          const f = v && finishes.find((x) => x.id === v);
+          if (f && f.code) counts[f.code] = (counts[f.code] || 0) + 1;
+        });
+        return (Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [''])[0];
+      })();
+      const itemNos = lines.map((l) => String(l.itemNo || '').trim().toUpperCase()).filter(Boolean);
+      const scored = assets.map((a) => {
+        const blob = a.blob || '';
+        let hits = 0;
+        itemNos.forEach((no) => {
+          const [base, fin] = no.split('/');
+          if (!base || !blob.includes(base.toLowerCase())) return;
+          if (fin && !blob.includes(fin.toLowerCase())) return;
+          hits++;
+        });
+        if (!hits) return null;
+        let score = hits * 10;
+        if (domFin && blob.includes(String(domFin).toLowerCase())) score += 5;
+        if (a.fab?.pairedCode && a.fab?.plateCode) score += 2; // the arm + backplate combo shot
+        return { a, score };
+      }).filter(Boolean).sort((x, y) => y.score - x.score);
+      const picks = [];
+      const seen = new Set();
+      for (const { a } of scored) { if (!seen.has(a.id)) { seen.add(a.id); picks.push(a); if (picks.length >= 8) break; } }
+      openPresentation(lines, picks);
+    } catch (e) {
+      alert('Could not gather the gallery images right now — please try again shortly.');
+    } finally { setPresBusy(false); }
+  };
+
+  const openPresentation = (lines, picks) => {
+    const w = window.open('', '_blank');
+    if (!w) return alert('Pop-up blocked — allow pop-ups for this site to generate the presentation.');
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const levelLabel = LEVEL_LABELS[price?.level] || '';
+    const capOf = (a) => {
+      const fabNo = String(a.fabCode || '').trim();
+      const color = String(a.fab?.fabColorName || a.fab?.ourFinishName || '').trim();
+      return [fabNo, color].filter(Boolean).join(' · ') || String(a.name || '');
+    };
+    const rows = lines.map((l) => `<tr><td class="ln">${esc(l.name)}${l.qty > 1 ? ` <span class="q">×${l.qty}</span>` : ''}</td><td class="amt">${esc(fmtMoney(l.total))}</td></tr>`).join('');
+    const figs = picks.map((a) => `<figure><img src="${esc(a.fullUrl || a.url)}" alt=""><figcaption>${esc(capOf(a))}</figcaption></figure>`).join('');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Presentation — Quote ${esc(submittedNo || '')}</title><style>
+      @page { size: letter landscape; margin: 0.4in; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Georgia, 'Times New Roman', serif; color: #1c1a16; }
+      .wrap { display: flex; gap: 28px; align-items: flex-start; }
+      .left { flex: 0 0 44%; }
+      .brand { font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: .25em; color: #b08d57; }
+      h1 { font-size: 21px; font-weight: 500; margin: 6px 0 2px; }
+      .meta { font-family: 'Courier New', monospace; font-size: 10px; color: #524e46; margin-bottom: 14px; }
+      table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+      td { padding: 5px 4px; border-top: 1px solid rgba(28,26,22,.14); vertical-align: top; }
+      .amt { text-align: right; white-space: nowrap; }
+      .q { color: #524e46; }
+      .total td { border-top: 2px solid #1c1a16; font-weight: bold; font-size: 13px; }
+      .fine { font-size: 9px; color: #524e46; margin-top: 12px; line-height: 1.5; }
+      .right { flex: 1 1 56%; display: grid; grid-template-columns: repeat(${picks.length > 4 ? 3 : 2}, 1fr); gap: 12px; }
+      figure { margin: 0; break-inside: avoid; }
+      figure img { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #f4f1ea; border: 1px solid rgba(28,26,22,.14); }
+      figcaption { font-family: 'Courier New', monospace; font-size: 8.5px; color: #524e46; padding-top: 4px; text-align: center; letter-spacing: .04em; }
+    </style></head><body>
+      <div class="wrap">
+        <div class="left">
+          <div class="brand">CLASSICAL ELEMENTS</div>
+          <h1>${esc(data?.flow?.name || flowName || 'Configured product')}</h1>
+          <div class="meta">Quote ${esc(submittedNo || '')} · ${esc(today)}${levelLabel ? ` · Priced at: ${esc(levelLabel)}` : ''}</div>
+          <table>${rows}<tr class="total"><td>Total</td><td class="amt">${esc(fmtMoney(price?.total))}</td></tr></table>
+          <div class="fine">Pricing as configured on the Classical Elements client portal. Final pricing is confirmed on your Sales Order Acknowledgement.</div>
+        </div>
+        <div class="right">${figs || '<div style="font-family:monospace;font-size:10px;color:#524e46">No matching gallery images were found for this configuration.</div>'}</div>
+      </div>
+      <script>
+        (function(){ var imgs = [].slice.call(document.images); var n = 0;
+          function done(){ if (++n >= imgs.length) setTimeout(function(){ window.print(); }, 250); }
+          if (!imgs.length) setTimeout(function(){ window.print(); }, 350);
+          else imgs.forEach(function(i){ if (i.complete) done(); else { i.onload = done; i.onerror = done; } });
+        })();
+      <\/script>
+    </body></html>`);
+    w.document.close();
   };
 
   if (err) return <div className="cfg"><button className="btn-ghost" onClick={onExit}>← Back</button><div className="empty" style={{ marginTop: 20 }}>{err}</div></div>;
@@ -636,9 +745,24 @@ export default function Configurator({ flowId, flowName, onExit }) {
       <div className="cfg-top">
         <button className="btn-ghost" onClick={onExit}>← All products</button>
         <h2 className="sec" style={{ margin: 0 }}>{data.flow.name}</h2>
-        {price ? (
-          <span className={`cfg-price${pricing ? ' stale' : ''}`}>{fmtMoney(price.total)}</span>
-        ) : (start !== null && start !== undefined ? <span className="cfg-price">Starting at {fmtMoney(start)}</span> : <span />)}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          {/* Their price ladder — shows only for Fabricut-leveled accounts (server-validated). */}
+          {price && String(price.level || '').indexOf('FAB_') === 0 && (
+            <span style={{ display: 'inline-flex', border: '1px solid var(--line)', borderRadius: 2, overflow: 'hidden' }}>
+              {Object.entries(LEVEL_LABELS).map(([id, label]) => {
+                const on = (viewLevel || price.level) === id;
+                return (
+                  <button key={id} type="button" onClick={() => setViewLevel(id)} style={{ padding: '7px 11px', fontFamily: 'var(--mono, monospace)', fontSize: '0.65rem', letterSpacing: '.07em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', background: on ? 'var(--brass, #b08d57)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)' }}>
+                    {label}
+                  </button>
+                );
+              })}
+            </span>
+          )}
+          {price ? (
+            <span className={`cfg-price${pricing ? ' stale' : ''}`}>{fmtMoney(price.total)}</span>
+          ) : (start !== null && start !== undefined ? <span className="cfg-price">Starting at {fmtMoney(start)}</span> : <span />)}
+        </span>
       </div>
 
       <div className="cfg-body">
@@ -648,10 +772,11 @@ export default function Configurator({ flowId, flowName, onExit }) {
               <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]}>
                 <Suspense fallback={null}>
                   <StudioRig />
-                  <Bounds fit clip margin={1.2}>
+                  <Bounds fit clip margin={1.15}>
                     <group scale={sizeScale}>
                       <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} />
                     </group>
+                    <RefitOnModel url={cadUrl} trigger={sizeScale} />
                   </Bounds>
                 </Suspense>
                 <OrbitControls makeDefault />
@@ -712,7 +837,13 @@ export default function Configurator({ flowId, flowName, onExit }) {
                 </div>
               )}
               {submitted ? (
-                <div className="msg ok" style={{ textAlign: 'left' }}>✓ Request sent{submittedNo ? <> — <strong>Quote #{submittedNo}</strong></> : ''}. Your Classical Elements team will confirm pricing and follow up. You can see it under Orders &amp; Quotes.</div>
+                <div className="msg ok" style={{ textAlign: 'left' }}>
+                  ✓ Request sent{submittedNo ? <> — <strong>Quote #{submittedNo}</strong></> : ''}. Your Classical Elements team will confirm pricing and follow up. You can see it under Orders &amp; Quotes.
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+                    <div style={{ marginBottom: 8 }}>Would you like to generate a presentation? It pairs this quote with the matching product images from your gallery on one landscape page — ready to print or save as PDF.</div>
+                    <button className="btn" disabled={presBusy} onClick={generatePresentation}>{presBusy ? 'Gathering images…' : 'Generate presentation'}</button>
+                  </div>
+                </div>
               ) : (
                 <div className="cfg-submit">
                   <textarea className="cfg-note" placeholder="Notes for your rep (quantity, project, timing…)" value={note} onChange={(e) => setNote(e.target.value)} />

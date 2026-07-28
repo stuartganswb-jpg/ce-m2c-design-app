@@ -3,10 +3,25 @@
 // paint vs wood light response) is built from the finish list the BFF sends, using the SAME static
 // rules as src/components/Shared/studioScene.js so material response matches exactly.
 import React, { useEffect, useMemo } from 'react';
-import { useGLTF, Environment, ContactShadows, Lightformer } from '@react-three/drei';
+import { useGLTF, Environment, ContactShadows, Lightformer, useBounds } from '@react-three/drei';
 import * as THREE from 'three';
 
 const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/';
+
+// Camera refit — <Bounds fit> measures on MOUNT, which is before Suspense resolves the GLB, so
+// it frames an empty group and the model appears tiny ("starts too far out", Stuart 2026-07-27).
+// This helper suspends on the SAME cached GLB as DynamicModel, so it mounts exactly when the
+// model is live in the tree — then re-measures and fits. `trigger` refits on later changes too
+// (e.g. the diameter render scale).
+export function RefitOnModel({ url, trigger }) {
+  useGLTF(url, DRACO_URL);
+  const bounds = useBounds();
+  useEffect(() => {
+    const t = setTimeout(() => { try { bounds.refresh().clip().fit(); } catch (e) { /* viewer gone */ } }, 80);
+    return () => clearTimeout(t);
+  }, [url, trigger, bounds]);
+  return null;
+}
 
 // ---- PBR registry (copied verbatim from studioScene.js) -------------------------------------
 const DEFAULT_ENVMAP_INTENSITY = 1.25;
