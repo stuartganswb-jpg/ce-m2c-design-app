@@ -16,46 +16,96 @@ const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/';
 // visible nodes, frames their box, and sets generous clip planes. Suspends on the SAME cached GLB
 // as DynamicModel so it runs exactly when the model is live; `trigger` refits on selection /
 // diameter changes.
-export function FitToVisible({ url, trigger, margin = 1.25, targetName = 'fit-target' }) {
-  useGLTF(url, DRACO_URL);
-  const camera = useThree((s) => s.camera);
+// Measure the VISIBLE geometry of a group (an invisible parent prunes its whole subtree — the
+// master GLB carries every option's meshes behind visibility toggles, and a plain Box3
+// setFromObject would measure the hidden ones too).
+export function visibleBoxOf(root) {
+  const box = new THREE.Box3();
+  const tmp = new THREE.Box3();
+  const walk = (o) => {
+    if (o.visible === false) return;
+    if (o.isMesh && o.geometry) {
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      if (o.geometry.boundingBox) { tmp.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld); box.union(tmp); }
+    }
+    for (const c of o.children) walk(c);
+  };
+  walk(root);
+  return box;
+}
+
+// FIT THE MODEL TO THE CAMERA — not the camera to the model (Stuart 2026-07-27/28: "zoom is
+// still small on start and the hidden cropping line is still there"). Moving the camera proved
+// unreliable here: R3F re-applies the Canvas `camera` prop on re-render, OrbitControls mounts
+// outside the Suspense boundary and re-targets, and any tight near/far clip slices a long rod
+// diagonally. Scaling + centering the model instead is deterministic: the product always ends up
+// TARGET_SIZE units at the origin, framed by the default camera, well inside the default clip
+// planes, and orbiting is centered because the model sits at the controls' default target.
+// The group this drives must carry NO scale/position props from React (they would fight it).
+// The model is sized so its BOUNDING SPHERE fills FILL of the frustum at the camera's starting
+// distance, and centered on the origin (= OrbitControls' default target). Sphere, not box: the
+// customer drags to rotate, and only a sphere fit guarantees the product stays fully framed at
+// EVERY orbit angle — a box fit that just fills the frame head-on swings out of view when turned.
+// Scale is computed from the STARTING distance, never the live camera, so a refit after a
+// selection change doesn't undo the customer's own zoom.
+// The group is also turned so the product's LONG axis lies broadside to the camera. The default
+// camera sits on the [5,5,5] diagonal, which looks nearly straight down a rod's axis — the rod
+// foreshortens to a stub and wastes the frame. Turning it broadside is free (we already own this
+// group's transform) and buys ~40% more on-screen length with no clipping risk.
+const START_CAM = [5, 5, 5]; // Canvas camera={{ position: [5, 5, 5] }}
+const START_DIST = Math.hypot(START_CAM[0], START_CAM[1], START_CAM[2]);
+const FILL = 0.95;
+
+// Rotation about Y that turns the model's longest horizontal axis perpendicular to the camera's
+// horizontal look direction (three's rotation.y maps (x,z) → (x cos a + z sin a, −x sin a + z cos a)).
+function broadsideYawFor(size, camPos) {
+  const along = size.x >= size.z ? { x: 1, z: 0 } : { x: 0, z: 1 };   // the long axis at identity
+  const hx = camPos[0], hz = camPos[2];
+  if (!Math.hypot(hx, hz)) return 0;
+  const want = { x: hz, z: -hx };                                     // perpendicular to the camera, in XZ
+  return Math.atan2(along.z, along.x) - Math.atan2(want.z, want.x);
+}
+
+export function FitModelToView({ url, trigger, targetName = 'fit-target' }) {
+  useGLTF(url, DRACO_URL); // suspends on the SAME cached GLB as DynamicModel → runs when it's live
   const scene = useThree((s) => s.scene);
-  const controls = useThree((s) => s.controls);
+  const camera = useThree((s) => s.camera);
   useEffect(() => {
     const t = setTimeout(() => {
       try {
-        scene.updateWorldMatrix(true, true);
-        // Fit ONLY the named model group — walking the whole scene would include the studio
-        // rig (the ContactShadows floor plane dwarfs the product and threw the camera out to
-        // frame the floor: "the rendering area does not display anything").
-        const root = scene.getObjectByName(targetName) || scene;
-        const box = new THREE.Box3();
-        const tmp = new THREE.Box3();
-        const walk = (o) => {
-          if (o.visible === false) return; // an invisible parent hides the whole subtree
-          if (o.isMesh && o.geometry) {
-            if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
-            if (o.geometry.boundingBox) { tmp.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld); box.union(tmp); }
-          }
-          for (const c of o.children) walk(c);
-        };
-        walk(root);
-        if (box.isEmpty()) return;
+        const root = scene.getObjectByName(targetName);
+        if (!root) return;
+        // Measure at identity — never measure through our own transform. Restore on a miss so a
+        // not-yet-populated scene can't flash the model at raw GLB scale.
+        const prevScale = root.scale.x;
+        const prevPos = root.position.clone();
+        const prevYaw = root.rotation.y;
+        const restore = () => { root.scale.setScalar(prevScale); root.position.copy(prevPos); root.rotation.y = prevYaw; root.updateWorldMatrix(true, true); };
+        root.scale.setScalar(1);
+        root.position.set(0, 0, 0);
+        root.rotation.y = 0;
+        root.updateWorldMatrix(true, true);
+        const box = visibleBoxOf(root);
+        if (box.isEmpty()) { restore(); return; }
         const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        const maxDim = Math.max(size.x, size.y, size.z) || 1;
-        const fov = ((camera.fov || 50) * Math.PI) / 180;
-        const dist = (maxDim / (2 * Math.tan(fov / 2))) * margin;
-        const dir = new THREE.Vector3(1, 0.45, 1).normalize();
-        camera.position.copy(center.clone().add(dir.multiplyScalar(dist)));
-        camera.near = Math.max(dist / 500, 0.01);
-        camera.far = dist * 500;
-        camera.updateProjectionMatrix();
-        if (controls) { controls.target.copy(center); controls.update(); } else camera.lookAt(center);
+        const radius = box.getBoundingSphere(new THREE.Sphere(center)).radius;
+        if (!(radius > 0)) { restore(); return; }
+        // Half-angle of the tightest frustum direction (vertical fov, horizontal via aspect).
+        const vHalf = ((camera.isPerspectiveCamera ? camera.fov : 50) * Math.PI) / 360;
+        const aspect = camera.aspect > 0 ? camera.aspect : 1;
+        const half = Math.min(vHalf, Math.atan(Math.tan(vHalf) * aspect));
+        const s = (START_DIST * Math.sin(half) * FILL) / radius;
+        // Turn broadside, then place the (rotated) centre on the origin so orbiting stays centred.
+        const yaw = broadsideYawFor(box.getSize(new THREE.Vector3()), START_CAM);
+        root.rotation.y = yaw;
+        root.scale.setScalar(s);
+        const offset = center.clone().multiplyScalar(s).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        root.position.set(-offset.x, -offset.y, -offset.z);
+        root.updateWorldMatrix(true, true);
       } catch (e) { /* viewer torn down mid-fit */ }
     }, 120);
     return () => clearTimeout(t);
-  }, [url, trigger, camera, scene, controls, targetName]);
+  }, [url, trigger, scene, camera, targetName]);
   return null;
 }
 

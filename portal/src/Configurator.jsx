@@ -7,7 +7,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
-import { DynamicModel, StudioRig, buildPbrRegistry, FitToVisible } from './cpqRender.jsx';
+import { DynamicModel, StudioRig, buildPbrRegistry, FitModelToView } from './cpqRender.jsx';
 import { sizeSelectionsOf, isReturnOption, returnsAllowedFor, projAllowedAtDia, renderScaleOf } from './shared/sizeMatrix';
 
 const SIZE_TYPE = 'SIZE_SELECT';
@@ -792,10 +792,14 @@ export default function Configurator({ flowId, flowName, onExit }) {
               <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]}>
                 <Suspense fallback={null}>
                   <StudioRig />
-                  <group name="fit-target" scale={sizeScale}>
-                    <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} />
+                  {/* The outer group is driven ENTIRELY by FitModelToView (scale + centering) —
+                      it must carry no transform props from React, or the two would fight. */}
+                  <group name="fit-target">
+                    <group scale={sizeScale}>
+                      <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} />
+                    </group>
                   </group>
-                  <FitToVisible url={cadUrl} trigger={`${sizeScale}|${JSON.stringify(visibilityOverrides)}`} />
+                  <FitModelToView url={cadUrl} trigger={`${sizeScale}|${JSON.stringify(visibilityOverrides)}|${JSON.stringify(cloneSpecs)}`} />
                 </Suspense>
                 <OrbitControls makeDefault />
               </Canvas>
