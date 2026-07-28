@@ -34,70 +34,112 @@ export function visibleBoxOf(root) {
   return box;
 }
 
-// FIT THE MODEL TO THE CAMERA — not the camera to the model (Stuart 2026-07-27/28: "zoom is
-// still small on start and the hidden cropping line is still there"). Moving the camera proved
-// unreliable here: R3F re-applies the Canvas `camera` prop on re-render, OrbitControls mounts
-// outside the Suspense boundary and re-targets, and any tight near/far clip slices a long rod
-// diagonally (that clip plane IS the "hidden cropping line"). Sizing the MODEL instead is
-// deterministic — it lands in front of the default camera, centred on the controls' default
-// target, nowhere near the default clip planes. Three properties:
-//   - BOUNDING-SPHERE fit, not box: the customer drags to rotate, and only a sphere fit keeps the
-//     product framed at EVERY angle; a box fit looks right head-on and swings out when turned.
-//   - BROADSIDE yaw: the [5,5,5] camera looks nearly down a rod's axis, foreshortening it to a
-//     stub; turning the long axis across the screen costs nothing and buys ~40% more length.
-//   - Scale from the STARTING distance, never the live camera, so a refit never undoes the
-//     customer's own scroll-zoom.
+// FIT THE MODEL TO THE CAMERA — by MEASURING THE RESULT, not by trusting assumptions
+// (Stuart 2026-07-28, fourth attempt: "small and gets cut off" -> now centred and uncut, but ~3x
+// too small). The previous version computed the scale from assumed inputs — a camera at [5,5,5],
+// a known fov/aspect — and any one of those being wrong in the real app scales the product wrong
+// with no way to notice. This version projects the fitted geometry through the LIVE camera,
+// measures how much of the viewport it actually covers, and corrects until it hits the target.
+// It cannot be wrong about the camera because it never assumes one.
+//
+// Two bounds, both from the live camera:
+//   - TARGET SPAN: the product covers ~78% of the viewport (nudged by rod diameter so 1-3/8"
+//     reads heftier than 3/4" — Stuart 2026-07-28).
+//   - SPHERE CAP: never larger than the bounding sphere that fits the frustum, so the product
+//     stays fully framed at EVERY orbit angle (the customer drags to rotate).
+// It also turns the product BROADSIDE (the camera looks nearly down a rod's axis otherwise) and
+// centres it on the origin = OrbitControls' default target.
+//
 // WHERE it runs matters as much as the maths: DynamicModel defers applying visibility until every
 // finish texture has loaded, so anything that fits earlier measures the model with the whole
-// invisible option cloud still visible — a huge box, the rod shrunk to a speck. The fit is
-// therefore called from inside that same override pass (see DynamicModel), the one code path we
-// can prove runs at the right moment, on a group that component owns outright.
-const START_CAM = [5, 5, 5]; // Canvas camera={{ position: [5, 5, 5] }}
-const START_DIST = Math.hypot(START_CAM[0], START_CAM[1], START_CAM[2]);
-const POLL_FRAMES = 12; // ~5x/sec — re-measure until the geometry settles
+// invisible option cloud still visible. The fit is therefore called from inside that same override
+// pass, on a group DynamicModel owns outright (React sets no transform props on it).
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
-// How much of the frustum the product fills — nudged by the rod diameter so a 1-3/8" system reads
-// visibly heftier than a 3/4" one (Stuart 2026-07-28: "i would still like a slight visual change
-// between diameters"). sizeScale is the render scale normalised to the master GLB's own diameter,
-// so log-relative to 1 keeps this monotonic for flows generated off any master. Capped at 0.95 —
-// the value verified to keep the product inside the frame at every orbit angle.
-const fillForScale = (sizeScale) => {
+// Fraction of the viewport the visible geometry covers, through the live camera (NDC is -1..1).
+export function screenSpanOf(root, camera) {
+  const box = visibleBoxOf(root);
+  if (box.isEmpty()) return 0;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  const v = new THREE.Vector3();
+  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+    v.set(x, y, z).project(camera);
+    minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
+    minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+  }
+  return Math.max(maxX - minX, maxY - minY) / 2;
+}
+
+// Target viewport coverage, nudged by rod diameter (the "slight visual change between diameters").
+const targetSpanFor = (sizeScale) => {
   const t = Math.log(Math.max(Number(sizeScale) || 1, 1e-3)) / Math.log(1.85);
-  return 0.90 + 0.05 * Math.max(-1, Math.min(1, t));
+  return 0.78 + 0.05 * Math.max(-1, Math.min(1, t));
 };
 
 // Rotation about Y that turns the model's longest horizontal axis perpendicular to the camera's
 // horizontal look direction (three's rotation.y maps (x,z) -> (x cos a + z sin a, -x sin a + z cos a)).
 function broadsideYawFor(size, camPos) {
-  const along = size.x >= size.z ? { x: 1, z: 0 } : { x: 0, z: 1 };   // the long axis at identity
-  const hx = camPos[0], hz = camPos[2];
+  const along = size.x >= size.z ? { x: 1, z: 0 } : { x: 0, z: 1 };
+  const hx = camPos.x, hz = camPos.z;
   if (!Math.hypot(hx, hz)) return 0;
-  const want = { x: hz, z: -hx };                                     // perpendicular to the camera, in XZ
+  const want = { x: hz, z: -hx };
   return Math.atan2(along.z, along.x) - Math.atan2(want.z, want.x);
 }
 
-// The fit itself, split out so it can be exercised outside React.
-export function applyFit(root, { fill, aspect = 1, fov = 50 }) {
+// Returns a diagnostic object (also used by the viewer readout) or null when nothing is visible.
+export function applyFit(root, camera, sizeScale = 1, maxSphereFill = 0.95) {
+  if (!root || !camera) return null;
   root.scale.setScalar(1);
   root.position.set(0, 0, 0);
   root.rotation.y = 0;
   root.updateWorldMatrix(true, true);
   const box = visibleBoxOf(root);
-  if (box.isEmpty()) return false;
+  if (box.isEmpty()) return null;
+  const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const radius = box.getBoundingSphere(new THREE.Sphere(center)).radius;
-  if (!(radius > 0)) return false;
-  // Half-angle of the tightest frustum direction (vertical fov, horizontal via aspect).
-  const vHalf = (fov * Math.PI) / 360;
-  const half = Math.min(vHalf, Math.atan(Math.tan(vHalf) * (aspect > 0 ? aspect : 1)));
-  const s = (START_DIST * Math.sin(half) * fill) / radius;
-  const yaw = broadsideYawFor(box.getSize(new THREE.Vector3()), START_CAM);
-  root.rotation.y = yaw;
-  root.scale.setScalar(s);
-  const offset = center.clone().multiplyScalar(s).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-  root.position.set(-offset.x, -offset.y, -offset.z);
-  root.updateWorldMatrix(true, true);
-  return true;
+  if (!(radius > 0)) return null;
+
+  let meshes = 0;
+  const count = (o) => { if (o.visible === false) return; if (o.isMesh) meshes++; for (const c of o.children) count(c); };
+  count(root);
+
+  const yaw = broadsideYawFor(size, camera.position);
+  const place = (s) => {
+    root.rotation.y = yaw;
+    root.scale.setScalar(s);
+    const off = center.clone().multiplyScalar(s).applyAxisAngle(Y_AXIS, yaw);
+    root.position.set(-off.x, -off.y, -off.z);
+    root.updateWorldMatrix(true, true);
+  };
+
+  camera.updateMatrixWorld();
+  const dist = camera.position.length() || 1;   // controls target is the origin, where we centre
+  const vHalf = ((camera.isPerspectiveCamera ? camera.fov : 50) * Math.PI) / 360;
+  const target = targetSpanFor(sizeScale);
+
+  // Start from the geometric estimate, then CORRECT from what the camera actually shows.
+  let s = (dist * Math.sin(vHalf) * 0.9) / radius;
+  let span = 0;
+  for (let i = 0; i < 4; i++) {
+    place(s);
+    span = screenSpanOf(root, camera);
+    if (!(span > 1e-6)) break;
+    const next = s * (target / span);
+    if (!Number.isFinite(next) || next <= 0) break;
+    if (Math.abs(next - s) / s < 0.005) { s = next; break; }
+    s = next;
+  }
+  // Orbit safety: never exceed the sphere that fits the frustum at this distance.
+  const aspect = camera.aspect > 0 ? camera.aspect : 1;
+  const half = Math.min(vHalf, Math.atan(Math.tan(vHalf) * aspect));
+  const sCap = (dist * Math.sin(half) * maxSphereFill) / radius;
+  const sFinal = Math.min(s, sCap);
+  place(sFinal);
+  return {
+    scale: sFinal, cappedBySphere: sFinal < s - 1e-9, radius, dist, aspect, meshes,
+    span: screenSpanOf(root, camera), target,
+  };
 }
 
 // ---- PBR registry (copied verbatim from studioScene.js) -------------------------------------
@@ -151,7 +193,7 @@ const pbrForTexture = (registry, url) => ({ envMapIntensity: DEFAULT_ENVMAP_INTE
 const globalTextureCache = {};
 
 // ---- DynamicModel (ported from CPQTab.js:125-350) -------------------------------------------
-export function DynamicModel({ url, textureOverrides, visibilityOverrides, cloneSpecs, pbrRegistry, fitSizeScale }) {
+export function DynamicModel({ url, textureOverrides, visibilityOverrides, cloneSpecs, pbrRegistry, fitSizeScale, onFit }) {
   const { scene } = useGLTF(url, DRACO_URL);
   const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -166,13 +208,10 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
     const root = fitRef.current;
     if (!root) return;
     try {
-      applyFit(root, {
-        fill: fillForScale(fitSizeScale),
-        aspect: camera && camera.aspect > 0 ? camera.aspect : 1,
-        fov: camera && camera.isPerspectiveCamera ? camera.fov : 50,
-      });
+      const info = applyFit(root, camera, fitSizeScale);
+      if (info && onFit) onFit(info);
     } catch (e) { /* viewer torn down mid-fit */ }
-  }, [camera, fitSizeScale]);
+  }, [camera, fitSizeScale, onFit]);
   const doFitRef = useRef(doFit);
   doFitRef.current = doFit;
   // Diameter change (or a camera swap) re-frames without waiting for a texture pass.
