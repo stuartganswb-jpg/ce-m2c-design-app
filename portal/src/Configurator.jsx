@@ -790,7 +790,8 @@ export default function Configurator({ flowId, flowName, onExit }) {
         <div className="cfg-stage">
           {cadUrl ? (
             <div className="viewer">
-              <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]}>
+              <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]}
+                style={{ width: '100%', height: '100%' }} resize={{ debounce: 0 }}>
                 <Suspense fallback={null}>
                   <StudioRig />
                   {/* No scale wrapper: DynamicModel frames itself (scale + centre + broadside)

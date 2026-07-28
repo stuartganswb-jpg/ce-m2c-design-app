@@ -204,6 +204,10 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
   // component owns outright — React sets no transform props on it, so nothing fights the fit.
   const fitRef = useRef(null);
   const camera = useThree((s) => s.camera);
+  // R3F re-measures the canvas on resize; a stale first measure (a wide strip before layout
+  // settles) would otherwise be baked into the model's scale forever.
+  const viewW = useThree((s) => s.size.width);
+  const viewH = useThree((s) => s.size.height);
   const doFit = React.useCallback(() => {
     const root = fitRef.current;
     if (!root) return;
@@ -211,7 +215,7 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
       const info = applyFit(root, camera, fitSizeScale);
       if (info && onFit) onFit(info);
     } catch (e) { /* viewer torn down mid-fit */ }
-  }, [camera, fitSizeScale, onFit]);
+  }, [camera, fitSizeScale, onFit, viewW, viewH]);
   const doFitRef = useRef(doFit);
   doFitRef.current = doFit;
   // Diameter change (or a camera swap) re-frames without waiting for a texture pass.
