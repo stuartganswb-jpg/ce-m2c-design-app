@@ -792,7 +792,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
               <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]}>
                 <Suspense fallback={null}>
                   <StudioRig />
-                  <group scale={sizeScale}>
+                  <group name="fit-target" scale={sizeScale}>
                     <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibilityOverrides} cloneSpecs={cloneSpecs} pbrRegistry={pbrRegistry} />
                   </group>
                   <FitToVisible url={cadUrl} trigger={`${sizeScale}|${JSON.stringify(visibilityOverrides)}`} />

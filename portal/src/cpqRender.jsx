@@ -16,7 +16,7 @@ const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/';
 // visible nodes, frames their box, and sets generous clip planes. Suspends on the SAME cached GLB
 // as DynamicModel so it runs exactly when the model is live; `trigger` refits on selection /
 // diameter changes.
-export function FitToVisible({ url, trigger, margin = 1.25 }) {
+export function FitToVisible({ url, trigger, margin = 1.25, targetName = 'fit-target' }) {
   useGLTF(url, DRACO_URL);
   const camera = useThree((s) => s.camera);
   const scene = useThree((s) => s.scene);
@@ -25,6 +25,10 @@ export function FitToVisible({ url, trigger, margin = 1.25 }) {
     const t = setTimeout(() => {
       try {
         scene.updateWorldMatrix(true, true);
+        // Fit ONLY the named model group — walking the whole scene would include the studio
+        // rig (the ContactShadows floor plane dwarfs the product and threw the camera out to
+        // frame the floor: "the rendering area does not display anything").
+        const root = scene.getObjectByName(targetName) || scene;
         const box = new THREE.Box3();
         const tmp = new THREE.Box3();
         const walk = (o) => {
@@ -35,7 +39,7 @@ export function FitToVisible({ url, trigger, margin = 1.25 }) {
           }
           for (const c of o.children) walk(c);
         };
-        walk(scene);
+        walk(root);
         if (box.isEmpty()) return;
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
@@ -51,7 +55,7 @@ export function FitToVisible({ url, trigger, margin = 1.25 }) {
       } catch (e) { /* viewer torn down mid-fit */ }
     }, 120);
     return () => clearTimeout(t);
-  }, [url, trigger, camera, scene, controls]);
+  }, [url, trigger, camera, scene, controls, targetName]);
   return null;
 }
 
