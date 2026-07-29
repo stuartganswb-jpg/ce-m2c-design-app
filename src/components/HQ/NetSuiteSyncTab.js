@@ -36,11 +36,65 @@ const healOutboxPayload = (o) => {
     return p;
 };
 
+// ---- FIELD-LEVEL SYNC CONTROL (Stuart 2026-07-28) ----------------------------------------------
+// "this brings to light a weakness in the sync — add visible check flags on these 2 windows so we
+// can check which ones we want to overwrite in each direction."
+//
+// The weakness: custitem26/27/28 (In-House / Stocked / Old) only ever travelled NetSuite → app.
+// The app's copies could be corrected all day and NetSuite never heard about it, and the Stocked
+// flag is what the whole Sales Snapshot is built on — so a right answer in the app still produced
+// an empty report. Now every field is a checkbox in BOTH directions.
+//
+// PULL = "let NetSuite overwrite this on items the app already has". Unchecking a field freezes the
+// app's value. New items are unaffected — there is nothing to overwrite on a first import.
+// PUSH = "write the app's value onto the NetSuite item".
+const PULL_FIELDS = [
+    { key: 'cost', label: 'Base Cost' },
+    { key: 'basePrice', label: 'Base Price (custitem9)' },
+    { key: 'weight', label: 'Weight' },
+    { key: 'isInHouse', label: 'In-House · custitem26' },
+    { key: 'isStocked', label: 'Stocked · custitem27' },
+    { key: 'isRetired', label: 'Old / retired · custitem28' },
+    { key: 'outsourceAction', label: 'Outsource action' },
+    { key: 'partHandling', label: 'Part handling' },
+    { key: 'uom', label: 'UOM' },
+    { key: 'bomRevision', label: 'BOM revision' },
+    { key: 'binLocation', label: 'Bin location' },
+    { key: 'vendorName', label: 'Vendor name' },
+    { key: 'vendorId', label: 'Vendor part #' },
+    { key: 'customData', label: 'NS collection / watchlist / projection' },
+];
+// The three NetSuite checkbox fields, and the app spec each one mirrors.
+const NS_FLAG_FIELDS = { isStocked: 'custitem27', isInHouse: 'custitem26', isRetired: 'custitem28' };
+const PUSH_FIELDS = [
+    { key: 'itemid', label: 'Item # (SKU)', def: true },
+    { key: 'displayname', label: 'Display name', def: true },
+    { key: 'basePrice', label: 'Base Price (custitem9)', def: true },
+    { key: 'weight', label: 'Weight', def: true },
+    { key: 'isStocked', label: 'Stocked · custitem27', def: false, flag: true },
+    { key: 'isInHouse', label: 'In-House · custitem26', def: false, flag: true },
+    { key: 'isRetired', label: 'Old / retired · custitem28', def: false, flag: true },
+];
+const defaultPullFlags = () => PULL_FIELDS.reduce((a, f) => ({ ...a, [f.key]: true }), {});
+const defaultPushFlags = () => PUSH_FIELDS.reduce((a, f) => ({ ...a, [f.key]: f.def }), {});
+
 const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3");
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncLog, setSyncLog] = useState([]);
     const [outbox, setOutbox] = useState([]); // staged NetSuite writes (ns_outbox) — live monitor
+    // Per-field direction control, persisted so a deliberate choice survives a reload.
+    const [pullFlags, setPullFlags] = useState(defaultPullFlags);
+    const [pushFlags, setPushFlags] = useState(defaultPushFlags);
+    useEffect(() => onSnapshot(doc(db, 'system', 'netsuite_sync_flags'), s => {
+        const d = s.exists() ? s.data() : {};
+        setPullFlags({ ...defaultPullFlags(), ...(d.pull || {}) });
+        setPushFlags({ ...defaultPushFlags(), ...(d.push || {}) });
+    }, () => { }), []);
+    const saveSyncFlags = (pull, push) => {
+        setPullFlags(pull); setPushFlags(push);
+        setDoc(doc(db, 'system', 'netsuite_sync_flags'), { pull, push, updatedAt: Date.now(), updatedBy: String(currentUser?.name || currentUser || '') }, { merge: true }).catch(() => { });
+    };
 
     useEffect(() => {
         if (BRAND_NETSUITE_MAP[activeBrand]) {
@@ -598,11 +652,18 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     const keepProductType = (existingSpecs.productType && String(existingSpecs.productType).toUpperCase() !== 'UNCATEGORIZED')
                         ? existingSpecs.productType
                         : (newSpecs.productType || existingSpecs.productType || 'Uncategorized');
+                    // 🎚 PER-FIELD DIRECTION CONTROL: drop any field the operator unchecked on the
+                    // pull card, so the app's curated value survives this import untouched. Only
+                    // EXISTING items are protected — a first import has nothing to overwrite.
+                    const allowedSpecs = {};
+                    Object.entries(newSpecs).forEach(([k, v]) => { if (pullFlags[k] !== false) allowedSpecs[k] = v; });
                     payload.manufacturingSpecs = {
                         ...existingSpecs,
-                        ...newSpecs,
+                        ...allowedSpecs,
                         productType: keepProductType,
-                        customData: { ...(newSpecs.customData || {}), ...(existingSpecs.customData || {}) }
+                        customData: pullFlags.customData === false
+                            ? (existingSpecs.customData || {})
+                            : { ...(newSpecs.customData || {}), ...(existingSpecs.customData || {}) }
                     };
                 } else {
                     payload.id = docId;
@@ -675,7 +736,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     };
 
     const handlePushItemsToNetSuite = async () => {
-        if (!window.confirm(`Push ${String(activeBrand || '').toUpperCase()} item updates (SKU, Name, Base Price, Weight) FROM the App TO NetSuite?\n\nThis overwrites those fields on the matched NetSuite items. Tags/flags are not sent (App-only). Tip: test ONE item via the Library's per-item push first.`)) return;
+        const enabled = PUSH_FIELDS.filter(f => pushFlags[f.key]);
+        if (!enabled.length) return alert('Nothing is ticked on the ⬆ Push card — choose at least one field to write.');
+        const enabledFlags = Object.keys(NS_FLAG_FIELDS).filter(k => pushFlags[k]);
+        const coreEnabled = enabled.some(f => !f.flag);
         setIsSyncing(true);
         addLog(`Initiating App → NetSuite write-back for ${String(activeBrand || '').toUpperCase()}...`, 'info');
         try {
@@ -685,16 +749,67 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // must NEVER write back to NetSuite even if someone stamps an internal id on one.
                 .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand)) && p.netSuiteInternalId && !(p.manufacturingSpecs?.aliasOf || p.aliasOf));
             if (items.length === 0) { addLog("No mapped items (with a NetSuite Internal ID) for this brand. Sync from ERP / set the ID first.", 'warn'); setIsSyncing(false); return; }
+
+            // ⚖ FLAG DIFF BEFORE ANY WRITE. custitem26/27/28 are checkboxes — pushing them blind
+            // could silently CLEAR a flag on hundreds of NetSuite items because the app's copy is
+            // stale. So read NetSuite's current values first and show exactly what changes, in both
+            // directions, before asking. It also lets a flag-only run skip every item that already
+            // agrees, instead of PATCHing the whole catalog.
+            const nsBoolOf = (v) => v === true || v === 'T' || v === 't' || v === 'true' || v === 1 || v === '1';
+            const nsFlagById = {};
+            if (enabledFlags.length) {
+                addLog(`Reading current ${enabledFlags.map(k => NS_FLAG_FIELDS[k]).join(' / ')} values from NetSuite for ${items.length} item(s)…`, 'info');
+                const ids = items.map(p => String(p.netSuiteInternalId)).filter(Boolean);
+                for (let i = 0; i < ids.length; i += 400) {
+                    const rows = await suiteqlQuery(`SELECT id, custitem26, custitem27, custitem28 FROM item WHERE id IN (${ids.slice(i, i + 400).join(',')})`);
+                    (rows || []).forEach(r => { nsFlagById[String(r.id)] = r; });
+                }
+                // Read failed entirely → we have no idea what NetSuite currently holds, and pushing a
+                // checkbox blind can un-tick hundreds of items. Stop rather than guess.
+                if (Object.keys(nsFlagById).length === 0) {
+                    addLog('❌ Could not read the current custitem26/27/28 values from NetSuite — flags NOT pushed (a blind checkbox push could un-tick items). Un-tick the flags to push the other fields, or retry.', 'error');
+                    alert('Could not read the current flag values from NetSuite, so nothing was written.\n\nPushing a checkbox without knowing its current value risks un-ticking items in bulk. Retry, or un-tick the three custitem flags to push the other fields only.');
+                    setIsSyncing(false); return;
+                }
+            }
+            const flagDelta = (p, k) => {
+                const row = nsFlagById[String(p.netSuiteInternalId)];
+                if (!row) return null;                                   // unknown in NetSuite — don't claim a change
+                const want = !!(p.manufacturingSpecs || {})[k];
+                const have = nsBoolOf(row[NS_FLAG_FIELDS[k]]);
+                return want === have ? 'same' : (want ? 'set' : 'clear');
+            };
+            const flagLines = enabledFlags.map(k => {
+                let set = 0, clear = 0, same = 0, unknown = 0;
+                items.forEach(p => { const d = flagDelta(p, k); if (d === 'set') set++; else if (d === 'clear') clear++; else if (d === 'same') same++; else unknown++; });
+                addLog(`  ${NS_FLAG_FIELDS[k]} (${k}): ${set} to SET, ${clear} to CLEAR, ${same} already match${unknown ? `, ${unknown} not found in NetSuite` : ''}.`, clear ? 'warn' : 'info');
+                return `• ${NS_FLAG_FIELDS[k]} — ${k}:  ${set} will be TICKED,  ${clear} will be UN-TICKED,  ${same} already match`;
+            });
+            const changed = enabledFlags.length && !coreEnabled
+                ? items.filter(p => enabledFlags.some(k => { const d = flagDelta(p, k); return d === 'set' || d === 'clear'; })).length
+                : items.length;
+            if (!window.confirm(`Push ${String(activeBrand || '').toUpperCase()} → NetSuite\n\nFields: ${enabled.map(f => f.label).join(', ')}\n\n${flagLines.length ? flagLines.join('\n') + '\n\n' : ''}${changed} of ${items.length} mapped item(s) will be written.\n\nThis OVERWRITES those fields on NetSuite. Tip: test ONE item via the Library's per-item push first.`)) { setIsSyncing(false); return; }
             addLog(`Found ${items.length} mapped item(s). Writing back...`, 'info');
 
-            let updated = 0, coreOnly = 0, failed = 0;
+            let updated = 0, coreOnly = 0, failed = 0, skipped = 0;
             for (const p of items) {
                 const specs = p.manufacturingSpecs || {};
                 const full = {};
-                if (p.legacyErpId && p.legacyErpId !== 'PENDING') full.itemid = p.legacyErpId;
-                if (p.itemName) full.displayname = p.itemName;
-                const bpv = parseFloat(specs.basePrice); if (specs.basePrice !== undefined && specs.basePrice !== '' && !isNaN(bpv)) full.custitem9 = bpv;
-                const wv = parseFloat(specs.weight); if (specs.weight !== undefined && specs.weight !== '' && !isNaN(wv)) full.weight = wv;
+                if (pushFlags.itemid && p.legacyErpId && p.legacyErpId !== 'PENDING') full.itemid = p.legacyErpId;
+                if (pushFlags.displayname && p.itemName) full.displayname = p.itemName;
+                if (pushFlags.basePrice) { const bpv = parseFloat(specs.basePrice); if (specs.basePrice !== undefined && specs.basePrice !== '' && !isNaN(bpv)) full.custitem9 = bpv; }
+                if (pushFlags.weight) { const wv = parseFloat(specs.weight); if (specs.weight !== undefined && specs.weight !== '' && !isNaN(wv)) full.weight = wv; }
+                // Checkbox flags are sent as real booleans (SuiteQL reports them as 'T'/'F', the REST
+                // record API takes true/false).
+                let flagChange = false;
+                enabledFlags.forEach(k => {
+                    const d = flagDelta(p, k);
+                    if (d === null) return;                              // not in NetSuite — nothing to write onto
+                    full[NS_FLAG_FIELDS[k]] = !!specs[k];
+                    if (d !== 'same') flagChange = true;
+                });
+                // A flags-only run touches ONLY the items that actually disagree.
+                if (!coreEnabled && !flagChange) { skipped++; continue; }
                 if (Object.keys(full).length === 0) continue;
 
                 let recordType = p.netSuiteRecordType || (p.partClass === 'Inventory' ? 'inventoryitem' : 'assemblyitem');
@@ -723,7 +838,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     addLog(`  ✗ ${p.legacyErpId || p.itemId || p.id}: ${JSON.stringify(result).slice(0, 180)}`, 'error');
                 }
             }
-            addLog(`✅ Write-back done: ${updated} updated${coreOnly ? ` (${coreOnly} core-only after a field was dropped)` : ''}, ${failed} failed.`, failed ? 'warn' : 'success');
+            addLog(`✅ Write-back done: ${updated} updated${coreOnly ? ` (${coreOnly} core-only after a field was dropped)` : ''}${skipped ? `, ${skipped} skipped (flags already match)` : ''}, ${failed} failed.`, failed ? 'warn' : 'success');
 
             // --- UNMAPPED items: MERGE-or-CREATE (never duplicate) ---
             // Items with a real item # but no NetSuite link: (1) look up the EXACT itemid in NetSuite —
@@ -925,8 +1040,22 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
                         <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
+                        <FieldFlags
+                            title="NetSuite may overwrite…"
+                            note="Ticked = NetSuite wins on items the app already has. Un-tick a field to freeze the app's value through this import. New items always take everything — there's nothing to overwrite on a first import. Item name, category and routing type are always app-master."
+                            fields={PULL_FIELDS} flags={pullFlags} disabled={isSyncing}
+                            onToggle={(k, v) => saveSyncFlags({ ...pullFlags, [k]: v }, pushFlags)}
+                            onAll={(v) => saveSyncFlags(PULL_FIELDS.reduce((a, f) => ({ ...a, [f.key]: v }), {}), pushFlags)}
+                        />
                         <div style={{ borderTop: '1px dashed var(--line)', margin: '6px 0', paddingTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>App → NetSuite (write-back)</div>
-                        <SyncButton onClick={handlePushItemsToNetSuite} disabled={isSyncing} label="⬆ Push Items → NetSuite (App is master)" sub="REST PATCH: writes the App's SKU, Name, Base Price & Weight onto matched NetSuite items (by Internal ID). Tolerant — record-type + field-drop retries; one row can't halt the run. Tags not sent." />
+                        <SyncButton onClick={handlePushItemsToNetSuite} disabled={isSyncing} label="⬆ Push Items → NetSuite (App is master)" sub="REST PATCH: writes the ticked fields onto matched NetSuite items (by Internal ID). Tolerant — record-type + field-drop retries; one row can't halt the run. The custitem flags are counted against NetSuite's current values and shown before anything is written." />
+                        <FieldFlags
+                            title="Write to NetSuite…"
+                            note="The three custitem flags are the ones that only ever came DOWN before — Stocked (custitem27) is what the Stock View snapshot is built on, so correcting it in the app alone changed nothing. Tick it here to push the truth up. You'll see how many get ticked and how many get UN-ticked before it writes, and a flags-only run touches only the items that disagree."
+                            fields={PUSH_FIELDS} flags={pushFlags} disabled={isSyncing}
+                            onToggle={(k, v) => saveSyncFlags(pullFlags, { ...pushFlags, [k]: v })}
+                            onAll={(v) => saveSyncFlags(pullFlags, PUSH_FIELDS.reduce((a, f) => ({ ...a, [f.key]: v }), {}))}
+                        />
                         <div style={{ borderTop: '1px dashed var(--line)', margin: '6px 0', paddingTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>Fabricut</div>
                         <label style={{ padding: '20px', textAlign: 'left', cursor: isSyncing ? 'wait' : 'pointer', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', display: 'flex', flexDirection: 'column', gap: '6px', opacity: isSyncing ? 0.6 : 1 }}
                             onMouseOver={(e) => { if (!isSyncing) e.currentTarget.style.borderColor = 'var(--brass)'; }}
@@ -960,6 +1089,33 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
             </div>
+        </div>
+    );
+};
+
+// Per-field direction control sitting directly under the button it governs, so what a sync will
+// overwrite is readable before you press it rather than discovered afterwards. A flag with a
+// custitem number is a NetSuite checkbox field; the rest are plain values.
+const FieldFlags = ({ title, note, fields, flags, onToggle, onAll, disabled }) => {
+    const on = fields.filter(f => flags[f.key]).length;
+    return (
+        <div style={{ border: '1px solid var(--line)', borderTop: 'none', background: 'var(--paper-2)', padding: '14px 18px', marginTop: '-12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{title} <span style={{ color: on ? 'var(--ink)' : '#d9534f' }}>({on}/{fields.length})</span></span>
+                <span style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => onAll(true)} disabled={disabled} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', padding: '3px 8px', cursor: disabled ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>All</button>
+                    <button onClick={() => onAll(false)} disabled={disabled} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', padding: '3px 8px', cursor: disabled ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>None</button>
+                </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '4px 14px' }}>
+                {fields.map(f => (
+                    <label key={f.key} title={f.flag ? 'A NetSuite checkbox field — pushing it can un-tick it too, so the counts are shown first' : ''} style={{ display: 'flex', alignItems: 'center', gap: '7px', cursor: disabled ? 'wait' : 'pointer', fontFamily: 'var(--sans)', fontSize: '0.82rem', color: flags[f.key] ? 'var(--ink)' : 'var(--ink-soft)', padding: '2px 0' }}>
+                        <input type="checkbox" checked={!!flags[f.key]} disabled={disabled} onChange={e => onToggle(f.key, e.target.checked)} style={{ cursor: disabled ? 'wait' : 'pointer', flexShrink: 0 }} />
+                        <span style={{ borderBottom: f.flag ? '1px dotted var(--brass)' : 'none' }}>{f.label}</span>
+                    </label>
+                ))}
+            </div>
+            <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '0.82rem', color: 'var(--ink-soft)', marginTop: '10px', lineHeight: 1.5 }}>{note}</div>
         </div>
     );
 };
