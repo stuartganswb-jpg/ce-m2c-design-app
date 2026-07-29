@@ -5,6 +5,7 @@ import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, 
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import FormPreview from '../Shared/FormPreview';
+import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printForm } from '../Shared/printForm';
 import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES, sizeKeyOf } from '../Shared/sizeMatrix';
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -26,7 +27,7 @@ const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 
 // Mirrors the Finishing app's TABS (FinishingFloor.js). 'MANAGEMENT' was retired (its user/perms
 // admin moved here to HQ); 'PRODUCTION TIMES' is the finishing timers + time-matrix config tab.
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
-const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING']; // mirrors PickPackApp TABS
+
 
 // Roles treated as OFFICE (not floor). Kept OUT of fin_users so they don't clutter the finishing/chip
 // employee selections. Everything else (operator, painter, finisher, *_manager, custom floor roles…) is
@@ -3105,7 +3106,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                         <tbody>
                             {TABS.map(tab => (
                             <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
-                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{pickTabLabel(tab)}</td>
                                 {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={hqPerms[role]?.includes(tab) || false} onChange={() => handleHqPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
@@ -3132,7 +3133,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                         <tbody>
                             {SHOP_TABS.map(tab => (
                             <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
-                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{pickTabLabel(tab)}</td>
                                 {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={shopPerms[role]?.includes(tab) || false} onChange={() => handleShopPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
@@ -3159,7 +3160,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                         <tbody>
                             {FIN_TABS.map(tab => (
                             <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
-                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{pickTabLabel(tab)}</td>
                                 {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={finPerms[role]?.includes(tab) || false} onChange={() => handleFinPermToggle(role, tab)} style={{ cursor: 'pointer' }} />
@@ -3186,7 +3187,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                         <tbody>
                             {PICK_TABS.map(tab => (
                             <tr key={tab} style={{ borderBottom: '1px solid var(--line)' }}>
-                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{tab}</td>
+                                <td style={{ padding: '15px', textAlign: 'left', color: 'var(--ink)', fontWeight: 500 }}>{pickTabLabel(tab)}</td>
                                 {allRoles.map(role => (
                                     <td key={role} style={{ padding: '15px' }}>
                                         <input type="checkbox" checked={pickPerms[role]?.includes(tab) || false} onChange={() => handlePickPermToggle(role, tab)} style={{ cursor: 'pointer' }} />

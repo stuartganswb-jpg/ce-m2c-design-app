@@ -9,6 +9,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
+import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printHtmlDocument } from '../Shared/labelPrint';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -33,7 +34,7 @@ const downscalePackImage = (file, maxDim = 1600) => new Promise((resolve, reject
 });
 
 // TABS updated to include COUNT + CHIPS (sample-chip production control)
-const TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'ROD CUTS', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
+const TABS = PICK_TABS;   // one definition, shared with the HQ role matrix (Shared/pickTabs)
 
 // Sample-chip production steps, in run order. Painting reuses the paint recipes (P01, P02…).
 // Finishes for the big HDSC chip run: P01–P30 (incl. P25), EP1–EP6, S01–S12 = 48 finishes.
@@ -2457,7 +2458,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     {TABS.filter(t => myTabs.includes(t)).map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
-                            {tab.replace('QUEUE', 'PICK QUEUE').replace('PACKING', 'PACKAGING PREP').replace('GALLERY', 'ASSET GALLERY').replace('COUNT', 'BIN COUNT').replace('ROD CUTS', 'ROD CUTS & RING PACKS')}
+                            {pickTabLabel(tab)}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
