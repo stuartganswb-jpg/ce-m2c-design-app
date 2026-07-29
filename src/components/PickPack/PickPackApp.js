@@ -2122,6 +2122,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // The component defaults to the bare root (HCUSR15 for HCUSR15/G-10 — what Stuart described),
     // with the finished each (…/G-EA) offered as the alternative, because only NetSuite's BOM
     // knows which one this assembly really consumes.
+    // On-hand comes from the live NetSuite pull (nsStock), NOT the item doc — the doc has no such
+    // field, which is why every pack read 0 (Stuart 2026-07-28: "it is not seeing the stock
+    // correctly… new tool showing nothing on any item").
+    const ohOf = (part) => (part ? (nsStock[erpOf(part)]?.onHand || 0) : 0);
     const packSizeOf = (code) => { const m = /-(\d+)$/.exec(String(code || '').toUpperCase()); return m ? parseInt(m[1], 10) : 0; };
     const isPackCode = (code) => packSizeOf(code) > 1;
     const packTarget = packTargetId ? hqParts.find(p => p.id === packTargetId) || null : null;
@@ -3115,6 +3119,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     assembly build the CONVERT tab uses, so NetSuite's BOM governs what is consumed. */}
                 {activeTab === 'ROD CUTS' && rodTabMode === 'PACKS' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        {Object.keys(nsStock).length === 0 && (
+                            <div style={{ background: '#fff', border: `1px solid ${theme.brass}`, padding: '14px 18px', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                ⚠ No live stock pulled this session — quantities and bins will read 0. Hit <b>PULL LIVE STOCK</b> on the Stock or Bin Count tab first.
+                            </div>
+                        )}
                         <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px' }}>
                             <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '4px' }}>1 · Pick the pack to build</div>
                             <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '12px' }}>Search a root code or name — e.g. HCUSR15. Pack SKUs end in the pack count (/G-10, /BL-12).</div>
@@ -3124,7 +3133,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {packMatches.map(p => (
                                         <button key={p.id} onClick={() => { setPackTargetId(p.id); setPackComponentId(""); setPackSearch(erpOf(p)); }} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '10px 12px', background: theme.paper, border: `1px solid ${theme.line}`, cursor: 'pointer', textAlign: 'left' }}>
                                             <span style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>{erpOf(p)}<span style={{ color: theme.inkSoft }}> · {p.itemName || ''}</span></span>
-                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, whiteSpace: 'nowrap' }}>{packSizeOf(erpOf(p))}-PACK · OH {p.onHand ?? 0}</span>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, whiteSpace: 'nowrap' }}>{packSizeOf(erpOf(p))}-PACK · OH {ohOf(p)}</span>
                                         </button>
                                     ))}
                                 </div>
@@ -3140,7 +3149,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div>
                                         <div style={{ fontFamily: theme.mono, fontSize: '15px', color: theme.ink, fontWeight: 600 }}>{erpOf(packTarget)}</div>
                                         <div style={{ fontFamily: theme.sans, fontSize: '13px', color: theme.inkSoft }}>{packTarget.itemName || ''}</div>
-                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '4px' }}>{packSize}-pack · on hand {packTarget.onHand ?? 0} · home bin {binOf(packTarget)}</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '4px' }}>{packSize}-pack · on hand {ohOf(packTarget)} · home bin {binOf(packTarget)}</div>
                                     </div>
                                     <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
                                 </div>
@@ -3154,7 +3163,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                                             {packComponentOptions.map(c => { const sel = packComponent && c.id === packComponent.id; return (
                                                 <button key={c.id} onClick={() => { setPackComponentId(c.id); setPackSrcScan(""); }} style={{ padding: '8px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>
-                                                    {erpOf(c)} <span style={{ color: theme.inkSoft }}>· OH {c.onHand ?? 0}</span>
+                                                    {erpOf(c)} <span style={{ color: theme.inkSoft }}>· OH {ohOf(c)}</span>
                                                 </button>
                                             ); })}
                                         </div>
@@ -3170,7 +3179,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     </div>
                                     <div style={{ flex: 1, minWidth: '220px', fontFamily: theme.mono, fontSize: '12px', color: packQtyNum > 0 ? theme.ink : theme.inkSoft, paddingBottom: '12px' }}>
                                         {packQtyNum > 0 && packComponent
-                                            ? <>consumes <b>{packEachesNeeded}</b> × {erpOf(packComponent)} → builds <b>{packQtyNum}</b> × {erpOf(packTarget)}</>
+                                            ? <>consumes <b>{packEachesNeeded}</b> × {erpOf(packComponent)} <span style={{ color: theme.inkSoft }}>({ohOf(packComponent)} on hand)</span> → builds <b>{packQtyNum}</b> × {erpOf(packTarget)}</>
                                             : 'enter how many packs to build'}
                                     </div>
                                 </div>
