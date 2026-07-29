@@ -856,6 +856,17 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
     // --- ROD CUTS (cut stocked 8 ft rods down to 6 ft / 4 ft; issued from the HQ Sales Snapshot) ---
     const [rodCutOrders, setRodCutOrders] = useState([]);
+    // RING PACKS (Stuart 2026-07-28): build stocked multi-packs from loose eaches — legacy
+    // collections carry an assembly per pack size (…/G-10, …/BL-12, …-7). The BOM in NetSuite is
+    // what actually gets consumed; the parsed pack size below is only what the operator is shown.
+    const [rodTabMode, setRodTabMode] = useState('CUTS');       // 'CUTS' | 'PACKS'
+    const [packSearch, setPackSearch] = useState("");
+    const [packTargetId, setPackTargetId] = useState("");       // the pack assembly being built
+    const [packComponentId, setPackComponentId] = useState(""); // the each it consumes
+    const [packQty, setPackQty] = useState("");
+    const [packSrcScan, setPackSrcScan] = useState("");
+    const [packDestScan, setPackDestScan] = useState("");
+    const [packMemo, setPackMemo] = useState("");
     const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
     const [cutSrcScan, setCutSrcScan] = useState('');
     const [cutDestScan, setCutDestScan] = useState('');
@@ -2107,6 +2118,73 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     };
     const platingRateFor = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : platingBaseCost(l); };
 
+    // RING PACKS derived. A pack SKU ends in "-<count>" (…/G-10, …/BL-12); "-EA" is the single.
+    // The component defaults to the bare root (HCUSR15 for HCUSR15/G-10 — what Stuart described),
+    // with the finished each (…/G-EA) offered as the alternative, because only NetSuite's BOM
+    // knows which one this assembly really consumes.
+    const packSizeOf = (code) => { const m = /-(\d+)$/.exec(String(code || '').toUpperCase()); return m ? parseInt(m[1], 10) : 0; };
+    const isPackCode = (code) => packSizeOf(code) > 1;
+    const packTarget = packTargetId ? hqParts.find(p => p.id === packTargetId) || null : null;
+    const packMatches = (() => {
+        const q = packSearch.trim().toUpperCase();
+        if (q.length < 2) return [];
+        return hqParts
+            .filter(p => isPackCode(erpOf(p)) && (erpOf(p).includes(q) || (p.itemName || '').toUpperCase().includes(q)))
+            .sort((a, b) => erpOf(a).localeCompare(erpOf(b)))
+            .slice(0, 12);
+    })();
+    const packSize = packTarget ? packSizeOf(erpOf(packTarget)) : 0;
+    const packRoot = packTarget ? erpOf(packTarget).split('/')[0] : '';
+    const packFinishCode = packTarget ? ((/\/([A-Z0-9]+)-\d+$/.exec(erpOf(packTarget)) || [])[1] || '') : '';
+    const packComponentOptions = (() => {
+        if (!packTarget) return [];
+        const out = [];
+        const bare = hqParts.find(p => erpOf(p) === packRoot);
+        if (bare) out.push(bare);
+        const ea = hqParts.find(p => erpOf(p) === `${packRoot}/${packFinishCode}-EA`);
+        if (ea && !out.includes(ea)) out.push(ea);
+        hqParts.forEach(p => { const c = erpOf(p); if (c.startsWith(`${packRoot}/`) && c.endsWith('-EA') && !out.includes(p)) out.push(p); });
+        return out.slice(0, 6);
+    })();
+    const packComponent = (packComponentId && hqParts.find(p => p.id === packComponentId)) || packComponentOptions[0] || null;
+    const packQtyNum = parseInt(packQty) || 0;
+    const packEachesNeeded = packQtyNum * (packSize || 0);
+    const packSrcBins = packComponent ? (nsStock[erpOf(packComponent)]?.bins || []).filter(b => b.bin) : [];
+    const packSrcBin = packSrcBins.find(b => String(b.bin).toUpperCase() === packSrcScan.trim().toUpperCase());
+    const packSrcQty = packSrcBin ? packSrcBin.qty : 0;
+    const packDestBin = packDestScan.trim() || (packTarget ? (binOf(packTarget) !== 'UNASSIGNED' ? binOf(packTarget) : '') : '');
+    const packReady = !!packTarget && !!packComponent && packQtyNum > 0 && packSize > 0
+        && !!packTarget.netSuiteInternalId && !!packComponent.netSuiteInternalId
+        && !!packSrcBin && packEachesNeeded <= packSrcQty && !!packDestBin;
+
+    // Post the pack build. Same RESTlet as CONVERT — it sources the assembly's BOM, consumes from
+    // the scanned bin and receives the finished pack into the destination bin.
+    const pushRingPackBuild = async () => {
+        if (!packReady) return;
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const packCode = erpOf(packTarget);
+        const compCode = erpOf(packComponent);
+        const consumeBin = String(packSrcBin.bin).trim().toUpperCase();
+        const receiveBin = String(packDestBin).trim().toUpperCase();
+        if (!window.confirm(`Build ${packQtyNum} × ${packCode}?\n\nConsumes ~${packEachesNeeded} × ${compCode} from ${consumeBin}\nReceives ${packQtyNum} × ${packCode} into ${receiveBin}\n\nNetSuite's BOM decides the exact components.`)) return;
+        try {
+            setIsSyncing(true);
+            const assembly = await resolveItemDetail(packCode);
+            if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${packCode} in NetSuite by item id — confirm the exact item id.`); }
+            if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${packCode} is type "${assembly.type}" in NetSuite, not an Assembly. A pack build needs an assembly with ${compCode} as its component.`); }
+            const memoText = `Ring pack build by ${operator?.name || 'Unknown'}${packMemo.trim() ? ` — ${packMemo.trim()}` : ''}`;
+            const built = await postConvertBuild({ itemId: assembly.id, quantity: packQtyNum, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: memoText });
+            alert(`✅ Pack build #${built.id || ''} posted: +${packQtyNum} × ${packCode} into ${receiveBin}, consumed from ${consumeBin}.`);
+            writeLog(`Ring Pack Build: +${packQtyNum} ${packCode} / -${packEachesNeeded} ${compCode} (from ${consumeBin}).${packMemo.trim() ? ` Memo: ${packMemo.trim()}` : ''}`, 'wms');
+            setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackMemo("");
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error("Ring pack build failed:", e);
+            alert("❌ NetSuite rejected the pack build:\n\n" + (e.message || e));
+        } finally { setIsSyncing(false); }
+    };
+
     // ROD CUTS derived: validate the source (8 ft) bin against LIVE per-bin stock when we have it;
     // dest bin is free-form (created in NetSuite if new — and it may legitimately equal the source bin,
     // since the cut-down rods are a DIFFERENT item). Same live-bin principle as Transfer/Convert.
@@ -2222,7 +2300,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     {TABS.filter(t => myTabs.includes(t)).map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
-                            {tab.replace('QUEUE', 'PICK QUEUE').replace('PACKING', 'PACKAGING PREP').replace('GALLERY', 'ASSET GALLERY').replace('COUNT', 'BIN COUNT')}
+                            {tab.replace('QUEUE', 'PICK QUEUE').replace('PACKING', 'PACKAGING PREP').replace('GALLERY', 'ASSET GALLERY').replace('COUNT', 'BIN COUNT').replace('ROD CUTS', 'ROD CUTS & RING PACKS')}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
@@ -3022,8 +3100,125 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 )}
 
                 {/* ⇄ TAB: BIN TRANSFER (move qty between bins within a location) */}
+                {/* MODE SWITCH — this tab carries two shop tools: rod cutting and ring-pack building. */}
+                {activeTab === 'ROD CUTS' && (
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '18px' }}>
+                        {[['CUTS', '✂ ROD CUTS'], ['PACKS', '⬡ RING PACKS']].map(([m, label]) => (
+                            <button key={m} onClick={() => setRodTabMode(m)} style={{ padding: '10px 18px', background: rodTabMode === m ? theme.ink : 'transparent', color: rodTabMode === m ? '#fff' : theme.inkSoft, border: `1px solid ${rodTabMode === m ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>{label}</button>
+                        ))}
+                    </div>
+                )}
+
+                {/* ⬡ RING PACKS — build stocked multi-packs from loose eaches (Stuart 2026-07-28:
+                    "assembly build the packs, so it will consume our stock of single(EA)… this tool
+                    is to build stock for the shelf for stocked items"). Posts the SAME NetSuite
+                    assembly build the CONVERT tab uses, so NetSuite's BOM governs what is consumed. */}
+                {activeTab === 'ROD CUTS' && rodTabMode === 'PACKS' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px' }}>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '4px' }}>1 · Pick the pack to build</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '12px' }}>Search a root code or name — e.g. HCUSR15. Pack SKUs end in the pack count (/G-10, /BL-12).</div>
+                            <input value={packSearch} onChange={e => { setPackSearch(e.target.value); setPackTargetId(""); }} placeholder="search ring packs…" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '0.95rem', border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                            {!packTarget && packMatches.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '10px' }}>
+                                    {packMatches.map(p => (
+                                        <button key={p.id} onClick={() => { setPackTargetId(p.id); setPackComponentId(""); setPackSearch(erpOf(p)); }} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '10px 12px', background: theme.paper, border: `1px solid ${theme.line}`, cursor: 'pointer', textAlign: 'left' }}>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>{erpOf(p)}<span style={{ color: theme.inkSoft }}> · {p.itemName || ''}</span></span>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, whiteSpace: 'nowrap' }}>{packSizeOf(erpOf(p))}-PACK · OH {p.onHand ?? 0}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            {!packTarget && packSearch.trim().length >= 2 && packMatches.length === 0 && (
+                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, marginTop: '10px' }}>No pack SKUs match. A pack must end in its count (e.g. HCUSR15/G-10) and be in this brand's library.</div>
+                            )}
+                        </div>
+
+                        {packTarget && (
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
+                                    <div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '15px', color: theme.ink, fontWeight: 600 }}>{erpOf(packTarget)}</div>
+                                        <div style={{ fontFamily: theme.sans, fontSize: '13px', color: theme.inkSoft }}>{packTarget.itemName || ''}</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '4px' }}>{packSize}-pack · on hand {packTarget.onHand ?? 0} · home bin {binOf(packTarget)}</div>
+                                    </div>
+                                    <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
+                                </div>
+
+                                {/* COMPONENT */}
+                                <div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>2 · The each it consumes</div>
+                                    {packComponentOptions.length === 0 ? (
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>✗ No each found for {packRoot} in this brand's library — the pack can't be built until the component item exists.</div>
+                                    ) : (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                            {packComponentOptions.map(c => { const sel = packComponent && c.id === packComponent.id; return (
+                                                <button key={c.id} onClick={() => { setPackComponentId(c.id); setPackSrcScan(""); }} style={{ padding: '8px 12px', fontFamily: theme.mono, fontSize: '11px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>
+                                                    {erpOf(c)} <span style={{ color: theme.inkSoft }}>· OH {c.onHand ?? 0}</span>
+                                                </button>
+                                            ); })}
+                                        </div>
+                                    )}
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '6px' }}>NetSuite's BOM decides what actually gets consumed — this picks the bin the parts come out of.</div>
+                                </div>
+
+                                {/* QTY */}
+                                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                    <div style={{ flex: '0 0 160px' }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>3 · Packs to build</div>
+                                        <input value={packQty} onChange={e => setPackQty(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                    </div>
+                                    <div style={{ flex: 1, minWidth: '220px', fontFamily: theme.mono, fontSize: '12px', color: packQtyNum > 0 ? theme.ink : theme.inkSoft, paddingBottom: '12px' }}>
+                                        {packQtyNum > 0 && packComponent
+                                            ? <>consumes <b>{packEachesNeeded}</b> × {erpOf(packComponent)} → builds <b>{packQtyNum}</b> × {erpOf(packTarget)}</>
+                                            : 'enter how many packs to build'}
+                                    </div>
+                                </div>
+
+                                {/* SOURCE BIN */}
+                                <div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>4 · Scan the bin the eaches come from</div>
+                                    {packSrcBins.length > 0 && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                            {packSrcBins.slice().sort((a, b) => b.qty - a.qty).map(b => { const sel = packSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
+                                                <button key={b.bin} onClick={() => setPackSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                            ); })}
+                                        </div>
+                                    )}
+                                    <input value={packSrcScan} onChange={e => setPackSrcScan(e.target.value)} placeholder="scan source bin" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${packSrcScan.trim() ? (packSrcBin ? '#7dbb81' : '#d9534f') : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: !packSrcScan.trim() ? theme.inkSoft : !packSrcBin ? '#d9534f' : (packEachesNeeded > packSrcQty ? '#d9534f' : '#7dbb81') }}>
+                                        {!packSrcScan.trim() ? (packSrcBins.length ? 'pick or scan one of the bins above' : 'no live bin data — Pull Live Stock on the Stock tab first')
+                                            : !packSrcBin ? '✗ the each is not stocked in this bin'
+                                            : packEachesNeeded > packSrcQty ? `✗ only ${packSrcQty} in this bin — need ${packEachesNeeded}`
+                                            : `✓ ${packSrcQty} in this bin`}
+                                    </div>
+                                </div>
+
+                                {/* DEST BIN */}
+                                <div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>5 · Bin the finished packs go into</div>
+                                    <input value={packDestScan} onChange={e => setPackDestScan(e.target.value)} placeholder={binOf(packTarget) !== 'UNASSIGNED' ? `${binOf(packTarget)} (home bin)` : 'scan destination bin'} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${packDestBin ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: packDestBin ? '#7dbb81' : '#d9534f' }}>
+                                        {packDestBin ? `✓ receiving into ${packDestBin}` : '✗ this pack has no home bin — scan where it goes'}
+                                    </div>
+                                </div>
+
+                                <input value={packMemo} onChange={e => setPackMemo(e.target.value)} placeholder="memo (optional)" style={{ width: '100%', padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+
+                                {(!packTarget.netSuiteInternalId || (packComponent && !packComponent.netSuiteInternalId)) && (
+                                    <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>✗ {!packTarget.netSuiteInternalId ? erpOf(packTarget) : erpOf(packComponent)} has no NetSuite Internal ID — map it first (HQ → ERP Mapping Audit).</div>
+                                )}
+
+                                <button onClick={pushRingPackBuild} disabled={!packReady || isSyncing} style={{ padding: '18px', background: packReady && !isSyncing ? theme.ink : theme.paper, color: packReady && !isSyncing ? '#fff' : theme.inkSoft, border: `1px solid ${packReady && !isSyncing ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '12px', letterSpacing: '.15em', textTransform: 'uppercase', cursor: packReady && !isSyncing ? 'pointer' : 'not-allowed' }}>
+                                    {isSyncing ? 'POSTING…' : `BUILD ${packQtyNum || ''} PACK${packQtyNum === 1 ? '' : 'S'}`}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {/* ✂ TAB: ROD CUTS (cut 8 ft rods down to 6 ft / 4 ft — scan source bin, confirm cut, scan dest bin) */}
-                {activeTab === 'ROD CUTS' && (() => {
+                {activeTab === 'ROD CUTS' && rodTabMode === 'CUTS' && (() => {
                     const cuts = rodCutOrders.filter(o => (o.brand || 'ce') === activeBrand);
                     const openCuts = cuts.filter(o => o.status === 'OPEN').sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
                     const doneCuts = cuts.filter(o => o.status === 'DONE').sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)).slice(0, 10);
