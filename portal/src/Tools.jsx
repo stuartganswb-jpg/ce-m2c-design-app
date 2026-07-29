@@ -107,7 +107,10 @@ const BracketSpanGuide = ({ myCollections, myBrand }) => {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td>{r.label} <span style={{ color: 'var(--ink-soft)', fontSize: '.8rem' }}>{r.material}</span></td>
+                  <td>
+                    {r.label} <span style={{ color: 'var(--ink-soft)', fontSize: '.8rem' }}>{r.material}</span>
+                    {r.note ? <div style={{ color: 'var(--ink-soft)', fontSize: '.72rem', fontStyle: 'italic' }}>{r.note}</div> : null}
+                  </td>
                   <td style={{ color: 'var(--ink-soft)' }}>{(ROD_COLLECTIONS.find((c) => c.id === r.collection) || {}).label}</td>
                   <td className="num">
                     <strong>{ftIn(r.spanInches)}</strong> <span style={{ color: 'var(--ink-soft)', fontSize: '.8rem' }}>{r.spanInches}"</span>

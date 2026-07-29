@@ -113,6 +113,8 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                                         <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, color: theme.ink }}>
                                             {r.label}
                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '0.72rem', color: theme.inkSoft, marginLeft: '8px' }}>{r.material}</span>
+                                            {/* Why a rod spans shorter than its diameter suggests. */}
+                                            {r.note && <div style={{ fontSize: '0.72rem', color: theme.inkSoft, fontStyle: 'italic' }}>{r.note}</div>}
                                         </td>
                                         <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, color: theme.inkSoft, fontSize: '0.82rem' }}>
                                             {(ROD_COLLECTIONS.find(c => c.id === r.collection) || {}).label}

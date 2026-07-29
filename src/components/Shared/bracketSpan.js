@@ -32,6 +32,18 @@ const ALUM_PROFILE = { h: 2, w: 0.75, t: 0.105 };
 // i.e. the 1.5" dimension vertical; like the aluminium, we don't offer it laid over.
 const FLAT_IRON_PROFILE = { h: 1.5, w: 0.5, t: GAUGE_WALL[16] };
 
+// TRAVERSE — 1-3/8" round extruded aluminium, 0.125" side wall, carried by both Fabricut H1 and
+// Simple Elegance. It is the one rod where sag is not merely cosmetic: an internal track runs the
+// carriers, and a bowed track binds them. So it is held to a far tighter standard than a decorative
+// rod — roughly 3.5× the L/360 "no visible sag" figure — which is what puts a heavy 10 ft curtain
+// at the 48" Stuart specified. Everything else about it (loads, fullness, safety factor) is
+// unchanged; only the sag limit and the cap differ.
+const TRAVERSE_PROFILE = { od: 1.375, wall: 0.125 };
+const TRAVERSE_DEFLECTION_N = 1250;
+// Between the 3/4" (48") and 1" (60") rounds, per Stuart — a track that has to stay true doesn't
+// get to span like a solid rod of the same diameter.
+const TRAVERSE_MAX_SPAN = 54;
+
 // Fullness is fixed rather than asked: 2.5× is our standard and exposing it invites a wrong
 // answer from someone who doesn't know what it means.
 export const FULLNESS = 2.5;
@@ -95,8 +107,8 @@ const FLAT_IRON_MAX_SPAN = 72;
 // vocabulary as hq_collections and the "Available Collections" checkboxes on the CRM Portal Access
 // panel. That's what lets the portal show a Fabricut customer only the Fabricut rods.
 export const ROD_COLLECTIONS = [
-    { id: 'H1', brand: 'ce', label: 'Fabricut H1', crmCollection: 'FABRICUT H1', note: '14 ga steel + the 2" aluminium extrusion' },
-    { id: 'H2', brand: 'ce', label: 'Simple Elegance', crmCollection: 'SIMPLE ELEGANCE', note: '16 ga steel' },
+    { id: 'H1', brand: 'ce', label: 'Fabricut H1', crmCollection: 'FABRICUT H1', note: '14 ga steel, the 2" aluminium extrusion, and the 1-3/8" traverse' },
+    { id: 'H2', brand: 'ce', label: 'Simple Elegance', crmCollection: 'SIMPLE ELEGANCE', note: '16 ga steel and the 1-3/8" traverse' },
     { id: 'FLATIRON', brand: 'm2c', label: 'Flat Iron', crmCollection: 'FLAT IRON', note: '1.5" × 1/2" 16 ga steel flat bar' },
 ];
 
@@ -134,6 +146,14 @@ export const RODS = [
         id: 'FLATIRON-15', collection: 'FLATIRON', label: '1-1/2" × 1/2" flat', material: 'Steel',
         section: rectSection(FLAT_IRON_PROFILE.h, FLAT_IRON_PROFILE.w, FLAT_IRON_PROFILE.t), metal: STEEL, maxSpan: FLAT_IRON_MAX_SPAN,
     },
+    // The traverse rod is the same extrusion in both collections — one physical rod, listed under
+    // each product line that sells it.
+    ...['H1', 'H2'].map(col => ({
+        id: `${col}-TRAV138`, collection: col, label: '1-3/8" traverse', material: 'Aluminium',
+        section: roundSection(TRAVERSE_PROFILE.od, TRAVERSE_PROFILE.wall), metal: ALUM,
+        maxSpan: TRAVERSE_MAX_SPAN, deflectionN: TRAVERSE_DEFLECTION_N,
+        note: 'internal track — held flat so the carriers run',
+    })),
 ];
 
 // ---- The answer -------------------------------------------------------------------------------
@@ -143,7 +163,10 @@ export function engineeredSpanInches(rod, loadLbPerFt) {
     const w = (Number(loadLbPerFt) || 0) / 12; // lb/in
     if (!(w > 0) || !rod || !rod.section) return null;
     const { I, S } = rod.section;
-    const sag = Math.pow((384 * rod.metal.E * I) / (DEFLECTION_N * 5 * w), 1 / 3);
+    // A rod may demand a tighter sag limit than the decorative default — the traverse track does,
+    // because a bowed track binds its carriers.
+    const n = rod.deflectionN || DEFLECTION_N;
+    const sag = Math.pow((384 * rod.metal.E * I) / (n * 5 * w), 1 / 3);
     const stress = Math.sqrt(8 * (rod.metal.yield / FS) * S / w);
     return Math.min(sag, stress);
 }
@@ -201,6 +224,7 @@ export const ASSUMPTIONS = [
     `Fullness ${FULLNESS}× · sag limit L/${DEFLECTION_N} ("no visible sag") · safety factor ${FS} on yield`,
     `House max span caps the engineered figure: ${ROUND_SIZES.map(s => `${s.label} ${s.maxSpan}"`).join(' · ')} · 2" alum ${ALUM_MAX_SPAN}" · flat iron ${FLAT_IRON_MAX_SPAN}"`,
     `Flat Iron (M2C): ${FLAT_IRON_PROFILE.h}" × ${FLAT_IRON_PROFILE.w}" × ${FLAT_IRON_PROFILE.t}" wall 16 ga mild steel, strong axis (1.5" vertical) only`,
+    `Traverse (H1 + H2): ${TRAVERSE_PROFILE.od}" round aluminium, ${TRAVERSE_PROFILE.wall}" wall, held to L/${TRAVERSE_DEFLECTION_N} (not L/${DEFLECTION_N}) and capped at ${TRAVERSE_MAX_SPAN}" — the internal track has to stay true or the carriers bind`,
     `Steel E ${(STEEL.E / 1e6).toFixed(0)} Msi, yield ${STEEL.yield.toLocaleString()} psi (1018 cold-drawn) · 14 ga wall ${GAUGE_WALL[14]}", 16 ga wall ${GAUGE_WALL[16]}"`,
     `Aluminium E ${(ALUM.E / 1e6).toFixed(0)} Msi, yield ${ALUM.yield.toLocaleString()} psi (6063-T5) · ${ALUM_PROFILE.h}" × ${ALUM_PROFILE.w}" × ${ALUM_PROFILE.t}" wall, strong axis only`,
     'Single span simply supported between brackets, uniform load, brackets anchored to studs.',
