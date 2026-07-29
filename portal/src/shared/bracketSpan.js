@@ -28,6 +28,9 @@ const DEFLECTION_N = 360;
 const GAUGE_WALL = { 14: 0.083, 16: 0.065 };   // Birmingham Wire Gauge, tube standard
 // The 2" rectangular aluminium extrusion, outside dimensions + uniform wall.
 const ALUM_PROFILE = { h: 2, w: 0.75, t: 0.105 };
+// FLAT IRON (M2C) — 1.5" tall × 0.5" wide, 16 ga mild steel, rectangular. Mounted the STRONG way,
+// i.e. the 1.5" dimension vertical; like the aluminium, we don't offer it laid over.
+const FLAT_IRON_PROFILE = { h: 1.5, w: 0.5, t: GAUGE_WALL[16] };
 
 // Fullness is fixed rather than asked: 2.5× is our standard and exposing it invites a wrong
 // answer from someone who doesn't know what it means.
@@ -83,27 +86,35 @@ const ROUND_SIZES = [
 // These are OUR house numbers, deliberately in one editable place. Change here, re-copy to
 // portal/src/shared/bracketSpan.js.
 const ALUM_MAX_SPAN = 72;
+// Flat Iron carries the same 72" cap as the 1-3/8" round: its stiffness (I ≈ 0.0613 in⁴) sits just
+// ABOVE the 1-3/8" 16 ga round (0.0575), so a tighter cap here would be inconsistent rather than
+// cautious. Same one-number lever as the others if that judgement should change.
+const FLAT_IRON_MAX_SPAN = 72;
 
 // crmCollection ties a rod family to the collection tag used everywhere else in the app — the same
 // vocabulary as hq_collections and the "Available Collections" checkboxes on the CRM Portal Access
 // panel. That's what lets the portal show a Fabricut customer only the Fabricut rods.
 export const ROD_COLLECTIONS = [
-    { id: 'H1', label: 'Fabricut H1', crmCollection: 'FABRICUT H1', note: '14 ga steel + the 2" aluminium extrusion' },
-    { id: 'H2', label: 'Simple Elegance', crmCollection: 'SIMPLE ELEGANCE', note: '16 ga steel' },
+    { id: 'H1', brand: 'ce', label: 'Fabricut H1', crmCollection: 'FABRICUT H1', note: '14 ga steel + the 2" aluminium extrusion' },
+    { id: 'H2', brand: 'ce', label: 'Simple Elegance', crmCollection: 'SIMPLE ELEGANCE', note: '16 ga steel' },
+    { id: 'FLATIRON', brand: 'm2c', label: 'Flat Iron', crmCollection: 'FLAT IRON', note: '1.5" × 1/2" 16 ga steel flat bar' },
 ];
 
-// The rod families a customer may see, given their CRM portalCollections. An EMPTY/absent list
-// means no restriction — the same rule the catalog gate uses, so turning entitlement on for one
-// customer never blanks the page for everyone else.
-export function rodCollectionsFor(allowedNames) {
+// The rod families to show, narrowed by BRAND first and then by the customer's CRM
+// portalCollections. Brand first because a customer never buys another brand's hardware, whatever
+// their collection tags say. An EMPTY/absent collection list means no restriction WITHIN the brand
+// — the same rule the catalog gate uses, so turning entitlement on for one customer never blanks
+// the page for everyone else. A blank brand means "don't filter by brand" (staff, all brands).
+export function rodCollectionsFor(allowedNames, brandId) {
+    const brand = String(brandId || '').trim().toLowerCase();
+    const inBrand = brand ? ROD_COLLECTIONS.filter(c => c.brand === brand) : ROD_COLLECTIONS;
     const allowed = (Array.isArray(allowedNames) ? allowedNames : [])
         .map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
-    if (!allowed.length) return ROD_COLLECTIONS;
+    if (!allowed.length) return inBrand;
     const set = new Set(allowed);
-    const kept = ROD_COLLECTIONS.filter(c => set.has(c.crmCollection));
     // A customer entitled only to collections this guide doesn't cover would otherwise see an empty
     // page; showing everything is the wrong answer, so the caller renders the "ask us" note instead.
-    return kept;
+    return inBrand.filter(c => set.has(c.crmCollection));
 }
 
 export const RODS = [
@@ -118,6 +129,10 @@ export const RODS = [
     {
         id: 'H1-ALU2', collection: 'H1', label: '2" rectangular', material: 'Aluminium',
         section: rectSection(ALUM_PROFILE.h, ALUM_PROFILE.w, ALUM_PROFILE.t), metal: ALUM, maxSpan: ALUM_MAX_SPAN,
+    },
+    {
+        id: 'FLATIRON-15', collection: 'FLATIRON', label: '1-1/2" × 1/2" flat', material: 'Steel',
+        section: rectSection(FLAT_IRON_PROFILE.h, FLAT_IRON_PROFILE.w, FLAT_IRON_PROFILE.t), metal: STEEL, maxSpan: FLAT_IRON_MAX_SPAN,
     },
 ];
 
@@ -184,7 +199,8 @@ export const STUD_NOTE = 'All measurements assume brackets are mounted into the 
 // What the numbers assume — shown to staff, not to customers.
 export const ASSUMPTIONS = [
     `Fullness ${FULLNESS}× · sag limit L/${DEFLECTION_N} ("no visible sag") · safety factor ${FS} on yield`,
-    `House max span caps the engineered figure: ${ROUND_SIZES.map(s => `${s.label} ${s.maxSpan}"`).join(' · ')} · 2" alum ${ALUM_MAX_SPAN}"`,
+    `House max span caps the engineered figure: ${ROUND_SIZES.map(s => `${s.label} ${s.maxSpan}"`).join(' · ')} · 2" alum ${ALUM_MAX_SPAN}" · flat iron ${FLAT_IRON_MAX_SPAN}"`,
+    `Flat Iron (M2C): ${FLAT_IRON_PROFILE.h}" × ${FLAT_IRON_PROFILE.w}" × ${FLAT_IRON_PROFILE.t}" wall 16 ga mild steel, strong axis (1.5" vertical) only`,
     `Steel E ${(STEEL.E / 1e6).toFixed(0)} Msi, yield ${STEEL.yield.toLocaleString()} psi (1018 cold-drawn) · 14 ga wall ${GAUGE_WALL[14]}", 16 ga wall ${GAUGE_WALL[16]}"`,
     `Aluminium E ${(ALUM.E / 1e6).toFixed(0)} Msi, yield ${ALUM.yield.toLocaleString()} psi (6063-T5) · ${ALUM_PROFILE.h}" × ${ALUM_PROFILE.w}" × ${ALUM_PROFILE.t}" wall, strong axis only`,
     'Single span simply supported between brackets, uniform load, brackets anchored to studs.',

@@ -1098,7 +1098,9 @@ exports.portalProfile = onCall({ cors: true }, async (request) => {
     const crm = snap.exists ? snap.data() : {};
     return {
         name: crm.name || '',
-        // Empty array = no restriction, matching the catalog gate.
+        // Brand scopes hardware before collections do — a customer never buys another brand's rods.
+        brandId: String(crm.brandId || '').trim().toLowerCase(),
+        // Empty array = no restriction WITHIN the brand, matching the catalog gate.
         collections: (Array.isArray(crm.portalCollections) ? crm.portalCollections : [])
             .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean),
     };

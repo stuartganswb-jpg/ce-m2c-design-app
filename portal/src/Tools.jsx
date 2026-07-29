@@ -18,7 +18,7 @@ import {
 
 // myCollections = the rod families this customer is entitled to (from crm_records.portalCollections
 // via portalProfile). Empty/absent = everything, matching the catalog gate.
-const BracketSpanGuide = ({ myCollections }) => {
+const BracketSpanGuide = ({ myCollections, myBrand }) => {
   const [fabricId, setFabricId] = useState('PRINT');
   const [dropFt, setDropFt] = useState(String(DEFAULT_DROP_FT));
   const [rodLen, setRodLen] = useState('');
@@ -26,7 +26,7 @@ const BracketSpanGuide = ({ myCollections }) => {
 
   const fab = fabricClass(fabricId);
   const drop = parseFloat(dropFt);
-  const mine = useMemo(() => rodCollectionsFor(myCollections), [myCollections]);
+  const mine = useMemo(() => rodCollectionsFor(myCollections, myBrand), [myCollections, myBrand]);
   const mineIds = useMemo(() => new Set(mine.map((c) => c.id)), [mine]);
   const rows = useMemo(
     () => (drop > 0 ? spanTable(fabricId, drop, collectionId).filter((r) => mineIds.has(r.collection)) : []),
@@ -167,7 +167,7 @@ export default function Tools() {
           ))}
         </div>
       )}
-      {active.render({ myCollections: profile.collections || [] })}
+      {active.render({ myCollections: profile.collections || [], myBrand: profile.brandId || '' })}
     </>
   );
 }

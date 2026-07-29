@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
     FABRIC_CLASSES, fabricClass, loadPerFoot, spanTable, bracketsFor, ftIn,
-    ROD_COLLECTIONS, DEFAULT_DROP_FT, ASSUMPTIONS, STUD_NOTE,
+    ROD_COLLECTIONS, rodCollectionsFor, DEFAULT_DROP_FT, ASSUMPTIONS, STUD_NOTE,
 } from '../Shared/bracketSpan';
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
@@ -21,7 +21,7 @@ const lbl = { fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em',
 const inp = { width: '100%', boxSizing: 'border-box', padding: '10px', fontSize: '0.85rem', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: 'var(--sans)', background: '#fff' };
 
 // ---- TOOL 1 · BRACKET SPAN ----------------------------------------------------------------
-const BracketSpanGuide = ({ showAssumptions }) => {
+const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
     const [fabricId, setFabricId] = useState('PRINT');
     const [dropFt, setDropFt] = useState(String(DEFAULT_DROP_FT));
     const [rodLen, setRodLen] = useState('');          // optional, inches → bracket count
@@ -30,11 +30,27 @@ const BracketSpanGuide = ({ showAssumptions }) => {
     const fab = fabricClass(fabricId);
     const drop = parseFloat(dropFt);
     const load = loadPerFoot(fab.areal, drop);
+    // Staff see the ACTIVE BRAND's rod families, the way every other HQ tab is scoped — M2C gets
+    // Flat Iron, CE gets Fabricut H1 + Simple Elegance.
+    const mine = useMemo(() => rodCollectionsFor(null, activeBrand), [activeBrand]);
+    const mineIds = useMemo(() => new Set(mine.map(c => c.id)), [mine]);
     const rows = useMemo(
-        () => (drop > 0 ? spanTable(fabricId, drop, collectionId) : []),
-        [fabricId, drop, collectionId]
+        () => (drop > 0 ? spanTable(fabricId, drop, collectionId).filter(r => mineIds.has(r.collection)) : []),
+        [fabricId, drop, collectionId, mineIds]
     );
     const rodInches = parseFloat(rodLen) > 0 ? parseFloat(rodLen) : null;
+
+    if (!mine.length) {
+        return (
+            <div style={card}>
+                <div style={cardHd}>Bracket Span Guide</div>
+                <div style={{ padding: '24px', color: theme.inkSoft, fontFamily: 'var(--serif)', fontSize: '1rem' }}>
+                    No rod families are published for this brand yet. Switch brands, or add one in
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem' }}> Shared/bracketSpan.js</span>.
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div style={card}>
@@ -66,7 +82,7 @@ const BracketSpanGuide = ({ showAssumptions }) => {
                 </div>
 
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
-                    {[{ id: '', label: 'All rods' }, ...ROD_COLLECTIONS].map(c => (
+                    {(mine.length > 1 ? [{ id: '', label: 'All rods' }, ...mine] : []).map(c => (
                         <button key={c.id || 'ALL'} onClick={() => setCollectionId(c.id)}
                             style={{
                                 padding: '8px 14px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px',
@@ -152,7 +168,7 @@ const TOOLS = [
     { id: 'span', label: 'Bracket Span Guide', blurb: 'Bracket spacing by fabric weight and drop', render: (p) => <BracketSpanGuide {...p} /> },
 ];
 
-const ToolsSpecsTab = () => {
+const ToolsSpecsTab = ({ activeBrand }) => {
     const [activeTool, setActiveTool] = useState(TOOLS[0].id);
     const tool = TOOLS.find(t => t.id === activeTool) || TOOLS[0];
 
@@ -181,7 +197,7 @@ const ToolsSpecsTab = () => {
                 </div>
             )}
 
-            {tool.render({ showAssumptions: true })}
+            {tool.render({ showAssumptions: true, activeBrand })}
         </div>
     );
 };
