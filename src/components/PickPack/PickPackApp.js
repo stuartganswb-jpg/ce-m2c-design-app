@@ -2142,16 +2142,22 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const packSize = packTarget ? packSizeOf(erpOf(packTarget)) : 0;
     const packRoot = packTarget ? erpOf(packTarget).split('/')[0] : '';
     const packFinishCode = packTarget ? ((/\/([A-Z0-9]+)-\d+$/.exec(erpOf(packTarget)) || [])[1] || '') : '';
+    // THE COMPONENT IS THE FINISHED EACH IN THE PACK'S OWN FINISH (Stuart 2026-07-28: "we work
+    // order and finish HCUSR15 into HCUSR15/BL-EA… then this tool can turn HCUSR15/BL-EA into
+    // HCUSR15/BL-10 or HCUSR15/BL-12"). The RAW root is deliberately NOT offered: it is the input
+    // to the finishing work order, never to a pack build, and offering it is what sent the first
+    // test at a component the BOM never wanted.
+    const packExpectedEach = packFinishCode ? `${packRoot}/${packFinishCode}-EA` : '';
     const packComponentOptions = (() => {
         if (!packTarget) return [];
         const out = [];
-        const bare = hqParts.find(p => erpOf(p) === packRoot);
-        if (bare) out.push(bare);
-        const ea = hqParts.find(p => erpOf(p) === `${packRoot}/${packFinishCode}-EA`);
-        if (ea && !out.includes(ea)) out.push(ea);
+        const ea = packExpectedEach ? hqParts.find(p => erpOf(p) === packExpectedEach) : null;
+        if (ea) out.push(ea);
+        // other finished eaches of the same root, for the odd legacy code that spells its finish differently
         hqParts.forEach(p => { const c = erpOf(p); if (c.startsWith(`${packRoot}/`) && c.endsWith('-EA') && !out.includes(p)) out.push(p); });
         return out.slice(0, 6);
     })();
+    const packEachMissing = !!packTarget && !!packExpectedEach && !hqParts.some(p => erpOf(p) === packExpectedEach);
     const packComponent = (packComponentId && hqParts.find(p => p.id === packComponentId)) || packComponentOptions[0] || null;
     const packQtyNum = parseInt(packQty) || 0;
     const packEachesNeeded = packQtyNum * (packSize || 0);
@@ -2234,7 +2240,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         const compCode = erpOf(packComponent);
         const consumeBin = String(packSrcBin.bin).trim().toUpperCase();
         const receiveBin = String(packDestBin).trim().toUpperCase();
-        if (!window.confirm(`Build ${packQtyNum} × ${packCode}?\n\nConsumes ~${packEachesNeeded} × ${compCode} from ${consumeBin}\nReceives ${packQtyNum} × ${packCode} into ${receiveBin}\n\nNetSuite's BOM decides the exact components.`)) return;
+        if (!window.confirm(`Build ${packQtyNum} × ${packCode}?\n\nConsumes ~${packEachesNeeded} × ${compCode} (finished each) from ${consumeBin}\nReceives ${packQtyNum} × ${packCode} into ${receiveBin}\n\nNetSuite's BOM decides the exact components.`)) return;
         try {
             setIsSyncing(true);
             const assembly = await resolveItemDetail(packCode);
@@ -3222,9 +3228,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                                 {/* COMPONENT */}
                                 <div>
-                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>2 · The each it consumes</div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>2 · The finished each it consumes</div>
                                     {packComponentOptions.length === 0 ? (
-                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>✗ No each found for {packRoot} in this brand's library — the pack can't be built until the component item exists.</div>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>✗ No finished each found for {packRoot}{packExpectedEach ? ` (expected ${packExpectedEach})` : ''} in this brand's library — finish the raw {packRoot} into it on a work order first.</div>
                                     ) : (
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                                             {packComponentOptions.map(c => { const sel = packComponent && c.id === packComponent.id; return (
@@ -3234,7 +3240,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             ); })}
                                         </div>
                                     )}
-                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '6px' }}>NetSuite's BOM decides what actually gets consumed — this picks the bin the parts come out of.</div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '6px' }}>Packs are built from FINISHED eaches — the raw {packRoot} becomes {packExpectedEach || 'the finished each'} on a work order first. NetSuite's BOM decides what actually gets consumed; this picks the bin the parts come out of.</div>
+                                    {packEachMissing && packComponentOptions.length > 0 && (
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f', marginTop: '8px' }}>⚠ {packExpectedEach} isn't in this brand's library — the eaches offered above are OTHER finishes. Check the colour before building.</div>
+                                    )}
+                                    {packComponent && ohOf(packComponent) === 0 && (
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f', marginTop: '8px' }}>✗ {erpOf(packComponent)} has none on hand — finish/plate a batch of {packRoot} into it before packing.</div>
+                                    )}
                                 </div>
 
                                 {/* QTY */}
