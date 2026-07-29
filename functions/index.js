@@ -195,10 +195,19 @@ const generateNetSuiteHeader = (method, url, creds) => {
     return `OAuth realm="${creds.account}", oauth_consumer_key="${oauthEncode(creds.consumerKey)}", oauth_token="${oauthEncode(creds.tokenId)}", oauth_nonce="${oauthEncode(oauth_nonce)}", oauth_timestamp="${oauth_timestamp}", oauth_signature_method="HMAC-SHA256", oauth_signature="${oauthEncode(oauth_signature)}", oauth_version="1.0"`;
 };
 
-// Only our own NetSuite account host may ever be proxied. Without this, an authenticated
-// caller could point the OAuth-signed relay at an arbitrary URL. SuiteTalk REST + RESTlet
-// traffic all lives under this one host.
-const NS_ALLOWED_HOSTS = ['3728153.suitetalk.api.netsuite.com'];
+// Only our own NetSuite account's hosts may ever be proxied. Without this, an authenticated
+// caller could point the OAuth-signed relay at an arbitrary URL.
+// TWO hosts, both account 3728153 — the note that once claimed RESTlets share the SuiteTalk
+// host was wrong, and that mistake silently blocked every RESTlet call from the 2026-07
+// hardening onward: the WMS assembly builds (Convert /P and Ring Packs) both post through
+// ce_convert_build_restlet and were failing with "targetUrl host is not allowed"
+// (Stuart 2026-07-28: "no go on the build").
+//   • *.suitetalk.api.netsuite.com — SuiteTalk REST records + SuiteQL
+//   • *.restlets.api.netsuite.com  — SuiteScript RESTlets
+const NS_ALLOWED_HOSTS = [
+    '3728153.suitetalk.api.netsuite.com',
+    '3728153.restlets.api.netsuite.com',
+];
 
 // ============================================================================
 // LAYER 1 — NETSUITE CONCURRENCY SHAPING (Stuart 2026-07-16)
