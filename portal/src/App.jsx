@@ -7,6 +7,7 @@ const Showroom = lazy(() => import('./Showroom.jsx'));
 const VisionIntake = lazy(() => import('./VisionIntake.jsx'));
 const QuickShip = lazy(() => import('./QuickShip.jsx'));
 const Gallery = lazy(() => import('./Gallery.jsx'));
+const Tools = lazy(() => import('./Tools.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' :
   Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -172,6 +173,7 @@ const TABS = [
   { id: 'measure', label: 'Measure & Fit' },
   { id: 'quickship', label: 'Quick Ship' },
   { id: 'gallery', label: 'Gallery' },
+  { id: 'tools', label: 'Tools, Specs & FAQs' },
 ];
 
 const Dashboard = ({ user }) => {
@@ -203,6 +205,11 @@ const Dashboard = ({ user }) => {
       {tab === 'gallery' && (
         <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading your gallery…</div>}>
           <Gallery />
+        </Suspense>
+      )}
+      {tab === 'tools' && (
+        <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading tools…</div>}>
+          <Tools />
         </Suspense>
       )}
       <PortalFooter />
