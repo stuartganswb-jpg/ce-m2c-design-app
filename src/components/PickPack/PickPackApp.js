@@ -867,7 +867,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [packSrcScan, setPackSrcScan] = useState("");
     const [packDestScan, setPackDestScan] = useState("");
     const [packMemo, setPackMemo] = useState("");
-    const [packDiag, setPackDiag] = useState(null);   // what NetSuite says the BOM actually sources
+    const [packDiag, setPackDiag] = useState(null);       // what NetSuite says the BOM actually sources
+    const [packDiagNames, setPackDiagNames] = useState({}); // NetSuite id -> { code, name } for unmapped components
     const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
     const [cutSrcScan, setCutSrcScan] = useState('');
     const [cutDestScan, setCutDestScan] = useState('');
@@ -2174,7 +2175,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
         try {
             setIsSyncing(true);
-            setPackDiag(null);
+            setPackDiag(null); setPackDiagNames({});
             const assembly = await resolveItemDetail(erpOf(packTarget));
             if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${erpOf(packTarget)} in NetSuite.`); }
             const res = await postConvertBuild({
@@ -2185,16 +2186,42 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 memo: 'BOM check', diag: true,
             });
             setPackDiag(res);
+            // Name any component our library couldn't identify.
+            const unknown = (res && Array.isArray(res.diag) ? res.diag : [])
+                .filter(d => d && d.item !== undefined)
+                .map(d => String(d.item))
+                .filter(id => !hqParts.some(p => String(p.netSuiteInternalId || '') === id));
+            if (unknown.length) setPackDiagNames(await resolveItemNames(unknown));
         } catch (e) {
             setPackDiag({ error: (e && e.message) ? e.message : String(e) });
         } finally { setIsSyncing(false); }
     };
+    // Some BOM components aren't in our library at all (or carry no stored internal id), so the
+    // map below can't name them — ask NetSuite directly. Best-effort: a failure just leaves the id.
+    const resolveItemNames = async (ids) => {
+        const want = [...new Set(ids.map(x => String(x || '')).filter(Boolean))];
+        if (!want.length) return {};
+        try {
+            const r = await nsProxyFetch({
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`,
+                method: 'POST',
+                payload: { q: `SELECT id, itemid, displayname FROM item WHERE id IN (${want.map(x => parseInt(x, 10) || 0).join(',')})` }
+            });
+            const b = await r.json().catch(() => ({}));
+            const out = {};
+            (b.items || []).forEach(row => { if (row.id) out[String(row.id)] = { code: row.itemid || '', name: row.displayname || '' }; });
+            return out;
+        } catch (e) { return {}; }
+    };
+
     // NetSuite internal id -> our item code, so a diag line reads HCUSR15/CP-EA instead of 62103.
     const codeForNsId = (nsId) => {
         const want = String(nsId || '');
         if (!want) return '';
         const hit = hqParts.find(p => String(p.netSuiteInternalId || '') === want);
-        return hit ? erpOf(hit) : `NS #${want}`;
+        if (hit) return erpOf(hit);
+        const looked = packDiagNames[want];
+        return looked && looked.code ? `${looked.code} (NS #${want}, not in this brand's library)` : `NS #${want}`;
     };
 
     // Post the pack build. Same RESTlet as CONVERT — it sources the assembly's BOM, consumes from
@@ -3190,7 +3217,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div style={{ fontFamily: theme.sans, fontSize: '13px', color: theme.inkSoft }}>{packTarget.itemName || ''}</div>
                                         <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '4px' }}>{packSize}-pack · on hand {ohOf(packTarget)} · home bin {binOf(packTarget)}</div>
                                     </div>
-                                    <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
+                                    <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); setPackDiagNames({}); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
                                 </div>
 
                                 {/* COMPONENT */}
@@ -3281,7 +3308,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             <div key={i} style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
                                                                 <span style={{ color: ok ? '#3f8b45' : '#d9534f', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
                                                                 <span style={{ fontWeight: 600 }}>line {(d.line ?? i) + 1}</span>
-                                                                <span>{codeForNsId(d.item)}</span>
+                                                                <span title={(packDiagNames[String(d.item)] || {}).name || ''}>{codeForNsId(d.item)}</span>
                                                                 <span style={{ color: theme.inkSoft }}>needs {d.qtyUsed ?? '?'}</span>
                                                                 <span style={{ color: theme.inkSoft }}>{d.srcOnhand ? `${d.srcOnhand} on hand in the bin it picked` : 'NO STOCK — nothing to consume'}</span>
                                                                 {d.error ? <span style={{ color: '#d9534f' }}>{d.error}</span> : null}
