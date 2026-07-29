@@ -19,8 +19,10 @@
  *        https://<ACCT>.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=<SCRIPT_INT_ID>&deploy=<DEPLOY_ID>
  *      Give me those two ids and I'll point the app at it.
  *
- * REQUEST body (JSON): { itemId, quantity, subsidiary, location, bin, [binId], [statusId], [memo] }
- * RESPONSE: { success:true, id:<buildId>, componentsDetailed:n } | { success:false, error, name }
+ * REQUEST body (JSON): { itemId, quantity, subsidiary, location, bin, toBin, [binId], [statusId], [memo], [diag] }
+ *   mode:'unbuild' takes an assembly APART instead: `bin` is where the assemblies come from and
+ *   `toBin` is where the returned components are put away (WMS Ring Packs "break apart").
+ * RESPONSE: { success:true, id:<recordId>, componentsDetailed:n } | { success:false, error, name }
  */
 define(['N/record', 'N/query'], function (record, query) {
 
@@ -49,7 +51,120 @@ define(['N/record', 'N/query'], function (record, query) {
         } catch (qErr) { return null; }
     }
 
+    // ---- UNBUILD (Stuart 2026-07-28: "at times we run out of stock of the raw item and
+    // occasionally need to take apart a 12 pack of BL and turn it into 1 -10 pack and 2 ea back
+    // into stock… we also need an option to unbuild and turn to core"). Exact mirror of the build:
+    // in a BUILD the header detail RECEIVES the assembly and the component detail CONSUMES parts;
+    // in an UNBUILD the header detail CONSUMES the assembly and the component detail RECEIVES the
+    // parts. Same pre-existing-line rule on both: clear whatever NetSuite pre-created, then write
+    // exactly one assignment, so the totals match and the operator's scanned bins are honoured.
+    function unbuild(body) {
+        var step = 'init';
+        var u = null;
+        var diag = [];
+        try {
+            step = 'create';
+            u = record.create({ type: record.Type.ASSEMBLY_UNBUILD, isDynamic: true });
+
+            if (body.subsidiary) {
+                step = 'subsidiary';
+                try {
+                    var curSub = u.getValue({ fieldId: 'subsidiary' });
+                    if (String(curSub || '') !== String(body.subsidiary)) {
+                        u.setValue({ fieldId: 'subsidiary', value: parseInt(body.subsidiary, 10) });
+                    }
+                } catch (subErr) { /* read-only/sourced -- `location` drives it */ }
+            }
+            if (body.location) { step = 'location'; u.setValue({ fieldId: 'location', value: parseInt(body.location, 10) }); }
+            step = 'item';
+            u.setValue({ fieldId: 'item', value: parseInt(body.itemId, 10) });
+            step = 'quantity';
+            u.setValue({ fieldId: 'quantity', value: Number(body.quantity) });
+            if (body.memo) { step = 'memo'; u.setValue({ fieldId: 'memo', value: String(body.memo).slice(0, 40) }); }
+
+            // HEADER detail = the assembly being TAKEN APART: which bin the packs come out of.
+            step = 'assembly-detail';
+            var headDiag = { attempted: false };
+            try {
+                var invH = u.getSubrecord({ fieldId: 'inventorydetail' });
+                if (invH) {
+                    headDiag.attempted = true;
+                    var srcBinId = body.binId ? parseInt(body.binId, 10) : null;
+                    var srcStatus = body.statusId ? parseInt(body.statusId, 10) : null;
+                    if (!srcBinId || !srcStatus) {
+                        var srcResolved = resolveBinStatus(body.itemId, body.location, body.bin, body.binId);
+                        if (!srcBinId && srcResolved && srcResolved.binId) srcBinId = parseInt(srcResolved.binId, 10);
+                        if (!srcStatus && srcResolved && srcResolved.statusId) srcStatus = parseInt(srcResolved.statusId, 10);
+                    }
+                    var preH = invH.getLineCount({ sublistId: 'inventoryassignment' });
+                    headDiag.preExistingAssignments = preH;
+                    for (var kh = preH - 1; kh >= 0; kh--) {
+                        try { invH.removeLine({ sublistId: 'inventoryassignment', line: kh }); } catch (rmH) { headDiag.removeError = String(rmH && rmH.message || rmH); }
+                    }
+                    invH.selectNewLine({ sublistId: 'inventoryassignment' });
+                    if (srcBinId) invH.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', value: srcBinId });
+                    else if (body.bin) invH.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', text: String(body.bin) });
+                    if (srcStatus) invH.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'inventorystatus', value: srcStatus });
+                    invH.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'quantity', value: Number(body.quantity) });
+                    invH.commitLine({ sublistId: 'inventoryassignment' });
+                    headDiag.detailed = true; headDiag.binId = srcBinId; headDiag.status = srcStatus;
+                }
+            } catch (hErr) { headDiag.error = String(hErr && hErr.message || hErr); }
+            diag.push({ assemblyDetail: headDiag });
+
+            // COMPONENT detail = the parts coming BACK: which bin they are put away into.
+            step = 'components';
+            var count = u.getLineCount({ sublistId: 'component' });
+            var detailed = 0;
+            for (var i = 0; i < count; i++) {
+                u.selectLine({ sublistId: 'component', line: i });
+                var qLine = Number(u.getCurrentSublistValue({ sublistId: 'component', fieldId: 'quantity' })) || 0;
+                var qBom = Number(u.getCurrentSublistValue({ sublistId: 'component', fieldId: 'bomquantity' })) || 0;
+                var qtyBack = qLine > 0 ? qLine : (qBom > 0 ? qBom * Number(body.quantity) : Number(body.quantity));
+                var lineDiag = { line: i, item: u.getCurrentSublistValue({ sublistId: 'component', fieldId: 'item' }), qLine: qLine, qBom: qBom, qtyUsed: qtyBack, detailed: false };
+                if (qtyBack > 0) {
+                    try {
+                        var invC = u.getCurrentSublistSubrecord({ sublistId: 'component', fieldId: 'componentinventorydetail' });
+                        var toBinId = body.toBinId ? parseInt(body.toBinId, 10) : null;
+                        if (!toBinId && body.toBin) {
+                            var rb2 = query.runSuiteQL({
+                                query: 'SELECT id FROM bin WHERE UPPER(binnumber) = ? AND location = ?',
+                                params: [String(body.toBin).toUpperCase(), parseInt(body.location, 10)]
+                            }).asMappedResults();
+                            if (rb2 && rb2.length) toBinId = parseInt(rb2[0].id, 10);
+                        }
+                        var preC = invC.getLineCount({ sublistId: 'inventoryassignment' });
+                        lineDiag.preExistingAssignments = preC;
+                        for (var kc = preC - 1; kc >= 0; kc--) {
+                            try { invC.removeLine({ sublistId: 'inventoryassignment', line: kc }); } catch (rmC) { lineDiag.removeError = String(rmC && rmC.message || rmC); }
+                        }
+                        invC.selectNewLine({ sublistId: 'inventoryassignment' });
+                        if (toBinId) invC.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', value: toBinId });
+                        else if (body.toBin) invC.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', text: String(body.toBin) });
+                        invC.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'inventorystatus', value: body.toStatusId ? parseInt(body.toStatusId, 10) : 1 });
+                        invC.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'quantity', value: qtyBack });
+                        invC.commitLine({ sublistId: 'inventoryassignment' });
+                        u.commitLine({ sublistId: 'component' });
+                        detailed++; lineDiag.detailed = true; lineDiag.toBinId = toBinId;
+                    } catch (cErr) { lineDiag.error = String(cErr && cErr.message || cErr); }
+                }
+                diag.push(lineDiag);
+            }
+
+            if (body.diag) return { success: true, diagOnly: true, mode: 'unbuild', componentCount: count, componentsDetailed: detailed, diag: diag };
+            step = 'save';
+            var uid = u.save({ enableSourcing: true, ignoreMandatoryFields: false });
+            return { success: true, mode: 'unbuild', id: uid, componentsDetailed: detailed, diag: diag };
+        } catch (e) {
+            var uctx = {};
+            try { if (u) { uctx.subsidiary = u.getValue({ fieldId: 'subsidiary' }); uctx.location = u.getValue({ fieldId: 'location' }); uctx.item = u.getValue({ fieldId: 'item' }); } } catch (ctxErr) { /* best-effort */ }
+            return { success: false, mode: 'unbuild', step: step, error: (e && e.message) ? e.message : String(e), name: (e && e.name) || '', context: uctx, diag: diag };
+        }
+    }
+
     function post(body) {
+        // One RESTlet, two operations — the app picks with body.mode.
+        if (body && String(body.mode || '').toLowerCase() === 'unbuild') return unbuild(body);
         var step = 'init';
         var b = null;
         var diag = [];

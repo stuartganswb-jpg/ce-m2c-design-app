@@ -158,10 +158,10 @@ const convertRestletConfigured = () => !!NS_CONVERT_RESTLET.scriptId;
 
 // Build a phosphated /P assembly via the RESTlet: it consumes the bin-tracked raw from `bin` and
 // produces the /P (bin-untracked). Returns { success, id, componentsDetailed } or throws.
-const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, toBin, memo, diag }) => {
+const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, toBin, memo, diag, mode }) => {
     if (!convertRestletConfigured()) throw new Error("The Convert RESTlet isn't configured yet. Deploy netsuite/ce_convert_build_restlet.js in NetSuite and give me its Script + Deploy ids.");
     const url = `${NS_RESTLET_HOST}/app/site/hosting/restlet.nl?script=${NS_CONVERT_RESTLET.scriptId}&deploy=${NS_CONVERT_RESTLET.deployId}`;
-    const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo, ...(diag ? { diag: true } : {}) } });
+    const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo, ...(diag ? { diag: true } : {}), ...(mode ? { mode } : {}) } });
     const b = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
     if (b && b.success === false) {
@@ -867,6 +867,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [packSrcScan, setPackSrcScan] = useState("");
     const [packDestScan, setPackDestScan] = useState("");
     const [packMemo, setPackMemo] = useState("");
+    const [packOp, setPackOp] = useState('BUILD');       // 'BUILD' | 'BREAK'
+    const [breakSrcScan, setBreakSrcScan] = useState(""); // bin the packs come OUT of
+    const [breakDestScan, setBreakDestScan] = useState("");// bin the eaches go INTO
+    const [breakToCore, setBreakToCore] = useState(false); // chain a second unbuild: eaches -> raw core
+    const [breakCoreScan, setBreakCoreScan] = useState(""); // bin the raw core goes into
     const [packDiag, setPackDiag] = useState(null);       // what NetSuite says the BOM actually sources
     const [packDiagNames, setPackDiagNames] = useState({}); // NetSuite id -> { code, name } for unmapped components
     const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
@@ -2269,6 +2274,74 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         } finally { setIsSyncing(false); }
     };
 
+    // ---- BREAK APART (the reversal). A pack unbuilds into its finished eaches; ticking "to core"
+    // chains a SECOND unbuild that turns those eaches back into the raw ring, which is what makes a
+    // batch re-paintable (Stuart 2026-07-28: "take apart a 12 pack of BL and turn it into 1 -10 pack
+    // and 2 ea back into stock… we also need an option to unbuild and turn to core"). Re-packing into
+    // a different size is then just BUILD on the eaches — two clean NetSuite records, not a fiction.
+    const breakSrcBins = packTarget ? (nsStock[erpOf(packTarget)]?.bins || []).filter(b => b.bin) : [];
+    const breakSrcBin = breakSrcBins.find(b => String(b.bin).toUpperCase() === breakSrcScan.trim().toUpperCase());
+    const breakSrcQty = breakSrcBin ? breakSrcBin.qty : 0;
+    const breakEachesBack = packQtyNum * (packSize || 0);
+    const breakDestBin = breakDestScan.trim() || (packComponent && binOf(packComponent) !== 'UNASSIGNED' ? String(binOf(packComponent)).split(',')[0].trim() : '');
+    const packCorePart = packRoot ? hqParts.find(p => erpOf(p) === packRoot) : null;
+    const breakCoreBin = breakCoreScan.trim() || (packCorePart && binOf(packCorePart) !== 'UNASSIGNED' ? String(binOf(packCorePart)).split(',')[0].trim() : '');
+    const breakReady = !!packTarget && packQtyNum > 0 && !!packTarget.netSuiteInternalId
+        && !!breakSrcBin && packQtyNum <= breakSrcQty && !!breakDestBin
+        && (!breakToCore || (!!packCorePart && !!packComponent && !!breakCoreBin));
+
+    const pushPackBreak = async () => {
+        if (!breakReady) return;
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const packCode = erpOf(packTarget);
+        const eachCode = packComponent ? erpOf(packComponent) : eachForPack(packCode);
+        const srcBin = String(breakSrcBin.bin).trim().toUpperCase();
+        const destBin = String(breakDestBin).trim().toUpperCase();
+        const coreBin = String(breakCoreBin || '').trim().toUpperCase();
+        const msg = breakToCore
+            ? `Break ${packQtyNum} × ${packCode} ALL THE WAY BACK TO CORE?\n\n1) ${packQtyNum} × ${packCode} from ${srcBin} → ${breakEachesBack} × ${eachCode} into ${destBin}\n2) ${breakEachesBack} × ${eachCode} → ${breakEachesBack} × ${packRoot} into ${coreBin}\n\nTWO separate NetSuite records — if the second fails the first still stands, and you'll be told exactly where it stopped.`
+            : `Break ${packQtyNum} × ${packCode} apart?\n\nTakes ${packQtyNum} × ${packCode} from ${srcBin}\nReturns ${breakEachesBack} × ${eachCode} into ${destBin}`;
+        if (!window.confirm(msg)) return;
+        try {
+            setIsSyncing(true);
+            const asm = await resolveItemDetail(packCode);
+            if (!asm) { setIsSyncing(false); return alert(`Couldn't find ${packCode} in NetSuite.`); }
+            const first = await postConvertBuild({
+                mode: 'unbuild', itemId: asm.id, quantity: packQtyNum,
+                subsidiary: nsConfig.subsidiary, location: nsConfig.location,
+                bin: srcBin, toBin: destBin,
+                memo: `Pack break by ${operator?.name || 'Unknown'}${packMemo.trim() ? ` — ${packMemo.trim()}` : ''}`,
+            });
+            writeLog(`Pack Break: -${packQtyNum} ${packCode} / +${breakEachesBack} ${eachCode} (into ${destBin}).`, 'wms');
+            if (!breakToCore) {
+                alert(`✅ Unbuild #${first.id || ''} posted: ${packQtyNum} × ${packCode} → ${breakEachesBack} × ${eachCode} into ${destBin}.`);
+            } else {
+                // Second leg: the eaches back to the raw core, so the batch can be re-finished.
+                try {
+                    const eachAsm = await resolveItemDetail(eachCode);
+                    if (!eachAsm) throw new Error(`${eachCode} not found in NetSuite`);
+                    const second = await postConvertBuild({
+                        mode: 'unbuild', itemId: eachAsm.id, quantity: breakEachesBack,
+                        subsidiary: nsConfig.subsidiary, location: nsConfig.location,
+                        bin: destBin, toBin: coreBin,
+                        memo: `Pack break to core by ${operator?.name || 'Unknown'}`,
+                    });
+                    writeLog(`Pack Break to core: -${breakEachesBack} ${eachCode} / +${breakEachesBack} ${packRoot} (into ${coreBin}).`, 'wms');
+                    alert(`✅ Both posted: unbuild #${first.id || ''} (${packCode} → ${eachCode}) and #${second.id || ''} (${eachCode} → ${packRoot} into ${coreBin}).`);
+                } catch (e2) {
+                    // Honest partial state — the operator must know exactly where this stopped.
+                    alert(`⚠ HALF DONE.\n\n✅ Step 1 posted: ${packQtyNum} × ${packCode} → ${breakEachesBack} × ${eachCode}, now sitting in ${destBin}.\n\n❌ Step 2 (${eachCode} → ${packRoot}) failed:\n${(e2 && e2.message) || e2}\n\nThe eaches ARE in stock. Re-run Break Apart on ${eachCode} when the cause is fixed.`);
+                }
+            }
+            setPackQty(""); setBreakSrcScan(""); setBreakDestScan(""); setBreakCoreScan(""); setPackMemo("");
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error("Pack break failed:", e);
+            alert("❌ NetSuite rejected the unbuild:\n\n" + (e.message || e));
+        } finally { setIsSyncing(false); }
+    };
+
     // ROD CUTS derived: validate the source (8 ft) bin against LIVE per-bin stock when we have it;
     // dest bin is free-form (created in NetSuite if new — and it may legitimately equal the source bin,
     // since the cut-down rods are a DIFFERENT item). Same live-bin principle as Transfer/Convert.
@@ -3237,6 +3310,78 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); setPackDiagNames({}); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
                                 </div>
 
+                                {/* BUILD or BREAK — the reversal shares the pack picker above. */}
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    {[['BUILD', '⬡ BUILD PACKS'], ['BREAK', '⤺ BREAK APART']].map(([m, label]) => (
+                                        <button key={m} onClick={() => { setPackOp(m); setPackDiag(null); }} style={{ flex: 1, padding: '10px', background: packOp === m ? theme.ink : 'transparent', color: packOp === m ? '#fff' : theme.inkSoft, border: `1px solid ${packOp === m ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer' }}>{label}</button>
+                                    ))}
+                                </div>
+
+                                {packOp === 'BREAK' && (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                            <div style={{ flex: '0 0 160px' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Packs to break</div>
+                                                <input value={packQty} onChange={e => setPackQty(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" inputMode="numeric" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1.2rem', textAlign: 'center', border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: '240px', fontFamily: theme.mono, fontSize: '12px', color: packQtyNum > 0 ? theme.ink : theme.inkSoft, paddingBottom: '12px' }}>
+                                                {packQtyNum > 0 && packComponent
+                                                    ? <>takes <b>{packQtyNum}</b> × {erpOf(packTarget)} apart → <b>{breakEachesBack}</b> × {erpOf(packComponent)} back to stock</>
+                                                    : 'enter how many packs to take apart'}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Bin the PACKS come out of</div>
+                                            {breakSrcBins.length > 0 && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                                    {breakSrcBins.slice().sort((a, b) => b.qty - a.qty).map(b => { const sel = breakSrcScan.trim().toUpperCase() === String(b.bin).toUpperCase(); return (
+                                                        <button key={b.bin} onClick={() => setBreakSrcScan(b.bin)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b.bin} ({b.qty})</button>
+                                                    ); })}
+                                                </div>
+                                            )}
+                                            <input value={breakSrcScan} onChange={e => setBreakSrcScan(e.target.value)} placeholder="scan the pack's bin" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${breakSrcScan.trim() ? (breakSrcBin ? '#7dbb81' : '#d9534f') : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: !breakSrcScan.trim() ? theme.inkSoft : !breakSrcBin ? '#d9534f' : (packQtyNum > breakSrcQty ? '#d9534f' : '#7dbb81') }}>
+                                                {!breakSrcScan.trim() ? (breakSrcBins.length ? 'pick or scan one of the bins above' : 'no packs stocked in any bin — nothing to break apart')
+                                                    : !breakSrcBin ? '✗ no packs in this bin'
+                                                    : packQtyNum > breakSrcQty ? `✗ only ${breakSrcQty} packs in this bin` : `✓ ${breakSrcQty} packs in this bin`}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Bin the loose EACHES go into</div>
+                                            <input value={breakDestScan} onChange={e => setBreakDestScan(e.target.value)} placeholder={breakDestBin || 'scan the each bin'} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${breakDestBin ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: breakDestBin ? '#7dbb81' : '#d9534f' }}>
+                                                {breakDestBin ? `✓ ${packComponent ? erpOf(packComponent) : 'eaches'} back into ${breakDestBin}` : '✗ scan where the loose eaches go'}
+                                            </div>
+                                        </div>
+
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', border: `1px dashed ${breakToCore ? theme.brass : theme.line}`, padding: '12px', fontFamily: theme.mono, fontSize: '11px', color: breakToCore ? theme.ink : theme.inkSoft }}>
+                                            <input type="checkbox" checked={breakToCore} onChange={e => setBreakToCore(e.target.checked)} />
+                                            ⤺ also turn the eaches back into the raw core {packRoot ? `(${packRoot})` : ''} — for re-painting into another colour
+                                        </label>
+
+                                        {breakToCore && (
+                                            <div>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Bin the raw {packRoot} goes into</div>
+                                                <input value={breakCoreScan} onChange={e => setBreakCoreScan(e.target.value)} placeholder={breakCoreBin || 'scan the raw core bin'} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${breakCoreBin ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: !packCorePart ? '#d9534f' : breakCoreBin ? '#7dbb81' : '#d9534f' }}>
+                                                    {!packCorePart ? `✗ ${packRoot} isn't in this brand's library` : breakCoreBin ? `✓ ${breakEachesBack} × ${packRoot} into ${breakCoreBin}` : '✗ scan where the raw rings go'}
+                                                </div>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '6px' }}>Posts TWO NetSuite unbuilds — pack → eaches, then eaches → raw. If the second fails the first still stands and you'll be told exactly where it stopped.</div>
+                                            </div>
+                                        )}
+
+                                        <input value={packMemo} onChange={e => setPackMemo(e.target.value)} placeholder="memo (optional)" style={{ width: '100%', padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+
+                                        <button onClick={pushPackBreak} disabled={!breakReady || isSyncing} style={{ padding: '18px', background: breakReady && !isSyncing ? theme.ink : theme.paper, color: breakReady && !isSyncing ? '#fff' : theme.inkSoft, border: `1px solid ${breakReady && !isSyncing ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '12px', letterSpacing: '.15em', textTransform: 'uppercase', cursor: breakReady && !isSyncing ? 'pointer' : 'not-allowed' }}>
+                                            {isSyncing ? 'POSTING…' : breakToCore ? `BREAK ${packQtyNum || ''} PACK${packQtyNum === 1 ? '' : 'S'} → CORE` : `BREAK ${packQtyNum || ''} PACK${packQtyNum === 1 ? '' : 'S'} APART`}
+                                        </button>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textAlign: 'center' }}>Re-packing into another size? Break apart, then switch to BUILD PACKS and build the size you want from the loose eaches.</div>
+                                    </div>
+                                )}
+
+                                {packOp === 'BUILD' && (<>
                                 {/* COMPONENT */}
                                 <div>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>2 · The finished each it consumes</div>
@@ -3375,6 +3520,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <button onClick={pushRingPackBuild} disabled={!packReady || isSyncing} style={{ padding: '18px', background: packReady && !isSyncing ? theme.ink : theme.paper, color: packReady && !isSyncing ? '#fff' : theme.inkSoft, border: `1px solid ${packReady && !isSyncing ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '12px', letterSpacing: '.15em', textTransform: 'uppercase', cursor: packReady && !isSyncing ? 'pointer' : 'not-allowed' }}>
                                     {isSyncing ? 'POSTING…' : `BUILD ${packQtyNum || ''} PACK${packQtyNum === 1 ? '' : 'S'}`}
                                 </button>
+                                </>)}
                             </div>
                         )}
                     </div>
