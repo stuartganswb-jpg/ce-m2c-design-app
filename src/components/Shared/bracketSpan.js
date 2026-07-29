@@ -20,7 +20,11 @@
 const STEEL = { E: 29000000, yield: 54000 };   // psi · 1018 cold-drawn
 const ALUM = { E: 10000000, yield: 16000 };    // psi · 6063-T5
 const FS = 2;            // safety factor on yield
-const DEFLECTION_N = 180; // sag limit L/180 (the workbook's default; 240 = "no visible sag")
+// SAG LIMIT — tightened from the workbook's L/180 to L/360 (Stuart 2026-07-28: "those spans are
+// way too long, let's set it industry best practice"). L/180 is a structural limit borrowed from
+// building codes, where the beam is hidden; a curtain rod is judged BY EYE, so it has to be far
+// tighter. L/360 is the standard "no visible sag" figure for exposed decorative work.
+const DEFLECTION_N = 360;
 const GAUGE_WALL = { 14: 0.083, 16: 0.065 };   // Birmingham Wire Gauge, tube standard
 // The 2" rectangular aluminium extrusion, outside dimensions + uniform wall.
 const ALUM_PROFILE = { h: 2, w: 0.75, t: 0.105 };
@@ -62,11 +66,23 @@ const rectSection = (h, b, t) => {
 // ONLY in the strong (2" vertical) orientation — we do not sell it the weak way, so the weak-axis
 // row from the workbook is deliberately absent rather than hidden.
 const ROUND_SIZES = [
-    { od: 0.5, label: '1/2"' },
-    { od: 0.75, label: '3/4"' },
-    { od: 1, label: '1"' },
-    { od: 1.375, label: '1-3/8"' },
+    { od: 0.5, label: '1/2"', maxSpan: 36 },
+    { od: 0.75, label: '3/4"', maxSpan: 48 },
+    { od: 1, label: '1"', maxSpan: 60 },
+    { od: 1.375, label: '1-3/8"', maxSpan: 72 },
 ];
+
+// HOUSE MAXIMUM SPAN — the cap that applies no matter what the beam math says.
+//
+// Why a cap at all: the tube is genuinely stiffer than the installation around it. Sag is only one
+// failure; the ones the calculation cannot see are the bracket and its anchor, rings binding as
+// they travel over a long unsupported run, and a customer's eye. So the recommendation is the
+// SMALLER of the engineered span and this cap — matching the common trade rule of a support
+// roughly every 4 ft, opened up for the heavier rods that carry it.
+//
+// These are OUR house numbers, deliberately in one editable place. Change here, re-copy to
+// portal/src/shared/bracketSpan.js.
+const ALUM_MAX_SPAN = 72;
 
 export const ROD_COLLECTIONS = [
     { id: 'H1', label: 'Fabricut H1', note: '14 ga steel + the 2" aluminium extrusion' },
@@ -76,21 +92,22 @@ export const ROD_COLLECTIONS = [
 export const RODS = [
     ...ROUND_SIZES.map(s => ({
         id: `H1-${s.od}`, collection: 'H1', label: `${s.label} round`, material: 'Steel',
-        section: roundSection(s.od, GAUGE_WALL[14]), metal: STEEL,
+        section: roundSection(s.od, GAUGE_WALL[14]), metal: STEEL, maxSpan: s.maxSpan,
     })),
     ...ROUND_SIZES.map(s => ({
         id: `H2-${s.od}`, collection: 'H2', label: `${s.label} round`, material: 'Steel',
-        section: roundSection(s.od, GAUGE_WALL[16]), metal: STEEL,
+        section: roundSection(s.od, GAUGE_WALL[16]), metal: STEEL, maxSpan: s.maxSpan,
     })),
     {
         id: 'H1-ALU2', collection: 'H1', label: '2" rectangular', material: 'Aluminium',
-        section: rectSection(ALUM_PROFILE.h, ALUM_PROFILE.w, ALUM_PROFILE.t), metal: ALUM,
+        section: rectSection(ALUM_PROFILE.h, ALUM_PROFILE.w, ALUM_PROFILE.t), metal: ALUM, maxSpan: ALUM_MAX_SPAN,
     },
 ];
 
 // ---- The answer -------------------------------------------------------------------------------
-// Safe span in INCHES for one rod under a given load. Returns null for a non-positive load.
-export function safeSpanInches(rod, loadLbPerFt) {
+// Engineered span in INCHES for one rod under a given load, BEFORE the house cap. Null for a
+// non-positive load.
+export function engineeredSpanInches(rod, loadLbPerFt) {
     const w = (Number(loadLbPerFt) || 0) / 12; // lb/in
     if (!(w > 0) || !rod || !rod.section) return null;
     const { I, S } = rod.section;
@@ -99,19 +116,32 @@ export function safeSpanInches(rod, loadLbPerFt) {
     return Math.min(sag, stress);
 }
 
-// Whole table for a fabric class + drop. Spans are rounded DOWN to the inch — a guide that
-// over-promises by a fraction of an inch is worse than one that quietly under-promises.
-export function spanTable(fabricId, dropFt, collectionId) {
+// The RECOMMENDED span: the engineered span capped at the house maximum. Also reports which of the
+// two bound it, so neither page has to present a number it can't explain — "why does the 1-3/8"
+// rod stop at 6 ft?" has a real answer, and it's a different answer from "your fabric is heavy".
+export function safeSpanInches(rod, loadLbPerFt) {
+    const eng = engineeredSpanInches(rod, loadLbPerFt);
+    if (eng === null) return null;
+    return Math.min(eng, rod.maxSpan || Infinity);
+}
+
+// Whole table for a fabric class + curtain length. Spans are rounded DOWN to the inch — a guide
+// that over-promises by a fraction of an inch is worse than one that quietly under-promises.
+export function spanTable(fabricId, curtainLengthFt, collectionId) {
     const fab = fabricClass(fabricId);
-    const load = loadPerFoot(fab.areal, dropFt);
+    const load = loadPerFoot(fab.areal, curtainLengthFt);
     return RODS
         .filter(r => !collectionId || r.collection === collectionId)
         .map(r => {
-            const raw = safeSpanInches(r, load);
+            const eng = engineeredSpanInches(r, load);
+            const capped = eng === null ? null : Math.min(eng, r.maxSpan || Infinity);
             return {
                 ...r,
-                spanInches: raw === null ? null : Math.floor(raw),
-                spanFeet: raw === null ? null : Math.floor(raw) / 12,
+                spanInches: capped === null ? null : Math.floor(capped),
+                spanFeet: capped === null ? null : Math.floor(capped) / 12,
+                // 'MAX'  = our house limit is the binding constraint (a longer curtain won't shorten it)
+                // 'LOAD' = the fabric weight is (a heavier or longer curtain WILL shorten it)
+                limitedBy: capped === null ? null : (eng > (r.maxSpan || Infinity) ? 'MAX' : 'LOAD'),
             };
         });
 }
@@ -133,7 +163,8 @@ export function ftIn(inches) {
 
 // What the numbers assume — shown to staff, not to customers.
 export const ASSUMPTIONS = [
-    `Fullness ${FULLNESS}× · sag limit L/${DEFLECTION_N} · safety factor ${FS} on yield`,
+    `Fullness ${FULLNESS}× · sag limit L/${DEFLECTION_N} ("no visible sag") · safety factor ${FS} on yield`,
+    `House max span caps the engineered figure: ${ROUND_SIZES.map(s => `${s.label} ${s.maxSpan}"`).join(' · ')} · 2" alum ${ALUM_MAX_SPAN}"`,
     `Steel E ${(STEEL.E / 1e6).toFixed(0)} Msi, yield ${STEEL.yield.toLocaleString()} psi (1018 cold-drawn) · 14 ga wall ${GAUGE_WALL[14]}", 16 ga wall ${GAUGE_WALL[16]}"`,
     `Aluminium E ${(ALUM.E / 1e6).toFixed(0)} Msi, yield ${ALUM.yield.toLocaleString()} psi (6063-T5) · ${ALUM_PROFILE.h}" × ${ALUM_PROFILE.w}" × ${ALUM_PROFILE.t}" wall, strong axis only`,
     'Single span simply supported between brackets, uniform load, brackets anchored to studs.',

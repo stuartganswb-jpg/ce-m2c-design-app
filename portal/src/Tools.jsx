@@ -47,10 +47,10 @@ const BracketSpanGuide = () => {
         </label>
 
         <label style={{ display: 'block' }}>
-          <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Curtain drop (ft)</span>
+          <span className="eyebrow" style={{ display: 'block', marginBottom: 6 }}>Curtain length (ft)</span>
           <input type="number" min="1" step="0.5" value={dropFt} onChange={(e) => setDropFt(e.target.value)}
             style={{ width: '100%', boxSizing: 'border-box', padding: 10, border: '1px solid var(--line)', background: 'var(--card)', font: 'inherit', color: 'var(--ink)' }} />
-          <span style={{ display: 'block', fontSize: '.8rem', color: 'var(--ink-soft)', marginTop: 6, fontStyle: 'italic' }}>Rod to floor. 8 ft is typical.</span>
+          <span style={{ display: 'block', fontSize: '.8rem', color: 'var(--ink-soft)', marginTop: 6, fontStyle: 'italic' }}>Rod to floor — the longer the curtain, the heavier. 8 ft is typical.</span>
         </label>
 
         <label style={{ display: 'block' }}>
@@ -86,7 +86,10 @@ const BracketSpanGuide = () => {
                 <tr key={r.id}>
                   <td>{r.label} <span style={{ color: 'var(--ink-soft)', fontSize: '.8rem' }}>{r.material}</span></td>
                   <td style={{ color: 'var(--ink-soft)' }}>{(ROD_COLLECTIONS.find((c) => c.id === r.collection) || {}).label}</td>
-                  <td className="num"><strong>{ftIn(r.spanInches)}</strong> <span style={{ color: 'var(--ink-soft)', fontSize: '.8rem' }}>{r.spanInches}"</span></td>
+                  <td className="num">
+                    <strong>{ftIn(r.spanInches)}</strong> <span style={{ color: 'var(--ink-soft)', fontSize: '.8rem' }}>{r.spanInches}"</span>
+                    {r.limitedBy === 'LOAD' && <div style={{ fontSize: '.7rem', color: 'var(--brass)' }}>shortened for this fabric</div>}
+                  </td>
                   {rodInches ? <td className="num" style={{ color: 'var(--brass)', fontWeight: 600 }}>{bracketsFor(rodInches, r.spanInches)}</td> : null}
                 </tr>
               ))}
@@ -96,9 +99,11 @@ const BracketSpanGuide = () => {
       )}
 
       <p style={{ fontSize: '.82rem', color: 'var(--ink-soft)', lineHeight: 1.65, marginTop: 18, paddingTop: 14, borderTop: '1px dashed var(--line)' }}>
-        Spans are rounded down to the inch. The 2" rectangular rod is part of the Fabricut collection and is
-        always mounted with the 2" dimension vertical. If your opening falls close to a limit, talk to us —
-        an extra centre bracket is always the safer choice.
+        Spans are rounded down to the inch and never exceed our recommended maximum for that rod. Heavier
+        fabric and longer curtains shorten the span further — where that happens we've marked the row. The 2"
+        rectangular rod is part of the Fabricut collection and is always mounted with the 2" dimension
+        vertical. If your opening falls close to a limit, talk to us — an extra centre bracket is always the
+        safer choice.
       </p>
     </div>
   );

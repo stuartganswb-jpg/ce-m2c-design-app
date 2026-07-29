@@ -54,9 +54,9 @@ const BracketSpanGuide = ({ showAssumptions }) => {
                         <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '5px', fontStyle: 'italic' }}>{fab.example}</div>
                     </div>
                     <div>
-                        <span style={lbl}>Curtain drop (ft)</span>
+                        <span style={lbl}>Curtain length (ft)</span>
                         <input type="number" min="1" step="0.5" value={dropFt} onChange={e => setDropFt(e.target.value)} style={inp} />
-                        <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '5px', fontStyle: 'italic' }}>Rod to floor. 8 ft is typical.</div>
+                        <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '5px', fontStyle: 'italic' }}>Rod to floor — longer means heavier. 8 ft is typical.</div>
                     </div>
                     <div>
                         <span style={lbl}>Rod length (in) — optional</span>
@@ -104,6 +104,11 @@ const BracketSpanGuide = ({ showAssumptions }) => {
                                         <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.ink }}>
                                             <strong style={{ fontWeight: 600 }}>{ftIn(r.spanInches)}</strong>
                                             <span style={{ color: theme.inkSoft, fontSize: '0.78rem', marginLeft: '8px' }}>{r.spanInches}"</span>
+                                            {/* Which constraint bound it — "why is this 6 ft?" has two very
+                                                different answers and the operator should know which. */}
+                                            <div style={{ fontSize: '9px', letterSpacing: '.06em', color: r.limitedBy === 'LOAD' ? theme.brass : theme.inkSoft }}>
+                                                {r.limitedBy === 'LOAD' ? 'limited by fabric weight' : 'our maximum'}
+                                            </div>
                                         </td>
                                         {rodInches && (
                                             <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.brass, fontWeight: 600 }}>{n}</td>
@@ -116,8 +121,11 @@ const BracketSpanGuide = ({ showAssumptions }) => {
                 )}
 
                 <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: `1px dashed ${theme.line}`, fontSize: '0.8rem', color: theme.inkSoft, lineHeight: 1.6 }}>
-                    Spans are rounded down to the inch. The 2" rectangular rod is Fabricut H1 only and is always
-                    mounted with the 2" dimension vertical — we don't offer it the other way.
+                    Spans are rounded down to the inch and never exceed our maximum for that rod, whatever the
+                    beam math allows — the tube is stiffer than the bracket, the anchor and the eye. Fabric
+                    weight and curtain length only shorten the span further, and mostly bite on the smaller rods.
+                    The 2" rectangular rod is Fabricut H1 only and is always mounted with the 2" dimension
+                    vertical — we don't offer it the other way.
                 </div>
 
                 {/* Staff see what the numbers assume; the portal deliberately does not. */}
