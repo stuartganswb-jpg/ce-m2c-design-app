@@ -111,12 +111,35 @@ define(['N/record', 'N/query'], function (record, query) {
                     lineDiag.useBinId = useBinId; lineDiag.useStatus = useStatus; lineDiag.srcOnhand = src ? src.onhand : null;
                     try {
                         var inv = b.getCurrentSublistSubrecord({ sublistId: 'component', fieldId: 'componentinventorydetail' });
+                        // CLEAR ANY EXISTING ASSIGNMENT LINES FIRST (Stuart 2026-07-28: "The total
+                        // inventory detail quantity must be 10"). Once the component actually HAS
+                        // stock, NetSuite pre-populates the inventory detail itself; appending our
+                        // line then doubles the total against the line qty and the commit is
+                        // rejected. (While the component had zero on hand nothing was pre-created,
+                        // which is why this only appeared after the each was stocked.) Removing
+                        // them also guarantees the consume bin is the one the OPERATOR SCANNED
+                        // rather than whichever bin NetSuite happened to pick.
+                        var preLines = inv.getLineCount({ sublistId: 'inventoryassignment' });
+                        lineDiag.preExistingAssignments = preLines;
+                        for (var k = preLines - 1; k >= 0; k--) {
+                            try { inv.removeLine({ sublistId: 'inventoryassignment', line: k }); } catch (rmErr) { lineDiag.removeError = String(rmErr && rmErr.message || rmErr); }
+                        }
                         inv.selectNewLine({ sublistId: 'inventoryassignment' });
                         if (useBinId) inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', value: useBinId });
                         else if (body.bin) inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', text: String(body.bin) });
                         if (useStatus) inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'inventorystatus', value: useStatus });
                         inv.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'quantity', value: qtyNeeded });
                         inv.commitLine({ sublistId: 'inventoryassignment' });
+                        // Read the total back: if it ever disagrees with the line qty again, the diag
+                        // says so outright instead of surfacing NetSuite's bare message.
+                        try {
+                            var tot = 0, n2 = inv.getLineCount({ sublistId: 'inventoryassignment' });
+                            for (var m = 0; m < n2; m++) {
+                                tot += Number(inv.getSublistValue({ sublistId: 'inventoryassignment', fieldId: 'quantity', line: m })) || 0;
+                            }
+                            lineDiag.detailTotal = tot;
+                            lineDiag.detailLines = n2;
+                        } catch (totErr) { /* best-effort */ }
                         b.commitLine({ sublistId: 'component' });
                         detailed++;
                         lineDiag.detailed = true;
@@ -148,6 +171,13 @@ define(['N/record', 'N/query'], function (record, query) {
                         if (rb && rb.length) toBinId = parseInt(rb[0].id, 10);
                     }
                     var recvStatus = body.toStatusId ? parseInt(body.toStatusId, 10) : (body.statusId ? parseInt(body.statusId, 10) : 1);
+                    // Same rule as the consume side: clear anything NetSuite pre-created so the
+                    // received total matches the build qty and lands in the operator's put-away bin.
+                    var preB = invB.getLineCount({ sublistId: 'inventoryassignment' });
+                    builtDiag.preExistingAssignments = preB;
+                    for (var kb = preB - 1; kb >= 0; kb--) {
+                        try { invB.removeLine({ sublistId: 'inventoryassignment', line: kb }); } catch (rmB) { builtDiag.removeError = String(rmB && rmB.message || rmB); }
+                    }
                     invB.selectNewLine({ sublistId: 'inventoryassignment' });
                     if (toBinId) invB.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'binnumber', value: toBinId });
                     invB.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'inventorystatus', value: recvStatus });

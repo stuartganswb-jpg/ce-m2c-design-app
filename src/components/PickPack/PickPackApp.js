@@ -3339,9 +3339,30 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         );
                                                     })}
                                                 </div>
-                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '10px', lineHeight: 1.5 }}>
-                                                    A ✗ line with NO STOCK is the whole problem: NetSuite can't assign a consume bin for a component it has none of, which is what "configure the inventory detail in line 1" means. Either stock that component, or the BOM should consume the each you actually hold.
-                                                </div>
+                                                {(() => {
+                                                    // The advice must follow the ACTUAL failure — a stock message on a line
+                                                    // that plainly shows 220 on hand reads as nonsense (Stuart 2026-07-28:
+                                                    // "why is it saying this at the bom level? looks correct to me?").
+                                                    const lines = (packDiag.diag || []).filter(d => d && d.item !== undefined);
+                                                    const noStock = lines.filter(d => !d.srcOnhand);
+                                                    const errored = lines.filter(d => d.error && d.srcOnhand);
+                                                    const note = { fontFamily: theme.mono, fontSize: '10px', marginTop: '10px', lineHeight: 1.5 };
+                                                    if (noStock.length) return (
+                                                        <div style={{ ...note, color: theme.inkSoft }}>
+                                                            A ✗ line with NO STOCK is the problem: NetSuite can't assign a consume bin for a component it has none of. Finish a batch of the raw into that each first.
+                                                        </div>
+                                                    );
+                                                    if (errored.length) return (
+                                                        <div style={{ ...note, color: theme.inkSoft }}>
+                                                            The component and its stock look right — NetSuite rejected the inventory DETAIL itself{errored[0].detailTotal !== undefined ? ` (it assigned ${errored[0].detailTotal} against a line needing ${errored[0].qtyUsed})` : ''}. This is the NetSuite-side script, not your data: the updated ce_convert_build_restlet.js in the repo clears the detail lines NetSuite pre-creates before writing ours. Re-upload it in NetSuite (File Cabinet → SuiteScripts, replace the file) and run this again.
+                                                        </div>
+                                                    );
+                                                    return (
+                                                        <div style={{ ...note, color: '#3f8b45' }}>
+                                                            ✓ Every component resolved to a bin with stock — this pack is ready to build.
+                                                        </div>
+                                                    );
+                                                })()}
                                             </>
                                         )}
                                     </div>
