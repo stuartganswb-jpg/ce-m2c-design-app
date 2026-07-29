@@ -3,6 +3,7 @@ import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
 import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShipUom';
+import { SOURCING, sourcingPatch } from '../Shared/sourcing';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
@@ -97,6 +98,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const [typeFilter, setTypeFilter] = useState("");
     const [collectionFilter, setCollectionFilter] = useState("");
     const [watchlistFilter, setWatchlistFilter] = useState("");
+    // Tier filter (Stuart 2026-07-28: "filter down by raw items, /P items, and /EP items so i can
+    // easily apply the correct tags") — read off the item # suffix, the same rule the rest of the
+    // app uses: no slash = the raw core, "/P" = the phosphated base, "/EP…" = an outsourced plate,
+    // anything else after a slash = a painted / other finished variant.
+    const [tierFilter, setTierFilter] = useState("");
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [isUpdating, setIsUpdating] = useState(false);
     const [progress, setProgress] = useState(0);
@@ -113,7 +119,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         quickShipUom: { active: false, value: "" },
         watchList: { active: false, value: "NONE" },
         project: { active: false, value: "" },
-        isInHouse: { active: false, value: true },
+        sourcing: { active: false, value: SOURCING.IN },
         isStocked: { active: false, value: true },
         paintSize: { active: false, value: "S" },
         partHandling: { active: false, value: "" },
@@ -522,7 +528,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 
                 const isInHouse = getVal("Is In-House (TRUE/FALSE)");
                 if(isInHouse !== null) {
-                    payload["manufacturingSpecs.isInHouse"] = isInHouse.toUpperCase() === 'TRUE';
+                    // The CSV column is the two-way boolean, so an explicit TRUE/FALSE here also
+                    // settles the mode — otherwise a stale "BOTH" would survive a sheet that says
+                    // the item is purely in-house or purely bought.
+                    const patch = sourcingPatch(isInHouse.toUpperCase() === 'TRUE' ? SOURCING.IN : SOURCING.OUT);
+                    payload["manufacturingSpecs.isInHouse"] = patch.isInHouse;
+                    payload["manufacturingSpecs.sourcingMode"] = patch.sourcingMode;
                 }
 
                 const isStocked = getVal("Is Stocked (TRUE/FALSE)");
@@ -589,7 +600,15 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     };
 
     // --- MASS UPDATE LOGIC ---
-    const anyFilterActive = !!searchTerm || routingFilter !== "ALL" || !!typeFilter || !!collectionFilter || !!watchlistFilter;
+    const anyFilterActive = !!searchTerm || routingFilter !== "ALL" || !!typeFilter || !!collectionFilter || !!watchlistFilter || !!tierFilter;
+    const tierOfErp = (erp) => {
+        const id = String(erp || '').toUpperCase();
+        const cut = id.lastIndexOf('/');
+        if (cut <= 0) return 'RAW';
+        const suffix = id.slice(cut + 1);
+        if (suffix === 'P') return 'P';
+        return suffix.startsWith('EP') ? 'EP' : 'FIN';
+    };
     const filteredInventory = inventory.filter(part => {
         // Don't render the whole library by default — require a search or at least one filter.
         if (!anyFilterActive) return false;
@@ -614,7 +633,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         const currentWatchList = (specs.watchList || cust.watchlist || "NONE").toUpperCase();
         const matchesWatchlist = !watchlistFilter || currentWatchList === watchlistFilter.toUpperCase();
 
-        return matchesSearch && matchesRouting && matchesType && matchesCollection && matchesWatchlist;
+        const matchesTier = !tierFilter || tierOfErp(part.legacyErpId || part.itemId) === tierFilter;
+
+        return matchesSearch && matchesRouting && matchesType && matchesCollection && matchesWatchlist && matchesTier;
     });
 
     const toggleSelection = (id) => {
@@ -666,9 +687,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                         } else if (fieldKey === 'collection') {
                             const currentCols = targetPart?.manufacturingSpecs?.collections || [];
                             if (!currentCols.includes(val)) payload['manufacturingSpecs.collections'] = [...currentCols, val];
-                        } else if (fieldKey === 'isInHouse') {
-                            payload['manufacturingSpecs.isInHouse'] = val;
-                            payload.partClass = val ? "Inventory" : "Inventory"; 
+                        } else if (fieldKey === 'sourcing') {
+                            // Writes the legacy boolean AND the app-owned mode together, so the two
+                            // can never drift (Shared/sourcing.js owns that pairing).
+                            const patch = sourcingPatch(val);
+                            payload['manufacturingSpecs.isInHouse'] = patch.isInHouse;
+                            payload['manufacturingSpecs.sourcingMode'] = patch.sourcingMode;
                         } else if (fieldKey === 'projection' || fieldKey === 'bpOrientation' || fieldKey === 'isReturnBracket' || fieldKey === 'armThickness') {
                             payload[`manufacturingSpecs.customData.${fieldKey}`] = val;
                         } else if (['basePrice', 'cost', 'weight', 'moq', 'leadTime', 'reorderPoint'].includes(fieldKey)) {
@@ -1040,6 +1064,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 <option value="NONE">None / Unassigned</option>
                                 {dynamicWatchlists.map(w => <option key={w} value={w}>{w}</option>)}
                             </select>
+                            {/* Tier — by item-# suffix, so a whole tier can be tagged in one pass. */}
+                            <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)} title="Filter by tier: the raw core (no suffix), the /P phosphated base, the /EP plated variants, or any other finished suffix" style={{ ...fieldStyle, flex: '1 1 130px', padding: '8px', background: tierFilter ? theme.paper : '#fff' }}>
+                                <option value="">All Tiers</option>
+                                <option value="RAW">Raw only (no suffix)</option>
+                                <option value="P">/P — phosphated base</option>
+                                <option value="EP">/EP — plated (outsourced)</option>
+                                <option value="FIN">Other finished suffix</option>
+                            </select>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', alignItems: 'center' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase' }}>Showing {filteredInventory.length} Results</span>
@@ -1266,15 +1298,17 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </select>
                         </div>
 
-                        <div style={{ background: updates.isInHouse.active ? theme.paper : 'transparent', border: `1px solid ${updates.isInHouse.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                        <div style={{ background: updates.sourcing.active ? theme.paper : 'transparent', border: `1px solid ${updates.sourcing.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
-                                <input type="checkbox" checked={updates.isInHouse.active} onChange={(e) => handleUpdateChange('isInHouse', 'active', e.target.checked)} />
-                                Set Sourcing (In-House vs Outsourced)
+                                <input type="checkbox" checked={updates.sourcing.active} onChange={(e) => handleUpdateChange('sourcing', 'active', e.target.checked)} />
+                                Overwrite Sourcing (In-House / Outsourced / Both)
                             </label>
-                            <select disabled={!updates.isInHouse.active} value={updates.isInHouse.value.toString()} onChange={(e) => handleUpdateChange('isInHouse', 'value', e.target.value === 'true')} style={{ ...fieldStyle, opacity: updates.isInHouse.active ? 1 : 0.5 }}>
-                                <option value="true">Manufactured In-House</option>
-                                <option value="false">Outsourced / Purchased</option>
+                            <select disabled={!updates.sourcing.active} value={updates.sourcing.value} onChange={(e) => handleUpdateChange('sourcing', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.sourcing.active ? 1 : 0.5 }}>
+                                <option value={SOURCING.IN}>Manufactured In-House</option>
+                                <option value={SOURCING.OUT}>Outsourced / Purchased</option>
+                                <option value={SOURCING.BOTH}>Both — made here AND bought</option>
                             </select>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: theme.inkSoft, marginTop: '8px', lineHeight: 1.5 }}>Both = replenishment asks vendor-or-work-order per item, defaulted to the work order. Everywhere else a Both item reads as in-house.</div>
                         </div>
 
                         <div style={{ background: updates.isStocked.active ? theme.paper : 'transparent', border: `1px solid ${updates.isStocked.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>

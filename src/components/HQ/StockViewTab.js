@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteField } from "firebase/firestore";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
+import { SOURCING, sourcingOf } from '../Shared/sourcing';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
 import { reserveShortNo } from '../Shared/shortId';
@@ -1415,9 +1416,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     const x = { r: { itemid: g.base, internalId: baseInfo.iid }, info: baseInfo, qty: baseQty };
                     const specs = baseInfo.part.manufacturingSpecs || {};
                     const vendorName = String(specs.vendorName || '').trim();
-                    // Same rule as the Raw Cores router — an assembly is BUILT here whatever isInHouse says.
+                    // Same rules as the Raw Cores router: sourced BOTH ways → always ask (defaulted to
+                    // the work order); otherwise an assembly is BUILT here whatever isInHouse says.
                     const isAssembly = baseInfo.part.partClass === 'Assembly' || baseInfo.part.partClass === 'Master Assembly' || baseInfo.part.netSuiteRecordType === 'assemblyitem';
-                    if (isAssembly) shop.push(x);
+                    if (sourcingOf(specs) === SOURCING.BOTH) buy.push({ ...x, vendorOverride: '__MAKE__', bothSourced: true });
+                    else if (isAssembly) shop.push(x);
                     else if (specs.isInHouse === false || vendorName) buy.push({ ...x, vendorOverride: vendorName });
                     else shop.push(x);
                 }
@@ -1511,6 +1514,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const part = x.info.part;
             const specs = part.manufacturingSpecs || {};
             const vendorName = String(specs.vendorName || '').trim();
+            // SOURCED BOTH WAYS (Stuart 2026-07-28: H1/H2 assemblies "we produce in house — work
+            // order — but we also buy them") → always ask. This is checked FIRST, ahead of the
+            // assembly rule, because a Both item is usually an assembly and would otherwise be
+            // routed silently to the shop. It opens the vendor modal defaulted to ⚒ make-in-house,
+            // so doing nothing produces the safe answer.
+            if (sourcingOf(specs) === SOURCING.BOTH) { buy.push({ ...x, vendorOverride: '__MAKE__', bothSourced: true }); return; }
             // AN ASSEMBLY IS BUILT HERE — never a PO candidate, whatever the isInHouse flag says
             // (Stuart 2026-07-28: H2-138LBE, an assembly we make, was asking for a vendor). This is
             // the same exclusion the Min-OH rule already uses at isOutsourced above; 'Master
@@ -1822,8 +1831,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         const routeTd = (label, color, title) => <td style={{ ...numTd, textAlign: 'left', color, fontSize: '10px', whiteSpace: 'nowrap' }} title={title}>{label}</td>;
                                                         // Raw base routing — identical rule to the Raw Cores view.
                                                         const bp = bi.part, bsp = bp?.manufacturingSpecs || {};
-                                                        const bAsm = !!bp && (bp.partClass === 'Assembly' || bp.partClass === 'Master Assembly' || bp.netSuiteRecordType === 'assemblyitem');
-                                                        const bBuy = !!bp && !bAsm && (bsp.isInHouse === false || bi.vendored);
+                                                        const bBoth = !!bp && sourcingOf(bsp) === SOURCING.BOTH;
+                                                        const bAsm = !!bp && !bBoth && (bp.partClass === 'Assembly' || bp.partClass === 'Master Assembly' || bp.netSuiteRecordType === 'assemblyitem');
+                                                        const bBuy = !!bp && !bBoth && !bAsm && (bsp.isInHouse === false || bi.vendored);
                                                         return (
                                                             <React.Fragment key={g.base}>
                                                                 <tr style={{ borderTop: '2px solid var(--ink)' }}>
@@ -1839,10 +1849,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                                     <td style={{ ...numTd }}>{bi.onOrd > 0 ? <button onClick={() => setOnOrdModal({ itemid: g.base, onOrd: bi.onOrd, onOrdLines: bi.onOrdLines })} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{bi.onOrd}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                                     <td style={{ ...numTd, color: 'var(--ink-soft)' }} title="6 months of the family's combined demand">{bi.minOnHand || '·'}</td>
                                                                     <td style={{ ...numTd, fontWeight: 600, color: bi.shortfall > 0 ? '#d9534f' : 'var(--line)' }}>{bi.shortfall || '·'}</td>
-                                                                    {qtyCell(g.base, !!bp, bAsm || !bBuy ? 'Raw core → shop-floor work order (staged in RTG)' : 'Bought core → vendor confirmation, then one PO per vendor')}
-                                                                    {bAsm ? routeTd('⚒ SHOP WO', '#3a7d44', 'Assembly — we build it here, so an order becomes a shop-floor work order')
-                                                                        : bBuy ? routeTd(bi.vendored ? '🏷 VENDOR PO' : '⚠ NO VENDOR', bi.vendored ? '#3f7fc4' : '#d9534f', bi.vendored ? 'Bought — confirms the vendor, then joins that vendor\'s PO' : 'Flagged outsourced but has NO vendor — you\'ll be asked to pick one or switch it to in-house')
-                                                                            : routeTd('⚒ SHOP WO', 'var(--ink-soft)', 'Made in-house — an order becomes a shop-floor work order')}
+                                                                    {qtyCell(g.base, !!bp, bBoth ? 'Sourced both ways — ordering asks vendor-or-shop, defaulted to the work order' : (bAsm || !bBuy ? 'Raw core → shop-floor work order (staged in RTG)' : 'Bought core → vendor confirmation, then one PO per vendor'))}
+                                                                    {bBoth ? routeTd('⚖ BOTH → ASK', 'var(--brass)', 'Flagged BOTH in the Master Library — we make it and we buy it. Ordering asks which, defaulted to the work order.')
+                                                                        : bAsm ? routeTd('⚒ SHOP WO', '#3a7d44', 'Assembly — we build it here, so an order becomes a shop-floor work order')
+                                                                            : bBuy ? routeTd(bi.vendored ? '🏷 VENDOR PO' : '⚠ NO VENDOR', bi.vendored ? '#3f7fc4' : '#d9534f', bi.vendored ? 'Bought — confirms the vendor, then joins that vendor\'s PO' : 'Flagged outsourced but has NO vendor — you\'ll be asked to pick one or switch it to in-house')
+                                                                                : routeTd('⚒ SHOP WO', 'var(--ink-soft)', 'Made in-house — an order becomes a shop-floor work order')}
                                                                 </tr>
                                                                 {g.variants.map(({ r, tier }) => {
                                                                     const vi = reorderFor(r);
@@ -1914,6 +1925,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                                 {ri.part && (() => {
                                                                     const p = ri.part, sp = p.manufacturingSpecs || {};
                                                                     const asm = p.partClass === 'Assembly' || p.partClass === 'Master Assembly' || p.netSuiteRecordType === 'assemblyitem';
+                                                                    if (sourcingOf(sp) === SOURCING.BOTH) return <span title="Flagged BOTH in the Master Library — we make it and we buy it. Ordering asks which, defaulted to the work order." style={{ color: 'var(--brass)', fontSize: '9px' }}> · ⚖ BOTH → ASK</span>;
                                                                     if (asm) return <span title="Assembly — we build it here, so an order becomes a shop-floor work order" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM → WO</span>;
                                                                     if (sp.isInHouse === false || ri.vendored) return <span title={ri.vendored ? `Bought — confirms the vendor, then joins that vendor's PO` : 'Flagged outsourced but has NO vendor — you\'ll be asked to pick one or switch it to in-house'} style={{ color: ri.vendored ? '#3f7fc4' : '#d9534f', fontSize: '9px' }}> · {ri.vendored ? 'VENDOR → PO' : 'NO VENDOR'}</span>;
                                                                     return <span title="Made in-house — an order becomes a shop-floor work order" style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · WO</span>;
@@ -2239,6 +2251,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     {kept.length} core(s) → <span style={{ color: 'var(--ink)' }}>{groups.size} purchase order{groups.size === 1 ? '' : 's'}</span>
                                     {madeHere.length ? ` · ${madeHere.length} switched to shop floor` : ''}
                                     {vendorModal.shop.length ? ` · ${vendorModal.shop.length} already in-house` : ''}
+                                    {picks.some(x => x.bothSourced) ? ` · ${picks.filter(x => x.bothSourced).length} sourced BOTH ways (default: make here)` : ''}
                                 </div>
                             </div>
                             <div style={{ padding: '18px 26px' }}>
@@ -2248,7 +2261,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     const resolves = cur && cur !== '__MAKE__' && !!resolveVendorRec(vendorModal.vendors, cur);
                                     return (
                                         <div key={x.r.itemid} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '9px 0', borderBottom: '1px solid var(--paper-2)' }}>
-                                            <span style={{ width: '190px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{x.r.itemid}</span>
+                                            <span style={{ width: '190px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{x.r.itemid}
+                                                {/* Sourced both ways — it's here to be ASKED, not because it's a buy. */}
+                                                {x.bothSourced && <span title="This item is flagged BOTH in the Master Library — we make it and we buy it. Pick a vendor to purchase it, or leave it on ⚒ make in-house." style={{ display: 'block', color: 'var(--brass)', fontSize: '9px' }}>⚖ BOTH — make or buy</span>}
+                                            </span>
                                             <span style={{ width: '54px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', textAlign: 'right' }}>×{x.qty}</span>
                                             <select value={cur} onChange={e => setPick(i, e.target.value)} style={{ flex: 1, padding: '8px', border: `1px solid ${cur === '__MAKE__' ? 'var(--brass)' : (resolves ? 'var(--line)' : '#d9534f')}`, outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }}>
                                                 <option value="">— pick a vendor —</option>

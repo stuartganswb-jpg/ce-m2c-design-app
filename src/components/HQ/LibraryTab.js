@@ -7,6 +7,7 @@ import { fixMojibake } from '../Shared/textRepair';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
 import { fabricutCodeOf } from '../Shared/priceLevels';
+import { SOURCING, SOURCING_LABEL, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { nsProxyFetch } from "../Shared/nsProxy";
 
 
@@ -1630,10 +1631,22 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               <div>
                 <h4 style={sectionHeaderStyle}>Logistics, Sourcing & Pricing</h4>
                 
-                <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
-                    <button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '12px', background: editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>In-House</button>
-                    <button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '12px', background: !editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: !editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Outsourced</button>
+                {/* THREE-WAY SOURCING (Stuart 2026-07-28). "Both" = we make it AND we buy it — the
+                    H1/H2 assemblies. It writes isInHouse TRUE plus the app-owned sourcingMode, so
+                    screens that don't know about Both still route it to a work order (safe side),
+                    while the Stock View vendor modal asks PO-or-WO per item at order time. */}
+                <div style={{ display: 'flex', gap: '16px', marginBottom: '8px' }}>
+                    {[SOURCING.IN, SOURCING.OUT, SOURCING.BOTH].map(mode => {
+                        const on = sourcingOf(editSpecs) === mode;
+                        return (
+                            <button key={mode} onClick={() => setEditSpecs({ ...editSpecs, ...sourcingPatch(mode) })} style={{ flex: 1, padding: '12px', background: on ? 'var(--ink)' : 'transparent', color: on ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{SOURCING_LABEL[mode]}</button>
+                        );
+                    })}
                 </div>
+                {sourcingOf(editSpecs) === SOURCING.BOTH && (
+                    <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>Made here <em>and</em> bought. Replenishment asks which one each time — Stock View's vendor step offers this item's vendor or “⚒ make in-house”, defaulting to the work order. Fill in both the in-house and the vendor details below.</div>
+                )}
+                {sourcingOf(editSpecs) !== SOURCING.BOTH && <div style={{ marginBottom: '8px' }} />}
 
                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '24px', cursor: 'pointer', background: editSpecs.isStocked ? 'rgba(176,141,87,.08)' : 'transparent', border: `1px solid ${editSpecs.isStocked ? 'var(--brass)' : 'var(--line)'}`, padding: '14px 16px' }}>
                     <input type="checkbox" checked={!!editSpecs.isStocked} onChange={(e) => setEditSpecs({ ...editSpecs, isStocked: e.target.checked })} style={{ width: '16px', height: '16px', marginTop: '2px', cursor: 'pointer', flexShrink: 0 }} />
@@ -1643,14 +1656,18 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                 </label>
                 
                 <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
-                  {editSpecs.isInHouse ? (
+                  {/* BOTH shows the make-it fields AND the buy-it fields. The four shared ones
+                      (weight / price / cost / ROP) render once, in the vendor block, so a Both item
+                      never shows the same input twice. */}
+                  {sourcingOf(editSpecs) === SOURCING.BOTH && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '12px' }}>⚒ Made here</div>}
+                  {sourcingOf(editSpecs) !== SOURCING.OUT && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                         <div><label style={labelStyle}>Program #</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                         <div><label style={labelStyle}>Raw Mat</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                        <div><label style={labelStyle}>Weight (lbs)</label><input name="weight" type="number" step="0.01" value={editSpecs.weight || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                        <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                        <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                        <div><label style={labelStyle}>Reorder Pt (ROP)</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                        {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Weight (lbs)</label><input name="weight" type="number" step="0.01" value={editSpecs.weight || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
+                        {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
+                        {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
+                        {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Reorder Pt (ROP)</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
                         <div><label style={labelStyle}>Paint Size</label>
                             <select name="paintSize" value={editSpecs.paintSize || ""} onChange={handleSpecChange} style={{ ...fieldStyle, background: '#fff' }}>
                                 <option value="">—</option>
@@ -1660,7 +1677,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                             </select>
                         </div>
                     </div>
-                  ) : (
+                  )}
+                  {sourcingOf(editSpecs) === SOURCING.BOTH && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', margin: '24px 0 12px', paddingTop: '20px', borderTop: '1px solid var(--line)' }}>🏷 Bought — vendor</div>}
+                  {sourcingOf(editSpecs) !== SOURCING.IN && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
                         <div>

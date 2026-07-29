@@ -6,6 +6,7 @@ import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase
 import { loadGLBScene, snapshotPNG } from '../Shared/componentExport';
 import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
 import { validateAssemblyAlignment } from '../Shared/assemblyTags';
+import { SOURCING, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { SIZE_FAMILIES, buildSizeIndex } from '../Shared/sizeMatrix';
 
 // Fabricut-style spec-sheet generator (hidden-line drawings from the working GLB) — lazy so
@@ -1636,22 +1637,31 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                 <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Used by the Pick/Pack App to guide operators to the physical item location.</div>
                             </div>
 
+                            {/* Three-way sourcing — same vocabulary as the Master Library editor
+                                (Shared/sourcing.js). BOTH = we make it AND buy it; it shows both
+                                field sets and Stock View asks PO-or-WO at order time. */}
                             <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
-                                <button onClick={() => setEditSpecs({...editSpecs, isInHouse: true})} style={{ flex: 1, padding: '12px', background: editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>In-House Manufacturing</button>
-                                <button onClick={() => setEditSpecs({...editSpecs, isInHouse: false})} style={{ flex: 1, padding: '12px', background: !editSpecs.isInHouse ? 'var(--ink)' : 'transparent', color: !editSpecs.isInHouse ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Outsourced / Vendor</button>
+                                {[SOURCING.IN, SOURCING.OUT, SOURCING.BOTH].map(mode => {
+                                    const on = sourcingOf(editSpecs) === mode;
+                                    const label = mode === SOURCING.IN ? 'In-House Manufacturing' : mode === SOURCING.OUT ? 'Outsourced / Vendor' : 'Both';
+                                    return <button key={mode} onClick={() => setEditSpecs({ ...editSpecs, ...sourcingPatch(mode) })} style={{ flex: 1, padding: '12px', background: on ? 'var(--ink)' : 'transparent', color: on ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{label}</button>;
+                                })}
                             </div>
 
                             <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)' }}>
-                                {editSpecs.isInHouse ? (
+                                {sourcingOf(editSpecs) === SOURCING.BOTH && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '12px' }}>⚒ Made here</div>}
+                                {sourcingOf(editSpecs) !== SOURCING.OUT && (
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                                         <div><label style={labelStyle}>Program #</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                                         <div><label style={labelStyle}>Raw Mat</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                                        <div><label style={labelStyle}>Weight (lbs)</label><input name="weight" type="number" step="0.01" value={editSpecs.weight || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                                        <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                                        <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                                        <div><label style={labelStyle}>Reorder Pt (ROP)</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                                        {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Weight (lbs)</label><input name="weight" type="number" step="0.01" value={editSpecs.weight || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
+                                        {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
+                                        {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
+                                        {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Reorder Pt (ROP)</label><input name="reorderPoint" type="number" value={editSpecs.reorderPoint || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
                                     </div>
-                                ) : (
+                                )}
+                                {sourcingOf(editSpecs) === SOURCING.BOTH && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', margin: '24px 0 12px', paddingTop: '20px', borderTop: '1px solid var(--line)' }}>🏷 Bought — vendor</div>}
+                                {sourcingOf(editSpecs) !== SOURCING.IN && (
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                                         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '15px' }}>
                                             <div><label style={labelStyle}>Vendor Name</label><select name="vendorName" value={editSpecs.vendorName || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select Vendor...</option>{(globalLists.vendors || []).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
@@ -1678,6 +1688,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 )}
                             </div>
+
                         </div>
 
                         <div>
