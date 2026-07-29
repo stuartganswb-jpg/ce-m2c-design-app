@@ -78,11 +78,35 @@ const PUSH_FIELDS = [
 const defaultPullFlags = () => PULL_FIELDS.reduce((a, f) => ({ ...a, [f.key]: true }), {});
 const defaultPushFlags = () => PUSH_FIELDS.reduce((a, f) => ({ ...a, [f.key]: f.def }), {});
 
+// ---- ITEM SCOPE (Stuart 2026-07-28: "narrow it down and only sync what we know we want to fix") --
+// One box drives BOTH directions. Comma-separated terms, OR'd together:
+//   H1-            → item # CONTAINS "H1-"
+//   H1-,H2-        → either
+//   H1-1BE..H1-9   → an inclusive item-# RANGE (plain A→Z ordering, the same order NetSuite lists in)
+// Empty = the whole catalog, i.e. exactly the behaviour before this existed.
+// Deliberately NOT persisted: a saved scope would silently narrow somebody's next full sync, and a
+// half-synced library is a far worse failure than re-typing "H1-".
+const sqlEsc = (s) => String(s).replace(/'/g, "''");
+const parseScope = (s) => String(s || '').split(',').map(t => t.trim().toUpperCase()).filter(Boolean).map(t => {
+    const r = t.split('..');
+    return (r.length === 2 && r[0].trim() && r[1].trim()) ? { from: r[0].trim(), to: r[1].trim() } : { like: t };
+});
+const scopeSql = (col, terms) => terms.length
+    ? ` AND (${terms.map(t => t.like ? `UPPER(${col}) LIKE '%${sqlEsc(t.like)}%'` : `UPPER(${col}) BETWEEN '${sqlEsc(t.from)}' AND '${sqlEsc(t.to)}'`).join(' OR ')})`
+    : '';
+const scopeHit = (itemid, terms) => {
+    if (!terms.length) return true;
+    const id = String(itemid || '').toUpperCase();
+    return terms.some(t => t.like ? id.includes(t.like) : (id >= t.from && id <= t.to));
+};
+const scopeLabel = (terms) => terms.map(t => t.like ? `contains “${t.like}”` : `${t.from} → ${t.to}`).join(' or ');
+
 const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     const [nsSubsidiaryId, setNsSubsidiaryId] = useState("3");
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncLog, setSyncLog] = useState([]);
     const [outbox, setOutbox] = useState([]); // staged NetSuite writes (ns_outbox) — live monitor
+    const [itemScope, setItemScope] = useState("");   // narrows BOTH directions; never persisted
     // Per-field direction control, persisted so a deliberate choice survives a reload.
     const [pullFlags, setPullFlags] = useState(defaultPullFlags);
     const [pushFlags, setPushFlags] = useState(defaultPushFlags);
@@ -358,8 +382,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     };
 
     const handleSyncItems = async () => {
+        const scopeTerms = parseScope(itemScope);
+        if (scopeTerms.length && !window.confirm(`Sync ONLY items where the item # is ${scopeLabel(scopeTerms)}?\n\nEverything else in NetSuite is left alone — this is a targeted repair, not a full library sync.\n\nBOM components outside the scope still resolve from items already in the library.`)) return;
         setIsSyncing(true);
-        addLog(`Initiating Advanced Master Library Sync...`, 'info');
+        addLog(scopeTerms.length ? `Initiating SCOPED Master Library Sync — item # ${scopeLabel(scopeTerms)}...` : `Initiating Advanced Master Library Sync...`, scopeTerms.length ? 'warn' : 'info');
 
         try {
             // 1. Fetch Existing App Dictionary & Internal IDs
@@ -455,7 +481,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     AND item.itemid NOT LIKE 'STD-%'
                     AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
                     AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')
-                    AND item.id > ${lastId}
+                    AND item.id > ${lastId}${scopeSql('item.itemid', scopeTerms)}
                     ORDER BY item.id ASC
                 `;
 
@@ -740,6 +766,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         if (!enabled.length) return alert('Nothing is ticked on the ⬆ Push card — choose at least one field to write.');
         const enabledFlags = Object.keys(NS_FLAG_FIELDS).filter(k => pushFlags[k]);
         const coreEnabled = enabled.some(f => !f.flag);
+        const scopeTerms = parseScope(itemScope);
         setIsSyncing(true);
         addLog(`Initiating App → NetSuite write-back for ${String(activeBrand || '').toUpperCase()}...`, 'info');
         try {
@@ -747,8 +774,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             const items = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                 // Aliases are app-only pointers (alternate id/name/price over a main item) — they
                 // must NEVER write back to NetSuite even if someone stamps an internal id on one.
-                .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand)) && p.netSuiteInternalId && !(p.manufacturingSpecs?.aliasOf || p.aliasOf));
-            if (items.length === 0) { addLog("No mapped items (with a NetSuite Internal ID) for this brand. Sync from ERP / set the ID first.", 'warn'); setIsSyncing(false); return; }
+                .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand)) && p.netSuiteInternalId && !(p.manufacturingSpecs?.aliasOf || p.aliasOf))
+                .filter(p => scopeHit(p.legacyErpId || p.itemId, scopeTerms));
+            if (items.length === 0) { addLog(scopeTerms.length ? `No mapped items match the item-# scope (${scopeLabel(scopeTerms)}).` : "No mapped items (with a NetSuite Internal ID) for this brand. Sync from ERP / set the ID first.", 'warn'); setIsSyncing(false); return; }
+            if (scopeTerms.length) addLog(`Item scope active — ${items.length} item(s) where the item # is ${scopeLabel(scopeTerms)}.`, 'warn');
 
             // ⚖ FLAG DIFF BEFORE ANY WRITE. custitem26/27/28 are checkboxes — pushing them blind
             // could silently CLEAR a flag on hundreds of NetSuite items because the app's copy is
@@ -847,7 +876,8 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             const unmapped = snap.docs.map(d => ({ id: d.id, ...d.data() }))
                 .filter(p => (p.brandId === activeBrand || (p.sharedBrands || []).includes(activeBrand))
                     && !p.netSuiteInternalId
-                    && p.legacyErpId && p.legacyErpId !== 'PENDING' && p.legacyErpId !== 'N/A');
+                    && p.legacyErpId && p.legacyErpId !== 'PENDING' && p.legacyErpId !== 'N/A')
+                .filter(p => scopeHit(p.legacyErpId, scopeTerms));   // a scoped run never creates items outside it
             if (unmapped.length && window.confirm(`${unmapped.length} item(s) have an item # but NO NetSuite link.\n\nProcess them now? Exact item-id matches in NetSuite are LINKED (merged — never duplicated); the rest are CREATED as new NetSuite items (Inventory class only).`)) {
                 let linked = 0, created = 0, skipped = 0, cfailed = 0;
                 const subId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || '2';
@@ -1034,6 +1064,31 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         />
                         <p style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', margin: '8px 0 0 0' }}>The Internal ID of the NetSuite subsidiary you want to import data from.</p>
                     </div>
+
+                    {/* ITEM SCOPE — narrows the item sync AND the write-back to a slice of the
+                        catalog, so a repair run touches only what you meant to fix. */}
+                    {(() => {
+                        const terms = parseScope(itemScope);
+                        return (
+                            <div style={{ background: terms.length ? 'rgba(176,141,87,.10)' : 'var(--paper-2)', border: `1px solid ${terms.length ? 'var(--brass)' : 'var(--line)'}`, padding: '20px', borderRadius: '2px' }}>
+                                <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Item # scope <span style={{ color: 'var(--ink-soft)' }}>— applies to the item sync AND the write-back below</span></label>
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <input
+                                        value={itemScope}
+                                        onChange={e => setItemScope(e.target.value)}
+                                        placeholder="Blank = whole catalog · e.g.  H1-  ·  H1-,H2-  ·  H1-1BE..H1-9"
+                                        style={{ flex: 1, padding: '12px', border: `1px solid ${terms.length ? 'var(--brass)' : 'var(--line)'}`, boxSizing: 'border-box', fontFamily: 'var(--mono)', fontSize: '0.95rem', textTransform: 'uppercase', outline: 'none', background: '#fff' }}
+                                    />
+                                    {itemScope && <button onClick={() => setItemScope("")} style={{ padding: '0 16px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>✕ Clear</button>}
+                                </div>
+                                <p style={{ fontSize: '0.8rem', color: terms.length ? 'var(--ink)' : 'var(--ink-soft)', margin: '8px 0 0 0' }}>
+                                    {terms.length
+                                        ? <>⚠ SCOPED — only items whose item # is <strong>{scopeLabel(terms)}</strong> will be pulled or pushed. Everything else is untouched. BOM components outside the scope still resolve from items already in the library.</>
+                                        : <>Whole catalog. Comma-separate several terms, or use <code>A..B</code> for an item-# range. Not remembered between visits — a saved scope would silently narrow someone's next full sync.</>}
+                                </p>
+                            </div>
+                        );
+                    })()}
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         <SyncButton onClick={handleSyncCustomers} disabled={isSyncing} label="Sync Active Customers" sub="SuiteQL: Pulls all active customers mapped to Subsidiary." />
