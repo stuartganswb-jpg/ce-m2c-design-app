@@ -158,10 +158,10 @@ const convertRestletConfigured = () => !!NS_CONVERT_RESTLET.scriptId;
 
 // Build a phosphated /P assembly via the RESTlet: it consumes the bin-tracked raw from `bin` and
 // produces the /P (bin-untracked). Returns { success, id, componentsDetailed } or throws.
-const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, toBin, memo }) => {
+const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, toBin, memo, diag }) => {
     if (!convertRestletConfigured()) throw new Error("The Convert RESTlet isn't configured yet. Deploy netsuite/ce_convert_build_restlet.js in NetSuite and give me its Script + Deploy ids.");
     const url = `${NS_RESTLET_HOST}/app/site/hosting/restlet.nl?script=${NS_CONVERT_RESTLET.scriptId}&deploy=${NS_CONVERT_RESTLET.deployId}`;
-    const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo } });
+    const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo, ...(diag ? { diag: true } : {}) } });
     const b = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
     if (b && b.success === false) {
@@ -867,6 +867,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [packSrcScan, setPackSrcScan] = useState("");
     const [packDestScan, setPackDestScan] = useState("");
     const [packMemo, setPackMemo] = useState("");
+    const [packDiag, setPackDiag] = useState(null);   // what NetSuite says the BOM actually sources
     const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
     const [cutSrcScan, setCutSrcScan] = useState('');
     const [cutDestScan, setCutDestScan] = useState('');
@@ -2156,10 +2157,45 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const packSrcBins = packComponent ? (nsStock[erpOf(packComponent)]?.bins || []).filter(b => b.bin) : [];
     const packSrcBin = packSrcBins.find(b => String(b.bin).toUpperCase() === packSrcScan.trim().toUpperCase());
     const packSrcQty = packSrcBin ? packSrcBin.qty : 0;
-    const packDestBin = packDestScan.trim() || (packTarget ? (binOf(packTarget) !== 'UNASSIGNED' ? binOf(packTarget) : '') : '');
+    const packDestOptions = packTarget && binOf(packTarget) !== 'UNASSIGNED'
+        ? String(binOf(packTarget)).split(',').map(x => x.trim()).filter(Boolean) : [];
+    const packDestBin = packDestScan.trim() || packDestOptions[0] || '';
     const packReady = !!packTarget && !!packComponent && packQtyNum > 0 && packSize > 0
         && !!packTarget.netSuiteInternalId && !!packComponent.netSuiteInternalId
         && !!packSrcBin && packEachesNeeded <= packSrcQty && !!packDestBin;
+
+    // Ask NetSuite what this assembly's BOM ACTUALLY sources, without building anything. The RESTlet
+    // returns each component line, whether it requires inventory detail, and the bin/status it could
+    // resolve from live on-hand — which is exactly what "configure the inventory detail in line 1"
+    // is complaining about (Stuart 2026-07-28). Component ids are mapped back to our item codes.
+    const runPackDiag = async () => {
+        if (!packTarget) return;
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        try {
+            setIsSyncing(true);
+            setPackDiag(null);
+            const assembly = await resolveItemDetail(erpOf(packTarget));
+            if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${erpOf(packTarget)} in NetSuite.`); }
+            const res = await postConvertBuild({
+                itemId: assembly.id, quantity: packQtyNum || 1,
+                subsidiary: nsConfig.subsidiary, location: nsConfig.location,
+                bin: packSrcBin ? String(packSrcBin.bin).trim().toUpperCase() : '',
+                toBin: String(packDestBin || '').trim().toUpperCase(),
+                memo: 'BOM check', diag: true,
+            });
+            setPackDiag(res);
+        } catch (e) {
+            setPackDiag({ error: (e && e.message) ? e.message : String(e) });
+        } finally { setIsSyncing(false); }
+    };
+    // NetSuite internal id -> our item code, so a diag line reads HCUSR15/CP-EA instead of 62103.
+    const codeForNsId = (nsId) => {
+        const want = String(nsId || '');
+        if (!want) return '';
+        const hit = hqParts.find(p => String(p.netSuiteInternalId || '') === want);
+        return hit ? erpOf(hit) : `NS #${want}`;
+    };
 
     // Post the pack build. Same RESTlet as CONVERT — it sources the assembly's BOM, consumes from
     // the scanned bin and receives the finished pack into the destination bin.
@@ -2185,7 +2221,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             pullNetSuiteStock();
         } catch (e) {
             console.error("Ring pack build failed:", e);
-            alert("❌ NetSuite rejected the pack build:\n\n" + (e.message || e));
+            alert("❌ NetSuite rejected the pack build:\n\n" + (e.message || e) + "\n\nPulling the BOM so you can see which component it wants — check the panel below.");
+            setIsSyncing(false);
+            runPackDiag();   // a rejection is exactly when the sourced component list is worth seeing
+            return;
         } finally { setIsSyncing(false); }
     };
 
@@ -3151,7 +3190,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div style={{ fontFamily: theme.sans, fontSize: '13px', color: theme.inkSoft }}>{packTarget.itemName || ''}</div>
                                         <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '4px' }}>{packSize}-pack · on hand {ohOf(packTarget)} · home bin {binOf(packTarget)}</div>
                                     </div>
-                                    <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
+                                    <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
                                 </div>
 
                                 {/* COMPONENT */}
@@ -3206,7 +3245,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 {/* DEST BIN */}
                                 <div>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>5 · Bin the finished packs go into</div>
-                                    <input value={packDestScan} onChange={e => setPackDestScan(e.target.value)} placeholder={binOf(packTarget) !== 'UNASSIGNED' ? `${binOf(packTarget)} (home bin)` : 'scan destination bin'} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${packDestBin ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
+                                    {packDestOptions.length > 0 && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
+                                            {packDestOptions.map(b => { const sel = packDestBin.toUpperCase() === b.toUpperCase(); return (
+                                                <button key={b} onClick={() => setPackDestScan(b)} style={{ padding: '5px 9px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer', border: `1px solid ${sel ? '#7dbb81' : theme.line}`, background: sel ? '#eaf5ea' : '#fff', color: theme.ink }}>{b}</button>
+                                            ); })}
+                                            <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, alignSelf: 'center' }}>home bin{packDestOptions.length > 1 ? 's' : ''} — pick ONE</span>
+                                        </div>
+                                    )}
+                                    <input value={packDestScan} onChange={e => setPackDestScan(e.target.value)} placeholder={packDestOptions[0] ? `${packDestOptions[0]} (home bin)` : 'scan destination bin'} style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '1rem', textAlign: 'center', border: `2px solid ${packDestBin ? '#7dbb81' : theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
                                     <div style={{ fontFamily: theme.mono, fontSize: '9px', textAlign: 'center', marginTop: '4px', color: packDestBin ? '#7dbb81' : '#d9534f' }}>
                                         {packDestBin ? `✓ receiving into ${packDestBin}` : '✗ this pack has no home bin — scan where it goes'}
                                     </div>
@@ -3217,6 +3264,42 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 {(!packTarget.netSuiteInternalId || (packComponent && !packComponent.netSuiteInternalId)) && (
                                     <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>✗ {!packTarget.netSuiteInternalId ? erpOf(packTarget) : erpOf(packComponent)} has no NetSuite Internal ID — map it first (HQ → ERP Mapping Audit).</div>
                                 )}
+
+                                {/* WHAT THE BOM ACTUALLY SOURCES — the answer to "configure the inventory detail in
+                                    line 1": NetSuite can only assign a consume bin for a component that HAS stock. */}
+                                {packDiag && (
+                                    <div style={{ border: `1px solid ${theme.line}`, background: theme.paper, padding: '16px' }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '10px' }}>What NetSuite's BOM sources for this pack</div>
+                                        {packDiag.error ? (
+                                            <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>{packDiag.error}</div>
+                                        ) : (
+                                            <>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    {(packDiag.diag || []).filter(d => d && d.item !== undefined).map((d, i) => {
+                                                        const ok = d.detailed && d.useBinId;
+                                                        return (
+                                                            <div key={i} style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+                                                                <span style={{ color: ok ? '#3f8b45' : '#d9534f', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
+                                                                <span style={{ fontWeight: 600 }}>line {(d.line ?? i) + 1}</span>
+                                                                <span>{codeForNsId(d.item)}</span>
+                                                                <span style={{ color: theme.inkSoft }}>needs {d.qtyUsed ?? '?'}</span>
+                                                                <span style={{ color: theme.inkSoft }}>{d.srcOnhand ? `${d.srcOnhand} on hand in the bin it picked` : 'NO STOCK — nothing to consume'}</span>
+                                                                {d.error ? <span style={{ color: '#d9534f' }}>{d.error}</span> : null}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '10px', lineHeight: 1.5 }}>
+                                                    A ✗ line with NO STOCK is the whole problem: NetSuite can't assign a consume bin for a component it has none of, which is what "configure the inventory detail in line 1" means. Either stock that component, or the BOM should consume the each you actually hold.
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+
+                                <button onClick={runPackDiag} disabled={!packTarget || isSyncing} style={{ padding: '12px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.12em', textTransform: 'uppercase', cursor: packTarget && !isSyncing ? 'pointer' : 'not-allowed' }}>
+                                    {isSyncing ? 'CHECKING…' : 'CHECK BOM (no build posted)'}
+                                </button>
 
                                 <button onClick={pushRingPackBuild} disabled={!packReady || isSyncing} style={{ padding: '18px', background: packReady && !isSyncing ? theme.ink : theme.paper, color: packReady && !isSyncing ? '#fff' : theme.inkSoft, border: `1px solid ${packReady && !isSyncing ? theme.ink : theme.line}`, fontFamily: theme.mono, fontSize: '12px', letterSpacing: '.15em', textTransform: 'uppercase', cursor: packReady && !isSyncing ? 'pointer' : 'not-allowed' }}>
                                     {isSyncing ? 'POSTING…' : `BUILD ${packQtyNum || ''} PACK${packQtyNum === 1 ? '' : 'S'}`}
