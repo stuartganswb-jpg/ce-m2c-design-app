@@ -61,6 +61,13 @@ const HOST_ID = 'ce-label-print-root';
 const STYLE_ID = 'ce-label-print-style';
 const labelPaper = () => { try { return (localStorage.getItem('labelPaper') || '').toLowerCase(); } catch (e) { return ''; } };
 
+// The label's own CSS, re-scoped under the overlay so it also styles the ON-SCREEN copy without
+// leaking into the app. @page rules are dropped here — they belong to the print block only.
+const scopeCss = (cssText, prefix) => String(cssText)
+    .replace(/@page[^{]*\{[^}]*\}/gi, '')
+    .replace(/(^|\})\s*([^{}@]+)\{/g, (m, close, sel) =>
+        `${close}${sel.split(',').map((x) => `${prefix} ${x.trim()}`).filter((x) => x.trim()).join(',')}{`);
+
 export const printHtmlDocument = (docHtml, { autoPrintDelay = 250, timeout = 120000 } = {}) => {
     try {
         const css = [...String(docHtml).matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
@@ -72,28 +79,63 @@ export const printHtmlDocument = (docHtml, { autoPrintDelay = 250, timeout = 120
 
         const host = document.createElement('div');
         host.id = HOST_ID;
-        host.innerHTML = body;
+        host.innerHTML = `<div class="ce-lp-bar">PRINTING LABEL — TAP TO CLOSE</div><div class="ce-lp-scale">${body}</div>`;
         const style = document.createElement('style');
         style.id = STYLE_ID;
         style.textContent = `
-#${HOST_ID}{position:fixed;left:-10000px;top:0;width:0;height:0;overflow:hidden;}
+/* ON SCREEN the label covers the app while the print runs — this is what makes the floor TABLETS
+   work (Stuart 2026-07-28: "from the computer it prints the actual label, from the tablet it
+   prints the top corner of the screen"). Android Chrome renders the SCREEN rather than honouring
+   the print stylesheet, so the screen has to BE the label. Desktop still prints from the rules in
+   the media block below, so its output is unchanged. */
+#${HOST_ID}{position:fixed;inset:0;z-index:2147483000;background:#fff;overflow:auto;
+  display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 8px 24px;}
+#${HOST_ID} .ce-lp-bar{font:700 11px/1.4 monospace;letter-spacing:.12em;color:#555;
+  border:1px dashed #bbb;padding:6px 10px;cursor:pointer;flex:0 0 auto;}
+#${HOST_ID} .ce-lp-scale{transform-origin:top center;}
+${scopeCss(css, `#${HOST_ID}`)}
+#${HOST_ID} .l{box-shadow:0 0 0 1px #e2e2e2;background:#fff;}
 @media print{
   html,body{margin:0 !important;padding:0 !important;background:#fff !important;}
   body > *{display:none !important;}
-  body > #${HOST_ID}{display:block !important;position:static !important;width:auto !important;height:auto !important;overflow:visible !important;}
+  body > #${HOST_ID}{display:block !important;position:static !important;inset:auto !important;
+    padding:0 !important;gap:0 !important;overflow:visible !important;z-index:auto !important;}
+  #${HOST_ID} .ce-lp-bar{display:none !important;}
+  #${HOST_ID} .ce-lp-scale{transform:none !important;}
   ${css}
   ${labelPaper() === '4x2' ? '@page{size:4in 2in;margin:0;}' : ''}
 }`;
         document.head.appendChild(style);
         document.body.appendChild(host);
 
+        // Restore on ANY of: the print dialog closing, a tap on the bar, Escape, or a timeout —
+        // an operator must never be able to get stuck behind this overlay.
         let done = false;
         const cleanup = () => {
             if (done) return; done = true;
             window.removeEventListener('afterprint', cleanup);
+            document.removeEventListener('keydown', onKey);
             try { host.remove(); style.remove(); } catch (e) { /* already gone */ }
         };
+        const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
         window.addEventListener('afterprint', cleanup);
+        document.addEventListener('keydown', onKey);
+        host.addEventListener('click', cleanup);
+
+        // Blow the label up to fill the device screen: on a tablet whose browser prints the SCREEN,
+        // the on-screen size is the printed size. Desktop ignores this (its print block resets the
+        // transform and lays the label out at a true 4x2).
+        try {
+            const first = host.querySelector('.l');
+            const scaler = host.querySelector('.ce-lp-scale');
+            if (first && scaler && first.offsetWidth > 0) {
+                const k = Math.min(
+                    (window.innerWidth - 24) / first.offsetWidth,
+                    (window.innerHeight - 90) / (first.offsetHeight * host.querySelectorAll('.l').length || 1)
+                );
+                if (Number.isFinite(k) && k > 1.02) scaler.style.transform = `scale(${Math.min(k, 4)})`;
+            }
+        } catch (e) { /* sizing is a nicety — never block the print */ }
 
         // Thumbnails on item labels load from Storage — print once they are in, so the label is
         // never sent to the queue half-rendered (capped so a dead image can't block the job).
