@@ -32,7 +32,7 @@
 
 <header>
   <h1>4CO Work Center — Operations Playbook</h1>
-  <div class="sub">Reminder &amp; teaching guide · scenarios → screens → what happens behind the curtain · current as of July 21, 2026</div>
+  <div class="sub">Reminder &amp; teaching guide · scenarios → screens → what happens behind the curtain · current as of July 28, 2026</div>
 </header>
 
 <div class="section">
@@ -45,7 +45,8 @@
 <h2>1 · Sales Snapshot (HQ 12.5) — planning &amp; ordering</h2>
 <h3>Reading the grid</h3>
 <ul>
-  <li><b>Min OH rules:</b> OUT (outsourced: vendor, no assembly) = 6 months of demand. ASM (in-house assembly) = 6 weeks (3wk finishing lead + 3wk safety). <b>ROP</b> column overrides Min OH when set — ⬆ Save pushes it to the Master Library.</li>
+  <li><b>Min OH rules:</b> OUT (outsourced: vendor, no assembly) = 6 months of demand. ASM (in-house assembly) = 6 weeks (3wk finishing lead + 3wk safety). Everything else = 4 weeks of the 6-month rate.</li>
+  <li><b>ROP is the FLOOR under Min OH, not an override</b> (changed 07/28/26). A brand-new item has no sales history, so the demand rule computes ~0 and the item reads as fully stocked at zero — the ROP you typed stands in and Min OH shows it <b>in brass</b>. Once real demand climbs above the ROP the calculated figure takes over by itself. Short and Rec always measure against the number shown, so the columns can't disagree. <i>A ROP set BELOW the demand rule no longer holds the threshold down.</i> ⬆ Save pushes edited ROPs to the Master Library.</li>
   <li><b>Raw Cores (BOM) view:</b> demand rolled up to the raw base behind the finish variants — set core ROPs here so finishing never runs out of metal. Ordering always happens from the Finished view.</li>
   <li><b>Ring packs:</b> the <span class="mono">-EA</span> single row carries ALL demand (each-buyers + packs). Pack rows (-7/-10/-12) are analysis-only — order the single, packs build themselves at pick.</li>
   <li><b>Sort: Item # / Finish</b> — Finish groups /SG · /N25 · … together so you can issue all same-finish work orders in one pass (they arrive at the Setup Queue already batched).</li>
@@ -54,9 +55,36 @@
 <ol class="steps">
   <li>Enter Order quantities (Rec is guidance, never auto-filled).</li>
   <li><b>⚙ Generate Orders</b>: bought items → ONE PO per vendor; made items → work orders <b>parked in RTG</b> (nothing reaches the floor unreviewed).</li>
+  <li><b>Sourcing decides the lane, and it is never guessed.</b> An item set <b>Both</b> in the Master Library — we make it <i>and</i> we buy it — always stops at the vendor step and asks, pre-selected to <b>⚒ make in-house</b>, so doing nothing gives you the work order. Rows carry a <span class="mono">⚖ BOTH → ASK</span> chip so you see it before you generate. An <b>assembly</b> is built here and never becomes a PO candidate, whatever its in-house flag says.</li>
   <li>Short on raw cores? Tap the row's <b>⇄</b> to attach a <i>convert suggestion</i> (pick a sister finish with shelf stock + qty). It rides the WO to the Setup Queue — the floor executes it, the snapshot never posts anything.</li>
   <li><b>✂ on 8-ft rods</b> — cut orders route to WMS ROD CUTS and post the 2-line NetSuite adjustment at scan.</li>
 </ol>
+<h3>3-Tier view (raw · /P · plated) — added 07/28/26</h3>
+<p class="why">For families stocked at three levels (Fabricut H1): the raw mill core, the /P phosphated base that feeds every in-house paint, and the /EP plated tiers. They only make sense read together, so the view shows one block per family — the raw core as the header (with its description), its tiers indented beneath, /P first.</p>
+<ul>
+  <li><b>A family appears once its “/P” item is stocked</b> alongside the raw core. Plain raw cores stay on the Raw Cores view.</li>
+  <li><b>Tier is read off the suffix</b>, never asked: <span class="mono">/P</span> = phosphate · a suffix matching a configured Outsourced Master Finish (EP1, EP2…) = plated · anything else = finished goods.</li>
+  <li><b>Every tier has its own Order box</b>, because they are genuinely different work. The <b>Routes to</b> column shows the destination before you generate.</li>
+</ul>
+<table>
+  <tr><th>Tier</th><th>Ordering it creates</th><th>Where the work happens</th></tr>
+  <tr><td class="mono">H1-1BE</td><td>Shop-floor work order (or a vendor PO if it's genuinely bought)</td><td>RTG → Shop</td></tr>
+  <tr><td class="mono">H1-1BE/P</td><td>A “Needs Phosphating” to-do</td><td>WMS → CONVERT</td></tr>
+  <tr><td class="mono">H1-1BE/EP1</td><td>A “Needs Plating” to-do</td><td>WMS → PLATING (§7)</td></tr>
+  <tr><td>any other finish</td><td>Finishing work order</td><td>RTG → Finishing</td></tr>
+</table>
+<div class="rule"><b>Convert and plating both eat the raw core.</b> If what you're asking for exceeds the raw on hand + on order + whatever you typed on the raw row, the confirm box names the family and the shortfall. It does <b>not</b> quietly add a work order — the raw row is right there on the same screen and a silent extra WO would double-order it.</div>
+<p class="why">The /P to-do is closed by the CONVERT tab: “Pull &amp; Convert →” opens the cart pre-filled, the raw moves to the phosphate cart bin, and the to-do clears only when the assembly build actually posts. Plated to-dos ride the normal weekly plater shipment and PO (§7).</p>
+
+<h3>When the snapshot looks empty</h3>
+<p class="why">A blank screen names its own cause now — read the counter line before re-tagging anything.</p>
+<ul>
+  <li><span class="mono">N stocked rows loaded · N contain “…” · N have no Master Library part</span> — plus the specific gate that failed.</li>
+  <li><b>The row universe is NetSuite's Stocked box (custitem27), read live.</b> The app's own “Stocked finished assembly” checkbox is a <b>different field</b> — it tells CPQ to push the finished assembly, it only ever copies <i>down</i> from NetSuite, and ticking it cannot put an item in this report. Tick it in NetSuite (or push it up — §10), then just re-open the snapshot; no re-sync needed.</li>
+  <li><b>Category / collection / watchlist read the Master Library part</b>, not the NetSuite row — an unlinked row can never match one of those filters however it's tagged in NetSuite. Clear the filters and search the item # instead.</li>
+  <li>In the 3-Tier view a family surfaces when <b>any</b> of its tiers carries the filter you picked, and then shows all of them — so the collection only has to be on the /P or an /EP.</li>
+</ul>
+
 <h3>📋 Open WOs (cleanup panel)</h3>
 <p>Button in the snapshot toolbar. Every not-closed WO with floor phase + coat, task mini-status, NetSuite WO/BUILD state, pack status.</p>
 <ul>
@@ -169,7 +197,31 @@
 </div>
 
 <div class="section">
-<h2>10 · NetSuite sync — how writes travel &amp; how to read trouble</h2>
+<h2>10 · NetSuite sync — the 11.1 controls, how writes travel &amp; how to read trouble</h2>
+<h3>The two direction cards (11.1) — added 07/28/26</h3>
+<p class="why">Every field is now a checkbox in <b>both</b> directions, on the card that governs it. The three custitem flags used to travel one way only — down — which is why correcting the Stocked flag in the app changed nothing in NetSuite or the Stock View report. Checkbox choices are remembered; the item scope is not.</p>
+<table>
+  <tr><th>Card</th><th>What ticking means</th></tr>
+  <tr><td><b>Sync Master Library</b><br>“NetSuite may overwrite…”</td><td>NetSuite wins on items the app already has. <b>Un-tick a field to FREEZE the app's value</b> through an import — cost, price, weight, the three flags, outsource action, part handling, UOM, BOM revision, bin, vendor name/part, the NS collection/watchlist/projection blob. New items always take everything (nothing to overwrite on a first import). Item name, category and routing type stay app-master as they always have.</td></tr>
+  <tr><td><b>⬆ Push Items → NetSuite</b><br>“Write to NetSuite…”</td><td>Writes the app's value onto the NetSuite item: item #, display name, base price, weight — each now switchable — <b>plus custitem27 (Stocked), custitem26 (In-House) and custitem28 (Old)</b>, which could not be pushed at all before.</td></tr>
+</table>
+<div class="rule"><b>A checkbox push is never blind.</b> Before writing, the run reads NetSuite's current custitem26/27/28 for every matched item and the confirm shows both directions — <span class="mono">74 will be TICKED, 3 will be UN-TICKED, 994 already match</span>. Read the UN-TICKED number before you accept: it means the app disagrees with NetSuite in the other direction. A <b>flags-only</b> run (core fields un-ticked) writes only the items that actually disagree, and if the read fails the push aborts rather than guess.</div>
+<h3>Item # scope — sync or push only what you're fixing</h3>
+<ul>
+  <li>One box above both cards, applying to <b>both</b> directions. Blank = the whole catalog.</li>
+  <li><span class="mono">H1-</span> item # contains it · <span class="mono">H1-,H2-</span> either · <span class="mono">H1-1BE..H1-9</span> an item-# range.</li>
+  <li>The box turns brass and states the scope in words whenever it's set. It is <b>deliberately forgotten</b> between visits — a remembered scope would silently narrow somebody's next full sync.</li>
+  <li>A scoped run never creates a NetSuite item outside the scope. BOM components outside it still resolve from items already in the library.</li>
+</ul>
+<h3>Recipe: an item is right in the app but missing from the Stock View snapshot</h3>
+<ol class="steps">
+  <li>Confirm the app's own Stocked box is right (Mass Update → tier filter <span class="mono">/P</span> → Set Stocked Finished Assembly).</li>
+  <li>11.1 → Item # scope <span class="mono">H1-</span>.</li>
+  <li>Push card → <b>None</b>, then tick <b>Stocked · custitem27</b> only.</li>
+  <li>Push. Read the counts in the confirm — if it wants to UN-tick hundreds, cancel and check the app values first.</li>
+  <li>Re-open the Stock View snapshot. It reads NetSuite live, so no re-sync is needed.</li>
+</ol>
+<h3>How writes travel</h3>
 <ul>
   <li>Writes don't fire live — they stage into a queue drained <b>about once a minute</b>, serial, with automatic retries. This is what keeps 40 users from tripping NetSuite's ~5-connection limit.</li>
   <li><b>Memo marker</b> <span class="mono">[app push 07/20/26, 2:32 PM #aVNdVI]</span>: shows when the app pushed a transaction and doubles as the anti-duplicate token.</li>
