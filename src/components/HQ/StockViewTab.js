@@ -1212,6 +1212,45 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         return true;
     };
 
+    // WHY IS THIS EMPTY? (Stuart 2026-07-28: "i set all H1 /P items as stocked and in house and
+    // still nothing"). A blank snapshot has four possible causes and they look identical on screen,
+    // so count each gate and let the empty state name the one that actually failed.
+    // The gate people miss: the ROW UNIVERSE is NetSuite's custitem27 read live — the app's own
+    // "Stocked finished assembly" checkbox is a DIFFERENT field (manufacturingSpecs.isStocked, a
+    // one-way copy FROM NetSuite that drives the CPQ push) and is never written back, so ticking it
+    // here can never put an item in this report.
+    const snapDiagnostics = () => {
+        const all = (salesHist && salesHist.rows) || [];
+        const term = salesHistSearch.trim().toUpperCase();
+        const searched = term ? all.filter(r => String(r.itemid).toUpperCase().includes(term)) : all;
+        // Category/collection/watchlist are read off the resolved MASTER LIBRARY part — a row with no
+        // part can never match one of those, however it's tagged in NetSuite.
+        const unlinked = searched.filter(r => !snapPartOf(r)).length;
+        return { total: all.length, term, searched: searched.length, unlinked, metaOn: !!(snapCat || snapColl || snapWatch) };
+    };
+    const snapWhyEmpty = (extra) => {
+        const d = snapDiagnostics();
+        return (
+            <div style={{ padding: '40px 48px', fontFamily: 'var(--sans)', color: 'var(--ink-soft)', fontSize: '0.95rem', lineHeight: 1.7 }}>
+                <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '1.2rem', color: 'var(--ink)', marginBottom: '16px' }}>Nothing to show here.</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', marginBottom: '18px' }}>
+                    {d.total} stocked row{d.total === 1 ? '' : 's'} loaded{d.term ? ` · ${d.searched} contain “${d.term}”` : ''}{d.metaOn && d.unlinked ? ` · ${d.unlinked} of those have no Master Library part` : ''}
+                </div>
+                {extra}
+                {d.term && d.searched === 0 && (
+                    <div style={{ marginTop: '10px' }}>
+                        No stocked item # contains “{d.term}”, so those items aren’t flagged <strong>Stocked (custitem27) in NetSuite</strong> — which is the only thing that puts a row in this report. ⚠ The app’s own “Stocked finished assembly” checkbox is a <em>different</em> field: it tells CPQ to push the finished assembly, it is a one-way copy <em>from</em> NetSuite, and it is never written back. Tick the box in NetSuite, then re-open the snapshot (no re-sync needed — this reads NetSuite live).
+                    </div>
+                )}
+                {d.metaOn && d.unlinked > 0 && (
+                    <div style={{ marginTop: '10px' }}>
+                        {d.unlinked} row{d.unlinked === 1 ? ' has' : 's have'} no Master Library part. Category / collection / watchlist are read off that part, so those rows can never match one of those filters — run 11.1 → item sync, or ✕ Clear and search the item # instead.
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     // Raw-core rollup, hoisted to component scope so the TABLE and the ORDER GENERATOR read the
     // exact same groups (they used to live inside the render, which is why ordering couldn't work
     // from this view). Demand for every finish variant rolls into its BOM base.
@@ -1821,22 +1860,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                             const withSuffix = allRows.filter(r => String(r.itemid).lastIndexOf('/') > 0).length;
                                             const famsAll = tierGroups(false).length;
                                             const filtersOn = !!(term || snapWatch || snapCat || snapColl);
-                                            return (
-                                                <div style={{ padding: '40px 48px', fontFamily: 'var(--sans)', color: 'var(--ink-soft)', fontSize: '0.95rem', lineHeight: 1.7 }}>
-                                                    <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '1.2rem', color: 'var(--ink)', marginBottom: '16px' }}>No three-tier families to show{filtersOn && famsAll > 0 ? ' under the current filters' : ''}.</div>
-                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', marginBottom: '18px' }}>
-                                                        {allRows.length} stocked row{allRows.length === 1 ? '' : 's'} loaded · {withSuffix} carry a “/” suffix · <span style={{ color: famsAll ? 'var(--ink)' : '#d9534f' }}>{famsAll} famil{famsAll === 1 ? 'y has' : 'ies have'} a “/P”</span>{filtersOn ? ` · ${tierRows.length} match the filters` : ''}
+                                            return snapWhyEmpty(
+                                                <>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', marginBottom: '18px', marginTop: '-12px' }}>
+                                                        {withSuffix} carry a “/” suffix · <span style={{ color: famsAll ? 'var(--ink)' : '#d9534f' }}>{famsAll} famil{famsAll === 1 ? 'y has' : 'ies have'} a “/P”</span>{filtersOn ? ` · ${tierRows.length} match the filters` : ''}
                                                     </div>
                                                     {famsAll === 0 ? (
                                                         <div>
-                                                            Nothing in this snapshot has a <code>/P</code> row, so no family can form. The snapshot contains <strong>only items flagged Stocked (custitem27) in NetSuite</strong> — so the phosphated item itself (e.g. <code>H1-1BE/P</code>) has to be flagged Stocked, not just the plated ones. The raw core does <em>not</em> need the flag; its stock is read from the Master Library link.
+                                                            Nothing in this snapshot has a <code>/P</code> row, so no family can form. The phosphated item itself (e.g. <code>H1-1BE/P</code>) has to be flagged Stocked in NetSuite, not just the plated ones. The raw core does <em>not</em> need the flag — its stock is read from the Master Library link.
                                                         </div>
                                                     ) : filtersOn ? (
                                                         <div>
-                                                            {famsAll} famil{famsAll === 1 ? 'y is' : 'ies are'} loaded but none match — a family surfaces when <em>any</em> of its tiers carries the category / collection / watchlist you picked, so check that at least one of the <code>/P</code> or <code>/EP</code> items has it in the Master Library. ✕ Clear to see them all.
+                                                            {famsAll} famil{famsAll === 1 ? 'y is' : 'ies are'} loaded but none match — a family surfaces when <em>any</em> of its tiers carries the category / collection / watchlist you picked, so check that at least one of the <code>/P</code> or <code>/EP</code> items has it in the Master Library.
                                                         </div>
                                                     ) : null}
-                                                </div>
+                                                </>
                                             );
                                         })()
                                     ) : (
@@ -1994,7 +2032,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         </>
                                     )
                                 ) : rows.length === 0 ? (
-                                    <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>No stocked items{term ? ' match your search' : ' — flag items stocked (custitem27) in NetSuite'}.</div>
+                                    (salesHist.rows || []).length === 0 ? (
+                                        <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>No stocked items — flag items stocked (custitem27) in NetSuite.</div>
+                                    ) : snapWhyEmpty(
+                                        <div>The catalog loaded, but nothing passes the filters you have set. ✕ Clear to see all {(salesHist.rows || []).length} stocked items.</div>
+                                    )
                                 ) : (
                                     <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff' }}>
                                         <thead style={{ position: 'sticky', top: 0, background: 'var(--paper)', zIndex: 5 }}>
