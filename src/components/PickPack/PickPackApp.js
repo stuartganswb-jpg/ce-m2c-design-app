@@ -2130,24 +2130,32 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const ohOf = (part) => (part ? (nsStock[erpOf(part)]?.onHand || 0) : 0);
     const packSizeOf = (code) => { const m = /-(\d+)$/.exec(String(code || '').toUpperCase()); return m ? parseInt(m[1], 10) : 0; };
     const isPackCode = (code) => packSizeOf(code) > 1;
+    const rootOfCode = (code) => String(code || '').toUpperCase().split('/')[0];
+    const finishOfCode = (code) => ((/\/([A-Z0-9]+)-\d+$/.exec(String(code || '').toUpperCase()) || [])[1] || '');
+    // The finished each a pack is built from — HCUSR15/BL-10 and /BL-12 both come from HCUSR15/BL-EA.
+    const eachForPack = (code) => { const f = finishOfCode(code); return f ? `${rootOfCode(code)}/${f}-EA` : ''; };
+    const ohOfCode = (code) => (code ? (nsStock[String(code).toUpperCase()]?.onHand || 0) : 0);
     const packTarget = packTargetId ? hqParts.find(p => p.id === packTargetId) || null : null;
     const packMatches = (() => {
         const q = packSearch.trim().toUpperCase();
         if (q.length < 2) return [];
         return hqParts
-            .filter(p => isPackCode(erpOf(p)) && (erpOf(p).includes(q) || (p.itemName || '').toUpperCase().includes(q)))
+            .filter(p => isPackCode(erpOf(p)) && (
+                erpOf(p).includes(q)
+                || (p.itemName || '').toUpperCase().includes(q)
+                || eachForPack(erpOf(p)).includes(q)   // search by the FINISHED EACH to find its packs
+            ))
             .sort((a, b) => erpOf(a).localeCompare(erpOf(b)))
             .slice(0, 12);
     })();
     const packSize = packTarget ? packSizeOf(erpOf(packTarget)) : 0;
-    const packRoot = packTarget ? erpOf(packTarget).split('/')[0] : '';
-    const packFinishCode = packTarget ? ((/\/([A-Z0-9]+)-\d+$/.exec(erpOf(packTarget)) || [])[1] || '') : '';
+    const packRoot = packTarget ? rootOfCode(erpOf(packTarget)) : '';
     // THE COMPONENT IS THE FINISHED EACH IN THE PACK'S OWN FINISH (Stuart 2026-07-28: "we work
     // order and finish HCUSR15 into HCUSR15/BL-EA… then this tool can turn HCUSR15/BL-EA into
     // HCUSR15/BL-10 or HCUSR15/BL-12"). The RAW root is deliberately NOT offered: it is the input
     // to the finishing work order, never to a pack build, and offering it is what sent the first
     // test at a component the BOM never wanted.
-    const packExpectedEach = packFinishCode ? `${packRoot}/${packFinishCode}-EA` : '';
+    const packExpectedEach = packTarget ? eachForPack(erpOf(packTarget)) : '';
     const packComponentOptions = (() => {
         if (!packTarget) return [];
         const out = [];
@@ -3198,14 +3206,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         )}
                         <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px' }}>
                             <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '4px' }}>1 · Pick the pack to build</div>
-                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '12px' }}>Search a root code or name — e.g. HCUSR15. Pack SKUs end in the pack count (/G-10, /BL-12).</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '12px' }}>Search a root, a name, or the finished each — typing HCUSR15/BL-EA lists every pack built from it. Pack SKUs end in the pack count (/BL-10, /BL-12).</div>
                             <input value={packSearch} onChange={e => { setPackSearch(e.target.value); setPackTargetId(""); }} placeholder="search ring packs…" style={{ width: '100%', padding: '12px', fontFamily: theme.mono, fontSize: '0.95rem', border: `1px solid ${theme.line}`, outline: 'none', boxSizing: 'border-box' }} />
                             {!packTarget && packMatches.length > 0 && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '10px' }}>
                                     {packMatches.map(p => (
                                         <button key={p.id} onClick={() => { setPackTargetId(p.id); setPackComponentId(""); setPackSearch(erpOf(p)); }} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '10px 12px', background: theme.paper, border: `1px solid ${theme.line}`, cursor: 'pointer', textAlign: 'left' }}>
                                             <span style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>{erpOf(p)}<span style={{ color: theme.inkSoft }}> · {p.itemName || ''}</span></span>
-                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, whiteSpace: 'nowrap' }}>{packSizeOf(erpOf(p))}-PACK · OH {ohOf(p)}</span>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                                                {packSizeOf(erpOf(p))}-PACK · OH {ohOf(p)}
+                                                {eachForPack(erpOf(p)) ? <><br /><span style={{ color: ohOfCode(eachForPack(erpOf(p))) > 0 ? '#3f8b45' : theme.inkSoft }}>from {eachForPack(erpOf(p))} · {ohOfCode(eachForPack(erpOf(p)))} ea</span></> : null}
+                                            </span>
                                         </button>
                                     ))}
                                 </div>
