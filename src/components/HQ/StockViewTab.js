@@ -694,7 +694,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // 1) Item universe: stocked items (the rows) + old items (the blue fallback source).
             // ROWS require an ACTIVE item — an inactive item with a stray Stocked flag was surfacing
             // (H1-2RCTAR). Old/retired history donors stay includable regardless of active state.
-            const itemRows = await runSql(`SELECT i.id AS internal_id, i.itemid AS itemid, i.custitem27 AS stk, i.custitem28 AS old, i.isinactive AS inact FROM item i JOIN ItemSubsidiaryMap ism ON ism.item = i.id WHERE ism.subsidiary = ${sub} AND ${flagWhere}`);
+            //
+            // ⚠ PAGINATED (Stuart 2026-07-28: the 3-Tier view showed nothing for Fabricut H1 and the
+            // header read "999" items). SuiteQL returns AT MOST 1000 rows per response — this query
+            // was unpaginated, so once the stocked+old catalog passed 1000 items everything after the
+            // cut simply did not exist as far as this whole report was concerned. It reads as a
+            // tagging problem and no amount of re-tagging fixes it. Keyset pagination (id > lastId,
+            // ordered) is the same pattern the NetSuite Sync tab already uses for customers.
+            const itemRows = [];
+            for (let lastId = 0, guard = 0; guard < 40; guard++) {
+                const page = await runSql(`SELECT i.id AS internal_id, i.itemid AS itemid, i.custitem27 AS stk, i.custitem28 AS old, i.isinactive AS inact FROM item i JOIN ItemSubsidiaryMap ism ON ism.item = i.id WHERE ism.subsidiary = ${sub} AND ${flagWhere} AND i.id > ${lastId} ORDER BY i.id ASC`);
+                itemRows.push(...page);
+                if (page.length < 1000) break;
+                lastId = parseInt(page[page.length - 1].internal_id) || 0;
+                if (!lastId) break;
+            }
             const stocked = [], oldByItemId = {};
             itemRows.forEach(row => {
                 const rec = { internalId: String(row.internal_id), itemid: row.itemid };
@@ -1798,7 +1812,33 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     rawStock?.loading ? (
                                         <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Pulling raw-core stock from NetSuite…</div>
                                     ) : tierRows.length === 0 ? (
-                                        <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>No three-tier families{term || snapWatch || snapCat || snapColl ? ' match the current filters' : ''} — a family shows here once its “/P” phosphated item is stocked alongside the raw core.</div>
+                                        /* An empty screen here used to leave you re-tagging items with no way to
+                                           tell WHICH gate you were failing. Show the counts instead: the snapshot
+                                           only ever contains NetSuite items flagged Stocked (custitem27), a family
+                                           only forms when a "/P" row is among them, and the filters cut last. */
+                                        (() => {
+                                            const allRows = salesHist.rows || [];
+                                            const withSuffix = allRows.filter(r => String(r.itemid).lastIndexOf('/') > 0).length;
+                                            const famsAll = tierGroups(false).length;
+                                            const filtersOn = !!(term || snapWatch || snapCat || snapColl);
+                                            return (
+                                                <div style={{ padding: '40px 48px', fontFamily: 'var(--sans)', color: 'var(--ink-soft)', fontSize: '0.95rem', lineHeight: 1.7 }}>
+                                                    <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: '1.2rem', color: 'var(--ink)', marginBottom: '16px' }}>No three-tier families to show{filtersOn && famsAll > 0 ? ' under the current filters' : ''}.</div>
+                                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', marginBottom: '18px' }}>
+                                                        {allRows.length} stocked row{allRows.length === 1 ? '' : 's'} loaded · {withSuffix} carry a “/” suffix · <span style={{ color: famsAll ? 'var(--ink)' : '#d9534f' }}>{famsAll} famil{famsAll === 1 ? 'y has' : 'ies have'} a “/P”</span>{filtersOn ? ` · ${tierRows.length} match the filters` : ''}
+                                                    </div>
+                                                    {famsAll === 0 ? (
+                                                        <div>
+                                                            Nothing in this snapshot has a <code>/P</code> row, so no family can form. The snapshot contains <strong>only items flagged Stocked (custitem27) in NetSuite</strong> — so the phosphated item itself (e.g. <code>H1-1BE/P</code>) has to be flagged Stocked, not just the plated ones. The raw core does <em>not</em> need the flag; its stock is read from the Master Library link.
+                                                        </div>
+                                                    ) : filtersOn ? (
+                                                        <div>
+                                                            {famsAll} famil{famsAll === 1 ? 'y is' : 'ies are'} loaded but none match — a family surfaces when <em>any</em> of its tiers carries the category / collection / watchlist you picked, so check that at least one of the <code>/P</code> or <code>/EP</code> items has it in the Master Library. ✕ Clear to see them all.
+                                                        </div>
+                                                    ) : null}
+                                                </div>
+                                            );
+                                        })()
                                     ) : (
                                         <>
                                             {rawStock?.error && <div style={{ padding: '10px 16px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px', borderBottom: '1px solid var(--line)' }}>⚠ Raw-core stock pull failed ({rawStock.error}) — the raw row's Avail/On-Ord may be blank.</div>}
