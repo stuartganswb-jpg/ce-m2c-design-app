@@ -8,13 +8,17 @@
 // yield strengths, no safety factors, no gauges — those are on the staff page only.
 //
 // Built as a registry: the span guide is the first of several tools.
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from './firebase';
 import {
   FABRIC_CLASSES, fabricClass, spanTable, bracketsFor, ftIn,
-  ROD_COLLECTIONS, DEFAULT_DROP_FT,
+  ROD_COLLECTIONS, rodCollectionsFor, DEFAULT_DROP_FT, STUD_NOTE,
 } from './shared/bracketSpan';
 
-const BracketSpanGuide = () => {
+// myCollections = the rod families this customer is entitled to (from crm_records.portalCollections
+// via portalProfile). Empty/absent = everything, matching the catalog gate.
+const BracketSpanGuide = ({ myCollections }) => {
   const [fabricId, setFabricId] = useState('PRINT');
   const [dropFt, setDropFt] = useState(String(DEFAULT_DROP_FT));
   const [rodLen, setRodLen] = useState('');
@@ -22,11 +26,27 @@ const BracketSpanGuide = () => {
 
   const fab = fabricClass(fabricId);
   const drop = parseFloat(dropFt);
+  const mine = useMemo(() => rodCollectionsFor(myCollections), [myCollections]);
+  const mineIds = useMemo(() => new Set(mine.map((c) => c.id)), [mine]);
   const rows = useMemo(
-    () => (drop > 0 ? spanTable(fabricId, drop, collectionId) : []),
-    [fabricId, drop, collectionId]
+    () => (drop > 0 ? spanTable(fabricId, drop, collectionId).filter((r) => mineIds.has(r.collection)) : []),
+    [fabricId, drop, collectionId, mineIds]
   );
   const rodInches = parseFloat(rodLen) > 0 ? parseFloat(rodLen) : null;
+
+  // Entitled only to collections this guide doesn't cover — say so rather than show an empty table
+  // or, worse, quietly show them another collection's rods.
+  if (!mine.length) {
+    return (
+      <div className="card" style={{ padding: 24 }}>
+        <h3 style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, margin: '0 0 6px' }}>Bracket Span Guide</h3>
+        <div className="empty" style={{ marginTop: 12 }}>
+          We don't have a published span guide for your collections yet — your Classical Elements
+          representative can advise on bracket spacing for your rods.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card" style={{ padding: 24 }}>
@@ -61,12 +81,15 @@ const BracketSpanGuide = () => {
         </label>
       </div>
 
-      <div className="finish-bar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        {[{ id: '', label: 'All rods' }, ...ROD_COLLECTIONS].map((c) => (
-          <button key={c.id || 'ALL'} onClick={() => setCollectionId(c.id)}
-            className={`finish-tab${collectionId === c.id ? ' active' : ''}`}>{c.label}</button>
-        ))}
-      </div>
+      {/* Only the customer's own collections — and no chooser at all when they have just one. */}
+      {mine.length > 1 && (
+        <div className="finish-bar" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+          {[{ id: '', label: 'All rods' }, ...mine].map((c) => (
+            <button key={c.id || 'ALL'} onClick={() => setCollectionId(c.id)}
+              className={`finish-tab${collectionId === c.id ? ' active' : ''}`}>{c.label}</button>
+          ))}
+        </div>
+      )}
 
       {!(drop > 0) ? (
         <div className="empty">Enter a curtain drop to see the spans.</div>
@@ -98,7 +121,10 @@ const BracketSpanGuide = () => {
         </div>
       )}
 
-      <p style={{ fontSize: '.82rem', color: 'var(--ink-soft)', lineHeight: 1.65, marginTop: 18, paddingTop: 14, borderTop: '1px dashed var(--line)' }}>
+      <p style={{ fontSize: '.9rem', color: 'var(--ink)', lineHeight: 1.65, marginTop: 18, paddingTop: 14, borderTop: '1px dashed var(--line)', fontWeight: 500 }}>
+        {STUD_NOTE}
+      </p>
+      <p style={{ fontSize: '.82rem', color: 'var(--ink-soft)', lineHeight: 1.65, marginTop: 0 }}>
         Spans are rounded down to the inch and never exceed our recommended maximum for that rod. Heavier
         fabric and longer curtains shorten the span further — where that happens we've marked the row. The 2"
         rectangular rod is part of the Fabricut collection and is always mounted with the 2" dimension
@@ -110,12 +136,27 @@ const BracketSpanGuide = () => {
 };
 
 const TOOLS = [
-  { id: 'span', label: 'Bracket Span Guide', render: () => <BracketSpanGuide /> },
+  { id: 'span', label: 'Bracket Span Guide', render: (p) => <BracketSpanGuide {...p} /> },
 ];
 
 export default function Tools() {
   const [tool, setTool] = useState(TOOLS[0].id);
+  const [profile, setProfile] = useState(null); // null = still loading
   const active = TOOLS.find((t) => t.id === tool) || TOOLS[0];
+
+  // Which collections this customer buys. On failure we fall back to an EMPTY list, which the
+  // helper reads as "no restriction" — a reference page going blank because one call hiccuped
+  // would be worse than showing a rod family they don't happen to buy.
+  useEffect(() => {
+    let alive = true;
+    httpsCallable(functions, 'portalProfile')()
+      .then((res) => { if (alive) setProfile(res.data || {}); })
+      .catch(() => { if (alive) setProfile({}); });
+    return () => { alive = false; };
+  }, []);
+
+  if (!profile) return <><h2 className="sec">Tools, Specs &amp; FAQs</h2><div className="empty">Loading…</div></>;
+
   return (
     <>
       <h2 className="sec">Tools, Specs &amp; FAQs</h2>
@@ -126,7 +167,7 @@ export default function Tools() {
           ))}
         </div>
       )}
-      {active.render()}
+      {active.render({ myCollections: profile.collections || [] })}
     </>
   );
 }

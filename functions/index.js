@@ -1087,6 +1087,23 @@ const assertCollectionAllowed = async (db, crm, flow, flowId) => {
     if (!gate(asm)) throw new HttpsError('permission-denied', 'This product is not enabled on your account.');
 };
 
+// The signed-in customer's own profile, for pages that need to know WHO they are without loading a
+// catalog — today the Tools/Specs reference page, which scopes its rod guides to the collections
+// this customer buys. Deliberately tiny and leak-safe: the allowed collection NAMES and nothing
+// else. No pricing, no flows, no cost, no other customer's data.
+exports.portalProfile = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+    const snap = await db.collection('crm_records').doc(customerId).get();
+    const crm = snap.exists ? snap.data() : {};
+    return {
+        name: crm.name || '',
+        // Empty array = no restriction, matching the catalog gate.
+        collections: (Array.isArray(crm.portalCollections) ? crm.portalCollections : [])
+            .map((c) => String(c || '').trim().toUpperCase()).filter(Boolean),
+    };
+});
+
 // The customer's showroom, driven by their ASSIGNED CPQ FLOWS (crm_records.portalFlowIds — set in
 // the CRM Portal Access panel). The flow is the entitlement unit: its linked assembly (and later,
 // that assembly's BOM) defines everything the customer may see. Each assigned flow with a linked

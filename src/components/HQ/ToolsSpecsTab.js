@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
     FABRIC_CLASSES, fabricClass, loadPerFoot, spanTable, bracketsFor, ftIn,
-    ROD_COLLECTIONS, DEFAULT_DROP_FT, ASSUMPTIONS,
+    ROD_COLLECTIONS, DEFAULT_DROP_FT, ASSUMPTIONS, STUD_NOTE,
 } from '../Shared/bracketSpan';
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
@@ -120,7 +120,10 @@ const BracketSpanGuide = ({ showAssumptions }) => {
                     </table>
                 )}
 
-                <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: `1px dashed ${theme.line}`, fontSize: '0.8rem', color: theme.inkSoft, lineHeight: 1.6 }}>
+                <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: `1px dashed ${theme.line}`, fontSize: '0.9rem', color: theme.ink, fontWeight: 500 }}>
+                    {STUD_NOTE}
+                </div>
+                <div style={{ marginTop: '6px', fontSize: '0.8rem', color: theme.inkSoft, lineHeight: 1.6 }}>
                     Spans are rounded down to the inch and never exceed our maximum for that rod, whatever the
                     beam math allows — the tube is stiffer than the bracket, the anchor and the eye. Fabric
                     weight and curtain length only shorten the span further, and mostly bite on the smaller rods.
@@ -134,6 +137,7 @@ const BracketSpanGuide = ({ showAssumptions }) => {
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.brass, marginBottom: '6px' }}>Assumptions (staff only)</div>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: theme.inkSoft, lineHeight: 1.7 }}>
                             {ASSUMPTIONS.map((a, i) => <div key={i}>· {a}</div>)}
+                            <div>· Portal scoping: each rod family maps to a collection ({ROD_COLLECTIONS.map(c => `${c.label} → ${c.crmCollection}`).join(' · ')}), and a customer sees only the ones ticked under CRM → Portal Access → Available Collections. None ticked = all.</div>
                             <div>· Load at these settings: <strong style={{ color: theme.ink }}>{load.toFixed(2)} lb/ft</strong> ({fab.areal} lb/ft² × {drop || 0} ft × 2.5 fullness)</div>
                         </div>
                     </div>

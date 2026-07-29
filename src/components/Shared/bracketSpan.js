@@ -84,10 +84,27 @@ const ROUND_SIZES = [
 // portal/src/shared/bracketSpan.js.
 const ALUM_MAX_SPAN = 72;
 
+// crmCollection ties a rod family to the collection tag used everywhere else in the app — the same
+// vocabulary as hq_collections and the "Available Collections" checkboxes on the CRM Portal Access
+// panel. That's what lets the portal show a Fabricut customer only the Fabricut rods.
 export const ROD_COLLECTIONS = [
-    { id: 'H1', label: 'Fabricut H1', note: '14 ga steel + the 2" aluminium extrusion' },
-    { id: 'H2', label: 'Simple Elegance', note: '16 ga steel' },
+    { id: 'H1', label: 'Fabricut H1', crmCollection: 'FABRICUT H1', note: '14 ga steel + the 2" aluminium extrusion' },
+    { id: 'H2', label: 'Simple Elegance', crmCollection: 'SIMPLE ELEGANCE', note: '16 ga steel' },
 ];
+
+// The rod families a customer may see, given their CRM portalCollections. An EMPTY/absent list
+// means no restriction — the same rule the catalog gate uses, so turning entitlement on for one
+// customer never blanks the page for everyone else.
+export function rodCollectionsFor(allowedNames) {
+    const allowed = (Array.isArray(allowedNames) ? allowedNames : [])
+        .map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
+    if (!allowed.length) return ROD_COLLECTIONS;
+    const set = new Set(allowed);
+    const kept = ROD_COLLECTIONS.filter(c => set.has(c.crmCollection));
+    // A customer entitled only to collections this guide doesn't cover would otherwise see an empty
+    // page; showing everything is the wrong answer, so the caller renders the "ask us" note instead.
+    return kept;
+}
 
 export const RODS = [
     ...ROUND_SIZES.map(s => ({
@@ -160,6 +177,9 @@ export function ftIn(inches) {
     const total = Math.floor(inches);
     return `${Math.floor(total / 12)}' ${total % 12}"`;
 }
+
+// Shown to CUSTOMERS as well as staff — the one assumption that changes what an installer does.
+export const STUD_NOTE = 'All measurements assume brackets are mounted into the wall studs.';
 
 // What the numbers assume — shown to staff, not to customers.
 export const ASSUMPTIONS = [
