@@ -265,3 +265,74 @@ export function buildFabricutPlan(rows, libIndex, nowTs, outsourceCodes) {
 
     return { stamps, gaps, stats: { xlsxBases: groups.size, basesMatched, basesStamped, variantsStamped } };
 }
+
+// ---- TARGETED REPAIR: variants mis-stamped with the PAINTED tier ----------------------------
+// (Stuart 2026-07-29, after the premium rule was corrected.) Every /P25 variant the old importer
+// touched was written with PAINTED prices and tier 'P', because its plated test was a "starts with
+// EP" check and P25 begins with P. Re-running the whole import would fix them, but it also rewrites
+// thousands of untouched docs; this walks the library and rewrites ONLY the docs that are provably
+// wrong, from the plated tier already stored on their own base doc — so it needs no spreadsheet.
+//
+// docs = [{ docId, code, fab }] for every library doc (fab = manufacturingSpecs.fabricut or null).
+// Returns { repairs, skipped, stats } — pure, so the caller shows it before writing anything.
+//
+// SAFETY: a doc is only repaired when what it currently holds MATCHES ITS BASE'S PAINTED TIER —
+// that is the fingerprint of the mis-stamp. Anything else (hand-edited, already plated, an exact
+// per-suffix price from the sheet) is left alone and counted, because a repair that overwrites a
+// deliberate number is worse than the bug.
+const sameMoney = (a, b) => {
+    const x = (a === undefined || a === null || a === '') ? null : parseFloat(a);
+    const y = (b === undefined || b === null || b === '') ? null : parseFloat(b);
+    if (x === null && y === null) return true;
+    if (x === null || y === null) return false;
+    return Math.abs(x - y) < 0.005;
+};
+const sameTriple = (a, b) => !!a && !!b && sameMoney(a.cost, b.cost) && sameMoney(a.retail, b.retail) && sameMoney(a.wholesale, b.wholesale);
+
+export function buildPremiumTierRepairPlan(docs, outsourceCodes, nowTs) {
+    const ts = nowTs || Date.now();
+    const byCode = new Map();
+    docs.forEach(d => byCode.set(String(d.code || '').toUpperCase(), d));
+    const repairs = [];
+    const skipped = { notPlatedSuffix: 0, noFabricut: 0, noBaseDoc: 0, noPlatedTier: 0, alreadyCorrect: 0, notPaintedValues: 0 };
+
+    docs.forEach(d => {
+        const code = String(d.code || '').toUpperCase();
+        const cut = code.lastIndexOf('/');
+        if (cut <= 0) return;
+        const suffix = code.slice(cut + 1);
+        // Only the finishes the OLD rule got wrong: plated by the corrected rule, but not an EP*
+        // suffix (those were always handled). /P25 is the whole point.
+        if (!isPlatedSuffix(suffix, outsourceCodes) || /^EP\d*$/.test(suffix)) { skipped.notPlatedSuffix++; return; }
+        const fab = d.fab;
+        if (!fab) { skipped.noFabricut++; return; }
+        const base = byCode.get(code.slice(0, cut));
+        const bf = base?.fab;
+        if (!bf) { skipped.noBaseDoc++; return; }
+
+        // An exact per-suffix price from the sheet is authoritative — it beats the tier.
+        const exact = bf[`exact_${suffix}`];
+        const target = exact
+            ? { cost: exact.cost, retail: exact.retail, wholesale: exact.wholesale ?? null }
+            : { cost: bf.platedCost, retail: bf.platedRetail, wholesale: bf.platedWholesale ?? null };
+        if (target.cost === undefined && target.retail === undefined) { skipped.noPlatedTier++; return; }
+
+        const cur = { cost: fab.cost, retail: fab.retail, wholesale: fab.wholesale };
+        if (sameTriple(cur, target)) {
+            // Values are right; the tier LABEL may still read 'P' (display-only, but misleading).
+            if (fab.tier && fab.tier !== 'EP' && fab.tier !== suffix) {
+                repairs.push({ docId: d.docId, code, suffix, from: { ...cur, tier: fab.tier }, to: { ...target, tier: 'EP' }, reason: 'TIER_LABEL_ONLY' });
+            } else skipped.alreadyCorrect++;
+            return;
+        }
+        const painted = { cost: bf.paintedCost, retail: bf.paintedRetail, wholesale: bf.paintedWholesale ?? null };
+        if (!sameTriple(cur, painted)) { skipped.notPaintedValues++; return; }   // hand-edited — hands off
+        repairs.push({ docId: d.docId, code, suffix, from: { ...cur, tier: fab.tier }, to: { ...target, tier: 'EP' }, reason: exact ? 'PAINTED→EXACT' : 'PAINTED→PLATED' });
+    });
+
+    const stamps = repairs.map(r => ({
+        docId: r.docId, code: r.code,
+        patch: { manufacturingSpecs: { fabricut: { retail: r.to.retail ?? null, cost: r.to.cost ?? null, wholesale: r.to.wholesale ?? null, tier: 'EP', repairedAt: ts, repairedFrom: 'PAINTED_TIER' } } },
+    }));
+    return { repairs, stamps, skipped, stats: { scanned: docs.length, repaired: repairs.length, valueFixes: repairs.filter(r => r.reason !== 'TIER_LABEL_ONLY').length } };
+}

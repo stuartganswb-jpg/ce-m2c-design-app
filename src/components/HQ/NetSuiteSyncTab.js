@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
 import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch, onSnapshot, updateDoc, query, orderBy, limit } from "firebase/firestore";
-import { parseFabricutWorkbook, buildFabricutPlan } from '../Shared/fabricutImport';
+import { parseFabricutWorkbook, buildFabricutPlan, buildPremiumTierRepairPlan } from '../Shared/fabricutImport';
 import { nsProxyFetch } from "../Shared/nsProxy";
 
 const BRAND_NETSUITE_MAP = {
@@ -970,6 +970,56 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     // variant). Never creates items and never touches names/dims/basePrice — run "Sync Master
     // Library" first so all H1 items exist here (they're flagged custitem_sync_to_cpq in NetSuite).
     // Idempotent: re-run any time Stuart extends the workbook (poles/finials/rings rows to come).
+    // TARGETED PREMIUM-TIER REPAIR (Stuart 2026-07-29: "a targeted repair will be best if possible").
+    // The old importer stamped every /P25 variant with PAINTED prices because its plated test was a
+    // "starts with EP" check. Re-importing the workbook would fix them, but it rewrites thousands of
+    // untouched docs; this rewrites ONLY the docs that are provably wrong, reading the plated tier
+    // already stored on their own base doc — so it needs no spreadsheet and can be run any time.
+    // Two passes on purpose: a DRY RUN that prints the plan to the terminal, then the write.
+    const handleRepairPremiumTiers = async () => {
+        setIsSyncing(true);
+        addLog('🔧 Scanning for finish variants stamped with the wrong (painted) tier…', 'info');
+        try {
+            const [snap, finSnap] = await Promise.all([
+                getDocs(collection(db, 'Approved_Designs')),
+                getDocs(collection(db, 'hq_outsource_finishes')),
+            ]);
+            const outsourceCodes = finSnap.docs.map(d => d.data()).filter(f => f.code || f.name);
+            const docs = snap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(d => d.brandId === activeBrand || (d.sharedBrands || []).includes(activeBrand))
+                .map(d => ({ docId: d.id, code: String(d.legacyErpId || d.itemId || '').toUpperCase(), fab: d.manufacturingSpecs?.fabricut || null }));
+            const plan = buildPremiumTierRepairPlan(docs, outsourceCodes, Date.now());
+
+            if (!plan.repairs.length) {
+                addLog(`✅ Nothing to repair — ${plan.stats.scanned} docs scanned, every outsourced-finish variant already carries its plated tier.`, 'success');
+                addLog(`   (skipped: ${plan.skipped.alreadyCorrect} already correct · ${plan.skipped.notPaintedValues} hand-edited · ${plan.skipped.noPlatedTier} base has no plated tier · ${plan.skipped.noBaseDoc} no base doc)`, 'info');
+                setIsSyncing(false); return;
+            }
+            // Dry run to the terminal FIRST — every line, so the whole change set is readable before
+            // a single write and there is a record of it afterwards.
+            plan.repairs.forEach(r => addLog(
+                `   ${r.code}  ${r.reason === 'TIER_LABEL_ONLY' ? 'tier label P → EP (prices already right)' :
+                    `cost ${r.from.cost ?? '—'} → ${r.to.cost ?? '—'} · wholesale ${r.from.wholesale ?? '—'} → ${r.to.wholesale ?? '—'} · retail ${r.from.retail ?? '—'} → ${r.to.retail ?? '—'}`}`, 'warn'));
+            addLog(`🔧 ${plan.repairs.length} doc(s) to repair — ${plan.stats.valueFixes} with wrong PRICES, ${plan.repairs.length - plan.stats.valueFixes} tier-label only.`, 'warn');
+            addLog(`   Left alone: ${plan.skipped.alreadyCorrect} already correct · ${plan.skipped.notPaintedValues} hand-edited (values match neither tier) · ${plan.skipped.noPlatedTier} base carries no plated tier · ${plan.skipped.noBaseDoc} no base doc.`, 'info');
+
+            if (!window.confirm(`Repair ${plan.repairs.length} finish variant(s)?\n\n• ${plan.stats.valueFixes} carry PAINTED prices and should be PREMIUM (e.g. /P25)\n• ${plan.repairs.length - plan.stats.valueFixes} only have the wrong tier label\n\nEach one is rewritten from the plated tier already on its own base item. The full list is in the terminal.\n\nItems whose numbers were edited by hand are NOT touched (${plan.skipped.notPaintedValues} of those).`)) {
+                addLog('Repair cancelled — nothing written.', 'info'); setIsSyncing(false); return;
+            }
+            let done = 0;
+            for (let i = 0; i < plan.stamps.length; i += 400) {
+                const batch = writeBatch(db);
+                plan.stamps.slice(i, i + 400).forEach(st => batch.set(doc(db, 'Approved_Designs', st.docId), st.patch, { merge: true }));
+                await batch.commit();
+                done += Math.min(400, plan.stamps.length - i);
+                addLog(`  …${done}/${plan.stamps.length} repaired`, 'info');
+            }
+            addLog(`✅ Premium-tier repair complete: ${done} doc(s) now priced off the plated tier. Re-run any time — it is a no-op once clean.`, 'success');
+        } catch (e) { console.error(e); addLog(`❌ Repair failed: ${e.message}`, 'error'); }
+        setIsSyncing(false);
+    };
+
     const handleFabricutImport = async (file) => {
         if (!file) return;
         setIsSyncing(true);
@@ -1123,6 +1173,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '0.9rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Upload Fabricut_CE_CrossReference.xlsx — stamps Fabricut Retail + CE Cost onto every matching library item and finish variant (by CE item #), plus the size keys the H1 size-matrix flows resolve through. Run "Sync Master Library" first; re-run any time the workbook grows. Never touches names, dims or Base Price.</span>
                             <input type="file" accept=".xlsx" disabled={isSyncing} style={{ display: 'none' }} onChange={e => { handleFabricutImport(e.target.files[0]); e.target.value = ''; }} />
                         </label>
+                        <SyncButton onClick={handleRepairPremiumTiers} disabled={isSyncing} label="🔧 Repair Premium-Tier Prices (/P25)" sub="Finds finish variants stamped with the PAINTED tier that are actually outsourced/plated — the old importer's EP-prefix rule missed /P25. Rewrites each from the plated tier already on its own base item; prints the full list before writing and never touches hand-edited numbers. Safe to re-run — a no-op once clean." />
                         <SyncButton onClick={handleSeedFabricutFees} disabled={isSyncing} label="✂ Seed H1 Return-Fee Items" sub="ONE record per fee, like every item: french ($35 painted · $43 plated) & miter ($40 · $48) with the tier prices on the base doc + a Fabricut client row — backplate included, CP upcharge rides the plates. Re-runnable (refreshes prices, removes the old /P //EP siblings). Then Regenerate the H1 flow to link them." />
                     </div>
                 </div>
