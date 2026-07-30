@@ -192,6 +192,18 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       ...inventory.flatMap(p => p.manufacturingSpecs?.collections ? p.manufacturingSpecs.collections.map(c => c.toUpperCase()) : (p.manufacturingSpecs?.customData?.collection && p.manufacturingSpecs.customData.collection !== 'N/A' ? [p.manufacturingSpecs.customData.collection.toUpperCase()] : []))
   ])).sort();
 
+  // WHAT KIND OF RECORD IS OPEN — drives which editor sections render (Stuart 2026-07-28: fields
+  // "should really only show when the correct item type is selected to help simplify data entry").
+  // Fee detection mirrors the FEES class filter above verbatim, so the editor and the list agree.
+  const openPT = String(editSpecs.productType || '').toUpperCase();
+  const openErp = String(activePart?.legacyErpId || activePart?.itemId || editSpecs.tempLegacyId || '').toUpperCase();
+  const isFeeRecord = openPT === 'FEE' || activePart?.partClass === 'Fee' || /(^|-)FEE-/.test(openErp);
+  const isBracketRecord = openPT.includes('BRACKET');
+  const isBackplateRecord = openPT.includes('BACKPLATE') || openPT.includes('BACK PLATE');
+  const isAssemblyRecord = activePart?.partClass === 'Assembly' || activePart?.partClass === 'Master Assembly';
+  // Geometry (L/W/H) feeds the O2O maths for plates/brackets and cut-to-size parts; nothing else reads it.
+  const usesGeometry = isBracketRecord || isBackplateRecord || !!editSpecs.parametric?.isCutToSize;
+
   const dynamicWatchlists = Array.from(new Set([
       ...(globalLists.watchLists || []).map(w => w.toUpperCase()), 
       ...inventory.map(p => {
@@ -1477,6 +1489,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                        </div>
                    )}
                    
+                   {isFeeRecord && (
+                   <>
                    {/* CUSTOM OVERRIDE FEE (Stuart 2026-07-28): ticking this puts the fee in CPQ's
                        per-step "custom work" dropdown. The fee's OWN Part Handling above decides
                        which floor the overridden step goes to — Custom = shop, Small Parts =
@@ -1490,9 +1504,23 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                            </span>
                        </label>
                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px' }}>
-                           For fee items only (e.g. Custom Labor, Custom Finish). Its Part Handling above sets the destination floor; its base price is the fee's floor rate.
+                           Its Part Handling above sets the destination floor; its base price is the fee's floor rate.
                        </div>
                    </div>
+                   </>
+                   )}
+
+                   {/* A fee's whole commercial definition is its price, so for fee records it sits
+                       HERE in Core Attributes rather than down in Logistics (Stuart 2026-07-28:
+                       "except base price, which to be honest should be moved up to the Core
+                       Attributes area"). Physical parts keep theirs in the make/buy block. */}
+                   {isFeeRecord && (
+                       <div>
+                           <label style={labelStyle}>Base Price ($)</label>
+                           <input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} />
+                           <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px' }}>The fee's rate — and its floor when used as a custom override.</div>
+                       </div>
+                   )}
 
                    {windowConfig.system.uom?.includes(activeBrand) && (
                        <div>
@@ -1538,7 +1566,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                        <div><label style={labelStyle}>Seam Count</label><select name="seamCount" value={editSpecs.seamCount || ""} onChange={handleSpecChange} style={fieldStyle}><option value="">Select...</option>{(globalLists.seamCounts || []).map(x => <option key={x} value={x}>{x}</option>)}</select></div>
                    )}
                    
-                   {windowConfig.system.outsourceActions?.includes(activeBrand) && (
+                   {!isFeeRecord && windowConfig.system.outsourceActions?.includes(activeBrand) && (
                        <div>
                            <label style={labelStyle}>Outsource Action</label>
                            <select name="outsourceAction" value={String(editSpecs.outsourceAction || "").toUpperCase()} onChange={handleSpecChange} style={fieldStyle}>
@@ -1549,7 +1577,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                        </div>
                    )}
                    
-                   {windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
+                   {!isFeeRecord && windowConfig.custom.filter(w => (w.brands || []).includes(activeBrand)).map(w => (
                        <div key={w.id}>
                            <label style={labelStyle}>{w.name}</label>
                            <select value={editSpecs.dynamicDicts?.[w.id] || ""} onChange={(e) => handleDictChange(w.id, e.target.value)} style={fieldStyle}>
@@ -1559,7 +1587,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                        </div>
                    ))}
 
-                   {customSchema.map(field => (
+                   {!isFeeRecord && customSchema.map(field => (
                        <div key={field.key}>
                            <label style={labelStyle}>{field.label} (Custom)</label>
                            {field.type === 'dropdown' ? (
@@ -1578,7 +1606,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                        </div>
                    ))}
 
-                   {windowConfig.system.watchLists?.includes(activeBrand) && (
+                   {!isFeeRecord && windowConfig.system.watchLists?.includes(activeBrand) && (
                        <div style={{ gridColumn: 'span 2' }}>
                            <label style={labelStyle}>Assign to Watchlist</label>
                            <select name="watchList" value={editSpecs.watchList || "NONE"} onChange={handleSpecChange} style={fieldStyle}>
@@ -1590,9 +1618,14 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                  </div>
               </div>
 
+              {/* Only the item types these fields actually describe: brackets carry projection /
+                  mount / return / arm thickness, backplates carry orientation, fees carry the fee
+                  type. A ring or a pole shows none of it. */}
+              {(isBracketRecord || isBackplateRecord || isFeeRecord) && (
               <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', marginTop: '10px' }}>
-                  <h4 style={sectionHeaderStyle}>Hardware CPQ Metadata (Vision Engine)</h4>
+                  <h4 style={sectionHeaderStyle}>{isFeeRecord && !isBracketRecord && !isBackplateRecord ? 'Fee Metadata' : 'Hardware CPQ Metadata (Vision Engine)'}</h4>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                      {isBracketRecord && (
                       <div>
                           <label style={labelStyle}>Bracket Projection (Inches)</label>
                           <select value={String(editSpecs.customData?.projection || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("projection", e.target.value)} style={fieldStyle}>
@@ -1601,6 +1634,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               {renderOptionFallback(editSpecs.customData?.projection, globalLists.projections)}
                           </select>
                       </div>
+                      )}
+                      {isBracketRecord && (
                       <div>
                           <label style={labelStyle}>Bracket Mount Type</label>
                           <select value={String(editSpecs.customData?.bracketType || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("bracketType", e.target.value)} style={fieldStyle}>
@@ -1609,6 +1644,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               {renderOptionFallback(editSpecs.customData?.bracketType, globalLists.bracketMounts)}
                           </select>
                       </div>
+                      )}
+                      {isBracketRecord && (
                       <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0' }}>
                           <input type="checkbox" checked={!!editSpecs.customData?.isReturnBracket} onChange={(e) => handleCustomFieldChange("isReturnBracket", e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '2px', flexShrink: 0 }} />
                           <div>
@@ -1616,7 +1653,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>Sits right at the pole end and its width adds to the O2O. End-return brackets are the only ones placed at the very end — and they're never offered as a center support. (e.g. FIWERA, FICERA)</div>
                           </div>
                       </div>
-                      {!!editSpecs.customData?.isReturnBracket && (
+                      )}
+                      {isBracketRecord && !!editSpecs.customData?.isReturnBracket && (
                           <div>
                               <label style={labelStyle}>Bracket Arm Thickness (in)</label>
                               <input type="number" step="0.125" value={editSpecs.customData?.armThickness ?? ''} onChange={(e) => handleCustomFieldChange("armThickness", e.target.value)} placeholder="e.g. 0.5 (½&quot; flat-iron)" style={fieldStyle} />
@@ -1635,6 +1673,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', marginTop: '4px' }}>O2O uses the Geometry dimension along the pole — <strong>Vertical → ½ Width</strong> · <strong>Horizontal → ½ Length</strong> · <strong>Square → ½ Width</strong> · <strong>Round → ½ Diameter (Width)</strong>. Set L / W / H in “Geometry &amp; Z-Index Rules” above.</div>
                           </div>
                       )}
+                      {isFeeRecord && (
                       <div style={{ gridColumn: 'span 2' }}>
                           <label style={labelStyle}>Service / Fee Type (Auto-Append)</label>
                           <select value={String(editSpecs.customData?.feeType || "").toUpperCase()} onChange={(e) => handleCustomFieldChange("feeType", e.target.value)} style={fieldStyle}>
@@ -1644,9 +1683,14 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                           </select>
                           <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>If selected, the Vision System will automatically bill for this item when triggered.</span>
                       </div>
+                      )}
                   </div>
               </div>
+              )}
 
+              {/* A fee has no sourcing, vendor, stock or paint size — its price now lives in Core
+                  Attributes, so this whole block is irrelevant to it. */}
+              {!isFeeRecord && (
               <div>
                 <h4 style={sectionHeaderStyle}>Logistics, Sourcing & Pricing</h4>
                 
@@ -1747,6 +1791,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   </div>
                 </div>
               </div>
+              )}
 
               {activePart.partClass !== 'Master Assembly' && (
                   <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '24px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
@@ -1777,26 +1822,34 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   </div>
               )}
 
+              {/* L/W/H feed the O2O maths for plates and brackets (and cut-to-size lengths); the
+                  Z-index only matters where the part renders. Fees have neither. */}
+              {!isFeeRecord && (
               <div>
                 <h4 style={sectionHeaderStyle}>Geometry & Z-Index Rules</h4>
                 <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px' }}>
+                    {(usesGeometry || isAssemblyRecord) && (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '20px', marginBottom: '24px' }}>
                       <div><label style={labelStyle}>Length (in)</label><input name="length" type="number" step="0.1" value={editSpecs.parametric?.length || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
                       <div><label style={labelStyle}>Width (in)</label><input name="width" type="number" step="0.1" value={editSpecs.parametric?.width || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
                       <div><label style={labelStyle}>Height (in)</label><input name="height" type="number" step="0.1" value={editSpecs.parametric?.height || ""} onChange={handleParametricChange} style={fieldStyle} /></div>
                     </div>
+                    )}
                     <div style={{ marginBottom: '24px' }}>
                       <label style={{ fontSize: '0.9rem', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '10px' }}>
                           <input type="checkbox" name="isCutToSize" checked={editSpecs.parametric?.isCutToSize || false} onChange={handleParametricChange} />
                           Dynamic Custom Length Allowed (Stretchable Pole / Track)
                       </label>
                     </div>
+                    {isAssemblyRecord && (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                       <div style={{ gridColumn: 'span 2' }}><label style={labelStyle}>Z-Index / Render Layer</label><input name="layeringSequence" type="number" step="10" value={editSpecs.layeringSequence || ""} onChange={handleSpecChange} placeholder="e.g. 10 (Back), 30 (Front)" style={fieldStyle} /></div>
                       
                     </div>
+                    )}
                 </div>
               </div>
+              )}
 
               <div style={{ display: 'flex', gap: '16px', marginTop: '20px', flexWrap: 'wrap' }}>
                 <button onClick={savePartUpdates} style={{ flex: 2, padding: '16px', background: isSaving ? 'var(--brass-light)' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.3s ease', minWidth: '200px' }}>
