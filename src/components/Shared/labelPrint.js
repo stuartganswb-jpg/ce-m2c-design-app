@@ -57,6 +57,11 @@ const binLabelInner = (bin) => {
 // Paper: @page size is `auto`, so whatever the print dialog has selected is used (Letter, A4, or
 // 4x2 label stock). A station with a dedicated label printer can pin the exact label page with
 // localStorage 'labelPaper' = '4x2'.
+// Android hands window.print() to the SYSTEM print service and fires `afterprint` immediately —
+// before that service has rendered its preview. Cleaning up on that event tore the label off the
+// screen first, so the preview snapshotted the APP (Stuart 2026-07-28: "it now loads similar part
+// of the screen but as two pages"). There, the overlay stays until the operator dismisses it.
+const IS_ANDROID = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent || '');
 const HOST_ID = 'ce-label-print-root';
 const STYLE_ID = 'ce-label-print-style';
 const labelPaper = () => { try { return (localStorage.getItem('labelPaper') || '').toLowerCase(); } catch (e) { return ''; } };
@@ -79,7 +84,7 @@ export const printHtmlDocument = (docHtml, { autoPrintDelay = 250, timeout = 120
 
         const host = document.createElement('div');
         host.id = HOST_ID;
-        host.innerHTML = `<div class="ce-lp-bar">PRINTING LABEL — TAP TO CLOSE</div><div class="ce-lp-scale">${body}</div>`;
+        host.innerHTML = `<div class="ce-lp-bar">${IS_ANDROID ? 'PRINTING — LEAVE THIS ON SCREEN UNTIL THE PRINT DIALOG CLOSES, THEN TAP HERE' : 'PRINTING LABEL — TAP TO CLOSE'}</div><div class="ce-lp-scale">${body}</div>`;
         const style = document.createElement('style');
         style.id = STYLE_ID;
         style.textContent = `
@@ -90,8 +95,10 @@ export const printHtmlDocument = (docHtml, { autoPrintDelay = 250, timeout = 120
    the media block below, so its output is unchanged. */
 #${HOST_ID}{position:fixed;inset:0;z-index:2147483000;background:#fff;overflow:auto;
   display:flex;flex-direction:column;align-items:center;gap:8px;padding:8px 8px 24px;}
-#${HOST_ID} .ce-lp-bar{font:700 11px/1.4 monospace;letter-spacing:.12em;color:#555;
-  border:1px dashed #bbb;padding:6px 10px;cursor:pointer;flex:0 0 auto;}
+#${HOST_ID} .ce-lp-bar{font:700 ${IS_ANDROID ? '13px' : '11px'}/1.4 monospace;letter-spacing:.1em;
+  color:${IS_ANDROID ? '#fff' : '#555'};background:${IS_ANDROID ? '#1c1a16' : 'transparent'};
+  border:1px dashed ${IS_ANDROID ? '#1c1a16' : '#bbb'};padding:${IS_ANDROID ? '12px 14px' : '6px 10px'};
+  cursor:pointer;flex:0 0 auto;text-align:center;}
 #${HOST_ID} .ce-lp-scale{transform-origin:top center;}
 ${scopeCss(css, `#${HOST_ID}`)}
 #${HOST_ID} .l{box-shadow:0 0 0 1px #e2e2e2;background:#fff;}
@@ -118,7 +125,9 @@ ${scopeCss(css, `#${HOST_ID}`)}
             try { host.remove(); style.remove(); } catch (e) { /* already gone */ }
         };
         const onKey = (e) => { if (e.key === 'Escape') cleanup(); };
-        window.addEventListener('afterprint', cleanup);
+        // Desktop: the dialog is modal, so afterprint means "done" and the overlay can go.
+        // Android: afterprint fires too early (see above) — only an explicit tap clears it.
+        if (!IS_ANDROID) window.addEventListener('afterprint', cleanup);
         document.addEventListener('keydown', onKey);
         host.addEventListener('click', cleanup);
 
@@ -148,7 +157,7 @@ ${scopeCss(css, `#${HOST_ID}`)}
             imgs.forEach((i) => { i.addEventListener('load', ready); i.addEventListener('error', ready); });
             setTimeout(() => { if (!fired) { fired = true; go(); } }, 3000);
         }
-        setTimeout(cleanup, timeout);
+        setTimeout(cleanup, IS_ANDROID ? Math.max(timeout, 180000) : timeout);
         return true;
     } catch (e) { console.warn('printHtmlDocument error:', e); return false; }
 };
