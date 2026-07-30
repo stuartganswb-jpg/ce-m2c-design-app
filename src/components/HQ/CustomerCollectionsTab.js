@@ -22,6 +22,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, writeBatch } from "firebase/firestore";
 import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
+import { fabricutCodeOf } from '../Shared/priceLevels';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -30,6 +31,44 @@ const theme = {
 };
 const money = (v) => (v === '' || v === null || v === undefined || isNaN(parseFloat(v))) ? '' : parseFloat(v);
 const fmt = (v) => { const n = money(v); return n === '' ? '' : n.toFixed(2); };
+
+// ---- PRICING THAT ALREADY EXISTS SOMEWHERE ELSE (Stuart 2026-07-29) -------------------------
+// "when i pick customer fabricut and collection H1, the fields on the master are already filled
+// out, but on this new tool come up empty — can it search the fields for existing?"
+//
+// It can, and it has to: Fabricut's numbers were never written as customer rows. The CrossReference
+// import stamped them into manufacturingSpecs.fabricut, and only the Library's "⇄ Populate Client
+// Pricing" button ever copied them across. So this page reads that box too and shows the values as
+// SUGGESTIONS — greyed, marked, not claimed as saved — with one button to adopt them into real
+// clientPricing rows. Nothing is written behind the operator's back; the suggestion is a proposal
+// he can see, edit, or ignore.
+//
+// A registry rather than an if-statement because the shape is customer-specific: Fabricut is the
+// only customer with a legacy struct, and every customer set up through this page from now on uses
+// clientPricing from the start.
+const fabricutSuggestion = (part, findByCode) => {
+    const fab = part?.manufacturingSpecs?.fabricut;
+    if (!fab) return null;
+    const code = upper(part.legacyErpId || part.itemId);
+    const plated = (code.includes('/') ? code.split('/')[1] : '').startsWith('EP');
+    // Variant docs carry {cost, retail, wholesale} directly; base (mill) docs carry the painted and
+    // plated tiers side by side and the doc's own suffix picks which one applies.
+    const pick = (direct, painted, platedKey) => (fab[direct] !== undefined ? fab[direct] : (plated ? fab[platedKey] : fab[painted]));
+    const cost = pick('cost', 'paintedCost', 'platedCost');
+    const retail = pick('retail', 'paintedRetail', 'platedRetail');
+    let ws = pick('wholesale', 'paintedWholesale', 'platedWholesale');
+    if (ws === undefined || ws === null) ws = Number.isFinite(parseFloat(retail)) ? parseFloat(retail) / 2 : null;
+    if (cost === undefined && retail === undefined) return null;   // no tier for this variant
+    if (cost === null && retail === null) return null;             // group-priced plate ($0 with the arm)
+    return {
+        clientSku: fabricutCodeOf(part, findByCode) || '',
+        price: cost === null || cost === undefined ? '' : cost,
+        clientSalesPrice: ws === null || ws === undefined ? '' : ws,
+    };
+};
+const LEGACY_SOURCES = [
+    { match: /fabricut/i, label: 'Fabricut pricing box', read: fabricutSuggestion },
+];
 
 // Every collection an item claims — explicit list first, else the NetSuite-synced single value.
 const collectionsOf = (specs) => {
@@ -88,26 +127,47 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         return inventory.filter(p => collectionsOf(p.manufacturingSpecs).includes(upper(coll)));
     }, [inventory, coll]);
 
+    // Legacy-struct suggestions for THIS customer, keyed by doc id. Built once per customer/library
+    // change rather than per render — it resolves a base doc per variant to find the pattern code.
+    const byCode = useMemo(() => { const m = new Map(); inventory.forEach(p => m.set(codeOf(p), p)); return m; }, [inventory]); // eslint-disable-line react-hooks/exhaustive-deps
+    const legacySrc = useMemo(() => LEGACY_SOURCES.find(s => s.match.test(String(customer?.name || ''))) || null, [customer]);
+    const suggestions = useMemo(() => {
+        const m = new Map();
+        if (!legacySrc || !coll) return m;
+        const findByCode = (c) => byCode.get(upper(c)) || null;
+        members.forEach(p => {
+            if (rowFor(p)) return;                       // a real customer row always wins
+            const s = legacySrc.read(p, findByCode);
+            if (s && (s.clientSku || s.price !== '' || s.clientSalesPrice !== '')) m.set(p.id, s);
+        });
+        return m;
+    }, [legacySrc, members, byCode, coll, custKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const rows = useMemo(() => {
         const term = upper(search);
         return members
             .map(p => {
                 const row = rowFor(p);
                 const e = edits[p.id] || {};
+                const sug = !row ? (suggestions.get(p.id) || null) : null;
+                // A suggested value FILLS the cell so the number is visible and editable, but the row
+                // is flagged so the UI can show it as not-yet-saved and the counter can tell the two
+                // apart. Touching a cell turns it into a normal edit.
+                const pick = (k) => e[k] !== undefined ? e[k] : (row?.[k] ?? (sug ? sug[k] : '') ?? '');
                 return {
-                    p, row,
+                    p, row, sug,
                     code: codeOf(p),
                     name: p.itemName || '',
                     basePrice: e.basePrice !== undefined ? e.basePrice : (p.manufacturingSpecs?.basePrice ?? ''),
-                    clientSku: e.clientSku !== undefined ? e.clientSku : (row?.clientSku ?? ''),
-                    price: e.price !== undefined ? e.price : (row?.price ?? ''),
-                    clientSalesPrice: e.clientSalesPrice !== undefined ? e.clientSalesPrice : (row?.clientSalesPrice ?? ''),
+                    clientSku: pick('clientSku'),
+                    price: pick('price'),
+                    clientSalesPrice: pick('clientSalesPrice'),
                     dirty: !!edits[p.id],
                 };
             })
             .filter(r => !term || r.code.includes(term) || upper(r.name).includes(term))
             .filter(r => onlyPriced === 'ALL' || (onlyPriced === 'PRICED' ? money(r.price) !== '' : money(r.price) === ''));
-    }, [members, edits, search, onlyPriced, custKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [members, edits, search, onlyPriced, custKeys, suggestions]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const pricedCount = members.filter(p => money(rowFor(p)?.price) !== '').length;
     const dirtyCount = Object.keys(edits).length;
@@ -152,6 +212,39 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             setEdits({});
             alert(`✅ Saved ${written} item(s) for ${customer?.name || custId}.`);
         } catch (e) { console.error(e); alert('Save failed:\n\n' + (e.message || e)); }
+        setSaving(false);
+    };
+
+    // ---- ADOPT THE SUGGESTIONS ----------------------------------------------------------------
+    // Copies the legacy struct's values into real clientPricing rows for this customer, which is
+    // what makes them count everywhere (CPQ / Quick Ship / portal all read clientPricing, not the
+    // Fabricut box). Items that already have a customer row are never touched.
+    const adoptSuggestions = async () => {
+        const ids = [...suggestions.keys()];
+        if (!ids.length) return;
+        if (!window.confirm(`Write ${ids.length} ${legacySrc.label} value(s) into ${customer?.name}'s Client Pricing?\n\n• Their SKU = the Fabricut pattern #\n• Their Net = CE → Fabricut price\n• Their Sales = Fabricut wholesale (MSRP ÷ 2 where the sheet had none)\n\nOnly items with NO ${customer?.name} row yet are written. This is what makes the numbers count in CPQ, Quick Ship and the portal — until now they only lived in the pricing box.`)) return;
+        setSaving(true);
+        try {
+            let batch = writeBatch(db), n = 0, written = 0;
+            for (const id of ids) {
+                const p = inventory.find(x => x.id === id);
+                const s = suggestions.get(id);
+                if (!p || !s) continue;
+                const others = (p.clientPricing || []).filter(r => !custKeys.has(upper(r?.customerId)));
+                batch.update(doc(db, 'Approved_Designs', id), {
+                    clientPricing: [...others, {
+                        customerId: custId, customerName: customer?.name || '',
+                        clientSku: s.clientSku || '', price: s.price, clientSalesPrice: s.clientSalesPrice,
+                        source: 'ADOPTED_' + (legacySrc.label || '').toUpperCase().replace(/[^A-Z]+/g, '_'),
+                        updatedAt: Date.now(), updatedBy: String(currentUser || ''),
+                    }],
+                });
+                written++;
+                if (++n >= 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+            }
+            if (n) await batch.commit();
+            alert(`✅ ${written} item(s) now carry a real ${customer?.name} price row.`);
+        } catch (e) { console.error(e); alert('Adopt failed:\n\n' + (e.message || e)); }
         setSaving(false);
     };
 
@@ -236,7 +329,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const fld = { padding: '10px 12px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: theme.sans, fontSize: '0.9rem', background: '#fff' };
     const th = { padding: '8px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `2px solid ${theme.ink}`, whiteSpace: 'nowrap' };
     const td = { padding: '6px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '11px', borderBottom: `1px solid ${theme.paper2}` };
-    const cellInput = (dirty) => ({ width: '92px', padding: '5px 6px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', border: `1px solid ${dirty ? theme.brass : theme.line}`, outline: 'none', background: '#fff' });
+    // A SUGGESTED cell reads in brass on a dashed edge — the value is real and editable, but it
+    // is not a saved customer price until it's adopted or saved.
+    const cellInput = (dirty, sug) => ({ width: '92px', padding: '5px 6px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', outline: 'none', background: '#fff', color: (sug && !dirty) ? theme.brass : theme.ink, border: dirty ? `1px solid ${theme.brass}` : (sug ? `1px dashed ${theme.brass}` : `1px solid ${theme.line}`) });
     const btn = (on, extra = {}) => ({ padding: '10px 16px', background: on ? theme.ink : 'transparent', color: on ? '#fff' : theme.ink, border: `1px solid ${on ? theme.ink : theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', ...extra });
 
     return (
@@ -260,7 +355,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 </select>
                 {coll && (
                     <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
-                        {members.length} part{members.length === 1 ? '' : 's'} · <span style={{ color: pricedCount ? theme.green : theme.red }}>{pricedCount} priced</span> · {members.length - pricedCount} not yet
+                        {members.length} part{members.length === 1 ? '' : 's'} · <span style={{ color: pricedCount ? theme.green : theme.red }}>{pricedCount} priced</span>
+                        {suggestions.size > 0 && <> · <span style={{ color: theme.brass }}>{suggestions.size} suggested</span></>}
+                        {' · '}{members.length - pricedCount - suggestions.size} not yet
                     </span>
                 )}
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -280,6 +377,16 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 </div>
             ) : (
                 <>
+                    {/* SUGGESTIONS FROM A LEGACY STRUCT — visible, counted, adopted on purpose. */}
+                    {suggestions.size > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: 'rgba(176,141,87,.10)', border: `1px solid ${theme.brass}`, padding: '14px 18px' }}>
+                            <span style={{ fontSize: '0.9rem', color: theme.ink, flex: 1, minWidth: '360px' }}>
+                                <b>{suggestions.size} part(s) already carry {customer?.name} numbers in the {legacySrc?.label}</b> — shown below in brass. They are <i>not</i> customer price rows yet, so CPQ, Quick Ship and the portal don't use them. Adopt them to make them real, or edit a cell first and save it yourself.
+                            </span>
+                            <button onClick={adoptSuggestions} disabled={saving} style={btn(true, { background: theme.brass, borderColor: theme.brass })}>{saving ? 'Writing…' : `⇄ Adopt ${suggestions.size} into Client Pricing`}</button>
+                        </div>
+                    )}
+
                     {/* FILTERS + ADD */}
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
                         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item # or name…" style={{ ...fld, width: '260px' }} />
@@ -321,19 +428,21 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                             <tbody>
                                 {rows.map(r => (
                                     <tr key={r.p.id} style={{ background: r.dirty ? 'rgba(176,141,87,.07)' : '#fff' }}>
-                                        <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.code}</td>
+                                        <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.code}
+                                            {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '9px', color: theme.brass, fontWeight: 400 }}>SUGGESTED</span>}
+                                        </td>
                                         <td style={{ ...td, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{r.name}</td>
                                         <td style={{ ...td, textAlign: 'right' }}>
-                                            <input value={r.basePrice} onChange={e => setEdit(r.p.id, 'basePrice', e.target.value)} placeholder="—" style={{ ...cellInput(edits[r.p.id]?.basePrice !== undefined), width: '80px', color: theme.inkSoft }} />
+                                            <input value={r.basePrice} onChange={e => setEdit(r.p.id, 'basePrice', e.target.value)} placeholder="—" style={{ ...cellInput(edits[r.p.id]?.basePrice !== undefined, false), width: '80px', color: theme.inkSoft }} />
                                         </td>
                                         <td style={td}>
-                                            <input value={r.clientSku} onChange={e => setEdit(r.p.id, 'clientSku', e.target.value)} placeholder="—" style={{ ...cellInput(edits[r.p.id]?.clientSku !== undefined), width: '130px', textAlign: 'left' }} />
+                                            <input value={r.clientSku} onChange={e => setEdit(r.p.id, 'clientSku', e.target.value)} placeholder="—" style={{ ...cellInput(edits[r.p.id]?.clientSku !== undefined, !!r.sug), width: '130px', textAlign: 'left' }} />
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
-                                            <input value={r.price} onChange={e => setEdit(r.p.id, 'price', e.target.value)} placeholder="—" style={cellInput(edits[r.p.id]?.price !== undefined)} />
+                                            <input value={r.price} onChange={e => setEdit(r.p.id, 'price', e.target.value)} placeholder="—" style={cellInput(edits[r.p.id]?.price !== undefined, !!r.sug)} />
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
-                                            <input value={r.clientSalesPrice} onChange={e => setEdit(r.p.id, 'clientSalesPrice', e.target.value)} placeholder="—" style={cellInput(edits[r.p.id]?.clientSalesPrice !== undefined)} />
+                                            <input value={r.clientSalesPrice} onChange={e => setEdit(r.p.id, 'clientSalesPrice', e.target.value)} placeholder="—" style={cellInput(edits[r.p.id]?.clientSalesPrice !== undefined, !!r.sug)} />
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
                                             <button onClick={() => removeFromCollection(r.p)} title={`Remove from ${coll} (pricing rows are kept)`} style={{ background: 'none', border: 'none', color: theme.line, cursor: 'pointer', fontSize: '1rem' }}>×</button>
