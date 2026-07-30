@@ -8,6 +8,8 @@ import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
+import { buildFeeCatalog, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
+import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
 
 const globalTextureCache = {};
@@ -536,6 +538,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   });
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
+  // ADD-ONS AT CHECKOUT (Stuart 2026-07-30): fees picked at the END of the quote rather than built
+  // into a flow — { [feeDocId]: qty | true }. Percentage fees are on/off; the rest take a quantity.
+  const [addOnSel, setAddOnSel] = useState({});
   const [dynamicAssets, setDynamicAssets] = useState([]);
 
   const [productType, setProductType] = useState(''); 
@@ -667,6 +672,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // brandId, so they can't be brand-scoped and would leak other brands' names
   // into the dropdown — dropped intentionally.
   const combinedCustomers = useMemo(() => liveCustomers, [liveCustomers]);
+
+  // ADD-ON CATALOGUE — the brand's fee items, priced for the customer on the quote by the SAME
+  // resolver the pricing engine uses (their clientPricing row, else our base price), so the picker
+  // and the quote can never disagree. Fees a flow already bills are still billed by the flow; this
+  // is for the ones nobody wants to model as a step.
+  const addOnCustKeys = useMemo(
+      () => customerKeys(jobData.customerId, combinedCustomers.find(c => c.id === jobData.customerId)),
+      [jobData.customerId, combinedCustomers]);
+  const addOnCatalog = useMemo(() => buildFeeCatalog(libraryParts, {
+      priceFor: (p) => clientPriceFor(p.clientPricing, addOnCustKeys) ?? (parseFloat(p.manufacturingSpecs?.basePrice) || 0),
+  }), [libraryParts, addOnCustKeys]);
 
   // TRADE DISCOUNT (customer's CRM discountCode, e.g. D20 = less 20%). Applies per cart item,
   // AFTER the full pricing chain, display-side only: STANDARD-level items only (Fabricut levels
@@ -2095,6 +2111,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           }
       });
 
+      // ADD-ONS — appended after the configured items, so `grandTotal` at this moment is exactly
+      // the CONFIGURATION SUBTOTAL a percentage fee is worked out from: parts and labour, net of
+      // any trade discount, before other fees and before shipping (shipping rides on the estimate
+      // header, never a line). Two percentage fees therefore never compound.
+      const addOnLines = buildAddOnLines(addOnSel, addOnCatalog, grandTotal);
+      if (addOnLines.length) {
+          mergedBreakdown.push({ name: 'Add-ons & Fees', qty: 1, price: 0, total: 0, isHeader: true, partHandling: '', partId: null });
+          addOnLines.forEach(l => mergedBreakdown.push({
+              name: `  - ${l.name}`, qty: l.qty, price: l.price, total: l.total,
+              partHandling: l.partHandling || '', partId: l.partId || null, legacyErpId: l.legacyErpId || null,
+              isFee: true, isAddOn: true, addOnExplain: l.explain || '',
+          }));
+          grandTotal += addOnsTotal(addOnLines);
+      }
+
       const payload = {
           jobId: targetJobId, brandId: activeBrand, status: 'CONFIGURED',
           ...(mintedQuoteNo ? { quoteNo: mintedQuoteNo } : {}),
@@ -2172,6 +2203,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           }
           
           setCart([]);
+          setAddOnSel({});
           localStorage.removeItem('hq_global_cart');
           localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote');
           setShowCheckoutModal(false);
@@ -3528,6 +3560,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Project / Job Name (Optional)</label>
                         <input type="text" placeholder="e.g. Master Suite Reno" disabled={!!activeMasterQuoteId} value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'text' }} />
                     </div>
+
+                    {/* ADD-ONS — the last step before committing. Fees that nobody wants to model as
+                        a flow step (rush, packaging, shipping, strike-offs, colour upcharges) are
+                        picked here and each becomes its own line on the order. Percentage fees read
+                        the configured subtotal shown below them, so the number moves with the cart. */}
+                    <AddOnPicker
+                        catalog={addOnCatalog}
+                        selections={addOnSel}
+                        onChange={setAddOnSel}
+                        configSubtotal={cart.reduce((s, it) => { const d = tradeDiscountFor(it); return s + ((it.pricing?.finalPrice || 0) - (d ? d.amount : 0)) * (it.qty || 1); }, 0)}
+                        title="Add-ons & fees — added as their own lines"
+                        note={`Percentages are worked out from the configured subtotal (${cart.length} item${cart.length === 1 ? '' : 's'}, before fees and shipping). Fees a flow already bills are untouched — this is for the ones that aren't steps.`}
+                    />
 
                     <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
                         Submit Quote to Pipeline

@@ -101,6 +101,72 @@ export function computeFee({ rule, unitPrice, qty, configSubtotal }) {
     };
 }
 
+// ---- THE ADD-ON CATALOGUE (Stuart 2026-07-30) ------------------------------------------------
+// "add a step to cpq that looks like quick ship where it presents lots of options that we can add
+// to an order as single lines… so we do not need to add these items to a cpq flow."
+//
+// The catalogue is just the brand's fee items, priced for THIS customer the same way every other
+// price resolves (their clientPricing row when it has one, otherwise our base price) — so a fee
+// costs what 4.6 says it costs, with no second pricing path to keep in step.
+export const isFeeItemRecord = (p) => {
+    const u = (v) => String(v || '').trim().toUpperCase();
+    const pt = u(p?.manufacturingSpecs?.productType || p?.productType);
+    return pt === 'FEE' || p?.partClass === 'Fee' || /(^|-)FEE-/.test(u(p?.legacyErpId || p?.itemId));
+};
+
+// parts → catalogue rows. `priceFor(part)` resolves the customer's price (pass CPQ's own resolver
+// so the picker can never disagree with the quote). `portalOnly` keeps a customer-facing picker to
+// the fees explicitly ticked for it.
+export function buildFeeCatalog(parts, { priceFor, portalOnly = false } = {}) {
+    return (parts || [])
+        .filter(isFeeItemRecord)
+        .filter(p => p?.manufacturingSpecs?.isRetired !== true)
+        .map(p => {
+            const rule = feeRuleOf(p.manufacturingSpecs);
+            const unitPrice = typeof priceFor === 'function'
+                ? priceFor(p)
+                : num(p?.manufacturingSpecs?.basePrice);
+            return {
+                id: p.id,
+                code: String(p.legacyErpId || p.itemId || '').toUpperCase(),
+                name: p.itemName || '',
+                partHandling: p?.manufacturingSpecs?.partHandling || '',
+                rule, unitPrice: unitPrice ?? null,
+                portalOk: rule.portalSelectable,
+                summary: feeRuleSummary(rule, unitPrice),
+            };
+        })
+        .filter(e => !portalOnly || e.portalOk)
+        .sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+}
+
+// selections = { [catalogId]: qty }. configSubtotal is the base for percentage fees — parts and
+// labour only. Returns quote-shaped breakdown lines; a zero/blank quantity contributes nothing.
+export function buildAddOnLines(selections, catalog, configSubtotal) {
+    const out = [];
+    (catalog || []).forEach(entry => {
+        const raw = selections ? selections[entry.id] : undefined;
+        const qty = entry.rule.mode === 'PERCENT' ? 1 : (num(raw) ?? 0);
+        if (entry.rule.mode !== 'PERCENT' && !(qty > 0)) return;
+        if (entry.rule.mode === 'PERCENT' && !raw) return;      // percentage fees are on/off
+        const { amount, explain } = computeFee({ rule: entry.rule, unitPrice: entry.unitPrice, qty, configSubtotal });
+        if (!(amount > 0)) return;
+        out.push({
+            name: entry.name || entry.code,
+            qty: entry.rule.mode === 'PERCENT' ? 1 : qty,
+            price: entry.rule.mode === 'PERCENT' ? amount : (num(entry.unitPrice) ?? 0),
+            total: amount,
+            isFee: true, isAddOn: true,
+            partId: entry.id, legacyErpId: entry.code,
+            partHandling: entry.partHandling || '',
+            explain,
+        });
+    });
+    return out;
+}
+
+export const addOnsTotal = (lines) => (lines || []).reduce((s, l) => s + (parseFloat(l.total) || 0), 0);
+
 // A one-line summary of the rule for a picker row ("25% of the configuration, min $100.00").
 export function feeRuleSummary(rule, unitPrice) {
     const r = rule && rule.mode ? rule : feeRuleOf({ feeRule: rule });
