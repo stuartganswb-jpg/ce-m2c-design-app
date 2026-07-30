@@ -78,6 +78,42 @@ const LEGACY_SOURCES = [
     { match: /fabricut/i, label: 'Fabricut pricing box', read: fabricutSuggestion },
 ];
 
+// ---- WRITE-BACK: keep the legacy box in step with the rows (Stuart 2026-07-30) ---------------
+// "i have not run the 4.6 on the fabricut because i see the 4.6 is populating different fields
+// than the Fabricut." He was right to hold off. Two stores do two different jobs:
+//   manufacturingSpecs.fabricut → the CPQ PRICE LEVELS (Standard / Cost / Wholesale / Retail)
+//   clientPricing[]            → what the customer is actually CHARGED in CPQ / Quick Ship / portal
+// For Fabricut they must agree, and a page that wrote only the rows would leave the levels stale.
+// So an edit here writes both. Rules that keep it safe:
+//   • NEVER creates a box — an item with no Fabricut data is not a Fabricut item, and inventing
+//     one would put it into the price levels.
+//   • A VARIANT writes its OWN direct cost/wholesale/retail even when it was inheriting a tier,
+//     so one row's edit can never move its siblings.
+//   • A suffixless doc (mill base, or a fee like CE-FEE-4594) writes the tier its row shows.
+//   • Pattern #s and the explicit-null "$0 · w/ arm" flags are never touched — those are grouping
+//     decisions, not prices.
+const fabricutWriteBack = (part, next, outsourceCodes) => {
+    const fab = part?.manufacturingSpecs?.fabricut;
+    if (!fab) return null;
+    const code = upper(part.legacyErpId || part.itemId);
+    const sfx = code.includes('/') ? code.split('/')[1] : '';
+    const hasDirect = fab.cost !== undefined || fab.retail !== undefined || fab.wholesale !== undefined;
+    const keys = (sfx || hasDirect)
+        ? { cost: 'cost', wholesale: 'wholesale', retail: 'retail' }
+        : (isPlatedSuffix(sfx, outsourceCodes)
+            ? { cost: 'platedCost', wholesale: 'platedWholesale', retail: 'platedRetail' }
+            : { cost: 'paintedCost', wholesale: 'paintedWholesale', retail: 'paintedRetail' });
+    const out = {};
+    const put = (field, v) => { if (v !== '' && v !== null && v !== undefined) out[`manufacturingSpecs.fabricut.${field}`] = v; };
+    put(keys.cost, next.price);
+    put(keys.wholesale, next.clientSalesPrice);
+    put(keys.retail, next.clientRetailPrice);
+    if (!Object.keys(out).length) return null;
+    out['manufacturingSpecs.fabricut.updatedAt'] = Date.now();
+    out['manufacturingSpecs.fabricut.source'] = 'COLLECTION_PAGE';
+    return out;
+};
+
 // Every collection an item claims — explicit list first, else the NetSuite-synced single value.
 const collectionsOf = (specs) => {
     const s = specs || {};
@@ -195,7 +231,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         const ids = Object.keys(edits);
         if (!ids.length) return;
         const baseChanges = ids.filter(id => edits[id].basePrice !== undefined);
-        if (!window.confirm(`Save ${ids.length} item(s) for ${customer?.name || custId}?\n\n• Their SKU / net price / sales price write to this customer's Client Pricing row.${baseChanges.length ? `\n• ⚠ ${baseChanges.length} BASE price(s) change — that is our own price, for every customer.` : ''}\n\nCPQ, Quick Ship and the portal pick it up immediately.`)) return;
+        const boxCount = legacySrc ? ids.filter(id => inventory.find(x => x.id === id)?.manufacturingSpecs?.fabricut).length : 0;
+        if (!window.confirm(`Save ${ids.length} item(s) for ${customer?.name || custId}?\n\n• Their SKU / net price / sales price write to this customer's Client Pricing row.${boxCount ? `\n• ${boxCount} also update the ${legacySrc.label} on the item, so the CPQ price levels stay in step (pattern #s and the "$0 · w/ arm" flags are untouched).` : ''}${baseChanges.length ? `\n• ⚠ ${baseChanges.length} BASE price(s) change — that is our own price, for every customer.` : ''}\n\nCPQ, Quick Ship and the portal pick it up immediately.`)) return;
         setSaving(true);
         try {
             let batch = writeBatch(db), n = 0, written = 0;
@@ -218,6 +255,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 const keep = (next.clientSku || next.price !== '' || next.clientSalesPrice !== '' || next.clientRetailPrice !== '');
                 const patch = { clientPricing: keep ? [...others, next] : others };
                 if (e.basePrice !== undefined) patch['manufacturingSpecs.basePrice'] = money(e.basePrice);
+                // Keep the legacy box in step — Fabricut's price levels read it, not the rows.
+                if (legacySrc) Object.assign(patch, fabricutWriteBack(p, next, outsourceFinishes) || {});
                 batch.update(doc(db, 'Approved_Designs', id), patch);
                 written++;
                 if (++n >= 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
@@ -343,6 +382,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 const others = (p.clientPricing || []).filter(r => !custKeys.has(upper(r?.customerId)));
                 const patch = { clientPricing: [...others, next] };
                 if (imp.applyBase && e.baseChanged && e.newBase !== null) patch['manufacturingSpecs.basePrice'] = e.newBase;
+                if (legacySrc) Object.assign(patch, fabricutWriteBack(p, next, outsourceFinishes) || {});
                 batch.update(doc(db, 'Approved_Designs', e.docId), patch);
                 written++;
                 if (++n >= 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
