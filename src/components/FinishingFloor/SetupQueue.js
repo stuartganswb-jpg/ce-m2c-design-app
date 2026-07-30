@@ -6,6 +6,7 @@ import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { nsProxyFetch } from '../Shared/nsProxy';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
+import { finishRouteOf } from '../Shared/finishRouting';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
 // Finishing converts only ever run for the shop brands.
@@ -23,7 +24,17 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
   // (Stuart 2026-07-17: Direct Order Intake removed — every WO now arrives through the real
   // pipelines: CPQ/RTG dispatch for sales, Sales Snapshot → RTG for stock builds.)
 
-  const pendingOrders = workOrders.filter(w => w.currentPhase === "Setup" || w.currentPhase === "setup");
+  // OUTSOURCED FINISHES DO NOT BELONG ON THIS FLOOR (Stuart 2026-07-30: "these orders … are both
+  // for items that have outsourced finishes, so the cpq/routing … needs to respect the outsourced
+  // and these both should be routed to wms pick and pack"). An EP*/MEP*/P25 part is plated by an
+  // outside vendor — there is no recipe to batch and nothing to spray, which is exactly why both of
+  // them were sitting in the PENDING-RECIPE group as work no one could start. They keep their WMS
+  // pick (that is untouched — the pick queue reads sentToPickPack/pickStatus, not currentPhase) and
+  // ride the OB PLATING bin out on the weekly plater PO.
+  const inSetup = workOrders.filter(w => w.currentPhase === "Setup" || w.currentPhase === "setup");
+  const outsourcedOrders = inSetup.filter(w => finishRouteOf(w).outsourced);
+  const outsourcedIds = new Set(outsourcedOrders.map(w => w.id));
+  const pendingOrders = inSetup.filter(w => !outsourcedIds.has(w.id));
   // Follow the committed run order (scheduleSeq, set by the Schedule's "Commit" button) when present;
   // fall back to required date for anything not yet committed.
   pendingOrders.sort((a, b) => {
@@ -313,6 +324,29 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
             {finishGroups.length} finish batch{finishGroups.length === 1 ? '' : 'es'} · {pendingOrders.length} order{pendingOrders.length === 1 ? '' : 's'}
         </span>
       </div>
+
+      {/* Orders this floor does NOT finish — shown so they don't just vanish from the queue. */}
+      {outsourcedOrders.length > 0 && (
+        <div style={{ background: '#fff', border: '1px solid var(--brass)', borderRadius: '2px', padding: '16px 24px', marginBottom: '24px' }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', marginBottom: '10px' }}>
+            ⚗ Outsourced finish · {outsourcedOrders.length} order{outsourcedOrders.length === 1 ? '' : 's'} routed to WMS pick &amp; the plater — not this floor
+          </div>
+          {outsourcedOrders.map(w => {
+            const r = finishRouteOf(w);
+            return (
+              <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', borderTop: '1px solid var(--line)', padding: '7px 0', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>
+                <span>{w.displayId || w.id}{w.customer || w.clientName ? ` · ${w.customer || w.clientName}` : ''}</span>
+                <span style={{ color: 'var(--ink-soft)' }}>
+                  {r.codes.join(', ')} (by {r.via}) · {w.totalParts || 0} pcs · {w.sentToPickPack ? `pick: ${w.pickStatus || 'Pending'}` : 'not yet released to pick'}
+                </span>
+              </div>
+            );
+          })}
+          <div style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', marginTop: '10px', fontStyle: 'italic' }}>
+            These are plated by an outside vendor — nothing to set up or spray here. WMS picks them and stages them in OB PLATING for the weekly plater PO.
+          </div>
+        </div>
+      )}
 
       {/* ⇄ CONVERT FINISHED → RAW — for stock builds short on raw base cores */}
       <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', marginBottom: '24px' }}>

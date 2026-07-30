@@ -11,6 +11,7 @@ import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
+import { shortagesOf } from '../Shared/finishRouting';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
@@ -495,6 +496,87 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const p = code && hqParts.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === code);
         return (p && (p.binLocation || p.manufacturingSpecs?.binLocation)) || (l && l.binLocation) || 'UNASSIGNED';
     };
+
+    // ===== SHORT PICK → MILL CORES → OB PLATING (Stuart 2026-07-30) =====
+    // "the qty in the bins is insufficient for the order needs … it needs to see the qty in the bin
+    // is not enough so it really needs then look at the root item and its bin and see if we have
+    // enough qty of the item sitting in the Mill Finish".
+    //
+    // Demand is counted PER ITEM CODE ACROSS THE ORDER, not per line — the Fabricut order carries
+    // H1-1CP-V/EP4 on two separate 100-pc lines against a bin holding 100. Line by line each looks
+    // satisfiable; only the total (200 vs 100) shows the short.
+    // Live availability for a code — the per-bin pull if we have it, else NetSuite's combined on-hand.
+    const availOf = (code) => {
+        const c = String(code || '').toUpperCase();
+        const lv = liveBins[c];
+        if (lv) return lv.total || 0;
+        return nsStock[c]?.onHand || 0;
+    };
+    const shortagesFor = (job) => shortagesOf(pickableLines(job || {}), availOf);
+    const shortageOfLine = (job, line) => {
+        const c = String(((line && (line.legacyErpId || line.partId)) || '')).toUpperCase();
+        return shortagesFor(job).find(s => s.code === c) || null;
+    };
+
+    // Route a shortage out to the plater: raise the open Plating order, record the short on the WO,
+    // then drop the operator into the existing Pull-to-Plating screen pre-filled (mill core, qty,
+    // OB PLATING) so they scan the mill bin and the proven NetSuite path does the move. The demand
+    // card stays open on the Plating tab and rides the weekly shipment/PO with everything else.
+    const [routedShorts, setRoutedShorts] = useState({});   // CODE -> demandId, this session
+    const [pickShorts, setPickShorts] = useState([]);        // lines confirmed short, balance out to the plater
+    const routeShortToPlating = async (job, sh) => {
+        if (!sh || !sh.plateable) {
+            return alert(`${sh ? sh.code : 'This item'} has no outsourced finish suffix, so there is no mill core to plate.\n\nShort ${sh ? sh.short : ''} — raise it with HQ or skip the line.`);
+        }
+        await fetchLiveBins([sh.code, sh.mill]);
+        const millHave = availOf(sh.mill);
+        if (millHave < sh.short) {
+            return alert(`❌ Not enough mill finish either.\n\n${sh.code}: need ${sh.need}, have ${sh.have} — short ${sh.short}\n${sh.mill} (mill): ${millHave} available\n\nNothing was queued. This one needs cores made before it can be plated.`);
+        }
+        const millPart = enrichedByErp(sh.mill);
+        if (!millPart) return alert(`${sh.mill} isn't in this brand's item list yet — run Pull Live Stock / Sync NetSuite Stock, then try again.`);
+        if (!window.confirm(`⚗ Cover the short from mill finish?\n\n${sh.code} — need ${sh.need}, only ${sh.have} in stock (short ${sh.short}).\n${sh.mill} has ${millHave} in mill finish.\n\nThis opens a plating order for ${sh.short} pc(s) and sends you to pull them from their bin into OB PLATING. It stays open on the Plating tab and rides this week's plater PO.`)) return;
+        try {
+            const finish = outsourceFinishes.find(f => finishCodeOf(f) === sh.finishCode);
+            const demandId = `PLD-BO-${String(job.id).replace(/[^A-Za-z0-9-]/g, '')}-${sh.code.replace(/[^A-Za-z0-9]/g, '')}`;
+            await setDoc(doc(db, 'plating_demand', demandId), {
+                id: demandId, brandId: activeBrand, status: 'open', woNum: packRef(job),
+                baseItemId: millPart.id || null, baseErpId: sh.mill, targetErpId: sh.code,
+                finishCode: sh.finishCode, finishName: (finish && (finish.name || finish.code)) || sh.finishCode,
+                qty: sh.short, source: 'pick-backorder',
+                backorder: {
+                    jobId: job.id, ref: packRef(job), customer: job.customerName || job.clientName || job.customer || '',
+                    code: sh.code, need: sh.need, onHand: sh.have, short: sh.short
+                },
+                note: `Backorder ${packRef(job)} — short ${sh.short} of ${sh.code}`,
+                createdBy: operator?.name || 'WMS Pick', createdAt: Date.now()
+            }, { merge: true });
+            await updateDoc(doc(db, 'fin_workorders', job.id), {
+                pickHadShorts: true,
+                [`pickShortages.${sh.code.replace(/[^A-Za-z0-9]/g, '_')}`]: {
+                    code: sh.code, need: sh.need, onHand: sh.have, short: sh.short,
+                    mill: sh.mill, finishCode: sh.finishCode, platingDemandId: demandId, at: Date.now()
+                }
+            }).catch(() => { /* the demand is raised either way — never block the floor on this stamp */ });
+            setRoutedShorts(prev => ({ ...prev, [sh.code]: demandId }));
+            writeLog(`Pick short ${packRef(job)}: ${sh.code} need ${sh.need} / have ${sh.have} → ${sh.short} pulled from mill ${sh.mill} to OB PLATING`, 'wms');
+
+            // Pre-load the pull screen: mill core, the short qty, destination OB PLATING.
+            setPlatingBase(millPart);
+            setPlatingQty(String(sh.short));
+            setPlatingFinish(finish ? finish.id : '');
+            setPlatingSrcScan(''); setPlatingDestScan('OB PLATING');
+            setPlatingMemo(`Backorder ${packRef(job)} — ${sh.code} short ${sh.short}`);
+            setPlatingWO(packRef(job));
+            setPlatingDemandId(demandId);
+            setActivePickJob(null);
+            setActiveTab('PLATING');
+        } catch (e) {
+            console.error('Short → plating route failed:', e);
+            alert('❌ Could not queue the plating order:\n\n' + (e.message || e));
+        }
+    };
+    // ===== END SHORT PICK =====
 
     // ================= PACKING STATION (Stuart 2026-07-18) =================
     // Finished orders (currentPhase 'Complete', custom only) queue compactly up top; opening one
@@ -1775,32 +1857,48 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!okByLive && scanned !== expectedBin.toUpperCase() && expectedBin !== 'UNASSIGNED') {
             return alert("❌ Incorrect Bin Scanned! Please verify location.");
         }
-        if (parseInt(validation.qty) !== lineQty(lineItem)) {
-            return alert(`❌ Quantity Mismatch. Expected ${lineQty(lineItem)}.`);
+        // A SHORT quantity is only accepted once the shortfall has been routed to plating — otherwise
+        // "expected N" still holds and a mis-count can't slip through (Stuart 2026-07-30). The order
+        // carries the short so staging/HQ see the balance is coming back from the plater.
+        const entered = parseInt(validation.qty);
+        const target = lineQty(lineItem);
+        const code = String((lineItem.legacyErpId || lineItem.partId) || '').toUpperCase();
+        const routedShort = routedShorts[code];
+        let shortRec = null;
+        if (entered !== target) {
+            if (!(routedShort && entered >= 0 && entered < target)) {
+                return alert(`❌ Quantity Mismatch. Expected ${target}.`);
+            }
+            if (!window.confirm(`Confirm SHORT pick?\n\n${code}: picking ${entered} of ${target}. The remaining ${target - entered} is covered by the plating order already raised.`)) return;
+            shortRec = { line: currentPickLine, itemId: code, name: lineItem.name || '', target, picked: entered, platingDemandId: routedShort };
         }
 
         setValidation({ bin: '', qty: '' });
+        const nextShorts = shortRec ? [...pickShorts, shortRec] : pickShorts;
+        if (shortRec) setPickShorts(nextShorts);
 
         if (currentPickLine + 1 < activePickJob.partsList.length) {
             setCurrentPickLine(prev => prev + 1);
         } else {
-            completePick(pickSkips);
+            completePick(pickSkips, nextShorts);
         }
     };
 
     // Finish the pick (from the last confirmed line OR a skip of the last line). When lines were
     // skipped, the order is stamped so staging/HQ can fix it — the parts still went to staging,
     // just short the skipped line(s).
-    const completePick = (skips) => {
+    const completePick = (skips, shorts) => {
         setShowNacho(true);
         setTimeout(async () => {
             const patch = { pickStatus: 'Picked_Awaiting_Staging' };
             if (skips && skips.length) { patch.pickSkips = skips; patch.pickHadSkips = true; }
+            if (shorts && shorts.length) { patch.pickShorts = shorts; patch.pickHadShorts = true; }
             await updateDoc(doc(db, "fin_workorders", activePickJob.id), patch);
-            writeLog(`Order Picked: ${activePickJob.id}${(skips && skips.length) ? ` — ⚠ ${skips.length} line(s) SKIPPED (fix at staging): ${skips.map(s => s.itemId || s.name).join(', ')}` : ''}`, 'wms');
+            writeLog(`Order Picked: ${activePickJob.id}${(skips && skips.length) ? ` — ⚠ ${skips.length} line(s) SKIPPED (fix at staging): ${skips.map(s => s.itemId || s.name).join(', ')}` : ''}${(shorts && shorts.length) ? ` — ⚗ ${shorts.length} line(s) SHORT, balance out to plating: ${shorts.map(s => `${s.itemId} ${s.picked}/${s.target}`).join(', ')}` : ''}`, 'wms');
             printZebraLabel(activePickJob, 'SMALL_PARTS');
             setActivePickJob(null);
             setPickSkips([]);
+            setPickShorts([]);
             setShowNacho(false);
             setOperator(null);
         }, 2000);
@@ -1819,7 +1917,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (currentPickLine + 1 < activePickJob.partsList.length) {
             setCurrentPickLine(prev => prev + 1);
         } else {
-            completePick(nextSkips);
+            completePick(nextSkips, pickShorts);
         }
     };
 
@@ -2315,7 +2413,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             <div style={{ position: 'fixed', inset: 0, backgroundColor: theme.paper, color: theme.ink, zIndex: 9999, display: 'flex', flexDirection: 'column', padding: '40px', fontFamily: theme.sans }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: `1px solid ${theme.line}`, paddingBottom: '20px', marginBottom: '40px' }}>
                     <h1 title={activePickJob.id} style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {packRef(activePickJob)}{pickSkips.length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '0.9rem', color: '#d9534f', marginLeft: '16px' }}>⚠ {pickSkips.length} SKIPPED</span>}</h1>
-                    <button onClick={() => { setActivePickJob(null); setPickSkips([]); setValidation({ bin: '', qty: '' }); }} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
+                    <button onClick={() => { setActivePickJob(null); setPickSkips([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); }} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
                 </div>
 
                 {showNacho ? (
@@ -2338,6 +2436,29 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <button onClick={() => fetchLiveBins([line.legacyErpId || line.partId])} title="Re-pull live per-bin stock from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 8px', fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>⟳ Live</button>
                             </div>
                             
+                            {(() => {
+                                const sh = shortageOfLine(activePickJob, line);
+                                if (!sh) return null;
+                                const routed = !!routedShorts[sh.code];
+                                return (
+                                    <div style={{ margin: '0 0 24px', padding: '16px', background: routed ? '#f2f7f2' : '#fdf3f3', border: `1px solid ${routed ? '#9dbf9d' : '#e2b8b8'}` }}>
+                                        <div style={{ fontFamily: theme.mono, fontSize: '11px', color: routed ? '#3a7d44' : '#a33', letterSpacing: '.05em' }}>
+                                            {routed ? `✓ ${sh.short} ROUTED TO PLATING` : `SHORT ${sh.short}`} — this order needs {sh.need} of {sh.code}, stock holds {sh.have}.
+                                        </div>
+                                        {routed ? (
+                                            <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginTop: '8px' }}>Pick what is in the bin and confirm the SHORT quantity — the remainder is covered by the plating order.</div>
+                                        ) : sh.plateable ? (
+                                            <>
+                                                <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.ink, marginTop: '8px' }}>Mill core {sh.mill} has {sh.millAvail} available{sh.millAvail >= sh.short ? ' — enough to cover the short.' : ' — not enough to cover it.'}</div>
+                                                <button type="button" onClick={() => routeShortToPlating(activePickJob, sh)} disabled={sh.millAvail < sh.short} style={{ marginTop: '12px', padding: '12px 18px', background: sh.millAvail < sh.short ? theme.paper : theme.brass, color: sh.millAvail < sh.short ? theme.inkSoft : '#fff', border: `1px solid ${sh.millAvail < sh.short ? theme.line : theme.brass}`, cursor: sh.millAvail < sh.short ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>⚗ Pull {sh.short} mill → OB Plating</button>
+                                            </>
+                                        ) : (
+                                            <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginTop: '8px' }}>No outsourced finish on this code, so there is no mill core to plate. Skip the line and flag it at staging.</div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+
                             <a href={line.assetUrl || '#'} target="_blank" rel="noreferrer" style={{ display: 'inline-block', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textDecoration: 'none', textTransform: 'uppercase', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = theme.brass} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>
                                 OPEN REFERENCE PHOTO
                             </a>
@@ -2425,7 +2546,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 )}
                                                 <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Items{pickable.length !== (job.partsList?.length || 0) ? ` (${(job.partsList?.length || 0) - pickable.length} return/fee line(s) ride the shop order)` : ''} · tap for parts</div>
                                             </div>
-                                            <button onClick={(e) => { e.stopPropagation(); setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setValidation({ bin: '', qty: '' }); fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
+                                            <button onClick={(e) => { e.stopPropagation(); setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setPickShorts([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                                                 START PICKING
                                             </button>
                                         </div>
@@ -2436,6 +2557,19 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     <button onClick={() => fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId))} title="Re-pull live per-bin stock from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 8px', fontFamily: theme.mono, fontSize: '9px', cursor: 'pointer' }}>⟳ Live</button>
                                                 </div>
                                                 {pickable.length === 0 && <div style={{ padding: '12px 0', fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No pickable parts on this order.</div>}
+                                                {/* SHORT = the order needs more than the bins hold. Counted per ITEM across the
+                                                    order, so two 100-pc lines of the same code read as 200 against a 100 bin. */}
+                                                {shortagesFor(job).map(sh => (
+                                                    <div key={sh.code} style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', margin: '10px 0', padding: '10px 12px', background: '#fdf3f3', border: '1px solid #e2b8b8' }}>
+                                                        <div style={{ flex: 1, minWidth: '240px', fontFamily: theme.mono, fontSize: '11px', color: '#a33' }}>
+                                                            SHORT {sh.short} · {sh.code} needs {sh.need}, stock has {sh.have}
+                                                            {sh.plateable ? <span style={{ color: theme.inkSoft }}> — mill {sh.mill}: {sh.millAvail} available</span> : <span style={{ color: theme.inkSoft }}> — no outsourced finish on this code</span>}
+                                                        </div>
+                                                        {sh.plateable && (
+                                                            <button onClick={(e) => { e.stopPropagation(); routeShortToPlating(job, sh); }} disabled={sh.millAvail < sh.short} title={sh.millAvail < sh.short ? `Only ${sh.millAvail} mill cores — not enough to cover ${sh.short}` : `Pull ${sh.short} × ${sh.mill} from its bin into OB PLATING and open a plating order`} style={{ padding: '8px 14px', background: sh.millAvail < sh.short ? theme.paper : theme.brass, color: sh.millAvail < sh.short ? theme.inkSoft : '#fff', border: `1px solid ${sh.millAvail < sh.short ? theme.line : theme.brass}`, cursor: sh.millAvail < sh.short ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>⚗ Mill → OB Plating</button>
+                                                        )}
+                                                    </div>
+                                                ))}
                                                 {pickable.map((l, i) => (
                                                     <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '8px 0', borderBottom: `1px solid ${theme.line}` }}>
                                                         <div style={{ flex: 1, minWidth: 0 }}>
