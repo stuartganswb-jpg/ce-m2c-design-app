@@ -316,17 +316,41 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
       });
 
       // Center-bracket cloning (ported from CPQTab.js:232-297).
+      //
+      // ⚠ EVERYTHING HERE IS COMPUTED IN THE MODEL'S OWN (root-local) FRAME, not world space.
+      // The internal HQ version measures in world space and is correct there because it never
+      // transforms the model. The portal DOES — applyFit yaws the root to frame the piece broadside
+      // — and in world space a yawed rod no longer runs along a world axis. At the 45° yaw a long-X
+      // rod has EQUAL world x and z extents, so `axis` resolved to the tie ('x') and the clone was
+      // translated along world X while the rod ran diagonally: the bracket slid off the rod toward
+      // the viewer and landed at the wrong point along it. That is Stuart's 2026-07-30 report —
+      // "the center bracket is rendering in the wrong position, it is in front of the rod… this is
+      // portal only, the app cpq does not exhibit the same behavior". Measured up to 30% of rod
+      // length of off-rod drift. Working in the local frame makes the maths independent of however
+      // the viewer happens to be framing the model.
       try {
         const prior = clonedScene.getObjectByName('__centerClones');
         if (prior) clonedScene.remove(prior);
         const specs = (cloneSpecs || []).filter((s) => s && (parseInt(s.count) || 0) >= 1 && (s.meshNames || []).length);
         if (specs.length) {
           clonedScene.updateMatrixWorld(true);
-          const modelBox = new THREE.Box3().setFromObject(clonedScene);
+          const invRoot = new THREE.Matrix4().copy(clonedScene.matrixWorld).invert();
+          const localOf = (m) => new THREE.Matrix4().copy(invRoot).multiply(m.matrixWorld);
+          const localBox = (meshes) => {
+            const box = new THREE.Box3();
+            meshes.forEach((m) => {
+              const g = m.geometry; if (!g) return;
+              if (!g.boundingBox) g.computeBoundingBox();
+              if (g.boundingBox) box.union(g.boundingBox.clone().applyMatrix4(localOf(m)));
+            });
+            return box;
+          };
+          const allMeshes = []; clonedScene.traverse((c) => { if (c.isMesh) allMeshes.push(c); });
+          const modelBox = localBox(allMeshes);
+          if (modelBox.isEmpty()) throw new Error('no geometry');
           const size = modelBox.getSize(new THREE.Vector3());
           const axis = size.x >= size.y && size.x >= size.z ? 'x' : (size.y >= size.z ? 'y' : 'z');
           const defLo = modelBox.min[axis], defHi = modelBox.max[axis];
-          const invRoot = new THREE.Matrix4().copy(clonedScene.matrixWorld).invert();
           const group = new THREE.Group(); group.name = '__centerClones';
           specs.forEach((spec) => {
             const n = parseInt(spec.count) || 0;
@@ -339,13 +363,14 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
             clonedScene.traverse((c) => { if (c.isMesh && !isFastener(c) && wantedHit(c)) src.push(c); });
             if (!src.length) return;
             const anchorSrc = (spec.anchorNames || []).length ? src.filter(anchorHit) : src;
-            const srcBox = new THREE.Box3(); (anchorSrc.length ? anchorSrc : src).forEach((m) => srcBox.expandByObject(m));
+            const srcBox = localBox(anchorSrc.length ? anchorSrc : src);
             const srcAlong = srcBox.getCenter(new THREE.Vector3())[axis];
             let lo = defLo, hi = defHi;
             if ((spec.railNames || []).length) {
-              const railBox = new THREE.Box3(); let railFound = false;
-              clonedScene.traverse((c) => { if (c.isMesh && !isFastener(c) && railHit(c)) { railBox.expandByObject(c); railFound = true; } });
-              if (railFound) { lo = railBox.min[axis]; hi = railBox.max[axis]; }
+              const rail = [];
+              clonedScene.traverse((c) => { if (c.isMesh && !isFastener(c) && railHit(c)) rail.push(c); });
+              const railBox = rail.length ? localBox(rail) : null;
+              if (railBox && !railBox.isEmpty()) { lo = railBox.min[axis]; hi = railBox.max[axis]; }
             }
             src.forEach((m) => { m.visible = false; });
             for (let i = 1; i <= n; i++) {
@@ -355,7 +380,10 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
               src.forEach((m) => {
                 const c = m.clone();
                 c.visible = true; c.matrixAutoUpdate = false;
-                c.matrix.copy(invRoot).multiply(offset).multiply(m.matrixWorld);
+                // Translate in the model's OWN frame: offset ∘ (mesh → root-local). The old form
+                // (invRoot ∘ offset ∘ matrixWorld) applied the shift along a WORLD axis, which is
+                // only the rod's axis when the root is unrotated.
+                c.matrix.copy(offset).multiply(localOf(m));
                 c.userData.originalMaterial = m.userData.originalMaterial;
                 c.userData.originalVisible = true;
                 group.add(c);
