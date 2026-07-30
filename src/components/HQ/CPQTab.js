@@ -1505,7 +1505,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // chosen size (so the quote reads "Rod Diameter: 1" Round Rod"), never a part or price.
           if (step.type === SIZE_STEP_TYPE || step.type === 'PROJ_SELECT') {
               const sizeOpt = (step.styleOptions || []).find(o => o.optId === selectedValue);
-              if (sizeOpt) breakdown.push({ name: `${step.title}: ${sizeOpt.partName}`, qty: 1, price: 0, total: 0, partHandling: '', partId: null, legacyErpId: null });
+              if (sizeOpt) breakdown.push({ name: `${step.title}: ${sizeOpt.partName}`, qty: 1, price: 0, total: 0, partHandling: '', partId: null, legacyErpId: null, isSizeRow: true });   // display only — never work (Shared/lineClassification.isDisplayOnlyLine)
               return;
           }
 
@@ -1997,6 +1997,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   total: line.total * item.qty,
                   partHandling: line.partHandling || '',
                   partId: line.partId || null,
+                  legacyErpId: line.legacyErpId || null,
+                  isFee: !!line.isFee,
+                  isSizeRow: !!line.isSizeRow,
                   cutLength: line.cutLength || null,
                   dimensions: line.dimensions || null
               });
