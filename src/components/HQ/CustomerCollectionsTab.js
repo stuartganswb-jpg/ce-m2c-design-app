@@ -148,6 +148,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const [imp, setImp] = useState(null);                   // { entries, summary, fileName, applying }
     const [busy, setBusy] = useState('');
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);  // hq_outsource_finishes — the PREMIUM authority
+    const [newFee, setNewFee] = useState(null);            // ＋ New fee form (FEES mode)
     const fileRef = useRef(null);
 
     useEffect(() => {
@@ -329,6 +330,49 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         setSaving(false);
     };
 
+    // ---- CREATE A FEE (Stuart 2026-07-30) ------------------------------------------------------
+    // "i want to set up these fees myself not import, i just need the tools built for it… a tool to
+    // create fees like this and add to the 4.6 when fabricut is selected and H1, and then associate
+    // back." So: make the fee ITEM and the customer's association in one action, here, with the
+    // rule set at the same time. The customer's own code goes on the clientPricing row's clientSku,
+    // which is the association — the same field the grid edits and CPQ/portal already read.
+    const createFee = async () => {
+        const f = newFee || {};
+        const code = upper(f.code);
+        if (!code) return alert('Give the fee an item # — ours, not the customer’s (e.g. CE-FEE-6294).');
+        if (!String(f.name || '').trim()) return alert('Give the fee a description.');
+        if (inventory.some(p => codeOf(p) === code)) return alert(`"${code}" already exists in the library. Find it in the list and add ${customer?.name || 'the customer'}'s part # to it instead — that is the association.`);
+        const rule = {
+            mode: f.feeMode === 'PERCENT' ? 'PERCENT' : 'FLAT',
+            unit: f.feeUnit || 'EACH',
+            percent: money(f.feePercent), minAmount: money(f.feeMin),
+            portalSelectable: !!f.feePortal,
+        };
+        const row = (f.theirSku || f.theirNet !== '' || f.theirSales !== '') ? [{
+            customerId: custId, customerName: customer?.name || '',
+            clientSku: String(f.theirSku || '').trim(), price: money(f.theirNet), clientSalesPrice: money(f.theirSales),
+            source: 'COLLECTION_PAGE', updatedAt: Date.now(), updatedBy: String(currentUser || ''),
+        }] : [];
+        const id = `FEE-${code.replace(/[^A-Za-z0-9-]/g, '_')}-${Date.now().toString().slice(-6)}`;
+        try {
+            await setDoc(doc(db, 'Approved_Designs', id), {
+                id, itemId: code, legacyErpId: code, itemName: String(f.name).trim(),
+                brandId: activeBrand, sharedBrands: [activeBrand],
+                partClass: 'Fee', productType: 'FEE', routingType: '',
+                clientPricing: row,
+                manufacturingSpecs: {
+                    productType: 'FEE',
+                    basePrice: money(f.basePrice),
+                    feeRule: rule,
+                    ...(coll ? { collections: [upper(coll)] } : {}),
+                    status: 'APP_ONLY', createdAt: Date.now(), createdBy: String(currentUser || ''),
+                },
+            });
+            setNewFee(null);
+            alert(`✅ ${code} created${coll ? ` and tagged into ${coll}` : ''}${row.length ? `, with ${customer?.name}'s part # and pricing` : ''}.\n\nIt has NO NetSuite item yet — 11.1's write-back will link or create it. Set its Part Handling in the Master Library so the shop/finishing routing is right.`);
+        } catch (e) { console.error(e); alert('Could not create it:\n\n' + (e.message || e)); }
+    };
+
     // ---- ADD AN ITEM TO THE COLLECTION -------------------------------------------------------
     // The H1-1D case: an item that belongs to the collection but was never tagged into it. Adding
     // writes manufacturingSpecs.collections (app-owned) — pricing is then entered on its row.
@@ -422,7 +466,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     };
 
     // ---- styles ------------------------------------------------------------------------------
-    const fld = { padding: '10px 12px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: theme.sans, fontSize: '0.9rem', background: '#fff' };
+    const fld = { padding: '10px 12px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: theme.sans, fontSize: '0.9rem', background: '#fff', boxSizing: 'border-box' };
+    const lbl = { display: 'block', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft, marginBottom: '6px' };
     const th = { padding: '8px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `2px solid ${theme.ink}`, whiteSpace: 'nowrap' };
     const td = { padding: '7px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '12px', color: theme.ink, borderBottom: `1px solid ${theme.paper2}` };
     // A SUGGESTED cell reads in brass on a dashed edge — the value is real and editable, but it
@@ -450,12 +495,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
                     ))}
                 </div>
-                {mode === 'COLLECTION' && (
-                    <select value={coll} onChange={e => { setColl(e.target.value); setEdits({}); }} style={{ ...fld, minWidth: '220px' }}>
-                        <option value="">— pick a collection —</option>
-                        {allCollections.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                )}
+                <select value={coll} onChange={e => { setColl(e.target.value); setEdits({}); }} title={mode === 'FEES' ? 'In Fees mode this does not filter the list (fees are brand-wide) — it is the collection a NEW fee gets tagged into.' : 'Parts carrying this collection'} style={{ ...fld, minWidth: '220px' }}>
+                    <option value="">{mode === 'FEES' ? '— tag new fees into… (optional) —' : '— pick a collection —'}</option>
+                    {allCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
                 {(coll || mode === 'FEES') && (
                     <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
                         {members.length} {mode === 'FEES' ? 'fee' : 'part'}{members.length === 1 ? '' : 's'} · <span style={{ color: pricedCount ? theme.green : theme.red }}>{pricedCount} priced</span>
@@ -487,6 +530,18 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 <b>{suggestions.size} part(s) already carry {customer?.name} numbers in the {legacySrc?.label}</b> — shown below in brass. They are <i>not</i> customer price rows yet, so CPQ, Quick Ship and the portal don't use them. Adopt them to make them real, or edit a cell first and save it yourself.
                             </span>
                             <button onClick={adoptSuggestions} disabled={saving} style={btn(true, { background: theme.brass, borderColor: theme.brass })}>{saving ? 'Writing…' : `⇄ Adopt ${suggestions.size} into Client Pricing`}</button>
+                        </div>
+                    )}
+
+                    {mode === 'FEES' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
+                            <button onClick={() => setNewFee({ code: '', name: '', basePrice: '', feeMode: 'FLAT', feeUnit: 'EACH', feePercent: '', feeMin: '', feePortal: false, theirSku: '', theirNet: '', theirSales: '' })} style={btn(true, { background: theme.green, borderColor: theme.green })}>＋ New fee</button>
+                            <span style={{ fontSize: '0.88rem', color: theme.ink, flex: 1, minWidth: '420px' }}>
+                                Already have the fee? Don't make another — find it below and put <b>{customer?.name || 'the customer'}'s part #</b> in <b>Their SKU</b>. That row <i>is</i> the association.
+                                <span style={{ display: 'block', color: theme.inkSoft, marginTop: '4px' }}>
+                                    ⚠ The <b>cover-plate upcharge is already handled</b> — CPQ charges the difference when a coverplate is chosen over the standard backplate, priced on the CP/RCP plate items themselves. Don't create a fee for it. To give it {customer?.name || 'the customer'}'s code, switch to <b>Collection</b> mode and put the code on those plate items.
+                                </span>
+                            </span>
                         </div>
                     )}
 
@@ -615,6 +670,61 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         {mode === 'FEES' && <><br />A PERCENTAGE fee is worked out from the CONFIGURATION SUBTOTAL — parts and labour, before any other fee and before shipping — so two percentage fees on one order never compound. “10% or $100 minimum” is 10 in the % column and 100 in Min $.</>}
                     </div>
                 </>
+            )}
+
+            {/* NEW FEE */}
+            {newFee && (
+                <div onClick={() => setNewFee(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 320, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '720px', maxWidth: '96vw', maxHeight: '92vh', overflowY: 'auto', border: `1px solid ${theme.line}` }}>
+                        <div style={{ padding: '20px 26px', borderBottom: `1px solid ${theme.line}`, background: theme.paper2 }}>
+                            <div style={{ fontFamily: theme.serif, fontSize: '1.4rem' }}>New fee</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '4px' }}>
+                                Ours, with {customer?.name || 'the customer'}'s part # and pricing on it{coll ? ` · tagged into ${coll}` : ''}
+                            </div>
+                        </div>
+                        <div style={{ padding: '22px 26px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '16px' }}>
+                                <div><label style={lbl}>Our item #</label><input value={newFee.code} onChange={e => setNewFee({ ...newFee, code: e.target.value.toUpperCase() })} placeholder="CE-FEE-6294" style={{ ...fld, width: '100%', fontFamily: theme.mono }} /></div>
+                                <div><label style={lbl}>Description</label><input value={newFee.name} onChange={e => setNewFee({ ...newFee, name: e.target.value })} placeholder="Mitered return fee — backplate, painted" style={{ ...fld, width: '100%' }} /></div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', alignItems: 'end' }}>
+                                <div><label style={lbl}>Our base price $</label><input value={newFee.basePrice} onChange={e => setNewFee({ ...newFee, basePrice: e.target.value })} placeholder="0.00" style={{ ...fld, width: '100%', textAlign: 'right', fontFamily: theme.mono }} /></div>
+                                <div><label style={lbl}>How it's charged</label>
+                                    <select value={newFee.feeMode} onChange={e => setNewFee({ ...newFee, feeMode: e.target.value })} style={{ ...fld, width: '100%' }}>
+                                        {FEE_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                                    </select>
+                                </div>
+                                <div><label style={lbl}>Unit</label>
+                                    <select value={newFee.feeUnit} disabled={newFee.feeMode === 'PERCENT'} onChange={e => setNewFee({ ...newFee, feeUnit: e.target.value })} style={{ ...fld, width: '100%', background: newFee.feeMode === 'PERCENT' ? theme.paper2 : '#fff' }}>
+                                        {FEE_UNITS.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}
+                                    </select>
+                                </div>
+                                <div style={{ display: 'flex', gap: '10px' }}>
+                                    <div style={{ flex: 1 }}><label style={lbl}>%</label><input value={newFee.feePercent} disabled={newFee.feeMode !== 'PERCENT'} onChange={e => setNewFee({ ...newFee, feePercent: e.target.value })} placeholder={newFee.feeMode === 'PERCENT' ? '25' : '—'} style={{ ...fld, width: '100%', textAlign: 'right', fontFamily: theme.mono, background: newFee.feeMode !== 'PERCENT' ? theme.paper2 : '#fff' }} /></div>
+                                    <div style={{ flex: 1 }}><label style={lbl}>Min $</label><input value={newFee.feeMin} onChange={e => setNewFee({ ...newFee, feeMin: e.target.value })} placeholder="—" style={{ ...fld, width: '100%', textAlign: 'right', fontFamily: theme.mono }} /></div>
+                                </div>
+                            </div>
+                            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', border: `1px solid ${newFee.feePortal ? theme.brass : theme.line}`, background: newFee.feePortal ? 'rgba(176,141,87,.08)' : '#fff', padding: '12px 14px' }}>
+                                <input type="checkbox" checked={!!newFee.feePortal} onChange={e => setNewFee({ ...newFee, feePortal: e.target.checked })} style={{ marginTop: '2px', width: '15px', height: '15px', cursor: 'pointer' }} />
+                                <span style={{ fontSize: '0.88rem', color: theme.ink }}>Customer can pick this in the portal
+                                    <span style={{ display: 'block', fontSize: '0.82rem', color: theme.inkSoft, marginTop: '2px' }}>Leave off for internal-only fees — staff still add them on the customer's behalf.</span>
+                                </span>
+                            </label>
+                            <div style={{ borderTop: `1px solid ${theme.line}`, paddingTop: '18px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.brassDark, marginBottom: '10px' }}>{customer?.name || 'This customer'} — their side of it</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                                    <div><label style={lbl}>Their part #</label><input value={newFee.theirSku} onChange={e => setNewFee({ ...newFee, theirSku: e.target.value })} placeholder="H1-MRPF" style={{ ...fld, width: '100%', fontFamily: theme.mono }} /></div>
+                                    <div><label style={lbl}>Their net $</label><input value={newFee.theirNet} onChange={e => setNewFee({ ...newFee, theirNet: e.target.value })} placeholder="40.00" style={{ ...fld, width: '100%', textAlign: 'right', fontFamily: theme.mono }} /></div>
+                                    <div><label style={lbl}>Their sales $</label><input value={newFee.theirSales} onChange={e => setNewFee({ ...newFee, theirSales: e.target.value })} placeholder="80.00" style={{ ...fld, width: '100%', textAlign: 'right', fontFamily: theme.mono }} /></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{ padding: '16px 26px', borderTop: `1px solid ${theme.line}`, display: 'flex', gap: '12px', justifyContent: 'flex-end', background: theme.paper }}>
+                            <button onClick={() => setNewFee(null)} style={btn(false)}>Cancel</button>
+                            <button onClick={createFee} style={btn(true, { background: theme.green, borderColor: theme.green })}>Create fee →</button>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {/* IMPORT DIFF */}
