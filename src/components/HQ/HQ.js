@@ -12,6 +12,7 @@ const NodeClusterTab = lazy(() => import('./NodeClusterTab'));
 const BOMTab = lazy(() => import('./BOMTab')); 
 const LibraryTab = lazy(() => import('./LibraryTab')); 
 const LibraryMassUpdateTab = lazy(() => import('./LibraryMassUpdateTab')); 
+const CustomerCollectionsTab = lazy(() => import('./CustomerCollectionsTab'));
 const InstructionsTab = lazy(() => import('./InstructionsTab'));
 const ToolsSpecsTab = lazy(() => import('./ToolsSpecsTab'));
 const PackagingTab = lazy(() => import('./PackagingTab'));
@@ -48,7 +49,7 @@ const TAB_LABELS = {
 };
 
 const TABS = [
-  '1. Inception & Validation', '1.5 Node Grouping', '1.6 Assembly Builder', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update',
+  '1. Inception & Validation', '1.5 Node Grouping', '1.6 Assembly Builder', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update', '4.6 Customer Collections',
   '5. Marketing', '6. Instructions', '6.5 Tools, Specs & FAQs', '7. Quick Ship', '8. CPQ Configurator',
   '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '11.2 ERP Mapping Audit', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
   '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', '15. Packaging', 'ERP_WRITE_BACK'
@@ -417,6 +418,7 @@ function HQ() {
             )}
             
             {activeTab === '4.5 Mass Update' && <LibraryMassUpdateTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '4.6 Customer Collections' && <CustomerCollectionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '6. Instructions' && <InstructionsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '6.5 Tools, Specs & FAQs' && <ToolsSpecsTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '7. Quick Ship' && <QuickShipTab currentUser={user.name} activeBrand={activeBrand.id} />}
