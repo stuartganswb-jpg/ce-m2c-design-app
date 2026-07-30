@@ -1,9 +1,11 @@
 // Single source of truth for splitting a CPQ order line into the two
 // production divisions: 'small' (-> Finishing Floor) vs 'custom' (-> Shop Floor).
 //
-// See WORK_ORDER_CONTRACT.md §7. The authoritative signal is the per-step
-// `partHandling` flag set in the CPQ flow builder (AdminTab "Part Handling &
-// Routing", values from master_lists.partHandling, default 'Small Parts'/'Custom').
+// See WORK_ORDER_CONTRACT.md §7. The authoritative signal is the ITEM's own
+// `manufacturingSpecs.partHandling` in the Master Library — that field exists precisely to say
+// which floor a physical part belongs to, so a bracket tagged 'Small Parts' goes to finishing
+// regardless of which flow pulled it. The per-step flag from the CPQ flow builder (AdminTab
+// "Part Handling & Routing") is the FALLBACK, for lines whose part can't be resolved.
 // CPQTab bakes that flag (and the selected partId) onto each priced line, so by
 // the time the SO-import handler reads job.cpqData lines it can classify without
 // re-joining to the flow doc.
@@ -67,14 +69,21 @@ export function classifyLine(line, part) {
   const nameFeeish = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b|\bSPLICE\b|\bFEE\b/i.test(String((line && line.name) || ''));
   if (lineFee || partFee || (noRealPart && nameFeeish)) return DIVISION_CUSTOM;
 
-  // 1. Explicit per-line flag (propagated from step.partHandling) — authoritative.
-  const explicit = normalizeHandling(line && line.partHandling);
-  if (explicit) return explicit;
-
-  // 2. Fall back to the part-level manufacturing handling, if a part resolved.
+  // 1. THE ITEM'S OWN Part Handling WINS (Stuart 2026-07-28: "the cpq flow should respect the
+  //    routing that is placed on the items it is pulling, it should refer back — in the master
+  //    library all of our brackets, backplates, rings, finials are all tagged small parts, that
+  //    is the whole intention of these fields"). Previously the flow STEP's stamp was
+  //    authoritative, and the flow generator stamps every bracket step 'Custom' — so brackets and
+  //    their backplates went to the shop floor no matter how the library had them tagged, and the
+  //    finishing pick list starved.
   const specs = part && part.manufacturingSpecs;
   const partLevel = normalizeHandling(specs && specs.partHandling);
   if (partLevel) return partLevel;
+
+  // 2. Fall back to the per-line flag (propagated from step.partHandling) — used when the line
+  //    carries no resolvable part, or the item has no handling tag of its own.
+  const explicit = normalizeHandling(line && line.partHandling);
+  if (explicit) return explicit;
 
   // 3. Made-to-measure parts are custom fabrication.
   if (part && part.parametric && part.parametric.isCutToSize === true) {

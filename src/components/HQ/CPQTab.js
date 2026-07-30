@@ -1544,6 +1544,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // Resolve the real part id so the part lookup, line item, and ERP push are correct.
               let resolvedPartId = selectedValue;
               let resolvedErpId = null; // NetSuite item # for this line, baked on so it flows downstream
+              // The resolved ITEM's Part Handling — the routing truth (Shared/lineClassification).
+              // Captured alongside the erp id wherever the part is finalised, because partObj is
+              // block-scoped and the breakdown push happens outside that block.
+              let resolvedHandling = null;
 
               if (selectedValue) {
                   const styleOpt = step.type === 'STYLE_SWAP' ? (step.styleOptions || []).find(o => (o.optId || o.partId) === selectedValue) : null;
@@ -1581,6 +1585,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   }
 
                   resolvedErpId = partObj?.legacyErpId || partObj?.itemId || styleOpt?.legacyErpId || null;
+                  resolvedHandling = partObj?.manufacturingSpecs?.partHandling || null;
                   if (isFeePart(partObj, styleOpt)) lineIsFee = true;
 
                   if (partObj) itemName = `${step.title} (${lineNameFor(partObj, styleOpt)})`;
@@ -1622,6 +1627,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
                           resolvedPartId = linkedPart.itemId || linkedPart.id;
                           resolvedErpId = linkedPart.legacyErpId || linkedPart.itemId || resolvedErpId;
+                          resolvedHandling = linkedPart.manufacturingSpecs?.partHandling || resolvedHandling;
                           itemName = `${step.title} (${lineNameFor(linkedPart, null)})`;
                       }
                   }
@@ -1687,6 +1693,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           if (stepPrice === 0 && pp > 0) stepPrice = pp;
                           resolvedPartId = poleFinished.itemId || poleFinished.id;
                           resolvedErpId = poleFinished.legacyErpId || poleFinished.itemId || null;
+                          resolvedHandling = poleFinished.manufacturingSpecs?.partHandling || resolvedHandling;
                           itemName = `${step.title} (${lineNameFor(poleFinished, null)})`;
                       }
                   }
@@ -1701,7 +1708,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // Emit a BOM line for any selected PHYSICAL part even at $0 — every part step
               // carries a partHandling routing flag (fees don't), so an unpriced bracket/ring
               // still flows to the BOM, finishing, and packaging instead of silently dropping.
-              if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE' || (selectedValue && step.partHandling)) {
+              if (lineTotal > 0 || stepPrice > 0 || step.type === 'STATIC_FEE' || (selectedValue && (step.partHandling || resolvedHandling))) {
                   // Carry the generated cut geometry (from Vision -> dimensionInputs) onto
                   // dimension-driven lines so the shop work order gets a cutLength and the
                   // fin work order gets dimensions. See WORK_ORDER_CONTRACT.md §6/§7.
@@ -1710,7 +1717,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   breakdown.push({
                       name: itemName, qty: qty, price: stepPrice * multiplier, total: lineTotal,
                       isFee: lineIsFee,
-                      partHandling: step.partHandling || '',
+                      // The ITEM's Part Handling is the routing truth (see Shared/lineClassification);
+                      // the step's flag is only the fallback when no part resolved.
+                      partHandling: resolvedHandling || step.partHandling || '',
                       partId: resolvedPartId || step.linkedItemId || null,
                       legacyErpId: resolvedErpId,
                       cutLength: cutLength,
@@ -1762,7 +1771,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   breakdown.push({
                       name: `${step.subLabel || 'Backplate'} (${subPart ? lineNameFor(subPart, subOpt) : subOpt.partName})`,
                       qty: qty, price: subPrice, total: subPrice * qty,
-                      partHandling: step.partHandling || '',
+                      // Backplates are tagged Small Parts in the library — that tag now routes them,
+                      // instead of inheriting the bracket step's 'Custom' stamp.
+                      partHandling: subPart?.manufacturingSpecs?.partHandling || subBase?.manufacturingSpecs?.partHandling || step.partHandling || '',
                       partId: subPart?.itemId || subPart?.id || subOpt.partId,
                       legacyErpId: subPart?.legacyErpId || subPart?.itemId || null
                   });
