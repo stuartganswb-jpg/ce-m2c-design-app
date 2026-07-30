@@ -273,6 +273,19 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             .slice(0, 12);
     }, [inventory, addSearch, coll]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // SEARCHING FOR SOMETHING THAT ISN'T IN THE COLLECTION YET (Stuart 2026-07-30: typed
+    // CE-FEE-4594 and got "No parts match"). FEES are the case that bites — a French/Miter return
+    // fee is commercially part of Fabricut H1, but fees are almost never tagged into a collection,
+    // so the grid can't see them and neither can 4.5's collection filter. Rather than a dead end,
+    // the search falls back to the whole library and offers to add what it found.
+    const searchMisses = useMemo(() => {
+        const term = upper(search);
+        if (!coll || term.length < 2 || rows.length) return [];
+        return inventory.filter(p => !collectionsOf(p.manufacturingSpecs).includes(upper(coll)))
+            .filter(p => codeOf(p).includes(term) || upper(p.itemName).includes(term))
+            .slice(0, 12);
+    }, [inventory, search, coll, rows.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const addToCollection = async (p) => {
         const cur = Array.isArray(p.manufacturingSpecs?.collections) ? p.manufacturingSpecs.collections.map(c => upper(c)) : collectionsOf(p.manufacturingSpecs);
         if (cur.includes(upper(coll))) return;
@@ -470,8 +483,25 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     </tr>
                                 ))}
                                 {rows.length === 0 && (
-                                    <tr><td colSpan="8" style={{ padding: '36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
+                                    <tr><td colSpan="8" style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
                                         {members.length === 0 ? `No parts carry the ${coll} collection yet — add them with the search on the right.` : 'No parts match this filter.'}
+                                        {searchMisses.length > 0 && (
+                                            <div style={{ marginTop: '18px', fontStyle: 'normal', fontFamily: theme.sans }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.brassDark, marginBottom: '10px' }}>
+                                                    {searchMisses.length} match{searchMisses.length === 1 ? '' : 'es'} in the library that {searchMisses.length === 1 ? 'is' : 'are'} not in {coll} yet
+                                                </div>
+                                                <div style={{ display: 'inline-block', textAlign: 'left', border: `1px solid ${theme.line}`, minWidth: '460px' }}>
+                                                    {searchMisses.map(p => (
+                                                        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', borderBottom: `1px solid ${theme.paper2}`, background: '#fff' }}>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '12px', width: '160px', color: theme.ink }}>{codeOf(p)}</span>
+                                                            <span style={{ flex: 1, fontSize: '0.85rem', color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.itemName}</span>
+                                                            <button onClick={() => addToCollection(p)} style={{ ...btn(false), padding: '5px 12px' }}>Add to {coll}</button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                                <div style={{ fontSize: '0.82rem', color: theme.inkSoft, marginTop: '10px' }}>Fees usually land here — a return fee belongs to the collection commercially but is rarely tagged into it.</div>
+                                            </div>
+                                        )}
                                     </td></tr>
                                 )}
                             </tbody>
