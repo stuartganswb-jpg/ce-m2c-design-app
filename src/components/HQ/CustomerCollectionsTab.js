@@ -22,7 +22,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, writeBatch } from "firebase/firestore";
 import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
-import { fabricutCodeOf } from '../Shared/priceLevels';
+import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -46,11 +46,13 @@ const fmt = (v) => { const n = money(v); return n === '' ? '' : n.toFixed(2); };
 // A registry rather than an if-statement because the shape is customer-specific: Fabricut is the
 // only customer with a legacy struct, and every customer set up through this page from now on uses
 // clientPricing from the start.
-const fabricutSuggestion = (part, findByCode) => {
+const fabricutSuggestion = (part, findByCode, outsourceCodes) => {
     const fab = part?.manufacturingSpecs?.fabricut;
     if (!fab) return null;
     const code = upper(part.legacyErpId || part.itemId);
-    const plated = (code.includes('/') ? code.split('/')[1] : '').startsWith('EP');
+    // PREMIUM = an OUTSOURCED finish, not "a suffix starting with EP" (Stuart 2026-07-29) — /P25 is
+    // plated too, and the EP test read it as an in-house paint and took the painted prices.
+    const plated = isPlatedSuffix(code.includes('/') ? code.split('/')[1] : '', outsourceCodes);
     // Variant docs carry {cost, retail, wholesale} directly; base (mill) docs carry the painted and
     // plated tiers side by side and the doc's own suffix picks which one applies.
     const pick = (direct, painted, platedKey) => (fab[direct] !== undefined ? fab[direct] : (plated ? fab[platedKey] : fab[painted]));
@@ -61,9 +63,11 @@ const fabricutSuggestion = (part, findByCode) => {
     if (cost === undefined && retail === undefined) return null;   // no tier for this variant
     if (cost === null && retail === null) return null;             // group-priced plate ($0 with the arm)
     return {
-        clientSku: fabricutCodeOf(part, findByCode) || '',
+        clientSku: fabricutCodeOf(part, findByCode, outsourceCodes) || '',
         price: cost === null || cost === undefined ? '' : cost,
         clientSalesPrice: ws === null || ws === undefined ? '' : ws,
+        clientRetailPrice: retail === null || retail === undefined ? '' : retail,
+        plated,
     };
 };
 const LEGACY_SOURCES = [
@@ -90,6 +94,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const [addSearch, setAddSearch] = useState('');
     const [imp, setImp] = useState(null);                   // { entries, summary, fileName, applying }
     const [busy, setBusy] = useState('');
+    const [outsourceFinishes, setOutsourceFinishes] = useState([]);  // hq_outsource_finishes — the PREMIUM authority
     const fileRef = useRef(null);
 
     useEffect(() => {
@@ -106,7 +111,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             setCustomers(all.filter(c => c.brandId === activeBrand || (c.sharedBrands || []).includes(activeBrand))
                 .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))));
         });
-        return () => { unsubItems(); unsubCust(); };
+        const unsubFin = onSnapshot(collection(db, 'hq_outsource_finishes'), snap =>
+            setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.code || f.name)));
+        return () => { unsubItems(); unsubCust(); unsubFin(); };
     }, [activeBrand]);
 
     const codeOf = (p) => upper(p.legacyErpId || p.itemId || '');
@@ -137,11 +144,11 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         const findByCode = (c) => byCode.get(upper(c)) || null;
         members.forEach(p => {
             if (rowFor(p)) return;                       // a real customer row always wins
-            const s = legacySrc.read(p, findByCode);
-            if (s && (s.clientSku || s.price !== '' || s.clientSalesPrice !== '')) m.set(p.id, s);
+            const s = legacySrc.read(p, findByCode, outsourceFinishes);
+            if (s && (s.clientSku || s.price !== '' || s.clientSalesPrice !== '' || s.clientRetailPrice !== '')) m.set(p.id, s);
         });
         return m;
-    }, [legacySrc, members, byCode, coll, custKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [legacySrc, members, byCode, coll, custKeys, outsourceFinishes]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const rows = useMemo(() => {
         const term = upper(search);
@@ -156,18 +163,20 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 const pick = (k) => e[k] !== undefined ? e[k] : (row?.[k] ?? (sug ? sug[k] : '') ?? '');
                 return {
                     p, row, sug,
+                    plated: isPlatedSuffix(codeOf(p).includes('/') ? codeOf(p).split('/')[1] : '', outsourceFinishes),
                     code: codeOf(p),
                     name: p.itemName || '',
                     basePrice: e.basePrice !== undefined ? e.basePrice : (p.manufacturingSpecs?.basePrice ?? ''),
                     clientSku: pick('clientSku'),
                     price: pick('price'),
                     clientSalesPrice: pick('clientSalesPrice'),
+                    clientRetailPrice: pick('clientRetailPrice'),
                     dirty: !!edits[p.id],
                 };
             })
             .filter(r => !term || r.code.includes(term) || upper(r.name).includes(term))
             .filter(r => onlyPriced === 'ALL' || (onlyPriced === 'PRICED' ? money(r.price) !== '' : money(r.price) === ''));
-    }, [members, edits, search, onlyPriced, custKeys, suggestions]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [members, edits, search, onlyPriced, custKeys, suggestions, outsourceFinishes]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const pricedCount = members.filter(p => money(rowFor(p)?.price) !== '').length;
     const dirtyCount = Object.keys(edits).length;
@@ -197,11 +206,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     clientSku: e.clientSku !== undefined ? String(e.clientSku).trim() : (cur?.clientSku ?? ''),
                     price: e.price !== undefined ? money(e.price) : (cur?.price ?? ''),
                     clientSalesPrice: e.clientSalesPrice !== undefined ? money(e.clientSalesPrice) : (cur?.clientSalesPrice ?? ''),
+                    clientRetailPrice: e.clientRetailPrice !== undefined ? money(e.clientRetailPrice) : (cur?.clientRetailPrice ?? ''),
                     source: 'COLLECTION_PAGE', updatedAt: Date.now(), updatedBy: String(currentUser || ''),
                 };
                 const others = (p.clientPricing || []).filter(r => !custKeys.has(upper(r?.customerId)));
                 // A row with nothing in it is removed rather than stored as an empty shell.
-                const keep = (next.clientSku || next.price !== '' || next.clientSalesPrice !== '');
+                const keep = (next.clientSku || next.price !== '' || next.clientSalesPrice !== '' || next.clientRetailPrice !== '');
                 const patch = { clientPricing: keep ? [...others, next] : others };
                 if (e.basePrice !== undefined) patch['manufacturingSpecs.basePrice'] = money(e.basePrice);
                 batch.update(doc(db, 'Approved_Designs', id), patch);
@@ -234,7 +244,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 batch.update(doc(db, 'Approved_Designs', id), {
                     clientPricing: [...others, {
                         customerId: custId, customerName: customer?.name || '',
-                        clientSku: s.clientSku || '', price: s.price, clientSalesPrice: s.clientSalesPrice,
+                        clientSku: s.clientSku || '', price: s.price, clientSalesPrice: s.clientSalesPrice, clientRetailPrice: s.clientRetailPrice ?? '',
                         source: 'ADOPTED_' + (legacySrc.label || '').toUpperCase().replace(/[^A-Z]+/g, '_'),
                         updatedAt: Date.now(), updatedBy: String(currentUser || ''),
                     }],
@@ -310,6 +320,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     clientSku: e.changes.clientSku !== undefined ? e.changes.clientSku : (cur?.clientSku ?? ''),
                     price: e.changes.price !== undefined ? e.changes.price : (cur?.price ?? ''),
                     clientSalesPrice: e.changes.clientSalesPrice !== undefined ? e.changes.clientSalesPrice : (cur?.clientSalesPrice ?? ''),
+                    clientRetailPrice: cur?.clientRetailPrice ?? '',
                     source: 'CONTROL_FILE', updatedAt: Date.now(), updatedBy: String(currentUser || ''),
                 };
                 const others = (p.clientPricing || []).filter(r => !custKeys.has(upper(r?.customerId)));
@@ -421,7 +432,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     <th style={{ ...th, textAlign: 'right' }} title="OUR price — shared by every customer. Editing it here changes it everywhere.">Base $</th>
                                     <th style={{ ...th, color: theme.brass }} title="The customer's own item id — what they call this part">Their SKU</th>
                                     <th style={{ ...th, textAlign: 'right', color: theme.brass }} title="What this customer pays us. This is the price CPQ, Quick Ship and the portal use for them.">Their Net $</th>
-                                    <th style={{ ...th, textAlign: 'right', color: theme.brass }} title="What they sell it for — shown to them in the portal">Their Sales $</th>
+                                    <th style={{ ...th, textAlign: 'right', color: theme.brass }} title="What they sell it for — their street/wholesale price">Their Sales $</th>
+                                    <th style={{ ...th, textAlign: 'right', color: theme.brass }} title="Their list price / MSRP — the third Fabricut tier, kept alongside net and sales">Their Retail $</th>
                                     <th style={th}></th>
                                 </tr>
                             </thead>
@@ -430,6 +442,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     <tr key={r.p.id} style={{ background: r.dirty ? 'rgba(176,141,87,.07)' : '#fff' }}>
                                         <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.code}
                                             {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '9px', color: theme.brass, fontWeight: 400 }}>SUGGESTED</span>}
+                                            {r.plated && <span title="Outsourced (plated) finish — priced off the PREMIUM tier. /P25 counts as premium too, not just /EP*." style={{ marginLeft: '8px', fontSize: '9px', color: theme.blue, fontWeight: 400 }}>PREMIUM</span>}
                                         </td>
                                         <td style={{ ...td, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{r.name}</td>
                                         <td style={{ ...td, textAlign: 'right' }}>
@@ -445,12 +458,15 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                             <input value={r.clientSalesPrice} onChange={e => setEdit(r.p.id, 'clientSalesPrice', e.target.value)} placeholder="—" style={cellInput(edits[r.p.id]?.clientSalesPrice !== undefined, !!r.sug)} />
                                         </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
+                                            <input value={r.clientRetailPrice} onChange={e => setEdit(r.p.id, 'clientRetailPrice', e.target.value)} placeholder="—" style={cellInput(edits[r.p.id]?.clientRetailPrice !== undefined, !!r.sug)} />
+                                        </td>
+                                        <td style={{ ...td, textAlign: 'right' }}>
                                             <button onClick={() => removeFromCollection(r.p)} title={`Remove from ${coll} (pricing rows are kept)`} style={{ background: 'none', border: 'none', color: theme.line, cursor: 'pointer', fontSize: '1rem' }}>×</button>
                                         </td>
                                     </tr>
                                 ))}
                                 {rows.length === 0 && (
-                                    <tr><td colSpan="7" style={{ padding: '36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
+                                    <tr><td colSpan="8" style={{ padding: '36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
                                         {members.length === 0 ? `No parts carry the ${coll} collection yet — add them with the search on the right.` : 'No parts match this filter.'}
                                     </td></tr>
                                 )}

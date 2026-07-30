@@ -588,7 +588,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       if (cost === undefined && retail === undefined) return null; // no direct/sellable tier
       let sales = fab.wholesale !== undefined ? fab.wholesale : fab.paintedWholesale;
       if (sales === undefined || sales === null) sales = Number.isFinite(parseFloat(retail)) ? parseFloat(retail) / 2 : '';
-      const sku = fabricutCodeOf({ ...part, manufacturingSpecs: { ...(part.manufacturingSpecs || {}), fabricut: fab } }, findByCode) || '';
+      const sku = fabricutCodeOf({ ...part, manufacturingSpecs: { ...(part.manufacturingSpecs || {}), fabricut: fab } }, findByCode, outsourceFinishes) || '';
       return { customerId: custId, clientSku: sku, price: (cost === null || cost === undefined) ? '' : cost, clientSalesPrice: sales === null ? '' : sales, source: 'FABRICUT' };
   };
   // Bulk: every item carrying direct Fabricut pricing gets/refreshes its Fabricut client-pricing
@@ -1293,7 +1293,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                          const c = parseFloat(cpCost), r = parseFloat(cpRetail);
                          groupSuggest = `Upcharge included with bracket arms${Number.isFinite(c) ? ` — +$${c.toFixed(2)} cost` : ''}${Number.isFinite(r) ? ` / +$${r.toFixed(2)} retail` : ''} over the included backplate`;
                      }
-                     const resolvedCode = fabricutCodeOf({ ...activePart, legacyErpId: codeUp, manufacturingSpecs: { ...(activePart.manufacturingSpecs || {}), fabricut: fab } }, findByCode);
+                     const resolvedCode = fabricutCodeOf({ ...activePart, legacyErpId: codeUp, manufacturingSpecs: { ...(activePart.manufacturingSpecs || {}), fabricut: fab } }, findByCode, outsourceFinishes);
                      const cellStyle = { flex: 1 };
                      return (
                          <div style={{ marginTop: '30px', background: 'var(--paper)', padding: '24px', border: '1px solid var(--brass)' }}>

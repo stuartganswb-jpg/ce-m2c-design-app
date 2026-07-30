@@ -990,7 +990,11 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 libIndex.push({ docId: d.id, code, hasProjection: !!cust.projection, hasBpo: !!cust.bpOrientation });
             });
 
-            const plan = buildFabricutPlan(rows, libIndex, Date.now());
+            // The PREMIUM tier follows the configured outsourced finishes, not an "EP" prefix —
+            // /P25 is plated and used to be stamped with painted prices (Stuart 2026-07-29).
+            const finSnap = await getDocs(collection(db, 'hq_outsource_finishes'));
+            const outsourceCodes = finSnap.docs.map(d => d.data()).filter(f => f.code || f.name);
+            const plan = buildFabricutPlan(rows, libIndex, Date.now(), outsourceCodes);
             addLog(`Plan: ${plan.stamps.length} library docs to stamp (${plan.stats.basesStamped} base designs + ${plan.stats.variantsStamped} finish variants); ${plan.gaps.length} xlsx items not in the library.`, 'info');
 
             let done = 0;

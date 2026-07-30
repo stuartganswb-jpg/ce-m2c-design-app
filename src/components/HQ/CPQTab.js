@@ -827,11 +827,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (fee) return { name: desc || o.partName, desc: '' };
       const ourCode = doc?.legacyErpId && doc.legacyErpId !== 'PENDING' ? doc.legacyErpId : (sized ? (sized.itemId || o.partName) : o.partName);
       if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') {
-          const fc = fabricutCodeOf(doc, findBase);
+          const fc = fabricutCodeOf(doc, findBase, outsourceFinishes);
           return { name: fc || ourCode, desc: desc };
       }
       if (priceLevel === 'FAB_COST') {
-          const fc = fabricutCodeOf(doc, findBase);
+          const fc = fabricutCodeOf(doc, findBase, outsourceFinishes);
           return { name: ourCode, desc: `${desc}${fc ? ' · ' + fc : ''}` };
       }
       return { name: sized ? (sized.legacyErpId || sized.itemId || o.partName) : o.partName, desc };
@@ -1461,11 +1461,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const desc = p?.itemName || p?.name || opt?.partName || '';
           if (isFeePart(p, opt)) return desc;
           if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') {
-              return fabricutCodeOf(p, (c) => byCode.get(c) || null) || desc;
+              return fabricutCodeOf(p, (c) => byCode.get(c) || null, outsourceFinishes) || desc;
           }
           if (priceLevel === 'FAB_COST') {
               const our = p?.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : (p?.itemId || '');
-              const fc = fabricutCodeOf(p, (c) => byCode.get(c) || null);
+              const fc = fabricutCodeOf(p, (c) => byCode.get(c) || null, outsourceFinishes);
               return `${our || desc}${our && desc ? ' — ' + desc : ''}${fc ? ' · ' + fc : ''}`;
           }
           return desc;
@@ -1616,7 +1616,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           // On pole steps the SELECTION is the finish — species rides it (wood pole → oak/walnut item).
                           const linkedBase = speciesSwap(linkedSized, selFinish || finishObjForStep(step.id));
                           const linkedPart = finishVariantOf(linkedBase, fc);
-                          const fabLp = priceLevel !== 'STANDARD' ? fabricutPriceOf(linkedPart, priceLevel, fc) : null;
+                          const fabLp = priceLevel !== 'STANDARD' ? fabricutPriceOf(linkedPart, priceLevel, fc, outsourceFinishes) : null;
                           // Variant unpriced → base item price (M2C prices the base, CE the variant).
                           const lp = fabLp != null ? fabLp : (parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || parseFloat(linkedBase.manufacturingSpecs?.basePrice ?? linkedBase.basePrice) || 0);
                           if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
@@ -1636,7 +1636,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // = explicit $0, included in the arm). Fees and non-Fabricut items fall through
                   // untouched, so the quote is a faithful mix.
                   if (priceLevel !== 'STANDARD') {
-                      const fp = fabricutPriceOf(partObj, priceLevel, finishCodeForStep(step.id));
+                      const fp = fabricutPriceOf(partObj, priceLevel, finishCodeForStep(step.id), outsourceFinishes);
                       if (fp != null) optionNativePrice = fp;
                   }
 
@@ -1683,7 +1683,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           if (!pp && polePart) pp = parseFloat(polePart.manufacturingSpecs?.basePrice ?? polePart.basePrice) || 0;
                           if (!pp && matOpt.price !== undefined && matOpt.price !== '') pp = parseFloat(matOpt.price) || 0;
                           if (matStep.useClientPricing) { const cv = clientPriceOf(poleFinished) ?? clientPriceOf(polePart); if (cv != null) pp = cv; }
-                          if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel, finishCodeForStep(matStep.id)); if (fp != null) pp = fp; }
+                          if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel, finishCodeForStep(matStep.id), outsourceFinishes); if (fp != null) pp = fp; }
                           if (stepPrice === 0 && pp > 0) stepPrice = pp;
                           resolvedPartId = poleFinished.itemId || poleFinished.id;
                           resolvedErpId = poleFinished.legacyErpId || poleFinished.itemId || null;
@@ -1756,7 +1756,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   }
                   // Price level on plate sub-lines: BP → $0 (in the arm), CP → the flat upcharge.
                   if (priceLevel !== 'STANDARD') {
-                      const fp = fabricutPriceOf(subPart, priceLevel);
+                      const fp = fabricutPriceOf(subPart, priceLevel, undefined, outsourceFinishes);
                       if (fp != null) subPrice = fp;
                   }
                   breakdown.push({

@@ -19,11 +19,37 @@ export const PRICE_LEVELS = [
 
 export const priceLevelShort = (id) => PRICE_LEVELS.find(l => l.id === id)?.short || 'STANDARD';
 
+// ---- WHICH FINISHES ARE "PREMIUM" (Stuart 2026-07-29) ---------------------------------------
+// "the premium rule really should apply to OUTSOURCED FINISHES rather than just looking at the EP,
+// so that it covers P25 — the import tool missed this at times as well."
+//
+// Every tier test here used to be `suffix.startsWith('EP')`. /P25 IS an outsourced plated finish —
+// we send the part out for it, exactly like /EP1 — but its suffix starts with P, so the EP test
+// read it as an in-house paint and priced it off the PAINTED tier. Under-priced, and mislabelled
+// on the quote. (The NetSuite item sync already knew better: it flags /P25 Plated + not-in-house.)
+//
+// The authority is the configured hq_outsource_finishes registry; pass its codes when the caller
+// has them subscribed. The defaults are UNIONED in rather than replaced, so a caller without the
+// registry still gets P25 right and a registry that hasn't been extended can't silently regress it.
+export const DEFAULT_PLATED_SUFFIXES = ['P25'];
+
+export const isPlatedSuffix = (suffix, outsourceCodes) => {
+    const s = String(suffix || '').trim().toUpperCase();
+    if (!s) return false;
+    if (/^EP\d*$/.test(s)) return true;                       // EP, EP1…EP6
+    const codes = new Set(DEFAULT_PLATED_SUFFIXES);
+    (Array.isArray(outsourceCodes) ? outsourceCodes : []).forEach(c => {
+        const v = String((c && (c.code || c.name)) || c || '').trim().toUpperCase();
+        if (v) codes.add(v);
+    });
+    return codes.has(s);
+};
+
 // Fabricut pattern id for a resolved item. Variant docs don't carry codes — they live on the BASE
 // doc (fabCodePainted / fabCodePremium / fabCodeBase, stamped by the CrossReference import); the
 // tier follows the variant's own finish suffix (…/EPn → PREMIUM code). findByCode resolves the
 // base doc from an UPPERCASE ERP code.
-export function fabricutCodeOf(part, findByCode) {
+export function fabricutCodeOf(part, findByCode, outsourceCodes) {
     if (!part) return null;
     const code = String(part.legacyErpId || part.itemId || '').trim().toUpperCase();
     if (!code) return null;
@@ -32,7 +58,7 @@ export function fabricutCodeOf(part, findByCode) {
     if ((sfx || !part.manufacturingSpecs?.fabricut) && typeof findByCode === 'function') doc = findByCode(base) || part;
     const fab = doc?.manufacturingSpecs?.fabricut;
     if (!fab) return null;
-    if (sfx.startsWith('EP')) return fab.fabCodePremium || fab.fabCodePainted || fab.fabCodeBase || null;
+    if (isPlatedSuffix(sfx, outsourceCodes)) return fab.fabCodePremium || fab.fabCodePainted || fab.fabCodeBase || null;
     return fab.fabCodePainted || fab.fabCodeBase || fab.fabCodePremium || null;
 }
 
@@ -40,10 +66,10 @@ export function fabricutCodeOf(part, findByCode) {
 // level has nothing to say about it (→ caller keeps standard pricing).
 //   - Finish-variant and single-finish docs carry direct {retail, cost, wholesale}.
 //   - Base (mill) docs carry paintedRetail/… + platedRetail/… — the tier follows the doc's own
-//     finish suffix (…/EPn → plated), defaulting to painted.
+//     finish suffix through isPlatedSuffix (…/EPn AND /P25 → plated), defaulting to painted.
 //   - Explicit null (backplates — "arm price includes the plate") → a $0 line, NOT a fallback.
 //   - Missing wholesale falls back to retail ÷ 2 (the Traversing sheet has no wholesale column).
-export function fabricutPriceOf(part, levelId, finishCode) {
+export function fabricutPriceOf(part, levelId, finishCode, outsourceCodes) {
     const lvl = PRICE_LEVELS.find(l => l.id === levelId);
     const fab = part?.manufacturingSpecs?.fabricut;
     if (!lvl?.field || !fab) return null;
@@ -54,7 +80,7 @@ export function fabricutPriceOf(part, levelId, finishCode) {
     // caller passes it — a fee has no /P //EP variant docs; its painted vs plated price follows
     // the finish picked on that step (french return $35 painted / $43 plated on ONE record).
     const fcU = String(finishCode || '').toUpperCase();
-    const tier = (suffix.startsWith('EP') || (!suffix && fcU.startsWith('EP'))) ? 'plated' : 'painted';
+    const tier = (isPlatedSuffix(suffix, outsourceCodes) || (!suffix && isPlatedSuffix(fcU, outsourceCodes))) ? 'plated' : 'painted';
     const tiered = (f) => fab[f] !== undefined ? fab[f] : fab[`${tier}${f[0].toUpperCase()}${f.slice(1)}`];
 
     let v = tiered(lvl.field);

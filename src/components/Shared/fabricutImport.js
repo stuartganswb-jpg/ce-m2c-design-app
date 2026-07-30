@@ -6,6 +6,7 @@
 // Idempotent by design — re-running after Stuart extends the xlsx (poles/finials/rings) simply
 // stamps the new rows; existing user-edited fields (names, dims) are never touched.
 import ExcelJS from 'exceljs/dist/exceljs.min.js';
+import { isPlatedSuffix } from './priceLevels';
 
 // Header contract (lowercased, trimmed). Sheets qualify when ceItem + retail + sale all resolve —
 // this skips the "Fabricut to CE Components" and "Notes" sheets automatically, and survives the
@@ -116,11 +117,11 @@ export async function parseFabricutWorkbook(file) {
 //
 // Tier rules (mirrors the xlsx + the live NetSuite variant set /P /P25 /EP1..6):
 //   xlsx "/P" row  → painted tier → stamps every library variant whose suffix starts with "P"
-//   xlsx "/EP" row → plated tier  → stamps every variant whose suffix starts with "EP"
+//   xlsx "/EP" row → plated tier  → stamps every variant isPlatedSuffix calls plated (EP* AND /P25)
 //   any other exact suffix in the xlsx (brass /B /BL /PL) stamps that exact variant only
 //   BP/RBP carry no prices (arm price includes the plate) — their variants get retail/cost null,
 //   CP/RCP rows carry the flat upcharge (40/10) and stamp normally. No special-casing needed.
-export function buildFabricutPlan(rows, libIndex, nowTs) {
+export function buildFabricutPlan(rows, libIndex, nowTs, outsourceCodes) {
     const ts = nowTs || Date.now();
     // group xlsx rows by base code
     const groups = new Map();
@@ -240,15 +241,20 @@ export function buildFabricutPlan(rows, libIndex, nowTs) {
                 if (Object.keys(customData).length) patch.manufacturingSpecs.customData = customData;
                 basesStamped++;
             } else {
-                // VARIANT doc: resolve its tier prices — exact xlsx suffix wins, then P*/EP* prefix.
+                // VARIANT doc: resolve its tier prices — exact xlsx suffix wins, then PLATED, then
+                // painted. The plated test runs FIRST and goes through isPlatedSuffix, not a "starts
+                // with EP" check (Stuart 2026-07-29): /P25 is an outsourced plated finish whose
+                // suffix begins with P, so the old order dropped it into the PAINTED tier and
+                // stamped it with painted prices — the "import tool missed this at times".
+                const platedHere = isPlatedSuffix(suffix, outsourceCodes);
                 let src = g.exact[suffix] || null;
-                if (!src && suffix.startsWith('EP')) src = g.tiers.EP || null;
-                if (!src && suffix.startsWith('P')) src = g.tiers.P || null;
+                if (!src && platedHere) src = g.tiers.EP || null;
+                if (!src && !platedHere && suffix.startsWith('P')) src = g.tiers.P || null;
                 if (!src && g.tiers.BASE) src = g.tiers.BASE; // single-finish pricing covers oddball variants (e.g. wood -O/-W species)
                 if (!src) return; // no price data for this variant's tier — leave untouched
                 patch.manufacturingSpecs.fabricut = {
                     retail: src.retail, cost: src.cost, wholesale: src.wholesale ?? null,
-                    tier: g.exact[suffix] ? suffix : (suffix.startsWith('EP') ? 'EP' : suffix.startsWith('P') ? 'P' : 'BASE'),
+                    tier: g.exact[suffix] ? suffix : (platedHere ? 'EP' : suffix.startsWith('P') ? 'P' : 'BASE'),
                     importedAt: ts, source: 'CrossReference',
                 };
                 variantsStamped++;
