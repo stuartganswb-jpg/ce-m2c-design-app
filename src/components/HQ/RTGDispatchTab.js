@@ -79,6 +79,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         return () => unsub();
     }, []);
     const [salesOrders, setSalesOrders] = useState([]);
+    const [showArchive, setShowArchive] = useState(false);   // dispatched rows older than a week
     const [workOrders, setWorkOrders] = useState([]);
     const [purchaseOrders, setPurchaseOrders] = useState([]);
     const [inventoryTasks, setInventoryTasks] = useState([]);
@@ -145,9 +146,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const loadRTGOrders = async () => {
         setLoading(true);
         try {
-            // Only pull orders that are strictly "Approved" (Not yet Dispatched)
-            const soQuery = query(collection(db, "hq_sales_orders"), where("status", "==", "Approved"), where("brand", "==", activeBrand));
-            const woQuery = query(collection(db, "hq_work_orders"), where("status", "==", "Approved"), where("brand", "==", activeBrand));
+            // Approved AND Dispatched (Stuart 2026-07-28: "once sent they are gone, would much
+            // prefer they stay on and show status, sent to floor, etc"). A dispatched order stays
+            // on the board as a condensed row showing which floors it reached; rows older than a
+            // week fall into the archive toggle below, so the board stays this week's work.
+            const soQuery = query(collection(db, "hq_sales_orders"), where("status", "in", ["Approved", "Dispatched"]), where("brand", "==", activeBrand));
+            const woQuery = query(collection(db, "hq_work_orders"), where("status", "in", ["Approved", "Dispatched"]), where("brand", "==", activeBrand));
             const poQuery = query(collection(db, "hq_purchase_orders"), where("status", "==", "Approved"), where("brand", "==", activeBrand));
             const invQuery = query(collection(db, "hq_inventory_tasks"), where("status", "==", "Active"), where("brand", "==", activeBrand));
 
@@ -485,9 +489,47 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     });
 
     // §6: import a confirmed Sales Order and fan it out into the two linked work orders.
+    // Board split: what still needs dispatching vs what has already gone to the floors. A
+    // dispatched row stays visible for a week (the "condensed and archived at end of each week"
+    // he asked for), then only shows behind the archive toggle. Legacy rows with no dispatchedAt
+    // are treated as old, so they archive straight away rather than crowding today's board.
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const isRecent = (o) => !!o.dispatchedAt && (Date.now() - o.dispatchedAt) < WEEK_MS;
+    const splitBoard = (list) => {
+        const live = list.filter(o => !o.rtgArchived);
+        const pending = live.filter(o => o.status === 'Approved');
+        const done = live.filter(o => o.status === 'Dispatched').sort((a, b) => (b.dispatchedAt || 0) - (a.dispatchedAt || 0));
+        return { pending, recent: done.filter(isRecent), archived: done.filter(o => !isRecent(o)) };
+    };
+
+    // "maybe get condensed and archived at end of each week" — the weekly sweep. It stamps an
+    // RTG-ONLY flag (rtgArchived), never the status, so nothing outside this board changes
+    // behaviour: the order stays exactly as it is for Pick/Pack, Stock View and NetSuite; it just
+    // stops being carried on the dispatch board.
+    const archiveOlder = async (board, collectionName, label) => {
+        if (!board.archived.length) return;
+        if (!window.confirm(`Archive ${board.archived.length} dispatched ${label}(s) older than 7 days?\n\nThey come off this board only — the work orders on the floors, Pick/Pack and NetSuite are untouched.`)) return;
+        try {
+            for (const o of board.archived) {
+                await updateDoc(doc(db, collectionName, o.id), { rtgArchived: true, archivedAt: Date.now(), archivedBy: currentUser || '' });
+            }
+            addLog(`Archived ${board.archived.length} dispatched ${label}(s) from the RTG board.`, 'success');
+            loadRTGOrders();
+        } catch (e) {
+            addLog(`Archive failed: ${e.message}`, 'error');
+        }
+    };
+    const soBoard = splitBoard(salesOrders);
+    const woBoard = splitBoard(workOrders);
+    const dispatchedChip = (o) => [o.pushedToFinishing ? 'FINISHING ✓' : null, o.pushedToShop ? 'SHOP ✓' : null].filter(Boolean).join('  ·  ') || 'SENT';
+    const whenStr = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
+
     const autoSplitSalesOrder = async (so, opts = {}) => {
         if (!so.hqJobId) return alert("This SO has no linked CPQ job (custbody50). Cannot auto-split.");
-        if (!opts.skipConfirm && !window.confirm(`Import SO ${so.soId || so.id} and auto-split into Finishing + Shop work orders?`)) return;
+        const isRedispatch = so.status === 'Dispatched';
+        if (!opts.skipConfirm && !window.confirm(isRedispatch
+            ? `RE-DISPATCH SO ${so.soId || so.id}?\n\nThe split re-runs with the current routing rules and OVERWRITES the existing floor work orders (same ids) — any progress already logged against them is reset.`
+            : `Import SO ${so.soId || so.id} and auto-split into Finishing + Shop work orders?`)) return;
 
         try {
             const jobSnap = await getDoc(doc(db, "jobs", so.hqJobId));
@@ -720,7 +762,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 status: "Dispatched",
                 pushedToFinishing: hasSmall,
                 pushedToShop: hasCustom,
-                autoSplit: true
+                autoSplit: true,
+                dispatchedAt: Date.now(),
+                dispatchedBy: currentUser || ''
             });
 
             alert(`✅ SO ${orderKey} split: ${hasSmall ? 'Finishing ✓' : '—'}  ${hasCustom ? 'Shop ✓' : '—'}`);
@@ -899,6 +943,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
             await updateDoc(doc(db, collectionName, hqOrder.id), { 
                 pushedToFinishing: true,
+                dispatchedAt: Date.now(),
+                dispatchedBy: currentUser || '',
                 status: "Dispatched" 
             });
 
@@ -1013,6 +1059,61 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
 
     const cardStyle = { border: '1px solid var(--line)', padding: '20px', marginBottom: '16px', borderRadius: '2px', background: '#fff', transition: 'box-shadow 0.2s' };
     const btnStyle = { padding: '10px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', background: 'var(--paper-2)', border: '1px solid var(--line)', cursor: 'pointer', transition: 'all 0.2s ease', whiteSpace: 'nowrap' };
+
+    // ── DISPATCHED STRIP ────────────────────────────────────────────────────────────────────
+    // A dispatched order is DONE from this board's point of view but must still be VISIBLE with
+    // its status (Stuart 2026-07-28). It renders as one condensed row — no action buttons except
+    // View / Config — so the pending work above it stays the thing you act on. Rows dispatched in
+    // the last 7 days show by default; older ones sit behind the archive toggle at the foot of
+    // the column, which is the weekly condense he asked for.
+    const dispatchedRow = (o, kind) => (
+        <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '6px', background: '#fff', border: '1px solid var(--line)', borderLeft: '4px solid #5a8f5a', borderRadius: '2px' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '0.9rem', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={o.id}>
+                    {kind === 'sales' ? `SO: ${o.soId || o.id}${o.customer ? ` · ${o.customer}` : ''}` : `WO: ${o.nsWoTran || o.woId || o.id}`}
+                </div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#5a8f5a', marginTop: '3px' }}>
+                    Sent to floor · {dispatchedChip(o)} · {whenStr(o.dispatchedAt)}
+                </div>
+            </div>
+            <button style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => handleViewOrder(o, kind)}>View</button>
+            {o.hqJobId && <button style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => setCfgQuote(o.hqJobId)}>🔍</button>}
+            {kind === 'sales' && (
+                <button title="Re-run the split with the current routing rules — the floor docs use fixed ids (WO-… / SHOP-…), so this overwrites rather than duplicating."
+                    style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => autoSplitSalesOrder(o)}>↻ Re-dispatch</button>
+            )}
+        </div>
+    );
+
+    const dispatchedSection = (board, kind) => {
+        if (!board.recent.length && !board.archived.length) return null;
+        return (
+            <div style={{ marginTop: board.pending.length ? '18px' : '12px', paddingTop: '14px', borderTop: '1px dashed var(--line)' }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)', marginBottom: '10px' }}>
+                    Dispatched this week ({board.recent.length})
+                </div>
+                {board.recent.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.8rem', margin: '0 0 8px' }}>Nothing dispatched in the last 7 days.</p>}
+                {board.recent.map(o => dispatchedRow(o, kind))}
+                {board.archived.length > 0 && (
+                    <>
+                        <button onClick={() => setShowArchive(v => !v)} style={{ ...btnStyle, width: '100%', marginTop: '4px', fontSize: '9px', borderStyle: 'dashed' }}>
+                            {showArchive ? '▾ Hide older' : `▸ Older than 7 days · ${board.archived.length}`}
+                        </button>
+                        {showArchive && (
+                            <div style={{ marginTop: '8px' }}>
+                                <div style={{ opacity: 0.75 }}>{board.archived.map(o => dispatchedRow(o, kind))}</div>
+                                <button onClick={() => archiveOlder(board, kind === 'sales' ? 'hq_sales_orders' : 'hq_work_orders', kind === 'sales' ? 'sales order' : 'work order')}
+                                    title="Take these off the dispatch board. Nothing else changes — the floors, Pick/Pack and NetSuite keep them exactly as they are."
+                                    style={{ ...btnStyle, width: '100%', marginTop: '6px', fontSize: '9px' }}>
+                                    📦 Archive these {board.archived.length} off the board
+                                </button>
+                            </div>
+                        )}
+                    </>
+                )}
+            </div>
+        );
+    };
 
     // Clickable job-log row → best available detail view: the SO/WO modal if we still hold the
     // record, else the read-only configured-item 3D viewer via the linked quote.
@@ -1171,9 +1272,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Custom</span>
                         </div>
                         <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
-                            {salesOrders.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved sales orders pending dispatch.</p>}
+                            {soBoard.pending.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved sales orders pending dispatch.</p>}
                             
-                            {salesOrders.map(so => (
+                            {soBoard.pending.map(so => (
                                 <div key={so.id} style={{ ...cardStyle, borderLeft: '4px solid var(--ink)' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                                         <div>
@@ -1199,6 +1300,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 </div>
                             ))}
+
+                            {dispatchedSection(soBoard, 'sales')}
                         </div>
                     </div>
 
@@ -1209,9 +1312,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Stock Builds</span>
                         </div>
                         <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
-                            {workOrders.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved work orders pending dispatch.</p>}
+                            {woBoard.pending.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved work orders pending dispatch.</p>}
                             
-                            {workOrders.map(wo => (
+                            {woBoard.pending.map(wo => (
                                 <div key={wo.id} style={{ ...cardStyle, borderLeft: '4px solid var(--brass)' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                                         <div>
@@ -1235,6 +1338,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 </div>
                             ))}
+
+                            {dispatchedSection(woBoard, 'stock')}
                         </div>
                     </div>
 
