@@ -460,6 +460,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         watchList: currentWatchList,
         isProjectManaged: baseSpecs.isProjectManaged || false,
         partHandling: baseSpecs.partHandling || "",
+        customOverrideFee: !!baseSpecs.customOverrideFee,
         weight: baseSpecs.weight || "",
         wallMount: baseSpecs.wallMount || { partId: "", desc: "" }
     });
@@ -485,6 +486,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         pdfUrl: prev.pdfUrl, 
         cadUrl: prev.cadUrl,
         partHandling: prev.partHandling,
+        customOverrideFee: prev.customOverrideFee,
         project: prev.project,
         routingType: prev.routingType,
         productType: prev.productType,
@@ -686,7 +688,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     const newId = `${activeBrand.toUpperCase()}-${actualClass === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
-    setEditSpecs({ productType: "", uom: "EA", collections: [], project: "", routingType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], bomRevision: "", binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", weight: "", reorderPoint: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "" }); 
+    setEditSpecs({ productType: "", uom: "EA", collections: [], project: "", routingType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], bomRevision: "", binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", weight: "", reorderPoint: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "", customOverrideFee: false }); 
     setPdfFile(null); setCadFile(null); setCloneSourceId(""); setWoTargetQty(1);
   };
 
@@ -1475,6 +1477,23 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                        </div>
                    )}
                    
+                   {/* CUSTOM OVERRIDE FEE (Stuart 2026-07-28): ticking this puts the fee in CPQ's
+                       per-step "custom work" dropdown. The fee's OWN Part Handling above decides
+                       which floor the overridden step goes to — Custom = shop, Small Parts =
+                       finishing — so a new fee type works the moment it's ticked, no code change. */}
+                   <div>
+                       <label style={labelStyle}>Custom Override Fee</label>
+                       <label style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 12px', border: `1px solid ${editSpecs.customOverrideFee ? 'var(--brass)' : 'var(--line)'}`, cursor: 'pointer', background: '#fff' }}>
+                           <input type="checkbox" name="customOverrideFee" checked={!!editSpecs.customOverrideFee} onChange={e => setEditSpecs(prev => ({ ...prev, customOverrideFee: e.target.checked }))} />
+                           <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: editSpecs.customOverrideFee ? 'var(--ink)' : 'var(--ink-soft)' }}>
+                               OFFER IN CPQ'S CUSTOM-WORK DROPDOWN
+                           </span>
+                       </label>
+                       <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                           For fee items only (e.g. Custom Labor, Custom Finish). Its Part Handling above sets the destination floor; its base price is the fee's floor rate.
+                       </div>
+                   </div>
+
                    {windowConfig.system.uom?.includes(activeBrand) && (
                        <div>
                            <label style={labelStyle}>UOM</label>

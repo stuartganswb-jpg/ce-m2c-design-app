@@ -549,6 +549,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
   const [stepQuantities, setStepQuantities] = useState({}); 
   const [dimensionInputs, setDimensionInputs] = useState({});
+  // CUSTOM WORK OVERRIDES (Stuart 2026-07-28) — per STEP, set by the operator at quote time:
+  //   { [stepId]: { feeItemId, feeErpId, feeName, handling, notes, amount, floor } }
+  // Ticking it overrules the library routing for that step's parts and adds a priced fee line.
+  // The chosen FEE ITEM declares the destination floor via its own Part Handling, so new fee
+  // types work the moment they're ticked in the Master Library. APP ONLY — the customer portal
+  // has its own configurator and never renders or receives this.
+  const [customOverrides, setCustomOverrides] = useState({});
 
   const [engineFlags, setEngineFlags] = useState({ disabledSteps: [], warnings: [] });
   
@@ -1500,6 +1507,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
       (activeFlow.steps || []).forEach(step => {
           const selectedValue = dynamicConfigParams[step.id];
+          // CUSTOM WORK on this step: overrules the library routing for everything it emits, and
+          // adds its own priced fee line. The fee item's Part Handling is the destination floor.
+          const ovr = customOverrides[step.id];
+          const ovrActive = !!(ovr && ovr.feeItemId && ovr.handling);
+          const ovrHandling = ovrActive ? ovr.handling : null;
 
           // SIZE steps are selectors, not products: emit an informational $0 quote line naming the
           // chosen size (so the quote reads "Rod Diameter: 1" Round Rod"), never a part or price.
@@ -1719,7 +1731,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       isFee: lineIsFee,
                       // The ITEM's Part Handling is the routing truth (see Shared/lineClassification);
                       // the step's flag is only the fallback when no part resolved.
-                      partHandling: resolvedHandling || step.partHandling || '',
+                      partHandling: ovrHandling || resolvedHandling || step.partHandling || '',
+                      ...(ovrActive ? { customOverrideHandling: ovrHandling, customNote: ovr.notes || '', customFee: ovr.feeName || '' } : {}),
                       partId: resolvedPartId || step.linkedItemId || null,
                       legacyErpId: resolvedErpId,
                       cutLength: cutLength,
@@ -1773,7 +1786,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       qty: qty, price: subPrice, total: subPrice * qty,
                       // Backplates are tagged Small Parts in the library — that tag now routes them,
                       // instead of inheriting the bracket step's 'Custom' stamp.
-                      partHandling: subPart?.manufacturingSpecs?.partHandling || subBase?.manufacturingSpecs?.partHandling || step.partHandling || '',
+                      partHandling: ovrHandling || subPart?.manufacturingSpecs?.partHandling || subBase?.manufacturingSpecs?.partHandling || step.partHandling || '',
+                      ...(ovrActive ? { customOverrideHandling: ovrHandling, customNote: ovr.notes || '', customFee: ovr.feeName || '' } : {}),
                       partId: subPart?.itemId || subPart?.id || subOpt.partId,
                       legacyErpId: subPart?.legacyErpId || subPart?.itemId || null
                   });
@@ -1795,11 +1809,57 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   }
               }
           }
+
+          // The custom fee line: priced at the operator's amount (never below the item's floor
+          // rate), routed by the fee's own handling, carrying the note the floor needs to read.
+          if (ovrActive) {
+              const amt = Math.max(parseFloat(ovr.amount) || 0, parseFloat(ovr.floor) || 0);
+              if (amt > 0) {
+                  breakdown.push({
+                      name: `${ovr.feeName}${ovr.notes ? ` — ${String(ovr.notes).trim()}` : ''}`,
+                      qty: 1, price: amt, total: amt,
+                      isFee: true,
+                      partHandling: ovrHandling,
+                      customOverrideHandling: ovrHandling,
+                      customNote: ovr.notes || '',
+                      customFee: ovr.feeName || '',
+                      partId: ovr.feeItemId || null,
+                      legacyErpId: ovr.feeErpId || null,
+                      forStep: step.title || ''
+                  });
+                  total += amt;
+              }
+          }
       });
 
       setPricing({ base: total, finalPrice: total });
       setPricingBreakdown(breakdown);
-  }, [dynamicConfigParams, stepQuantities, dimensionInputs, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes, priceLevel]);
+  }, [dynamicConfigParams, stepQuantities, dimensionInputs, customOverrides, activeFlow, activeAssembly, dynamicAssets, outsourceFinishes, jobData.customerId, libraryParts, liveAssemblies, activeBomPins, globalFinishes, priceLevel]);
+
+  // Fee items the Master Library has ticked as custom-override fees (e.g. CUSTOM LABOR, CUSTOM
+  // FINISH). Each carries its own Part Handling (the destination floor) and base price (the floor rate).
+  const customFeeItems = useMemo(() => (libraryParts || []).filter(p => p?.manufacturingSpecs?.customOverrideFee === true), [libraryParts]);
+
+  const setOverride = (stepId, patch) => setCustomOverrides(prev => {
+      const next = { ...prev };
+      if (patch === null) { delete next[stepId]; return next; }
+      next[stepId] = { ...(prev[stepId] || {}), ...patch };
+      return next;
+  });
+  // Picking the fee pulls its routing + floor rate straight off the library item.
+  const chooseCustomFee = (stepId, feeItemId) => {
+      const fee = customFeeItems.find(f => (f.itemId || f.id) === feeItemId || f.id === feeItemId);
+      if (!fee) return setOverride(stepId, { feeItemId: '', feeErpId: '', feeName: '', handling: '', floor: 0, amount: '' });
+      const floor = parseFloat(fee.manufacturingSpecs?.basePrice ?? fee.basePrice) || 0;
+      setOverride(stepId, {
+          feeItemId: fee.itemId || fee.id,
+          feeErpId: fee.legacyErpId || fee.itemId || '',
+          feeName: fee.itemName || fee.legacyErpId || 'Custom work',
+          handling: fee.manufacturingSpecs?.partHandling || '',
+          floor,
+          amount: String(floor || ''),
+      });
+  };
 
   const handleParamChange = (stepId, value) => setDynamicConfigParams(prev => ({ ...prev, [stepId]: value }));
 
@@ -1895,6 +1955,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           dynamicConfigParams: { ...dynamicConfigParams },
           stepQuantities: { ...stepQuantities },
           dimensionInputs: { ...dimensionInputs },
+          customOverrides: { ...customOverrides },
           engineeringNotes: activeDraft ? activeDraft.specs?.engineeringNotes : null,
           // Only the flat Vision part-pick ids the viewer needs — the full spatialData blob carries
           // canvas structures (nested arrays) that Firestore rejects as "invalid nested entity".
@@ -2781,7 +2842,67 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       </div>
                       
                       <div style={{ padding: '24px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
-                          
+
+                          {/* ⚙ CUSTOM WORK ON THIS STEP (Stuart 2026-07-28) — APP ONLY, never in the
+                              customer portal. Ticking it overrules the library routing for this
+                              step's parts and adds a priced fee line. The fee items offered are the
+                              ones ticked "Custom Override Fee" in the Master Library, and each one's
+                              own Part Handling decides the destination floor, so new fee types need
+                              no code change. Size/projection selectors carry no parts, so no override. */}
+                          {currentStep.type !== SIZE_STEP_TYPE && currentStep.type !== 'PROJ_SELECT' && (() => {
+                              const ov = customOverrides[currentStep.id];
+                              const on = !!ov;
+                              const feeChosen = !!(ov && ov.feeItemId);
+                              const floor = parseFloat(ov?.floor) || 0;
+                              const amt = parseFloat(ov?.amount);
+                              const belowFloor = feeChosen && Number.isFinite(amt) && amt < floor;
+                              const dest = ov?.handling ? (/custom/i.test(ov.handling) ? 'SHOP FLOOR' : 'FINISHING FLOOR') : '';
+                              return (
+                                  <div style={{ border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}`, background: on ? '#fdfaf4' : 'transparent', padding: '12px 14px', marginBottom: '18px' }}>
+                                      <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                          <input type="checkbox" checked={on} onChange={e => setOverride(currentStep.id, e.target.checked ? {} : null)} />
+                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.08em', textTransform: 'uppercase', color: on ? 'var(--ink)' : 'var(--ink-soft)' }}>
+                                              ⚙ Custom work on this step
+                                          </span>
+                                          {!on && customFeeItems.length === 0 && (
+                                              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>— no custom fee items ticked in the Master Library yet</span>
+                                          )}
+                                      </label>
+
+                                      {on && (
+                                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+                                              <div>
+                                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>Fee type</label>
+                                                  <select value={ov?.feeItemId || ''} onChange={e => chooseCustomFee(currentStep.id, e.target.value)} style={{ width: '100%', padding: '10px', border: `1px solid ${feeChosen ? 'var(--line)' : '#d9534f'}`, marginTop: '4px', fontFamily: 'var(--sans)' }}>
+                                                      <option value="">Select the custom fee…</option>
+                                                      {customFeeItems.map(f => (
+                                                          <option key={f.id} value={f.itemId || f.id}>{f.itemName || f.legacyErpId}</option>
+                                                      ))}
+                                                  </select>
+                                                  {feeChosen && (
+                                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: dest ? 'var(--brass)' : '#d9534f', marginTop: '4px' }}>
+                                                          {dest ? `→ this step's parts route to the ${dest}` : '⚠ this fee item has no Part Handling — set it in the Master Library'}
+                                                      </div>
+                                                  )}
+                                              </div>
+                                              <div>
+                                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>Fee amount{floor > 0 ? ` (floor $${floor.toFixed(2)})` : ''}</label>
+                                                  <input type="number" min={floor || 0} step="0.01" disabled={!feeChosen} value={ov?.amount ?? ''} onChange={e => setOverride(currentStep.id, { amount: e.target.value })}
+                                                      style={{ width: '100%', padding: '10px', border: `1px solid ${belowFloor ? '#d9534f' : 'var(--line)'}`, marginTop: '4px', fontFamily: 'var(--mono)', background: feeChosen ? '#fff' : 'var(--paper)' }} />
+                                                  {belowFloor && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '4px' }}>below the floor — it will bill at ${floor.toFixed(2)}</div>}
+                                              </div>
+                                              <div style={{ gridColumn: '1 / -1' }}>
+                                                  <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>Nature of the custom work — rides the work order to the floor</label>
+                                                  <textarea rows={2} disabled={!feeChosen} value={ov?.notes || ''} onChange={e => setOverride(currentStep.id, { notes: e.target.value })}
+                                                      placeholder={feeChosen ? 'e.g. hand-forge the scroll to match the client\'s existing rod' : 'choose the fee type first'}
+                                                      style={{ width: '100%', padding: '10px', border: '1px solid var(--line)', marginTop: '4px', fontFamily: 'var(--sans)', boxSizing: 'border-box', background: feeChosen ? '#fff' : 'var(--paper)' }} />
+                                              </div>
+                                          </div>
+                                      )}
+                                  </div>
+                              );
+                          })()}
+
                           {/* Size-matrix selector (Rod Diameter / Bracket Projection): big card
                               choices; the selection re-resolves every configured part to that size
                               at pricing/push time — geometry and all other selections stay put. */}

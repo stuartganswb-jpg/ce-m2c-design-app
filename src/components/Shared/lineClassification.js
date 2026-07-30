@@ -55,6 +55,12 @@ function normalizeHandling(value) {
  * @returns {'small'|'custom'}
  */
 export function classifyLine(line, part) {
+  // -1. OPERATOR OVERRIDE (CPQ "custom work on this step"): the chosen fee item's Part Handling
+  //     wins over every other signal, including the fee rule below — a Custom FINISH fee is
+  //     meant to reach the finishing floor, and a Custom LABOR fee the shop.
+  const overridden = normalizeHandling(line && line.customOverrideHandling);
+  if (overridden) return overridden;
+
   // 0. FEES, RETURN fabrication and SPLICE fee lines are never small-part picks (Stuart
   //    2026-07-14): a french/miter/bent return is pole FABRICATION (rides the custom order's
   //    fab notes), splicing happens on the shop floor, and fee entities have no physical item.
