@@ -10,7 +10,7 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
-import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printHtmlDocument } from '../Shared/labelPrint';
+import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
@@ -70,80 +70,9 @@ const BRAND_NETSUITE_MAP = {
 
 const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// Minimal Code 128-B → SVG barcode (no external lib) so PC-printed labels stay scannable like the ZPL ones.
-const CODE128B = ("212222 222122 222221 121223 121322 131222 122213 122312 132212 221213 221312 231212 112232 122132 122231 113222 123122 123221 223211 221132 221231 213212 223112 312131 311222 321122 321221 312212 322112 322211 212123 212321 232121 111323 131123 131321 112313 132113 132311 211313 231113 231311 112133 112331 132131 113123 113321 133121 313121 211331 231131 213113 213311 213131 311123 311321 331121 312113 312311 332111 314111 221411 431111 111224 111422 121124 121421 141122 141221 112214 112412 122114 122411 142112 142211 241211 221114 413111 241112 134111 111242 121142 121241 114212 124112 124211 411212 421112 421211 212141 214121 412121 111143 111341 131141 114113 114311 411113 411311 113141 114131 311141 411131 211412 211214 211232 2331112").split(' ');
-const code128BSvg = (text) => {
-    const s = String(text || '');
-    const vals = [];
-    for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c >= 32 && c <= 126) vals.push(c - 32); }
-    if (!vals.length) return '';
-    const codes = [104, ...vals];           // Start B
-    let sum = 104; vals.forEach((v, i) => { sum += v * (i + 1); });
-    codes.push(sum % 103, 106);             // checksum, Stop
-    const widths = codes.map(c => CODE128B[c]).join('');
-    const H = 10; let x = 0, rects = '';
-    for (let i = 0; i < widths.length; i++) { const w = parseInt(widths[i], 10); if (i % 2 === 0) rects += `<rect x="${x}" y="0" width="${w}" height="${H}"/>`; x += w; }
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${x} ${H}" preserveAspectRatio="none" fill="#000">${rects}</svg>`;
-};
-
-// Render a label and send it to the browser's normal print queue via the shared printer in
-// Shared/labelPrint (in-page print — no hidden iframe, no pop-up tab, so nothing can swallow it).
-// `size: auto` lets the dialog's selected paper win; a label-printer station can pin the exact
-// 4x2 page with localStorage 'labelPaper' = '4x2'.
-const printHtmlLabel = ({ widthIn = 4, heightIn = 2, title = 'Label', html = '' }) => {
-    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>
-@page{size:auto;margin:0;}
-html,body{margin:0;padding:0;}
-.label{width:${widthIn}in;height:${heightIn}in;box-sizing:border-box;padding:0.1in 0.15in;font-family:Arial,Helvetica,sans-serif;color:#000;display:flex;flex-direction:column;overflow:hidden;}
-.hdr{font-size:15pt;font-weight:800;letter-spacing:.4px;line-height:1.05;margin-bottom:1pt;}
-.big{font-size:14pt;font-weight:800;line-height:1.1;}
-.line{font-size:10.5pt;font-weight:600;line-height:1.22;}
-.line b{font-weight:800;}
-.bc{margin-top:auto;}
-.bc svg{width:100%;height:0.42in;display:block;}
-.bctxt{font-size:8pt;text-align:center;letter-spacing:2px;margin-top:1pt;}
-</style></head><body><div class="label">${html}</div></body></html>`;
-    return printHtmlDocument(doc, { autoPrintDelay: 250, timeout: 60000 });
-};
-
-// Auto-print raw ZPL to a Zebra via the Zebra BrowserPrint local agent (USB/network printer, no dialog).
-// Tries the HTTPS agent first (required when the app is served over HTTPS), then HTTP for localhost/dev.
-// Each attempt is short-timed so a missing agent fails fast. Returns true only when a printer accepted it.
-const printZplBrowserPrint = async (zpl) => {
-    if (!zpl) return false;
-    const bases = ['https://localhost:9101', 'https://127.0.0.1:9101', 'http://localhost:9100', 'http://127.0.0.1:9100'];
-    for (const base of bases) {
-        try {
-            const ac = new AbortController();
-            const t = setTimeout(() => ac.abort(), 1500);
-            const dRes = await fetch(base + '/default', { method: 'GET', signal: ac.signal });
-            clearTimeout(t);
-            if (!dRes.ok) continue;
-            const device = await dRes.json();
-            const wRes = await fetch(base + '/write', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ device, data: zpl })
-            });
-            if (wRes.ok) return true;
-        } catch (e) { /* agent not reachable on this base — try the next */ }
-    }
-    return false;
-};
-
-// Route a label: the print dialog by default; ZPL straight to the Zebra only on stations that
-// opt in with localStorage 'labelPrintMode' = 'zebra' (falling back to the dialog if the local
-// BrowserPrint agent doesn't answer).
-const emitLabel = (zpl, htmlSpec) => {
-    let mode = '';
-    try { mode = (localStorage.getItem('labelPrintMode') || '').toLowerCase(); } catch (e) { /* localStorage unavailable */ }
-    if (mode === 'zebra' || mode === 'zpl') {
-        (async () => { const printed = await printZplBrowserPrint(zpl); if (!printed) printHtmlLabel(htmlSpec); })();
-        return 'zebra';
-    }
-    printHtmlLabel(htmlSpec);
-    return 'html';
-};
-
+// esc / code128BSvg / printHtmlLabel / printZplBrowserPrint / emitLabel used to live here. They are
+// now the shared route in Shared/labelPrint so Shop Floor prints through exactly the same code —
+// one implementation, one place to fix. Behaviour on this screen is unchanged.
 
 // Bin / ERP-id helpers (raw items carry binLocation top-level after mapping; library docs nest it under manufacturingSpecs).
 const binOf = (p) => (p?.binLocation || p?.manufacturingSpecs?.binLocation || 'UNASSIGNED');

@@ -5,6 +5,7 @@ import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc,
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { emitLabel, printShopBinLabel, printShopCompletionLabel } from '../Shared/labelPrint';
 import './shopStyles.css';
 
 // IMPORT THE COMPONENTS
@@ -451,18 +452,19 @@ const ShopFloor = () => {
         const bin = hqPart?.manufacturingSpecs?.binLocation || 'N/A';
         const partName = routingsMap[job.routingId]?.displayName || job.routingId;
         
-        const zpl = `
-            ^XA
-            ^FO50,50^A0N,40,40^FDWO: ${job.woNum}^FS
-            ^FO50,100^A0N,30,30^FDPart: ${partName}^FS
-            ^FO50,150^A0N,30,30^FDQty: ${job.goodQty}^FS
-            ^FO50,220^A0N,50,50^FDBIN: ${bin}^FS
-            ^FO50,300^BY3,2,70^BCN,70,Y,N,N^FD${job.woNum}^FS
-            ^XZ
-        `;
-        
-        console.log("Sending ZPL to Zebra Printer:", zpl);
-        alert(`🖨️ Zebra Label Spooled for WO ${job.woNum}\nRouting to Bin: ${bin}`);
+        // Prints through the shared label route (Shared/labelPrint): the browser's normal print
+        // queue by default — the same path the WMS setup / pick-pack labels use, which is what got
+        // the floor TABLETS printing. A station with a Zebra + BrowserPrint agent opts back into
+        // raw ZPL with localStorage 'labelPrintMode' = 'zebra'. Until now this function only
+        // console.log'd the ZPL and popped an alert, so no label was ever produced here.
+        const zpl = `^XA
+^FO50,50^A0N,40,40^FDWO: ${job.woNum}^FS
+^FO50,100^A0N,30,30^FDPart: ${partName}^FS
+^FO50,150^A0N,30,30^FDQty: ${job.goodQty}^FS
+^FO50,220^A0N,50,50^FDBIN: ${bin}^FS
+^FO50,300^BY3,2,70^BCN,70,Y,N,N^FD${job.woNum}^FS
+^XZ`;
+        emitLabel(zpl, () => printShopBinLabel({ woNum: job.woNum, part: partName, qty: job.goodQty, bin }));
     };
 
     const handleExportBatch = async () => {
@@ -971,8 +973,12 @@ const ShopFloor = () => {
                 ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
                 ^XZ
             `;
-            console.log("Sending ZPL to Zebra Printer:", zpl);
-            alert(`🖨️ Zebra Label Spooled for ${order.woNum}`);
+            emitLabel(zpl, () => printShopCompletionLabel({
+                woNum: order.woNum, soNum: order.soNum, orderKey: order.orderKey,
+                item: order.item || order.partNum, qty: order.qty, cutLength: order.cutLength,
+                finishRecipe: order.finishRecipe, isOutsourced: order.isOutsourced,
+                outsourcePrice: order.outsourcePrice, clientName: order.clientName
+            }));
         };
 
         const CustomCard = ({ order }) => {

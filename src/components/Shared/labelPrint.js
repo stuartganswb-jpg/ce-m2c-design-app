@@ -224,3 +224,109 @@ const stockItemLabelInner = ({ itemId, itemName, uom, woNum }) => `<div class="l
 </div>`;
 export const printStockItemLabels = ({ itemId, itemName, uom, woNum, copies = 1 }) =>
     printDoc(`Item ${itemId || ''} ×${copies}`, STOCK_CSS, Array.from({ length: Math.max(1, Math.min(50, parseInt(copies) || 1)) }, () => stockItemLabelInner({ itemId, itemName, uom, woNum })));
+
+// ── THE ONE LABEL ROUTE (Stuart 2026-07-30: "update all locations to use this new print method,
+// everywhere we print labels") ──────────────────────────────────────────────────────────────────
+// Every label in the app now leaves through emitLabel. Default = the browser's normal print queue
+// via printHtmlDocument above (the in-page overlay that made the floor tablets work). A station
+// with a Zebra + the BrowserPrint agent installed opts back into raw ZPL with
+// localStorage 'labelPrintMode' = 'zebra', and still falls back to the dialog if the agent is
+// silent — so a missing agent can never leave an operator with no label.
+// These three were PickPack-local until now; Shop Floor had no printer wired at all, it only
+// console.log'd the ZPL and alerted "Label Spooled" (Stuart: "on shop floor custom it is not").
+
+// Generic 4x2 label frame — used by callers that build their own inner markup.
+export const printHtmlLabel = ({ widthIn = 4, heightIn = 2, title = 'Label', html = '' }) => {
+    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+@page{size:auto;margin:0;}
+html,body{margin:0;padding:0;}
+.label{width:${widthIn}in;height:${heightIn}in;box-sizing:border-box;padding:0.1in 0.15in;font-family:Arial,Helvetica,sans-serif;color:#000;display:flex;flex-direction:column;overflow:hidden;}
+.hdr{font-size:15pt;font-weight:800;letter-spacing:.4px;line-height:1.05;margin-bottom:1pt;}
+.big{font-size:14pt;font-weight:800;line-height:1.1;}
+.line{font-size:10.5pt;font-weight:600;line-height:1.22;}
+.line b{font-weight:800;}
+.bc{margin-top:auto;}
+.bc svg{width:100%;height:0.42in;display:block;}
+.bctxt{font-size:8pt;text-align:center;letter-spacing:2px;margin-top:1pt;}
+</style></head><body><div class="label">${html}</div></body></html>`;
+    return printHtmlDocument(doc, { autoPrintDelay: 250, timeout: 60000 });
+};
+
+// Raw ZPL straight to a Zebra through the local BrowserPrint agent (no dialog). Tries HTTPS first
+// (required when the app is served over HTTPS), then HTTP for localhost/dev. Each attempt is
+// short-timed so a station WITHOUT the agent fails fast instead of hanging the operator.
+export const printZplBrowserPrint = async (zpl) => {
+    if (!zpl) return false;
+    const bases = ['https://localhost:9101', 'https://127.0.0.1:9101', 'http://localhost:9100', 'http://127.0.0.1:9100'];
+    for (const base of bases) {
+        try {
+            const ac = new AbortController();
+            const t = setTimeout(() => ac.abort(), 1500);
+            const dRes = await fetch(base + '/default', { method: 'GET', signal: ac.signal });
+            clearTimeout(t);
+            if (!dRes.ok) continue;
+            const device = await dRes.json();
+            const wRes = await fetch(base + '/write', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ device, data: zpl })
+            });
+            if (wRes.ok) return true;
+        } catch (e) { /* agent not reachable on this base — try the next */ }
+    }
+    return false;
+};
+
+// `fallback` is either an htmlSpec for printHtmlLabel, or a function that prints the label itself
+// (so callers using the printDoc-based builders below can share this same routing).
+export const emitLabel = (zpl, fallback) => {
+    let mode = '';
+    try { mode = (localStorage.getItem('labelPrintMode') || '').toLowerCase(); } catch (e) { /* localStorage unavailable */ }
+    const run = () => (typeof fallback === 'function' ? fallback() : printHtmlLabel(fallback));
+    if (mode === 'zebra' || mode === 'zpl') {
+        (async () => { const printed = await printZplBrowserPrint(zpl); if (!printed) run(); })();
+        return 'zebra';
+    }
+    run();
+    return 'html';
+};
+
+// ── SHOP FLOOR LABELS ─────────────────────────────────────────────────────────────────────────
+// Bin routing (put the finished run away) and custom-order completion (rides the parts to
+// finishing / plating). Both barcode the value the next station scans.
+const SHOP_CSS = `${PAGE_CSS}
+.l{padding:0.12in 0.16in;display:flex;flex-direction:column;}
+.k{font-size:8.5pt;font-weight:800;letter-spacing:2px;color:#333;}
+.wo{font-size:20pt;font-weight:900;line-height:1.02;margin-top:1pt;word-break:break-all;}
+.rows{margin-top:2pt;}
+.r{font-size:10pt;font-weight:600;line-height:1.24;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.r b{font-weight:800;}
+.bin{font-size:17pt;font-weight:900;letter-spacing:1px;margin-top:2pt;}
+.bc{margin-top:auto;} .bc svg{width:100%;height:0.4in;display:block;} .bct{font-size:7.5pt;letter-spacing:2px;text-align:center;}`;
+
+export const printShopBinLabel = ({ woNum, part, qty, bin }) => printDoc(`Bin ${woNum || ''}`, SHOP_CSS, [`<div class="l">
+  <div class="k">PUT AWAY · SHOP</div>
+  <div class="wo">WO: ${esc(woNum || '')}</div>
+  <div class="rows">
+    <div class="r">${esc(part || '')}</div>
+    <div class="r"><b>QTY:</b> ${esc(qty ?? '')}</div>
+  </div>
+  <div class="bin">BIN: ${esc(bin || 'N/A')}</div>
+  <div class="bc">${code128BSvg(String(woNum || ''))}<div class="bct">${esc(woNum || '')}</div></div>
+</div>`]);
+
+export const printShopCompletionLabel = (o = {}) => {
+    const key = String(o.orderKey || o.woNum || '');
+    const toPlating = !!o.isOutsourced;
+    return printDoc(`Custom ${o.woNum || ''}`, SHOP_CSS, [`<div class="l">
+  <div class="k">${toPlating ? 'CUSTOM · TO PLATING' : 'CUSTOM · SHOP COMPLETE'}</div>
+  <div class="wo">${esc(o.woNum || key)}</div>
+  <div class="rows">
+    ${o.soNum ? `<div class="r"><b>SO:</b> ${esc(o.soNum)}</div>` : ''}
+    <div class="r">${esc(o.item || o.partNum || '')}${o.qty ? ` &nbsp;×${esc(o.qty)}` : ''}${o.cutLength ? ` &nbsp;·&nbsp; CUT ${esc(o.cutLength)}"` : ''}</div>
+    ${o.finishRecipe ? `<div class="r"><b>FINISH:</b> ${esc(o.finishRecipe)}</div>` : ''}
+    ${toPlating && o.outsourcePrice ? `<div class="r"><b>SERVICE/EA:</b> $${esc(o.outsourcePrice)}</div>` : ''}
+    ${o.clientName ? `<div class="r">${esc(o.clientName)}</div>` : ''}
+  </div>
+  <div class="bc">${code128BSvg(key)}<div class="bct">${esc(key)}</div></div>
+</div>`]);
+};
