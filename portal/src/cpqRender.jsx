@@ -78,12 +78,28 @@ const targetSpanFor = (sizeScale) => {
 
 // Rotation about Y that turns the model's longest horizontal axis perpendicular to the camera's
 // horizontal look direction (three's rotation.y maps (x,z) -> (x cos a + z sin a, -x sin a + z cos a)).
+//
+// ⚠ TWO ANGLES ARE BROADSIDE — a and a+180° — and they show OPPOSITE FACES of the assembly.
+// The bare formula picks one by construction, so which face you get depends on how the GLB was
+// authored: a model whose long axis is X lands front-to-camera, one whose long axis is Z lands
+// BACK-to-camera. Viewing the back mirrors left/right on screen, so the Left End Treatment renders
+// at the right end and a left bracket reads backwards on the pole — which is exactly what the H2
+// portal showroom was doing (Stuart 2026-07-30: "when making selections for left, it now displays
+// the right side, so they are reversed… and it's on the pole backwards compared to all the others").
+//
+// Resolved by taking the broadside angle that turns the model LEAST from how it was authored: fold
+// the result into (-90°, 90°]. Both angles frame the piece identically, so nothing about the fit
+// changes; it just stops the framing from silently flipping the model end-for-end. The internal HQ
+// configurator has no yaw at all — it draws the model as authored — so this also brings the portal
+// closer to it rather than further away.
 function broadsideYawFor(size, camPos) {
   const along = size.x >= size.z ? { x: 1, z: 0 } : { x: 0, z: 1 };
   const hx = camPos.x, hz = camPos.z;
   if (!Math.hypot(hx, hz)) return 0;
   const want = { x: hz, z: -hx };
-  return Math.atan2(along.z, along.x) - Math.atan2(want.z, want.x);
+  const raw = Math.atan2(along.z, along.x) - Math.atan2(want.z, want.x);
+  const a = Math.atan2(Math.sin(raw), Math.cos(raw));          // normalise to (-π, π]
+  return Math.abs(a) > Math.PI / 2 ? a - Math.sign(a) * Math.PI : a;
 }
 
 // Returns a diagnostic object (also used by the viewer readout) or null when nothing is visible.
