@@ -26,7 +26,11 @@ import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
-    brass: '#b08d57', line: '#d9d4ca', green: '#3a7d44', red: '#d9534f', blue: '#3f7fc4',
+    // brassDark / blueDark are for TEXT: the brand brass and blue are chosen for borders and
+    // fills and go muddy at label sizes on white (Stuart 2026-07-30: "darken the color font or
+    // go bolder, it is too hard to read"). Borders and buttons keep the brand values.
+    brass: '#b08d57', brassDark: '#7d6031', line: '#d9d4ca', green: '#3a7d44', red: '#d9534f',
+    blue: '#3f7fc4', blueDark: '#2a5f9e',
     mono: "'Courier New', monospace", sans: 'var(--sans)', serif: 'var(--serif)',
 };
 const money = (v) => (v === '' || v === null || v === undefined || isNaN(parseFloat(v))) ? '' : parseFloat(v);
@@ -339,10 +343,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     // ---- styles ------------------------------------------------------------------------------
     const fld = { padding: '10px 12px', border: `1px solid ${theme.line}`, outline: 'none', fontFamily: theme.sans, fontSize: '0.9rem', background: '#fff' };
     const th = { padding: '8px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `2px solid ${theme.ink}`, whiteSpace: 'nowrap' };
-    const td = { padding: '6px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '11px', borderBottom: `1px solid ${theme.paper2}` };
+    const td = { padding: '7px 10px', textAlign: 'left', fontFamily: theme.mono, fontSize: '12px', color: theme.ink, borderBottom: `1px solid ${theme.paper2}` };
     // A SUGGESTED cell reads in brass on a dashed edge — the value is real and editable, but it
     // is not a saved customer price until it's adopted or saved.
-    const cellInput = (dirty, sug) => ({ width: '92px', padding: '5px 6px', textAlign: 'right', fontFamily: theme.mono, fontSize: '11px', outline: 'none', background: '#fff', color: (sug && !dirty) ? theme.brass : theme.ink, border: dirty ? `1px solid ${theme.brass}` : (sug ? `1px dashed ${theme.brass}` : `1px solid ${theme.line}`) });
+    const cellInput = (dirty, sug) => ({ width: '92px', padding: '6px 7px', textAlign: 'right', fontFamily: theme.mono, fontSize: '12px', fontWeight: 600, outline: 'none', background: '#fff', color: (sug && !dirty) ? theme.brassDark : theme.ink, border: dirty ? `1px solid ${theme.brass}` : (sug ? `1px dashed ${theme.brass}` : `1px solid ${theme.line}`) });
     const btn = (on, extra = {}) => ({ padding: '10px 16px', background: on ? theme.ink : 'transparent', color: on ? '#fff' : theme.ink, border: `1px solid ${on ? theme.ink : theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', ...extra });
 
     return (
@@ -441,10 +445,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 {rows.map(r => (
                                     <tr key={r.p.id} style={{ background: r.dirty ? 'rgba(176,141,87,.07)' : '#fff' }}>
                                         <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.code}
-                                            {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '9px', color: theme.brass, fontWeight: 400 }}>SUGGESTED</span>}
-                                            {r.plated && <span title="Outsourced (plated) finish — priced off the PREMIUM tier. /P25 counts as premium too, not just /EP*." style={{ marginLeft: '8px', fontSize: '9px', color: theme.blue, fontWeight: 400 }}>PREMIUM</span>}
+                                            {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '10px', color: theme.brassDark, fontWeight: 600 }}>SUGGESTED</span>}
+                                            {r.plated && <span title="Outsourced (plated) finish — priced off the PREMIUM tier. /P25 counts as premium too, not just /EP*." style={{ marginLeft: '8px', fontSize: '10px', color: theme.blueDark, fontWeight: 600 }}>PREMIUM</span>}
                                         </td>
-                                        <td style={{ ...td, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{r.name}</td>
+                                        <td style={{ ...td, fontFamily: theme.sans, fontSize: '0.88rem', color: theme.inkSoft }}>{r.name}</td>
                                         <td style={{ ...td, textAlign: 'right' }}>
                                             <input value={r.basePrice} onChange={e => setEdit(r.p.id, 'basePrice', e.target.value)} placeholder="—" style={{ ...cellInput(edits[r.p.id]?.basePrice !== undefined, false), width: '80px', color: theme.inkSoft }} />
                                         </td>

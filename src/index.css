@@ -44,3 +44,47 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 500;
   margin: 0;
 }
+
+/* ============================================================================
+   MINIMUM LEGIBLE TYPE — 10px floor, site-wide (Stuart 2026-07-30: "increase the
+   size of the smallest font on the page, at least one point larger, and make that
+   a site wide rule as the smallest — this is just too small to see").
+
+   The app styles almost everything inline, so the small sizes live in ~650 style
+   objects across ~30 files (580 × 9px, 65 × 8px, a few at 7px). Editing them one
+   by one would be a huge diff with a real chance of missing some and no way to
+   stop the next one being written. This clamps them in ONE place instead: React
+   serializes inline styles into the style attribute as "font-size: 9px", so an
+   attribute selector reaches every one of them, present and future.
+
+   Substring collisions can't happen — "font-size: 8px" is not a substring of
+   "font-size: 18px", because the space has to sit immediately before the digit.
+   Printed labels are unaffected: Shared/labelPrint sizes everything in `pt`
+   inside a <style> block, which this never sees.
+
+   Raising the floor further later = add the sizes to this list. Writing a new
+   9px style is now harmless rather than a bug.
+   ============================================================================ */
+[style*="font-size: 7px"],
+[style*="font-size: 7.5px"],
+[style*="font-size: 8px"],
+[style*="font-size: 8.5px"],
+[style*="font-size: 9px"],
+[style*="font-size: 9.5px"] { font-size: 10px !important; }
+
+/* Same floor for the rem-sized stragglers (0.62rem ≈ 9.9px → 0.7rem ≈ 11.2px). */
+[style*="font-size: 0.6rem"],
+[style*="font-size: 0.62rem"],
+[style*="font-size: 0.65rem"],
+[style*="font-size: 0.68rem"] { font-size: 0.7rem !important; }
+
+/* Uppercase mono micro-labels are the smallest thing on screen and the hardest to
+   read — at the 10px floor they need extra weight to hold up. NOTE this matches the
+   AUTHORED sizes: clamping above changes what renders, not what the style attribute
+   says, so a rule keyed on "font-size: 10px" would never fire for a 9px source. */
+[style*="font-size: 7px"][style*="uppercase"],
+[style*="font-size: 8px"][style*="uppercase"],
+[style*="font-size: 8.5px"][style*="uppercase"],
+[style*="font-size: 9px"][style*="uppercase"],
+[style*="font-size: 9.5px"][style*="uppercase"],
+[style*="font-size: 10px"][style*="uppercase"] { font-weight: 500; }
