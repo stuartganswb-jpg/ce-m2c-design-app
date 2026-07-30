@@ -23,6 +23,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, writeBatch } from "firebase/firestore";
 import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
+import { FEE_MODES, FEE_UNITS, feeRuleOf } from '../Shared/feeRules';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -114,6 +115,14 @@ const fabricutWriteBack = (part, next, outsourceCodes) => {
     return out;
 };
 
+// FEE ITEMS — the same test the Master Library's "Fees only" filter uses, so a record that reads
+// as a fee there reads as one here. Covers NetSuite-synced fees (CE-FEE-…), app records typed FEE,
+// and the H1-… alias records that carry partClass Fee.
+const isFeeItem = (p) => {
+    const pt = upper(p?.manufacturingSpecs?.productType || p?.productType);
+    return pt === 'FEE' || p?.partClass === 'Fee' || /(^|-)FEE-/.test(upper(p?.legacyErpId || p?.itemId));
+};
+
 // Every collection an item claims — explicit list first, else the NetSuite-synced single value.
 const collectionsOf = (specs) => {
     const s = specs || {};
@@ -129,6 +138,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const [coll, setColl] = useState('');
     const [search, setSearch] = useState('');
     const [onlyPriced, setOnlyPriced] = useState('ALL');   // ALL | PRICED | MISSING
+    // FEES mode lists the brand's fee catalogue instead of a collection's parts. Fees are brand-wide,
+    // not collection-scoped — a rush or shipping fee applies to any order — and they are almost never
+    // tagged into a collection, which is exactly why they were invisible here (Stuart 2026-07-30).
+    const [mode, setMode] = useState('COLLECTION');        // COLLECTION | FEES
     const [edits, setEdits] = useState({});                 // docId → { clientSku, price, clientSalesPrice, basePrice }
     const [saving, setSaving] = useState(false);
     const [addSearch, setAddSearch] = useState('');
@@ -170,9 +183,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const rowFor = (p) => (p.clientPricing || []).find(r => custKeys.has(upper(r?.customerId))) || null;
 
     const members = useMemo(() => {
+        if (mode === 'FEES') return inventory.filter(isFeeItem);
         if (!coll) return [];
         return inventory.filter(p => collectionsOf(p.manufacturingSpecs).includes(upper(coll)));
-    }, [inventory, coll]);
+    }, [inventory, coll, mode]);
 
     // Legacy-struct suggestions for THIS customer, keyed by doc id. Built once per customer/library
     // change rather than per render — it resolves a base doc per variant to find the pattern code.
@@ -201,8 +215,15 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 // is flagged so the UI can show it as not-yet-saved and the counter can tell the two
                 // apart. Touching a cell turns it into a normal edit.
                 const pick = (k) => e[k] !== undefined ? e[k] : (row?.[k] ?? (sug ? sug[k] : '') ?? '');
+                const rule = feeRuleOf(p.manufacturingSpecs);
+                const rv = (k, v) => e[k] !== undefined ? e[k] : v;
                 return {
-                    p, row, sug,
+                    p, row, sug, rule,
+                    feeMode: rv('feeMode', rule.mode),
+                    feeUnit: rv('feeUnit', rule.unit),
+                    feePercent: rv('feePercent', rule.percent ?? ''),
+                    feeMin: rv('feeMin', rule.minAmount ?? ''),
+                    feePortal: rv('feePortal', rule.portalSelectable),
                     plated: isPlatedSuffix(codeOf(p).includes('/') ? codeOf(p).split('/')[1] : '', outsourceFinishes),
                     code: codeOf(p),
                     name: p.itemName || '',
@@ -255,6 +276,13 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 const keep = (next.clientSku || next.price !== '' || next.clientSalesPrice !== '' || next.clientRetailPrice !== '');
                 const patch = { clientPricing: keep ? [...others, next] : others };
                 if (e.basePrice !== undefined) patch['manufacturingSpecs.basePrice'] = money(e.basePrice);
+                // Fee RULE — how the amount is worked out. The PRICE stays where every price lives
+                // (base / clientPricing / the Fabricut box); only the shape is stored here.
+                if (e.feeMode !== undefined) patch['manufacturingSpecs.feeRule.mode'] = e.feeMode;
+                if (e.feeUnit !== undefined) patch['manufacturingSpecs.feeRule.unit'] = e.feeUnit;
+                if (e.feePercent !== undefined) patch['manufacturingSpecs.feeRule.percent'] = money(e.feePercent);
+                if (e.feeMin !== undefined) patch['manufacturingSpecs.feeRule.minAmount'] = money(e.feeMin);
+                if (e.feePortal !== undefined) patch['manufacturingSpecs.feeRule.portalSelectable'] = !!e.feePortal;
                 // Keep the legacy box in step — Fabricut's price levels read it, not the rows.
                 if (legacySrc) Object.assign(patch, fabricutWriteBack(p, next, outsourceFinishes) || {});
                 batch.update(doc(db, 'Approved_Designs', id), patch);
@@ -417,13 +445,20 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     <option value="">— pick a customer —</option>
                     {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
-                <select value={coll} onChange={e => { setColl(e.target.value); setEdits({}); }} style={{ ...fld, minWidth: '220px' }}>
-                    <option value="">— pick a collection —</option>
-                    {allCollections.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-                {coll && (
+                <div style={{ display: 'flex', border: `1px solid ${theme.line}` }}>
+                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons']].map(([k, l]) => (
+                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
+                    ))}
+                </div>
+                {mode === 'COLLECTION' && (
+                    <select value={coll} onChange={e => { setColl(e.target.value); setEdits({}); }} style={{ ...fld, minWidth: '220px' }}>
+                        <option value="">— pick a collection —</option>
+                        {allCollections.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                )}
+                {(coll || mode === 'FEES') && (
                     <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
-                        {members.length} part{members.length === 1 ? '' : 's'} · <span style={{ color: pricedCount ? theme.green : theme.red }}>{pricedCount} priced</span>
+                        {members.length} {mode === 'FEES' ? 'fee' : 'part'}{members.length === 1 ? '' : 's'} · <span style={{ color: pricedCount ? theme.green : theme.red }}>{pricedCount} priced</span>
                         {suggestions.size > 0 && <> · <span style={{ color: theme.brass }}>{suggestions.size} suggested</span></>}
                         {' · '}{members.length - pricedCount - suggestions.size} not yet
                     </span>
@@ -438,10 +473,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             </div>
             {busy && <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass }}>{busy}</div>}
 
-            {!custId || !coll ? (
+            {!custId || (mode === 'COLLECTION' && !coll) ? (
                 <div style={{ padding: '48px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft, fontSize: '1.1rem', border: `1px solid ${theme.line}`, background: '#fff' }}>
-                    Pick a customer and a collection to begin.<br />
-                    <span style={{ fontSize: '0.9rem' }}>Fabricut × FABRICUT H1 · Calico Corners × SIMPLE ELEGANCE — the same screen maintains both.</span>
+                    {custId ? 'Pick a collection to begin.' : 'Pick a customer to begin.'}<br />
+                    <span style={{ fontSize: '0.9rem' }}>Fabricut × FABRICUT H1 · Calico Corners × SIMPLE ELEGANCE — the same screen maintains both. 💲 Fees &amp; Add-ons needs only the customer.</span>
                 </div>
             ) : (
                 <>
@@ -491,6 +526,13 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     <th style={{ ...th, textAlign: 'right', color: theme.brass }} title="What this customer pays us. This is the price CPQ, Quick Ship and the portal use for them.">Their Net $</th>
                                     <th style={{ ...th, textAlign: 'right', color: theme.brass }} title="What they sell it for — their street/wholesale price">Their Sales $</th>
                                     <th style={{ ...th, textAlign: 'right', color: theme.brass }} title="Their list price / MSRP — the third Fabricut tier, kept alongside net and sales">Their Retail $</th>
+                                    {mode === 'FEES' && <>
+                                        <th style={{ ...th, borderLeft: `2px solid ${theme.ink}` }} title="Flat = the price is per unit, multiplied by the quantity. Percentage = worked out from the configuration subtotal (parts + labour, before other fees and shipping).">How it's charged</th>
+                                        <th style={th} title="What the quantity counts — returns, feet, bends, strike-offs…">Unit</th>
+                                        <th style={{ ...th, textAlign: 'right' }} title="Percentage of the configuration subtotal (percentage fees only)">%</th>
+                                        <th style={{ ...th, textAlign: 'right' }} title="Floor. “10% or $100 minimum” = 10 in the % column, 100 here — the minimum wins whenever the percentage falls short.">Min $</th>
+                                        <th style={{ ...th, textAlign: 'center' }} title="Ticked = the customer can pick this themselves in the portal. Left off, it is internal-only and staff add it on their behalf.">Portal</th>
+                                    </>}
                                     <th style={th}></th>
                                 </tr>
                             </thead>
@@ -517,13 +559,34 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                         <td style={{ ...td, textAlign: 'right' }}>
                                             <input value={r.clientRetailPrice} onChange={e => setEdit(r.p.id, 'clientRetailPrice', e.target.value)} placeholder="—" style={cellInput(edits[r.p.id]?.clientRetailPrice !== undefined, !!r.sug)} />
                                         </td>
+                                        {mode === 'FEES' && <>
+                                            <td style={{ ...td, borderLeft: `2px solid ${theme.ink}` }}>
+                                                <select value={r.feeMode} onChange={e => setEdit(r.p.id, 'feeMode', e.target.value)} style={{ ...cellInput(edits[r.p.id]?.feeMode !== undefined), width: '150px', textAlign: 'left' }}>
+                                                    {FEE_MODES.map(m => <option key={m.id} value={m.id} title={m.hint}>{m.label}</option>)}
+                                                </select>
+                                            </td>
+                                            <td style={td}>
+                                                <select value={r.feeUnit} disabled={r.feeMode === 'PERCENT'} onChange={e => setEdit(r.p.id, 'feeUnit', e.target.value)} style={{ ...cellInput(edits[r.p.id]?.feeUnit !== undefined), width: '120px', textAlign: 'left', background: r.feeMode === 'PERCENT' ? theme.paper2 : '#fff' }}>
+                                                    {FEE_UNITS.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}
+                                                </select>
+                                            </td>
+                                            <td style={{ ...td, textAlign: 'right' }}>
+                                                <input value={r.feePercent} disabled={r.feeMode !== 'PERCENT'} onChange={e => setEdit(r.p.id, 'feePercent', e.target.value)} placeholder={r.feeMode === 'PERCENT' ? '25' : '—'} style={{ ...cellInput(edits[r.p.id]?.feePercent !== undefined), width: '62px', background: r.feeMode !== 'PERCENT' ? theme.paper2 : '#fff' }} />
+                                            </td>
+                                            <td style={{ ...td, textAlign: 'right' }}>
+                                                <input value={r.feeMin} onChange={e => setEdit(r.p.id, 'feeMin', e.target.value)} placeholder="—" style={{ ...cellInput(edits[r.p.id]?.feeMin !== undefined), width: '72px' }} />
+                                            </td>
+                                            <td style={{ ...td, textAlign: 'center' }}>
+                                                <input type="checkbox" checked={!!r.feePortal} onChange={e => setEdit(r.p.id, 'feePortal', e.target.checked)} style={{ cursor: 'pointer', width: '15px', height: '15px' }} />
+                                            </td>
+                                        </>}
                                         <td style={{ ...td, textAlign: 'right' }}>
                                             <button onClick={() => removeFromCollection(r.p)} title={`Remove from ${coll} (pricing rows are kept)`} style={{ background: 'none', border: 'none', color: theme.line, cursor: 'pointer', fontSize: '1rem' }}>×</button>
                                         </td>
                                     </tr>
                                 ))}
                                 {rows.length === 0 && (
-                                    <tr><td colSpan="8" style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
+                                    <tr><td colSpan={mode === 'FEES' ? 13 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
                                         {members.length === 0 ? `No parts carry the ${coll} collection yet — add them with the search on the right.` : 'No parts match this filter.'}
                                         {searchMisses.length > 0 && (
                                             <div style={{ marginTop: '18px', fontStyle: 'normal', fontFamily: theme.sans }}>
@@ -547,8 +610,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                             </tbody>
                         </table>
                     </div>
-                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>
+                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, lineHeight: 1.6 }}>
                         Their Net is the price this customer is charged — it is what CPQ, Quick Ship and the portal quote them. Leave it blank and they simply pay the base price.
+                        {mode === 'FEES' && <><br />A PERCENTAGE fee is worked out from the CONFIGURATION SUBTOTAL — parts and labour, before any other fee and before shipping — so two percentage fees on one order never compound. “10% or $100 minimum” is 10 in the % column and 100 in Min $.</>}
                     </div>
                 </>
             )}
