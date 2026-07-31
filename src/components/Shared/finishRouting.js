@@ -110,3 +110,23 @@ export const shortagesOf = (lines, availOf) => {
         };
     }).filter(Boolean);
 };
+
+/**
+ * What can actually be done about a shortage, given what the mill core holds right now.
+ *
+ * Three outcomes, and the middle one matters: a mill holding 40 of the 100 we are short should
+ * still send 40 out to plate AND raise the make-40-more flag — not stall the whole line on
+ * all-or-nothing (Stuart 2026-07-30: "if we do not have enough stock of the base item in mill
+ * finish then it needs to pop up on the stocked sales snapshot to be work ordered").
+ *
+ * @param {number} short      pieces the order is short of the plated code
+ * @param {number} millAvail  pieces of the mill core on hand
+ * @returns {{fromMill:number, coresToMake:number, plate:boolean, flagUrgent:boolean}}
+ */
+export const coverPlan = (short, millAvail) => {
+    const s = Math.max(0, Number(short) || 0);
+    const m = Math.max(0, Number(millAvail) || 0);
+    const fromMill = Math.min(s, m);
+    const coresToMake = s - fromMill;
+    return { fromMill, coresToMake, plate: fromMill > 0, flagUrgent: coresToMake > 0 };
+};

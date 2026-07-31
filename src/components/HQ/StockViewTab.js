@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteField } from "firebase/firestore";
+import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField } from "firebase/firestore";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { SOURCING, sourcingOf } from '../Shared/sourcing';
@@ -74,6 +74,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [ropSaving, setRopSaving] = useState(false);
     const [routeModal, setRouteModal] = useState(null); // in-house items WITH a vendor → per-item PO-vs-WO choice {buy, make, items}
     const [rawOrderQty, setRawOrderQty] = useState({});  // Raw Cores view: Order qty keyed by base ERP
+    const [urgentCores, setUrgentCores] = useState([]);  // core_urgent_demand — mill cores a live backorder is waiting on
     const [tierOrderQty, setTierOrderQty] = useState({}); // 3-Tier view: Order qty keyed by ERP (raw base AND each variant)
     const [vendorModal, setVendorModal] = useState(null); // vendor confirmation before POs are cut {buy, make, shop, vendors, picks}
 
@@ -144,6 +145,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         });
 
+        // URGENT CORE DEMAND (Stuart 2026-07-30). Raised by the WMS pick app when a plated item is
+        // short AND the mill core can't cover it: the parts have to be MADE before they can be
+        // plated, and a live backorder is waiting. This screen's own reorder math should already be
+        // asking for them, but it works off history — it can't know a customer is standing in front
+        // of this one today. So they get flagged in red here, where cores actually get work-ordered.
+        const unsubUrgent = onSnapshot(collection(db, "core_urgent_demand"), snap => {
+            setUrgentCores(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.status !== 'done'));
+        });
+
         // In-progress plating lines (out for plating) → feeds the WIP-Plating column + popup. 'built' = done.
         const unsubPlating = onSnapshot(collection(db, "plating_shipments"), snap => {
             setPlatingLines(
@@ -152,7 +162,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             );
         });
 
-        return () => { unsubParts(); unsubLists(); unsubCollections(); unsubOutsource(); unsubPlating(); };
+        return () => { unsubParts(); unsubLists(); unsubCollections(); unsubOutsource(); unsubUrgent(); unsubPlating(); };
     }, [activeBrand]);
 
     // --- ALIGNED DYNAMIC DICTIONARY LISTS ---
@@ -822,6 +832,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             await setDoc(ref, { internalIds: items.map(i => i.internalId), items, updatedAt: new Date().toISOString(), updatedBy: currentUser || '' }, { merge: true });
             addLog(`🔒 Locked ${olds.length} OLD counterpart(s) by internal ID (${items.length} total retired).`, 'success');
         } catch (e) { addLog(`Lock failed: ${e.message}`, 'error'); alert('Lock failed: ' + e.message); }
+    };
+
+    // Urgent-core lookups for this brand: by the CORE code (Raw Cores view) and by the PLATED code
+    // the backorder is actually for (Finished view), so the flag is visible on whichever view is up.
+    const urgentForBrand = urgentCores.filter(u => !u.brandId || u.brandId === activeBrand);
+    const urgentByCore = urgentForBrand.reduce((m, u) => { const k = String(u.coreErpId || '').toUpperCase(); (m[k] = m[k] || []).push(u); return m; }, {});
+    const urgentByPlate = urgentForBrand.reduce((m, u) => { const k = String(u.plateErpId || '').toUpperCase(); (m[k] = m[k] || []).push(u); return m; }, {});
+    const urgentTotalFor = (list) => (list || []).reduce((s, u) => s + (Number(u.shortfall) || 0), 0);
+    const clearUrgentCore = async (u) => {
+        if (!window.confirm(`Clear the urgent flag on ${u.coreErpId}?\n\nDo this once the work order is raised — it only removes the red flag, it changes no stock.`)) return;
+        try { await deleteDoc(doc(db, 'core_urgent_demand', u.id)); addLog(`Cleared urgent core flag ${u.coreErpId} (${u.ref || ''}).`, 'info'); }
+        catch (e) { addLog(`Couldn't clear the urgent flag: ${e.message}`, 'error'); }
     };
 
     // ---- REORDER + WORK-ORDER MATH (right side of the Sales Snapshot) ----
@@ -1851,6 +1873,39 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 <button onClick={snapView === 'RAW' ? generateRawOrders : snapView === 'TIER' ? generateTierOrders : generateOrders} disabled={genBusy || !shownCount} title={snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : snapView === 'TIER' ? 'Route every tier row with an Order qty by what it IS: raw core → shop-floor WO (or a vendor PO if it\'s bought), /P → WMS Convert to-do, plated → WMS Plating to-do, finished → Finishing WO.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : snapView === 'TIER' ? '⚙ Generate Tier Orders' : '⚙ Generate Orders (PO + WO)')}</button>
                             </div>
 
+                            {/* ⚠ URGENT CORES — a live backorder is waiting on these being MADE. The reorder
+                                math below works off sales history, so it cannot know a customer is standing
+                                in front of this one today; the WMS pick app flags them here, where cores get
+                                work-ordered. "Not in this view" means the core has no snapshot row at all
+                                (usually the plated item isn't flagged Stocked in NetSuite) — exactly the
+                                case that would otherwise be missed. */}
+                            {urgentForBrand.length > 0 && (() => {
+                                const shownIds = new Set(
+                                    snapView === 'RAW' ? rawRows.map(g => String(g.base).toUpperCase())
+                                        : rows.map(r => String(r.itemid).toUpperCase())
+                                );
+                                return (
+                                    <div style={{ border: '2px solid #d9534f', background: '#fdf3f3', padding: '14px 18px', marginBottom: '12px' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', fontWeight: 700, marginBottom: '10px' }}>
+                                            ⚠ Urgent — {urgentForBrand.length} core{urgentForBrand.length === 1 ? '' : 's'} a picked order is waiting on ({urgentTotalFor(urgentForBrand)} pcs to make)
+                                        </div>
+                                        {urgentForBrand.map(u => {
+                                            const inView = shownIds.has(String(snapView === 'RAW' ? u.coreErpId : u.plateErpId).toUpperCase());
+                                            return (
+                                                <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', borderTop: '1px solid #e2b8b8', padding: '7px 0' }}>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: '#a33' }}>{u.coreErpId}</span>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>
+                                                        make {u.shortfall} — {u.ref}{u.customer ? ` · ${u.customer}` : ''} needs {u.need} × {u.plateErpId}, stock had {u.onHand}{Number(u.millAvail) > 0 ? `, mill covered ${Math.max(0, Number(u.short) - Number(u.shortfall))}` : ', no mill stock'}
+                                                    </span>
+                                                    {!inView && <span title={`No row for ${snapView === 'RAW' ? u.coreErpId : u.plateErpId} in this view — it is probably not flagged Stocked in NetSuite, or a filter is hiding it. Order it from the Raw Cores view.`} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#fff', background: '#d9534f', padding: '2px 7px', letterSpacing: '.05em' }}>NOT IN THIS VIEW</span>}
+                                                    <button onClick={() => clearUrgentCore(u)} title="Clear once the work order is raised — removes the flag only, changes no stock" style={{ marginLeft: 'auto', padding: '5px 10px', background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>✓ Ordered</button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                );
+                            })()}
+
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
                                 {salesHist.loading ? (
                                     <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Querying NetSuite sales history…</div>
@@ -2014,9 +2069,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     {rawRows.map(g => {
                                                         const ri = rawInfo(g);
                                                         return (
-                                                        <tr key={g.base}>
-                                                            <td style={{ padding: '7px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }} title={`Feeds: ${g.variants.join(', ')}`}>
+                                                        <tr key={g.base} style={urgentByCore[String(g.base).toUpperCase()] ? { background: '#fdf3f3' } : undefined}>
+                                                            <td style={{ padding: '7px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: urgentByCore[String(g.base).toUpperCase()] ? '#fdf3f3' : '#fff', whiteSpace: 'nowrap' }} title={`Feeds: ${g.variants.join(', ')}`}>
                                                                 {g.base}{!ri.part && <span title="No matching Master Library part — sync it to get stock + ROP" style={{ color: '#d9534f', fontSize: '9px' }}> · UNLINKED</span>}
+                                                                {urgentByCore[String(g.base).toUpperCase()] && <span title={urgentByCore[String(g.base).toUpperCase()].map(u => `${u.ref}: make ${u.shortfall} for ${u.plateErpId}`).join(' · ')} style={{ marginLeft: '6px', color: '#fff', background: '#d9534f', fontSize: '9px', padding: '2px 6px', letterSpacing: '.05em' }}>⚠ URGENT {urgentTotalFor(urgentByCore[String(g.base).toUpperCase()])}</span>}
                                                                 {/* Where an Order qty on this row will actually go — visible BEFORE generating, so a
                                                                     mis-flagged item is caught here rather than in the vendor modal. */}
                                                                 {ri.part && (() => {
@@ -2081,10 +2137,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 // Order is ALWAYS entered by hand — Rec is guidance, never a prefill.
                                                 const ov = orderQty[r.internalId] ?? '';
                                                 const sug = convSugMap[r.itemid];
+                                                const urg = urgentByPlate[String(r.itemid).toUpperCase()];
                                                 return (
                                                 <React.Fragment key={r.internalId}>
-                                                <tr>
-                                                    <td style={{ padding: '7px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}{info.isPack ? <span title={info.minRule} style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · PACK×{info.packSize}</span> : (info.isSingleAgg ? <span title="This EA history IS the full single demand (each-buyers + mirrored pack consumption); pack rows are not added on top — no double count. Avail counts pack shelf stock × size." style={{ color: '#3a7d44', fontSize: '9px' }}> · EA+</span> : null)}
+                                                <tr style={urg ? { background: '#fdf3f3' } : undefined}>
+                                                    <td style={{ padding: '7px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: urg ? '#fdf3f3' : '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{urg && <span title={urg.map(u => `${u.ref}: needs ${u.need}, make ${u.shortfall} × ${u.coreErpId}`).join(' · ')} style={{ marginLeft: '6px', color: '#fff', background: '#d9534f', fontSize: '9px', padding: '2px 6px', letterSpacing: '.05em' }}>⚠ URGENT · make {urgentTotalFor(urg)} × {urg[0].coreErpId}</span>}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}{info.isPack ? <span title={info.minRule} style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · PACK×{info.packSize}</span> : (info.isSingleAgg ? <span title="This EA history IS the full single demand (each-buyers + mirrored pack consumption); pack rows are not added on top — no double count. Avail counts pack shelf stock × size." style={{ color: '#3a7d44', fontSize: '9px' }}> · EA+</span> : null)}
                                                     {finishOf(r.itemid) && !info.isPack ? (
                                                         sug
                                                             ? <button onClick={() => { if (window.confirm(`Clear the convert suggestion (${sug.qty} × ${sug.from})?`)) setConvSugMap(p => { const n = { ...p }; delete n[r.itemid]; return n; }); }} title="Convert suggestion attached — rides onto the WO for the Setup Queue operator. Click to clear." style={{ marginLeft: '6px', background: 'var(--brass)', color: '#fff', border: 'none', padding: '2px 7px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px' }}>⇄ {String(sug.from).split('/').pop()} ×{sug.qty}</button>

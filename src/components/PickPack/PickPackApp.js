@@ -11,7 +11,7 @@ import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
-import { shortagesOf } from '../Shared/finishRouting';
+import { shortagesOf, coverPlan } from '../Shared/finishRouting';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
@@ -524,49 +524,81 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // card stays open on the Plating tab and rides the weekly shipment/PO with everything else.
     const [routedShorts, setRoutedShorts] = useState({});   // CODE -> demandId, this session
     const [pickShorts, setPickShorts] = useState([]);        // lines confirmed short, balance out to the plater
+    // Raise the "make more cores" flag. The Sales Snapshot's own math should already be asking for
+    // these, but a live backorder can't wait for the next reorder review — so it lands there in RED
+    // as URGENT (Stuart 2026-07-30: "if we do not have enough stock of the base item in mill finish
+    // then it needs to pop up on the stocked sales snapshot to be work ordered … in theory it
+    // should already be there by the nature of that screen design, but just in case we need to
+    // highlight these items in red as urgent").
+    const flagUrgentCore = async (job, sh, millHave, uncovered) => {
+        const id = `UCD-${String(job.id).replace(/[^A-Za-z0-9-]/g, '')}-${sh.mill.replace(/[^A-Za-z0-9]/g, '')}`;
+        await setDoc(doc(db, 'core_urgent_demand', id), {
+            id, brandId: activeBrand, status: 'open',
+            coreErpId: sh.mill, plateErpId: sh.code, finishCode: sh.finishCode,
+            need: sh.need, onHand: sh.have, short: sh.short,
+            millAvail: millHave, shortfall: uncovered,
+            jobId: job.id, ref: packRef(job), customer: job.customerName || job.clientName || job.customer || '',
+            createdAt: Date.now(), createdBy: operator?.name || 'WMS Pick'
+        }, { merge: true });
+        writeLog(`URGENT core demand: ${sh.mill} short ${uncovered} for backorder ${packRef(job)} (${sh.code}) — flagged red on the Sales Snapshot`, 'wms');
+    };
+
     const routeShortToPlating = async (job, sh) => {
         if (!sh || !sh.plateable) {
             return alert(`${sh ? sh.code : 'This item'} has no outsourced finish suffix, so there is no mill core to plate.\n\nShort ${sh ? sh.short : ''} — raise it with HQ or skip the line.`);
         }
         await fetchLiveBins([sh.code, sh.mill]);
         const millHave = availOf(sh.mill);
-        if (millHave < sh.short) {
-            return alert(`❌ Not enough mill finish either.\n\n${sh.code}: need ${sh.need}, have ${sh.have} — short ${sh.short}\n${sh.mill} (mill): ${millHave} available\n\nNothing was queued. This one needs cores made before it can be plated.`);
+        // Cover what the mill CAN cover and flag the rest — a mill with 40 of the 100 we are short
+        // should still send 40 out to plate, not stall the whole line.
+        const plan = coverPlan(sh.short, millHave);
+        const coverable = plan.fromMill, uncovered = plan.coresToMake;
+
+        if (!plan.plate) {
+            if (!window.confirm(`❌ No mill finish either.\n\n${sh.code}: need ${sh.need}, have ${sh.have} — short ${sh.short}\n${sh.mill} (mill): ${millHave} available\n\nFlag ${sh.mill} as URGENT so it shows in red on the Stocked Sales Snapshot to be work-ordered?`)) return;
+            try {
+                await flagUrgentCore(job, sh, millHave, uncovered);
+                alert(`⚠ Flagged. ${sh.mill} — ${uncovered} core(s) needed for ${packRef(job)}.\n\nIt is now RED · URGENT on HQ → Stock View → Stocked Sales Snapshot, where it gets work-ordered. Nothing was sent to plating.`);
+            } catch (e) { alert('❌ Could not raise the urgent flag:\n\n' + (e.message || e)); }
+            return;
         }
+
         const millPart = enrichedByErp(sh.mill);
         if (!millPart) return alert(`${sh.mill} isn't in this brand's item list yet — run Pull Live Stock / Sync NetSuite Stock, then try again.`);
-        if (!window.confirm(`⚗ Cover the short from mill finish?\n\n${sh.code} — need ${sh.need}, only ${sh.have} in stock (short ${sh.short}).\n${sh.mill} has ${millHave} in mill finish.\n\nThis opens a plating order for ${sh.short} pc(s) and sends you to pull them from their bin into OB PLATING. It stays open on the Plating tab and rides this week's plater PO.`)) return;
+        if (!window.confirm(`⚗ Cover the short from mill finish?\n\n${sh.code} — need ${sh.need}, only ${sh.have} in stock (short ${sh.short}).\n${sh.mill} has ${millHave} in mill finish.\n\nThis opens a plating order for ${coverable} pc(s) and sends you to pull them from their bin into OB PLATING. It stays open on the Plating tab and rides this week's plater PO.${uncovered > 0 ? `\n\n⚠ ${uncovered} still uncovered — ${sh.mill} will ALSO be flagged red/urgent on the Stocked Sales Snapshot to be work-ordered.` : ''}`)) return;
         try {
+            if (plan.flagUrgent) await flagUrgentCore(job, sh, millHave, uncovered).catch(() => { /* the plating half still proceeds */ });
             const finish = outsourceFinishes.find(f => finishCodeOf(f) === sh.finishCode);
             const demandId = `PLD-BO-${String(job.id).replace(/[^A-Za-z0-9-]/g, '')}-${sh.code.replace(/[^A-Za-z0-9]/g, '')}`;
             await setDoc(doc(db, 'plating_demand', demandId), {
                 id: demandId, brandId: activeBrand, status: 'open', woNum: packRef(job),
                 baseItemId: millPart.id || null, baseErpId: sh.mill, targetErpId: sh.code,
                 finishCode: sh.finishCode, finishName: (finish && (finish.name || finish.code)) || sh.finishCode,
-                qty: sh.short, source: 'pick-backorder',
+                qty: coverable, source: 'pick-backorder',
                 backorder: {
                     jobId: job.id, ref: packRef(job), customer: job.customerName || job.clientName || job.customer || '',
                     code: sh.code, need: sh.need, onHand: sh.have, short: sh.short
                 },
-                note: `Backorder ${packRef(job)} — short ${sh.short} of ${sh.code}`,
+                note: `Backorder ${packRef(job)} — short ${sh.short} of ${sh.code}${uncovered > 0 ? ` (${coverable} from mill, ${uncovered} cores to make)` : ''}`,
                 createdBy: operator?.name || 'WMS Pick', createdAt: Date.now()
             }, { merge: true });
             await updateDoc(doc(db, 'fin_workorders', job.id), {
                 pickHadShorts: true,
                 [`pickShortages.${sh.code.replace(/[^A-Za-z0-9]/g, '_')}`]: {
                     code: sh.code, need: sh.need, onHand: sh.have, short: sh.short,
-                    mill: sh.mill, finishCode: sh.finishCode, platingDemandId: demandId, at: Date.now()
+                    mill: sh.mill, millAvail: millHave, fromMill: coverable, coresToMake: uncovered,
+                    finishCode: sh.finishCode, platingDemandId: demandId, at: Date.now()
                 }
             }).catch(() => { /* the demand is raised either way — never block the floor on this stamp */ });
             setRoutedShorts(prev => ({ ...prev, [sh.code]: demandId }));
-            writeLog(`Pick short ${packRef(job)}: ${sh.code} need ${sh.need} / have ${sh.have} → ${sh.short} pulled from mill ${sh.mill} to OB PLATING`, 'wms');
+            writeLog(`Pick short ${packRef(job)}: ${sh.code} need ${sh.need} / have ${sh.have} → ${coverable} pulled from mill ${sh.mill} to OB PLATING${uncovered > 0 ? `; ${uncovered} core(s) flagged URGENT for a work order` : ''}`, 'wms');
 
             // Pre-load the pull screen: mill core, the short qty, destination OB PLATING.
             setPlatingBase(millPart);
-            setPlatingQty(String(sh.short));
+            setPlatingQty(String(coverable));
             setPlatingFinish(finish ? finish.id : '');
             setPlatingSrcScan(''); setPlatingDestScan('OB PLATING');
-            setPlatingMemo(`Backorder ${packRef(job)} — ${sh.code} short ${sh.short}`);
+            setPlatingMemo(`Backorder ${packRef(job)} — ${sh.code} short ${sh.short}${uncovered > 0 ? `, ${coverable} from mill` : ''}`);
             setPlatingWO(packRef(job));
             setPlatingDemandId(demandId);
             setActivePickJob(null);
@@ -2449,8 +2481,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginTop: '8px' }}>Pick what is in the bin and confirm the SHORT quantity — the remainder is covered by the plating order.</div>
                                         ) : sh.plateable ? (
                                             <>
-                                                <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.ink, marginTop: '8px' }}>Mill core {sh.mill} has {sh.millAvail} available{sh.millAvail >= sh.short ? ' — enough to cover the short.' : ' — not enough to cover it.'}</div>
-                                                <button type="button" onClick={() => routeShortToPlating(activePickJob, sh)} disabled={sh.millAvail < sh.short} style={{ marginTop: '12px', padding: '12px 18px', background: sh.millAvail < sh.short ? theme.paper : theme.brass, color: sh.millAvail < sh.short ? theme.inkSoft : '#fff', border: `1px solid ${sh.millAvail < sh.short ? theme.line : theme.brass}`, cursor: sh.millAvail < sh.short ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>⚗ Pull {sh.short} mill → OB Plating</button>
+                                                <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.ink, marginTop: '8px' }}>
+                                                    Mill core {sh.mill} has {sh.millAvail} available — {sh.millAvail >= sh.short ? 'enough to cover the short.' : (sh.millAvail > 0 ? `covers ${sh.millAvail}, the other ${sh.short - sh.millAvail} needs cores made.` : 'no cores in mill finish either, so this one has to be made.')}
+                                                </div>
+                                                <button type="button" onClick={() => routeShortToPlating(activePickJob, sh)} style={{ marginTop: '12px', padding: '12px 18px', background: sh.millAvail <= 0 ? '#a33' : theme.brass, color: '#fff', border: `1px solid ${sh.millAvail <= 0 ? '#a33' : theme.brass}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                                    {sh.millAvail <= 0 ? `⚠ Flag ${sh.mill} urgent — make cores` : `⚗ Pull ${Math.min(sh.short, sh.millAvail)} mill → OB Plating${sh.millAvail < sh.short ? ` · flag ${sh.short - sh.millAvail}` : ''}`}
+                                                </button>
                                             </>
                                         ) : (
                                             <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginTop: '8px' }}>No outsourced finish on this code, so there is no mill core to plate. Skip the line and flag it at staging.</div>
@@ -2565,9 +2601,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             SHORT {sh.short} · {sh.code} needs {sh.need}, stock has {sh.have}
                                                             {sh.plateable ? <span style={{ color: theme.inkSoft }}> — mill {sh.mill}: {sh.millAvail} available</span> : <span style={{ color: theme.inkSoft }}> — no outsourced finish on this code</span>}
                                                         </div>
-                                                        {sh.plateable && (
-                                                            <button onClick={(e) => { e.stopPropagation(); routeShortToPlating(job, sh); }} disabled={sh.millAvail < sh.short} title={sh.millAvail < sh.short ? `Only ${sh.millAvail} mill cores — not enough to cover ${sh.short}` : `Pull ${sh.short} × ${sh.mill} from its bin into OB PLATING and open a plating order`} style={{ padding: '8px 14px', background: sh.millAvail < sh.short ? theme.paper : theme.brass, color: sh.millAvail < sh.short ? theme.inkSoft : '#fff', border: `1px solid ${sh.millAvail < sh.short ? theme.line : theme.brass}`, cursor: sh.millAvail < sh.short ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>⚗ Mill → OB Plating</button>
-                                                        )}
+                                                        {sh.plateable && (() => {
+                                                            const noMill = sh.millAvail <= 0;
+                                                            return (
+                                                                <button onClick={(e) => { e.stopPropagation(); routeShortToPlating(job, sh); }}
+                                                                    title={noMill ? `No mill cores — flags ${sh.mill} as urgent on the Stocked Sales Snapshot to be work-ordered` : `Pull ${Math.min(sh.short, sh.millAvail)} × ${sh.mill} into OB PLATING${sh.millAvail < sh.short ? ` and flag the remaining ${sh.short - sh.millAvail} core(s) as urgent` : ''}`}
+                                                                    style={{ padding: '8px 14px', background: noMill ? '#a33' : theme.brass, color: '#fff', border: `1px solid ${noMill ? '#a33' : theme.brass}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>
+                                                                    {noMill ? '⚠ Flag urgent — make cores' : (sh.millAvail < sh.short ? `⚗ Mill ×${sh.millAvail} + flag ${sh.short - sh.millAvail}` : '⚗ Mill → OB Plating')}
+                                                                </button>
+                                                            );
+                                                        })()}
                                                     </div>
                                                 ))}
                                                 {pickable.map((l, i) => (
