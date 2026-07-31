@@ -179,6 +179,25 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     // 'PENDING' is the app's placeholder for a record with no ERP id yet — the Master Library falls
     // back to itemId there (codeOfPart), so this must too or the same record reads "PENDING" here
     // and "CE-FEE-4594" there (Stuart 2026-07-30).
+    // What the Customer Alias & Pricing box actually holds, in one line — so a premium/plated price
+    // is VISIBLE on the row instead of hidden behind a button (Stuart 2026-07-31: "4.6 still is not
+    // showing a way to handle the fees for the premium finishes, it still does not align with all
+    // the fields in the customer alias"). A fee with a painted AND a plated price now reads as one.
+    const tierSummaryOf = (p) => {
+        const f = p?.manufacturingSpecs?.fabricut;
+        if (!f) return null;
+        const n = (v) => (v === null ? '$0' : (v === undefined || v === '' ? '—' : String(v)));
+        const trio = (a, b, c) => [n(f[a]), n(f[b]), n(f[c])].join(' · ');
+        const has = (a, b, c) => [a, b, c].some(k => f[k] !== undefined);
+        const out = [];
+        if (has('paintedCost', 'paintedWholesale', 'paintedRetail')) out.push(`PAINTED ${trio('paintedCost', 'paintedWholesale', 'paintedRetail')}`);
+        if (has('platedCost', 'platedWholesale', 'platedRetail')) out.push(`PLATED ${trio('platedCost', 'platedWholesale', 'platedRetail')}`);
+        if (has('cost', 'wholesale', 'retail')) out.push(`OWN ${trio('cost', 'wholesale', 'retail')}`);
+        const codes = [f.fabCodePainted, f.fabCodePremium, f.fabCodeBase].filter(Boolean);
+        if (codes.length) out.push(`# ${[...new Set(codes)].join(' / ')}`);
+        return out.length ? out.join('   ') : null;
+    };
+
     const codeOf = (p) => upper((p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId) || p.id || '');
     const customer = customers.find(c => c.id === custId) || null;
 
@@ -635,7 +654,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                         <th style={{ ...th, textAlign: 'right' }} title="Floor. “10% or $100 minimum” = 10 in the % column, 100 here — the minimum wins whenever the percentage falls short.">Min $</th>
                                         <th style={{ ...th, textAlign: 'center' }} title="Ticked = the customer can pick this themselves in the portal. Left off, it is internal-only and staff add it on their behalf.">Portal</th>
                                     </>}
-                                    <th style={th}></th>
+                                    <th style={{ ...th, textAlign: 'right' }} title="Customer Alias & Pricing — the painted and plated tiers plus their part #s, the same fields as the Master Library window. This is what the CPQ price levels read.">Painted / Plated</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -645,7 +664,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                             {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '10px', color: theme.brassDark, fontWeight: 600 }}>SUGGESTED</span>}
                                             {r.plated && <span title="Outsourced (plated) finish — priced off the PREMIUM tier. /P25 counts as premium too, not just /EP*." style={{ marginLeft: '8px', fontSize: '10px', color: theme.blueDark, fontWeight: 600 }}>PREMIUM</span>}
                                         </td>
-                                        <td style={{ ...td, fontFamily: theme.sans, fontSize: '0.88rem', color: theme.inkSoft }}>{r.name}</td>
+                                        <td style={{ ...td, fontFamily: theme.sans, fontSize: '0.88rem', color: theme.inkSoft }}>
+                                            {r.name}
+                                            {(() => { const ts = tierSummaryOf(r.p); return ts ? <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brassDark, marginTop: '3px', letterSpacing: '.02em' }}>{ts}</div> : null; })()}
+                                        </td>
                                         <td style={{ ...td, textAlign: 'right' }}>
                                             <input value={r.basePrice} onChange={e => setEdit(r.p.id, 'basePrice', e.target.value)} placeholder="—" style={{ ...cellInput(edits[r.p.id]?.basePrice !== undefined, false), width: '80px', color: theme.inkSoft }} />
                                         </td>
@@ -683,7 +705,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                             </td>
                                         </>}
                                         <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                            <button onClick={() => (tierRow === r.p.id ? setTierRow(null) : openTiers(r.p))} title="Customer Alias & Pricing — painted and plated tiers plus their part #s. This is what the CPQ price levels read." style={{ background: 'none', border: `1px solid ${r.p.manufacturingSpecs?.fabricut ? theme.brass : theme.line}`, color: r.p.manufacturingSpecs?.fabricut ? theme.brassDark : theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', padding: '4px 8px', marginRight: '6px' }}>⚙ Tiers</button>
+                                            <button onClick={() => (tierRow === r.p.id ? setTierRow(null) : openTiers(r.p))} title="Customer Alias & Pricing — painted and plated tiers plus their part #s. This is what the CPQ price levels read." style={{ background: r.p.manufacturingSpecs?.fabricut ? theme.brass : 'none', border: `1px solid ${r.p.manufacturingSpecs?.fabricut ? theme.brass : theme.line}`, color: r.p.manufacturingSpecs?.fabricut ? '#fff' : theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', padding: '5px 9px', marginRight: '6px', whiteSpace: 'nowrap' }}>{tierRow === r.p.id ? '⚙ Close' : (r.p.manufacturingSpecs?.fabricut ? '⚙ P / EP' : '＋ P / EP')}</button>
                                             {mode === 'COLLECTION' && <button onClick={() => removeFromCollection(r.p)} title={`Remove from ${coll} (pricing rows are kept)`} style={{ background: 'none', border: 'none', color: theme.line, cursor: 'pointer', fontSize: '1rem' }}>×</button>}
                                         </td>
                                     </tr>
@@ -751,6 +773,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     </div>
                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, lineHeight: 1.6 }}>
                         Their Net is the price this customer is charged — it is what CPQ, Quick Ship and the portal quote them. Leave it blank and they simply pay the base price.
+                        <br />⚙ P / EP opens the same painted + plated tiers as the Master Library's Customer Alias &amp; Pricing window — a fee whose premium finish costs more (french return $35 painted · $43 plated) carries both there, and the row shows them once set.
                         {mode === 'FEES' && <><br />A PERCENTAGE fee is worked out from the CONFIGURATION SUBTOTAL — parts and labour, before any other fee and before shipping — so two percentage fees on one order never compound. “10% or $100 minimum” is 10 in the % column and 100 in Min $.</>}
                     </div>
                 </>
