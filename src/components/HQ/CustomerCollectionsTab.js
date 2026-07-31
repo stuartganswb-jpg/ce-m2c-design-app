@@ -170,7 +170,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         return () => { unsubItems(); unsubCust(); unsubFin(); };
     }, [activeBrand]);
 
-    const codeOf = (p) => upper(p.legacyErpId || p.itemId || '');
+    // 'PENDING' is the app's placeholder for a record with no ERP id yet — the Master Library falls
+    // back to itemId there (codeOfPart), so this must too or the same record reads "PENDING" here
+    // and "CE-FEE-4594" there (Stuart 2026-07-30).
+    const codeOf = (p) => upper((p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId) || p.id || '');
     const customer = customers.find(c => c.id === custId) || null;
 
     const allCollections = useMemo(() => Array.from(new Set(
