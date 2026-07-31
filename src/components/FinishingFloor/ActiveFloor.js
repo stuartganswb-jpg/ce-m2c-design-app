@@ -560,6 +560,29 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   });
   const batchColors = Array.from(new Set([...Object.keys(colorGroups), ...Object.keys(poleGroups)]));
 
+  // ⤴ READY TO ADVANCE — every active order whose CURRENT coat has all its steps ticked and is
+  // therefore waiting on a press, not on work (Stuart 2026-07-30: "a lot of orders that are
+  // complete but still sitting on the active floor"). Computed from the same nextPartsAction /
+  // nextPoleAction the buttons use, so this list and the floor can never disagree: an order is
+  // here exactly when its next action IS the advance.
+  const readyToAdvance = activeWOs.flatMap(wo => {
+      const out = [];
+      const len = recipeLen(wo);
+      const pa = nextPartsAction(wo);
+      if (pa && pa.advance) {
+          const idx = wo.currentStepIndex || 0;
+          out.push({ wo, stream: 'parts', label: pa.label, coat: idx + 1, len, isFinal: idx + 1 >= len,
+              blocked: idx + 1 >= len && woHasPoles(wo) && poleIdxOf(wo) < len });
+      }
+      const po = nextPoleAction(wo);
+      if (po && po.advance) {
+          const idx = poleIdxOf(wo);
+          out.push({ wo, stream: 'poles', label: po.label, coat: idx + 1, len, isFinal: idx + 1 >= len,
+              blocked: idx + 1 >= len && (wo.currentStepIndex || 0) < len });
+      }
+      return out;
+  });
+
   const getRemainingMins = (timestampMs, totalMinsAllowed) => Math.max(0, Math.floor(((totalMinsAllowed * 60000) - (now - timestampMs)) / 60000));
 
   const busyOperators = activeJobs.map(job => {
@@ -591,6 +614,38 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       
       {/* LEFT: PIPELINE */}
       <div>
+        {/* ⤴ WAITING ON A PRESS — the backlog panel. These orders are not being worked; every step
+            of the coat in front of them is ticked and they are waiting for the advance. Listing
+            them is the difference between hunting card by card and clearing them deliberately. */}
+        {readyToAdvance.length > 0 && (
+            <div style={{ background: '#fff', border: '1px solid var(--brass)', marginBottom: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <div style={{ padding: '16px 30px', background: 'rgba(176,141,87,.10)', borderBottom: '1px solid var(--line)' }}>
+                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>⤴ Waiting on a press — {readyToAdvance.length}</span>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '4px', letterSpacing: '.04em' }}>
+                        Every step of the current coat is done. Nothing is being worked — they need the coat advanced, and the last one takes the order off this floor.
+                    </div>
+                </div>
+                <div>
+                    {readyToAdvance.map(r => (
+                        <div key={r.wo.id + r.stream} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 30px', borderBottom: '1px solid var(--paper-2)', flexWrap: 'wrap' }}>
+                            <button onClick={() => setViewWo(r.wo)} title="Open the order — every step shows who PIN'd it and when" style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)', textDecoration: 'underline' }}>{woRef(r.wo)}</button>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '2px 7px' }}>{r.stream === 'poles' ? 'Poles' : 'Small parts'}</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>coat {r.coat}/{r.len} · {r.wo.stockErpId || r.wo.type || ''}{r.wo.recipe ? ` · ${r.wo.recipe}` : ''}</span>
+                            {r.isFinal && !r.blocked && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#3a7d44', textTransform: 'uppercase' }}>last coat — this finishes the order</span>}
+                            {r.blocked && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase' }}>waits for the other stream</span>}
+                            <button onClick={() => { const act = r.stream === 'poles' ? nextPoleAction(r.wo) : nextPartsAction(r.wo); if (act && act.advance) runManualAction(r.wo, act, r.stream); }}
+                                style={{ marginLeft: 'auto', padding: '10px 16px', background: r.isFinal && !r.blocked ? '#3a7d44' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>
+                                {r.label} →
+                            </button>
+                        </div>
+                    ))}
+                </div>
+                <div style={{ padding: '10px 30px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', background: 'var(--paper)', letterSpacing: '.04em' }}>
+                    Each still PINs and still runs the final-coat QC gate — same path as the floor cards, nothing is skipped.
+                </div>
+            </div>
+        )}
+
         {/* 🖐 MANUAL MODE — scan-first while the machines are offline (only the oven runs). */}
         <div style={{ background: '#fff', border: '1px solid var(--line)', marginBottom: '30px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
             <div style={{ padding: '20px 30px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
@@ -977,12 +1032,36 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           const hasP = woHasPoles(wo);
           const pIdx = poleIdxOf(wo);
           const t = wo.tasks || {};
-          const chip = (label, st) => (
-              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', border: '1px solid var(--line)', background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>{label}</span>
-                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', fontWeight: 600, color: st === 'Complete' ? '#3a7d44' : (st === 'Running' ? 'var(--brass)' : 'var(--ink-soft)') }}>{st || 'Pending'}</span>
-              </div>
-          );
+          // WHO PINNED IT AND WHEN (Stuart 2026-07-30: "so i can visually confirm there is no human
+          // error of forgotten pin steps"). Every task already carries assignedTo/startTime from the
+          // Start and completedBy/completedAt from the Stop — it was simply never shown. A step that
+          // reads Complete with no name against it was completed by something other than a PIN'd
+          // stop (a station card, a force-complete, or a legacy write), and that is precisely the
+          // gap worth seeing.
+          const clock = (ms) => ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
+          const chip = (label, key) => {
+              const tk = t[key] || {};
+              const st = tk.status;
+              const started = clock(tk.startTime), done = clock(tk.completedAt);
+              const mins = (tk.startTime && tk.completedAt) ? Math.max(0, Math.round((tk.completedAt - tk.startTime) / 60000)) : null;
+              const noPin = st === 'Complete' && !tk.completedBy && !tk.assignedTo;
+              const line = (icon, who, at, extra) => (
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '3px', lineHeight: 1.5 }}>
+                      {icon} {who || <span style={{ color: '#d9534f' }}>no PIN</span>}{at ? ` · ${at}` : ''}{extra || ''}
+                  </div>
+              );
+              return (
+                  <div key={label} style={{ padding: '8px 10px', border: `1px solid ${noPin ? '#d9534f' : 'var(--line)'}`, background: st === 'Complete' ? '#f0f7f1' : (st === 'Running' ? '#fdf8ef' : '#fff') }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>{label}</span>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', fontWeight: 600, color: st === 'Complete' ? '#3a7d44' : (st === 'Running' ? 'var(--brass)' : 'var(--ink-soft)') }}>{st || 'Pending'}</span>
+                      </div>
+                      {(tk.startTime || tk.assignedTo) && line('▶', tk.assignedTo, started)}
+                      {st === 'Complete' && line('■', tk.completedBy || tk.assignedTo, done, mins !== null ? ` · ${mins}m` : '')}
+                      {noPin && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '2px' }}>completed without a PIN'd stop</div>}
+                  </div>
+              );
+          };
           const row = (k, v) => v ? <div style={{ display: 'flex', gap: '10px', fontSize: '0.9rem', lineHeight: 1.7 }}><span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', width: '110px', flexShrink: 0, paddingTop: '2px' }}>{k}</span><span style={{ color: 'var(--ink)' }}>{v}</span></div> : null;
           return (
               <div onClick={() => setViewWo(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -1006,12 +1085,12 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           {wo.convertSuggestion && row('⇄ Suggestion', `convert ${wo.convertSuggestion.qty} × ${wo.convertSuggestion.from} → ${wo.convertSuggestion.to} (Setup Queue converter)`)}
                           {row('Note', wo.note || '')}
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '14px' }}>
-                              {chip('Sled Setup', t.spinSetup?.status)}
-                              {chip('Sled Spray', t.spinSpray?.status)}
-                              {chip('Sled Bake', t.spinBake?.status)}
-                              {hasP && chip('Pole Spray', t.poleSpray?.status)}
-                              {hasP && chip('Pole Bake', t.poleBake?.status)}
-                              {chip('Hand Finish', t.hand?.status)}
+                              {chip('Sled Setup', 'spinSetup')}
+                              {chip('Sled Spray', 'spinSpray')}
+                              {chip('Sled Bake', 'spinBake')}
+                              {hasP && chip('Pole Spray', 'poleSpray')}
+                              {hasP && chip('Pole Bake', 'poleBake')}
+                              {chip('Hand Finish', 'hand')}
                           </div>
                           {/* ▶ OPEN IN MANUAL CONTROL (Stuart 2026-07-28: "we have a shortage of
                               scanners right now") — the scan at the top of Manual Floor Control is
