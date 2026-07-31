@@ -122,6 +122,9 @@ const DigitalTwinSCADA = ({ redWO, blueWO, activeWOs, onForceClear, onStation })
 
 const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, now, user, setQcModal, users }) => {
   const activeWOs = workOrders.filter(w => w.currentPhase === "Painting");
+  // "orders that are complete but still sitting on the active floor" (Stuart 2026-07-30) — the
+  // prompt raised the moment a coat's last step is stopped. See advancePromptFor below.
+  const [advancePrompt, setAdvancePrompt] = useState(null);
   const activeJobs = workOrders.filter(j => j.tasks && Object.values(j.tasks).some(t => t.status === 'Running'));
   const redlineWOs = workOrders.filter(w => w.redlineAlert);
   const floorOps = users?.filter(u => ['painter', 'hand_painter', 'paint_manager'].includes(u.role)) || [];
@@ -337,6 +340,32 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           await addDoc(collection(db, 'fin_logs'), { u: user?.name || 'Floor', cat: 'manual', t: serverTimestamp(), at: Date.now(), ...entry });
       } catch (e) { console.warn('manual log failed', e); }
   };
+  // Which stream a task belongs to, and what the stream's next action becomes ONCE this task is
+  // Complete. The write has gone in but the snapshot has not come back yet, so the answer is
+  // computed on a local copy rather than by waiting — the prompt has to appear on the same tap.
+  const raiseAdvancePrompt = (wo, taskKey) => {
+      const stream = (taskKey === 'poleSpray' || taskKey === 'poleBake') ? 'poles' : 'parts';
+      const after = { ...wo, tasks: { ...(wo.tasks || {}), [taskKey]: { ...((wo.tasks || {})[taskKey] || {}), status: 'Complete' } } };
+      const act = stream === 'poles' ? nextPoleAction(after) : nextPartsAction(after);
+      if (!act || !act.advance) return;                       // more steps left in this coat
+      const len = recipeLen(wo);
+      const idx = stream === 'poles' ? poleIdxOf(wo) : (wo.currentStepIndex || 0);
+      const isFinal = idx + 1 >= len;
+      const otherDone = stream === 'poles'
+          ? (wo.currentStepIndex || 0) >= len
+          : (!woHasPoles(wo) || poleIdxOf(wo) >= len);
+      setAdvancePrompt({
+          woId: wo.id, ref: woRef(wo), stream, label: act.label, isFinal, otherDone,
+          coat: idx + 1, len,
+          // What actually happens next, said plainly — the reason the order is or is not leaving.
+          consequence: !isFinal
+              ? `The ${stream === 'poles' ? 'poles' : 'small parts'} move to coat ${idx + 2} of ${len} and every step resets to Pending.`
+              : otherDone
+                  ? 'This is the last coat and the other stream is already finished — QC runs, then the order LEAVES the floor for the WMS packing queue.'
+                  : `This is the last coat for the ${stream === 'poles' ? 'poles' : 'small parts'}, but the ${stream === 'poles' ? 'small parts' : 'poles'} are still running — the order stays on the floor until both are done.`,
+      });
+  };
+
   const manualTask = async (wo, taskKey, action, actor) => {
       const t = (wo.tasks || {})[taskKey] || {};
       const startedMs = t.startTime || null;
@@ -355,6 +384,13 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       }
       try {
           await updateDoc(doc(db, 'fin_workorders', wo.id), updates);
+          // ⤴ THE STEP IS DONE — BUT THE COAT IS NOT. Stopping a step only marks that step
+          // Complete; the coat (and the order) advance on a SEPARATE press. An operator who stops
+          // the last step of the final coat has, from where they are standing, finished the job —
+          // and the order then sits on the Active Floor with every step ticked, waiting for a
+          // button nothing asked them to press. That is what Stuart is looking at. So when this
+          // COMPLETE was the last step of the coat, say so and offer the advance right here.
+          if (action === 'COMPLETE') raiseAdvancePrompt(wo, taskKey);
           await logManual({
               ...(actor ? { u: actor } : {}),
               msg: `MANUAL ${action} · ${taskKey} · ${woRef(wo)} @ ${stationCtl || 'floor'}${elapsedMs != null ? ` · ran ${(elapsedMs / 60000).toFixed(1)}m` : ''}`,
@@ -1011,6 +1047,49 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                   </div>
                               );
                           })()}
+                      </div>
+                  </div>
+              </div>
+          );
+      })()}
+
+      {/* ⤴ COAT DONE — WHAT NOW. Raised the moment the last step of a coat is stopped, because
+          that is the moment the operator believes they are finished. Without it the order sits on
+          the floor with every step ticked, waiting on a press nothing asked for. */}
+      {advancePrompt && (() => {
+          const wo = workOrders.find(w => w.id === advancePrompt.woId);
+          const close = () => setAdvancePrompt(null);
+          return (
+              <div onClick={close} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '560px', maxWidth: '95vw', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,.28)' }}>
+                      <div style={{ padding: '20px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+                          <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>
+                              {advancePrompt.isFinal ? 'Last coat finished' : `Coat ${advancePrompt.coat} of ${advancePrompt.len} finished`}
+                          </div>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '4px', letterSpacing: '.06em' }}>
+                              {advancePrompt.ref} · {advancePrompt.stream === 'poles' ? 'POLES' : 'SMALL PARTS'} · every step of this coat is done
+                          </div>
+                      </div>
+                      <div style={{ padding: '22px 26px' }}>
+                          <div style={{ fontSize: '0.95rem', color: 'var(--ink)', lineHeight: 1.6 }}>
+                              Stopping a step marks that <i>step</i> done. The coat only moves on when you say so — <b>that press is what takes the order off this floor</b>.
+                          </div>
+                          <div style={{ marginTop: '14px', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)', fontSize: '0.9rem', color: 'var(--ink-soft)' }}>
+                              {advancePrompt.consequence}
+                          </div>
+                      </div>
+                      <div style={{ padding: '16px 26px', borderTop: '1px solid var(--line)', display: 'flex', gap: '12px', justifyContent: 'flex-end', background: 'var(--paper)' }}>
+                          <button onClick={close} style={{ padding: '12px 18px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Not yet</button>
+                          <button
+                              onClick={async () => {
+                                  close();
+                                  if (!wo) return;
+                                  const act = advancePrompt.stream === 'poles' ? nextPoleAction(wo) : nextPartsAction(wo);
+                                  if (act && act.advance) await runManualAction(wo, act, advancePrompt.stream);
+                              }}
+                              style={{ padding: '12px 20px', background: advancePrompt.isFinal ? '#3a7d44' : 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                              {advancePrompt.label} →
+                          </button>
                       </div>
                   </div>
               </div>
