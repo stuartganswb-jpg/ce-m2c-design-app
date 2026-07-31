@@ -75,6 +75,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [routeModal, setRouteModal] = useState(null); // in-house items WITH a vendor → per-item PO-vs-WO choice {buy, make, items}
     const [rawOrderQty, setRawOrderQty] = useState({});  // Raw Cores view: Order qty keyed by base ERP
     const [urgentCores, setUrgentCores] = useState([]);  // core_urgent_demand — mill cores a live backorder is waiting on
+    // ⚡ URGENT RUN FLAG (Stuart 2026-07-30: "there should be a flag that we can check if urgent and
+    // a field to enter a need by date"). Ticked before pressing Generate, it marks the work orders
+    // THAT PRESS creates as urgent and sets their need-by date. An urgent WO arrives PINNED to the
+    // top of the Finishing Setup Queue until an operator acknowledges it.
+    const [woUrgent, setWoUrgent] = useState(false);
+    const [woNeedBy, setWoNeedBy] = useState('');
     const [tierOrderQty, setTierOrderQty] = useState({}); // 3-Tier view: Order qty keyed by ERP (raw base AND each variant)
     const [vendorModal, setVendorModal] = useState(null); // vendor confirmation before POs are cut {buy, make, shop, vendors, picks}
 
@@ -1024,7 +1030,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const createStockFinWOs = async (toMake) => {
         let n = 0;
         {
-            const reqDate = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+            const reqDate = woNeedBy || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
             for (const { r, info, qty } of toMake) {
                 const finish = finishOf(r.itemid);
                 const woId = `WO-STK-${r.internalId}-${Date.now()}`;
@@ -1060,11 +1066,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     machineAssigned: null, redlineAlert: false,
                     sentToPickPack: false, pickStatus: 'Pending',
                     shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
+                    // Urgent rides INSIDE the payload so it survives the RTG review hop verbatim and
+                    // lands on fin_workorders, which is what the Setup Queue actually reads.
+                    ...(woUrgent ? { urgent: true, urgentAck: false, needBy: woNeedBy || reqDate, urgentBy: currentUser || '', urgentAt: Date.now() } : {}),
                     brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
                 };
                 await setDoc(doc(db, "hq_work_orders", woId), {
                     id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
                     source: 'SALES_SNAPSHOT', routeTo: 'FINISHING', finPayload,
+                    ...(woUrgent ? { urgent: true, needBy: woNeedBy || reqDate } : {}),
                     erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, totalParts: qty, reqDate,
                     paintSize: info.size || null, customer: 'Internal Stock',
                     createdAt: Date.now(), createdBy: currentUser || ''
@@ -1339,7 +1349,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // The WO still lands in RTG first so ns_outbox serializes the NetSuite write.
     const createStockShopWOs = async (toMake) => {
         let n = 0;
-        const reqDate = new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+        const reqDate = woNeedBy || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
         for (const { r, info, qty } of toMake) {
             const stamp = Date.now().toString().slice(-6);
             const safeErp = String(r.itemid).replace(/[^A-Za-z0-9]+/g, '-');
@@ -1347,6 +1357,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             await setDoc(doc(db, "hq_work_orders", woId), {
                 id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
                 source: 'RAW_CORES', routeTo: 'SHOP',
+                ...(woUrgent ? { urgent: true, needBy: woNeedBy || reqDate } : {}),
                 erpId: r.itemid, partErpId: r.itemid,
                 nsItemId: r.internalId ? String(r.internalId) : null,
                 hqJobId: info.part?.id || null,
@@ -1870,6 +1881,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 )}
                                 <button onClick={lockRetiredByInternalId} disabled={!salesHist.withOld} title="Notate the OLD counterparts by NetSuite internal ID and hide them app-wide" style={{ marginLeft: 'auto', padding: '9px 16px', background: salesHist.withOld ? 'var(--brass)' : 'var(--paper-2)', color: salesHist.withOld ? '#fff' : 'var(--ink-soft)', border: salesHist.withOld ? 'none' : '1px solid var(--line)', cursor: salesHist.withOld ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🔒 Lock {salesHist.withOld || ''} OLD</button>
                                 <button onClick={downloadSalesHistoryCsv} disabled={!rows.length} style={{ padding: '9px 16px', background: rows.length ? 'var(--ink)' : 'var(--paper-2)', color: rows.length ? '#fff' : 'var(--ink-soft)', border: rows.length ? 'none' : '1px solid var(--line)', cursor: rows.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>⬇ Download CSV</button>
+                                {/* ⚡ Applies to the work orders the NEXT Generate press creates. Run-level, not
+                                    per row: you tick it, generate the rush, then untick. */}
+                                <label title="Mark the work orders this Generate press creates as URGENT — they arrive pinned to the top of the Finishing Setup Queue until an operator acknowledges them" style={{ display: 'flex', alignItems: 'center', gap: '7px', padding: '7px 12px', border: `1px solid ${woUrgent ? '#d9534f' : 'var(--line)'}`, background: woUrgent ? '#fdf3f3' : '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: woUrgent ? '#d9534f' : 'var(--ink-soft)', fontWeight: woUrgent ? 700 : 400 }}>
+                                    <input type="checkbox" checked={woUrgent} onChange={e => setWoUrgent(e.target.checked)} style={{ cursor: 'pointer' }} />
+                                    ⚡ Urgent
+                                </label>
+                                <label title="Need-by date for the work orders this press creates. It becomes their required date, so the queue and the planner both sort by it. Leave blank for the standard 14 days." style={{ display: 'flex', alignItems: 'center', gap: '7px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>
+                                    Need by
+                                    <input type="date" value={woNeedBy} onChange={e => setWoNeedBy(e.target.value)} style={{ padding: '6px 8px', border: `1px solid ${woNeedBy ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '11px', outline: 'none' }} />
+                                </label>
                                 <button onClick={snapView === 'RAW' ? generateRawOrders : snapView === 'TIER' ? generateTierOrders : generateOrders} disabled={genBusy || !shownCount} title={snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : snapView === 'TIER' ? 'Route every tier row with an Order qty by what it IS: raw core → shop-floor WO (or a vendor PO if it\'s bought), /P → WMS Convert to-do, plated → WMS Plating to-do, finished → Finishing WO.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : snapView === 'TIER' ? '⚙ Generate Tier Orders' : '⚙ Generate Orders (PO + WO)')}</button>
                             </div>
 

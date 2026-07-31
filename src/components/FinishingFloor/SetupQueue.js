@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc, setDoc, getDocs, query, where, collection } from "firebase/firestore";
+import { doc, updateDoc, setDoc, getDocs, query, where, collection, onSnapshot } from "firebase/firestore";
 import { btnStyle, cardStyle } from './finishingStyles';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { nsProxyFetch } from '../Shared/nsProxy';
@@ -12,7 +12,7 @@ import { finishRouteOf } from '../Shared/finishRouting';
 // Finishing converts only ever run for the shop brands.
 const BRAND_NETSUITE_MAP = { 'ce': { subsidiary: "2", location: "17" }, 'm2c': { subsidiary: "3", location: "19" } };
 
-const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} }) => {
+const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, currentUser = '' }) => {
   // Active Floor load is INFORMATIONAL ONLY (Stuart 2026-07-21: the old §A4 200-pc daily cap
   // blocked real staging — removed; the floor manages its own pace).
   const activeFloorLoad = workOrders
@@ -35,12 +35,49 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
   const outsourcedOrders = inSetup.filter(w => finishRouteOf(w).outsourced);
   const outsourcedIds = new Set(outsourcedOrders.map(w => w.id));
   const pendingOrders = inSetup.filter(w => !outsourcedIds.has(w.id));
+
+  // ⚡ URGENT, UNACKNOWLEDGED → PINNED ABOVE EVERYTHING (Stuart 2026-07-30: "when flagged this way
+  // the work order should arrive pinned to the top of the set up queue screen where the operator
+  // can easily see it and acknowledge it then it can fall back into the ordered group of its finish
+  // code"). Acknowledging does NOT change the order's phase or priority — it only says a human has
+  // seen it, at which point it drops back into its finish batch where the work actually happens.
+  const urgentPinned = pendingOrders
+    .filter(w => w.urgent && !w.urgentAck)
+    .sort((a, b) => new Date(a.needBy || a.reqDate || '2999-12-31') - new Date(b.needBy || b.reqDate || '2999-12-31'));
+  const ackUrgent = async (wo) => {
+    try {
+      await updateDoc(doc(db, "fin_workorders", wo.id), { urgentAck: true, urgentAckAt: Date.now(), urgentAckBy: currentUser || 'Floor' });
+      if (writeLog) writeLog(`Acknowledged URGENT ${wo.displayId || wo.id} (need by ${wo.needBy || wo.reqDate || 'ASAP'})`, 'setup');
+    } catch (e) { alert(`Couldn't acknowledge: ${e.message}`); }
+  };
+
+  // 📅 PLANNED RUN DAY PER FINISH (Stuart 2026-07-30: "the operator can highlight the day they plan
+  // to run that finish color so that the rest of the team will know and it can plan accordingly if
+  // they need to place any more orders for parts in those finishes"). One shared doc so every
+  // screen — and everyone ordering parts — sees the same plan. Multi-select: a big colour can run
+  // across two days.
+  const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'];
+  const [runDays, setRunDays] = useState({});   // recipe -> { days: [], by, at }
+  useEffect(() => onSnapshot(doc(db, 'system', 'finish_run_days'), (d) => setRunDays(d.exists() ? (d.data().byRecipe || {}) : {})), []);
+  const toggleRunDay = async (recipe, day) => {
+    const cur = (runDays[recipe] && runDays[recipe].days) || [];
+    const next = cur.includes(day) ? cur.filter(d => d !== day) : [...cur, day].sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b));
+    try {
+      await setDoc(doc(db, 'system', 'finish_run_days'), {
+        byRecipe: { ...runDays, [recipe]: { days: next, by: currentUser || 'Floor', at: Date.now() } }
+      }, { merge: true });
+      if (writeLog) writeLog(`Run day for ${recipe}: ${next.length ? next.join(', ') : 'cleared'}`, 'setup');
+    } catch (e) { alert(`Couldn't save the run day: ${e.message}`); }
+  };
   // Follow the committed run order (scheduleSeq, set by the Schedule's "Commit" button) when present;
   // fall back to required date for anything not yet committed.
   pendingOrders.sort((a, b) => {
+    // Urgent first inside its batch — acknowledging takes it off the pin, it should not then be
+    // buried behind everything else in the same colour.
+    if (!!a.urgent !== !!b.urgent) return a.urgent ? -1 : 1;
     const sa = a.scheduleSeq ?? Infinity, sb = b.scheduleSeq ?? Infinity;
     if (sa !== sb) return sa - sb;
-    return new Date(a.reqDate) - new Date(b.reqDate);
+    return new Date(a.needBy || a.reqDate) - new Date(b.needBy || b.reqDate);
   });
 
   // GROUPED BY FINISH (Stuart 2026-07-17): the floor finishes in batches per recipe, so the
@@ -325,6 +362,39 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
         </span>
       </div>
 
+      {/* ⚡ PINNED — urgent and not yet acknowledged. These are ALSO still in their finish batch
+          below; this strip is the "did anyone see it" gate, not a second copy of the work. */}
+      {urgentPinned.length > 0 && (
+        <div style={{ background: '#fdf3f3', border: '2px solid #d9534f', borderRadius: '2px', padding: '16px 20px', marginBottom: '24px' }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: '#d9534f', fontWeight: 700, marginBottom: '12px' }}>
+            ⚡ Urgent — {urgentPinned.length} order{urgentPinned.length === 1 ? '' : 's'} needing acknowledgement
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '14px' }}>
+            {urgentPinned.map(wo => {
+              const need = wo.needBy || wo.reqDate || '';
+              const late = need && new Date(need) < new Date(new Date().toDateString());
+              return (
+                <div key={wo.id} style={{ background: '#fff', border: '1px solid #e2b8b8', borderLeft: '4px solid #d9534f', padding: '14px 16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+                    <strong style={{ fontSize: '1.05rem', color: 'var(--ink)', fontWeight: 500 }}>WO: {wo.nsWoTran || wo.woNum || wo.displayId || wo.id}</strong>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', padding: '3px 8px', border: '1px solid var(--line)', background: 'var(--paper)', color: 'var(--ink)' }}>{wo.recipe || wo.color || '—'}</span>
+                  </div>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: late ? '#d9534f' : 'var(--ink)', marginTop: '8px', fontWeight: late ? 700 : 500 }}>
+                    NEED BY {need || 'ASAP'}{late ? ' · PAST DUE' : ''}
+                  </div>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                    {(wo.type || wo.stockErpId || wo.itemName || '—')} · {wo.totalParts || wo.qty || 0} pcs · {wo.customer || wo.clientName || 'Internal Stock'}
+                  </div>
+                  <button onClick={() => ackUrgent(wo)} style={{ ...btnStyle, width: '100%', marginTop: '12px', background: '#d9534f', color: '#fff', border: 'none' }}>
+                    ✓ Acknowledge — drop into the {wo.recipe || wo.color || 'finish'} batch
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Orders this floor does NOT finish — shown so they don't just vanish from the queue. */}
       {outsourcedOrders.length > 0 && (
         <div style={{ background: '#fff', border: '1px solid var(--brass)', borderRadius: '2px', padding: '16px 24px', marginBottom: '24px' }}>
@@ -429,9 +499,28 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
       {finishGroups.map(g => (
         <div key={g.recipe} style={{ marginBottom: '28px' }}>
           {/* One section per FINISH — run it as a batch, then move to the next finish. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 16px', background: 'var(--ink)', color: '#fff', borderRadius: '2px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 16px', background: 'var(--ink)', color: '#fff', borderRadius: '2px', marginBottom: '14px', flexWrap: 'wrap' }}>
             <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>{g.recipe}</span>
             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.85 }}>{g.orders.length} order{g.orders.length === 1 ? '' : 's'} · {g.pieces} pcs — batch this finish together</span>
+            {g.orders.some(w => w.urgent) && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', background: '#d9534f', color: '#fff', padding: '3px 8px' }}>⚡ {g.orders.filter(w => w.urgent).length} URGENT</span>}
+            {/* 📅 Planned run day — tap a day to tell the rest of the team when this colour runs, so
+                parts for it get ordered in time. Shared doc: everyone sees the same plan. */}
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', opacity: 0.6, textTransform: 'uppercase' }}>Run day</span>
+              {DAYS.map(d => {
+                const on = ((runDays[g.recipe] && runDays[g.recipe].days) || []).includes(d);
+                return (
+                  <button key={d} onClick={() => toggleRunDay(g.recipe, d)}
+                    title={on ? `${g.recipe} is planned for ${d} — tap to clear` : `Plan the ${g.recipe} run for ${d}`}
+                    style={{ padding: '4px 10px', borderRadius: '999px', border: `1px solid ${on ? 'var(--brass)' : 'rgba(255,255,255,0.28)'}`, background: on ? 'var(--brass)' : 'transparent', color: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', fontWeight: on ? 700 : 400 }}>
+                    {d}
+                  </button>
+                );
+              })}
+              {runDays[g.recipe] && runDays[g.recipe].by && ((runDays[g.recipe].days || []).length > 0) && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', opacity: 0.55 }}>set by {runDays[g.recipe].by}</span>
+              )}
+            </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '24px' }}>
             {g.orders.map(wo => {
@@ -444,6 +533,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {} })
                         {(wo.type === 'sales' || wo.soNum) && <span style={{color:'var(--ink-soft)', fontSize:'0.85rem'}}> (SO: {wo.soId || wo.soNum})</span>}
                     </strong>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {wo.urgent && <span title={`Urgent · need by ${wo.needBy || wo.reqDate || 'ASAP'}${wo.urgentAck ? ` · acknowledged by ${wo.urgentAckBy || 'floor'}` : ''}`} style={{ background: '#d9534f', color: '#fff', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--mono)', letterSpacing: '.06em' }}>⚡ {wo.needBy || wo.reqDate || 'URGENT'}</span>}
                         <span style={{ background: 'var(--paper)', padding: '4px 8px', fontSize: '0.85rem', fontFamily: 'var(--mono)', textTransform: 'uppercase', border: '1px solid var(--line)', color: 'var(--ink)' }}>{wo.recipe || wo.color}</span>
                         <button onClick={() => closeOrder(wo)} title="Close this work order — removes it from production (record kept; an attached NetSuite WO is closed too)" style={{ background: 'none', border: '1px solid var(--line)', color: '#d9534f', fontSize: '0.9rem', cursor: 'pointer', padding: '2px 8px', lineHeight: 1.4 }}>✕</button>
                     </div>

@@ -182,7 +182,7 @@ const FinishingFloor = () => {
       </nav>
       <main style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column' }}>
         <div style={{ backgroundColor: '#fff', border: '1px solid var(--line)', flex: 1, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', borderRadius: '2px' }}>
-          {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} sysConfig={sysConfig} />}
+          {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} sysConfig={sysConfig} currentUser={user?.name || ''} />}
           {activeTab === 'SETUP QUEUE' && <div style={{ padding: '0 30px 30px' }}><SchedulePlanner workOrders={workOrders} recipes={recipes} capacityMatrix={capacityMatrix} sysConfig={sysConfig} /></div>}
           {activeTab === 'ACTIVE FLOOR' && <ActiveFloor workOrders={workOrders} recipes={recipes} activePots={activePots} sysConfig={sysConfig} setMixModal={setMixModal} now={now} user={user} setQcModal={setQcModal} users={users} />}
           {activeTab === 'FINISH RECIPES' && <Recipes recipes={recipes} paintProfiles={paintProfiles} supplies={supplies} writeLog={writeLog} user={user} />}
