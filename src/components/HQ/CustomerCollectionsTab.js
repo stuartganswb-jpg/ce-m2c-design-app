@@ -20,7 +20,7 @@
 // everywhere on the next snapshot. No mirror, no deploy.
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, setDoc, writeBatch } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatch } from "firebase/firestore";
 import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
 import { FEE_MODES, FEE_UNITS, feeRuleOf } from '../Shared/feeRules';
@@ -149,6 +149,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const [busy, setBusy] = useState('');
     const [outsourceFinishes, setOutsourceFinishes] = useState([]);  // hq_outsource_finishes — the PREMIUM authority
     const [newFee, setNewFee] = useState(null);            // ＋ New fee form (FEES mode)
+    // ⚙ TIERS — the per-row Customer Alias & Pricing editor. The grid's single Net/Sales/Retail is
+    // ONE tier; the box on the item carries PAINTED and PLATED side by side plus the pattern #s,
+    // and that is what the CPQ price levels read (Stuart 2026-07-30: "it does not allow us to
+    // update this properly as it does not have fields for the plated/premium items").
+    const [tierRow, setTierRow] = useState(null);          // docId of the open editor
+    const [tierEdit, setTierEdit] = useState({});          // field → value while open
     const fileRef = useRef(null);
 
     useEffect(() => {
@@ -331,6 +337,44 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             alert(`✅ ${written} item(s) now carry a real ${customer?.name} price row.`);
         } catch (e) { console.error(e); alert('Adopt failed:\n\n' + (e.message || e)); }
         setSaving(false);
+    };
+
+    // ---- ⚙ TIER EDITOR -------------------------------------------------------------------------
+    const TIER_FIELDS = [
+        { key: 'paintedCost', label: 'Cost', group: 'Painted tier (/P)' },
+        { key: 'paintedWholesale', label: 'Wholesale', group: 'Painted tier (/P)' },
+        { key: 'paintedRetail', label: 'Retail (MSRP)', group: 'Painted tier (/P)' },
+        { key: 'platedCost', label: 'Cost', group: 'Plated / premium tier (/EP, /P25)' },
+        { key: 'platedWholesale', label: 'Wholesale', group: 'Plated / premium tier (/EP, /P25)' },
+        { key: 'platedRetail', label: 'Retail (MSRP)', group: 'Plated / premium tier (/EP, /P25)' },
+        { key: 'cost', label: 'Cost', group: 'This item’s own price (variants, single-finish)' },
+        { key: 'wholesale', label: 'Wholesale', group: 'This item’s own price (variants, single-finish)' },
+        { key: 'retail', label: 'Retail (MSRP)', group: 'This item’s own price (variants, single-finish)' },
+    ];
+    const CODE_FIELDS = [
+        { key: 'fabCodePainted', label: 'Their part # — painted' },
+        { key: 'fabCodePremium', label: 'Their part # — premium / plated' },
+        { key: 'fabCodeBase', label: 'Their part # — base' },
+    ];
+    const openTiers = (p) => {
+        const fab = p.manufacturingSpecs?.fabricut || {};
+        const seed = {};
+        [...TIER_FIELDS, ...CODE_FIELDS].forEach(f => { seed[f.key] = fab[f.key] === undefined || fab[f.key] === null ? '' : fab[f.key]; });
+        setTierEdit(seed); setTierRow(p.id);
+    };
+    const saveTiers = async () => {
+        const p = inventory.find(x => x.id === tierRow);
+        if (!p) return;
+        const patch = {};
+        TIER_FIELDS.forEach(f => { const v = tierEdit[f.key]; patch[`manufacturingSpecs.fabricut.${f.key}`] = v === '' ? null : money(v); });
+        CODE_FIELDS.forEach(f => { patch[`manufacturingSpecs.fabricut.${f.key}`] = String(tierEdit[f.key] || '').trim(); });
+        patch['manufacturingSpecs.fabricut.source'] = 'COLLECTION_PAGE';
+        patch['manufacturingSpecs.fabricut.updatedAt'] = Date.now();
+        try {
+            await setDoc(doc(db, 'Approved_Designs', p.id), { manufacturingSpecs: { fabricut: {} } }, { merge: true }); // ensure the map exists
+            await updateDoc(doc(db, 'Approved_Designs', p.id), patch);
+            setTierRow(null); setTierEdit({});
+        } catch (e) { console.error(e); alert('Save failed:\n\n' + (e.message || e)); }
     };
 
     // ---- CREATE A FEE (Stuart 2026-07-30) ------------------------------------------------------
@@ -595,7 +639,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 </tr>
                             </thead>
                             <tbody>
-                                {rows.map(r => (
+                                {rows.flatMap(r => [(
                                     <tr key={r.p.id} style={{ background: r.dirty ? 'rgba(176,141,87,.07)' : '#fff' }}>
                                         <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.code}
                                             {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '10px', color: theme.brassDark, fontWeight: 600 }}>SUGGESTED</span>}
@@ -638,11 +682,48 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 <input type="checkbox" checked={!!r.feePortal} onChange={e => setEdit(r.p.id, 'feePortal', e.target.checked)} style={{ cursor: 'pointer', width: '15px', height: '15px' }} />
                                             </td>
                                         </>}
-                                        <td style={{ ...td, textAlign: 'right' }}>
-                                            <button onClick={() => removeFromCollection(r.p)} title={`Remove from ${coll} (pricing rows are kept)`} style={{ background: 'none', border: 'none', color: theme.line, cursor: 'pointer', fontSize: '1rem' }}>×</button>
+                                        <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                            <button onClick={() => (tierRow === r.p.id ? setTierRow(null) : openTiers(r.p))} title="Customer Alias & Pricing — painted and plated tiers plus their part #s. This is what the CPQ price levels read." style={{ background: 'none', border: `1px solid ${r.p.manufacturingSpecs?.fabricut ? theme.brass : theme.line}`, color: r.p.manufacturingSpecs?.fabricut ? theme.brassDark : theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', padding: '4px 8px', marginRight: '6px' }}>⚙ Tiers</button>
+                                            {mode === 'COLLECTION' && <button onClick={() => removeFromCollection(r.p)} title={`Remove from ${coll} (pricing rows are kept)`} style={{ background: 'none', border: 'none', color: theme.line, cursor: 'pointer', fontSize: '1rem' }}>×</button>}
                                         </td>
                                     </tr>
-                                ))}
+                                ), tierRow === r.p.id ? (
+                                    <tr key={r.p.id + '-tiers'}>
+                                        <td colSpan={mode === 'FEES' ? 13 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                                                <span style={{ fontFamily: theme.serif, fontSize: '1.15rem', color: theme.ink }}>Customer Alias &amp; Pricing — {r.code}</span>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>drives the CPQ price levels · blank = no price at that tier</span>
+                                            </div>
+                                            {['Painted tier (/P)', 'Plated / premium tier (/EP, /P25)', 'This item’s own price (variants, single-finish)'].map(group => (
+                                                <div key={group} style={{ display: 'flex', alignItems: 'flex-end', gap: '14px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                                                    <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>{group}</span>
+                                                    {TIER_FIELDS.filter(f => f.group === group).map(f => (
+                                                        <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft }}>{f.label}</span>
+                                                            <input value={tierEdit[f.key] ?? ''} onChange={e => setTierEdit(prev => ({ ...prev, [f.key]: e.target.value }))} placeholder="—" style={{ width: '96px', padding: '6px 7px', textAlign: 'right', fontFamily: theme.mono, fontSize: '12px', fontWeight: 600, border: `1px solid ${theme.line}`, outline: 'none' }} />
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            ))}
+                                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '14px', marginTop: '14px', paddingTop: '14px', borderTop: `1px solid ${theme.line}`, flexWrap: 'wrap' }}>
+                                                <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>Their part #s</span>
+                                                {CODE_FIELDS.map(f => (
+                                                    <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft }}>{f.label}</span>
+                                                        <input value={tierEdit[f.key] ?? ''} onChange={e => setTierEdit(prev => ({ ...prev, [f.key]: e.target.value }))} placeholder="—" style={{ width: '170px', padding: '6px 7px', fontFamily: theme.mono, fontSize: '12px', border: `1px solid ${theme.line}`, outline: 'none' }} />
+                                                    </label>
+                                                ))}
+                                                <span style={{ marginLeft: 'auto', display: 'flex', gap: '10px' }}>
+                                                    <button onClick={() => { setTierRow(null); setTierEdit({}); }} style={btn(false)}>Cancel</button>
+                                                    <button onClick={saveTiers} style={btn(true, { background: theme.green, borderColor: theme.green })}>Save tiers</button>
+                                                </span>
+                                            </div>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '12px', lineHeight: 1.6 }}>
+                                                A BASE (mill) item carries the painted and plated tiers — its variants inherit them. A VARIANT or single-finish item carries its own price on the third row. Pattern #s live on the base item; a variant resolves to the premium code when its finish is outsourced (/EP* and /P25).
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ) : null])}
                                 {rows.length === 0 && (
                                     <tr><td colSpan={mode === 'FEES' ? 13 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
                                         {members.length === 0 ? `No parts carry the ${coll} collection yet — add them with the search on the right.` : 'No parts match this filter.'}

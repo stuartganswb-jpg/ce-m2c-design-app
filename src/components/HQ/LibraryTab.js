@@ -1345,9 +1345,17 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                      const codeUp = String(editSpecs.tempLegacyId || activePart.legacyErpId || '').toUpperCase();
                      const isBpPlate = /(^|-)R?BP(-|\/|$)/.test(codeUp);
                      const isCpPlate = /(^|-)R?CP(-|\/|$)/.test(codeUp);
+                     // NO BOX YET — say what it is and offer it plainly. This used to be a small
+                     // dashed button that scrolled past unnoticed on a long record, which is why
+                     // "there is still no way for me to make this window appear" (Stuart 2026-07-30):
+                     // it was always here, it just did not look like anything.
                      if (!fab) return (
-                         <div style={{ marginTop: '30px' }}>
-                             <button onClick={() => setEditSpecs(prev => ({ ...prev, fabricut: { source: 'MANUAL', importedAt: new Date().toISOString() } }))} style={{ padding: '10px 18px', background: 'transparent', border: '1px dashed var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>＋ Add Fabricut Pricing</button>
+                         <div style={{ marginTop: '30px', background: 'var(--paper)', padding: '20px 24px', border: '1px dashed var(--brass)' }}>
+                             <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)', marginBottom: '6px' }}>Customer Alias &amp; Pricing</div>
+                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '14px', lineHeight: 1.6 }}>
+                                 The customer's own part # and their painted / plated prices for this item. This is what <b>drives the CPQ price levels</b> — with it, a quote at a customer level prices straight off these numbers. Available on every item, including fees and aliases.
+                             </div>
+                             <button onClick={() => setEditSpecs(prev => ({ ...prev, fabricut: { source: 'MANUAL', importedAt: new Date().toISOString() } }))} style={{ padding: '12px 20px', background: 'var(--brass)', border: 'none', color: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>＋ Add customer alias &amp; pricing</button>
                          </div>
                      );
                      const setF = (k, v) => setEditSpecs(prev => ({ ...prev, fabricut: { ...(prev.fabricut || {}), [k]: v } }));
@@ -1375,7 +1383,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                      return (
                          <div style={{ marginTop: '30px', background: 'var(--paper)', padding: '24px', border: '1px solid var(--brass)' }}>
                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderBottom: '1px solid var(--line)', paddingBottom: '10px', marginBottom: '18px' }}>
-                                 <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Fabricut Pricing & Grouping</h4>
+                                 <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Customer Alias &amp; Pricing</h4>
                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em' }}>{fab.source || 'CrossReference'}{fab.importedAt ? ` · ${String(fab.importedAt).slice(0, 10)}` : ''} · drives the CPQ price levels</span>
                              </div>
 
