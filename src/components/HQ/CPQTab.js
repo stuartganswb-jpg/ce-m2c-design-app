@@ -1341,7 +1341,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               || (x.partName && (y.itemName === x.partName || y.legacyErpId === x.partName || y.itemId === x.partName))),
                           sizeSel2, sizeLabelIndex);
                   };
-                  const retPoolLive2 = s.subOptions.some(x => x.returnOnly && sizeOk2(x));
+                  // MUST be measured over the SAME candidate list the picker offers, or the two
+                  // disagree and the effect deletes a selection the picker just showed (Stuart
+                  // 2026-07-31: Flat Iron ceiling arm, right side — "as soon as we select one it
+                  // appears for a second then disappears and blanks out"). The picker narrows to the
+                  // bracket's own location (and customer) FIRST and asks "is a return plate live
+                  // HERE?"; this asked "is one live ANYWHERE". With FICERA (an end-return arm, so
+                  // returnChosen) and no size-passing return plate on the right, the picker correctly
+                  // fell back to the regular pool and listed the right-side plates — then this line
+                  // saw a return plate on the LEFT, demanded o.returnOnly, and cleared the pick.
+                  const selLoc2 = mainOpt && mainOpt.location;
+                  const cand2 = s.subOptions.filter(optCustomerOk).filter(x => !selLoc2 || !x.location || x.location === selLoc2);
+                  const retPoolLive2 = cand2.some(x => x.returnOnly && sizeOk2(x));
                   const inPool = o && (returnChosen2 ? (retPoolLive2 ? o.returnOnly : (!o.returnOnly && !o.inlineOnly))
                       : inlineBracket2 ? (hasInl2 ? o.inlineOnly : o.returnOnly)
                       : (!o.returnOnly && !o.inlineOnly));
