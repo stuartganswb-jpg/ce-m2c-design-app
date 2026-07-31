@@ -66,6 +66,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' });
   const [isBulkFab, setIsBulkFab] = useState(false); // bulk Fabricut → clientPricing writer running
+  const [aliasAudit, setAliasAudit] = useState(null); // 🔎 "where is this used?" scan { code, loading, hits, scanned }
   const [aliasForm, setAliasForm] = useState({ code: '', name: '', price: '', collection: '' }); // alias creator
   const [orphanMode, setOrphanMode] = useState(false);     // show only unreferenced, NS-less items
   const [orphanUsedSet, setOrphanUsedSet] = useState(null); // every part id/code referenced by a BOM or flow
@@ -627,6 +628,68 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
       setIsBulkFab(false);
       alert(`✅ ${n} item(s) now carry the ${cust.name} Client Pricing row${failed ? ` (${failed} failed — see console)` : ''}.\n\nReopen any item to review; rows are editable/removable per item.`);
+  };
+
+  // ---- 🔎 ALIAS USAGE AUDIT (Stuart 2026-07-30: "run that search and confirm we can get rid of
+  // them") -------------------------------------------------------------------------------------
+  // An alias is only safe to delete when NOTHING pins it. Knowing every field a code could hide in
+  // is a losing game — flows nest choices inside steps inside options, and the schema has moved
+  // more than once — so this does not go looking in named fields. It serialises each document and
+  // searches the JSON for the code as a whole token, then reports the PATHS where it matched. A
+  // field nobody remembered still gets found.
+  //
+  // App Check blocks any script outside the authenticated app from reading Firestore, so this has
+  // to run here, in the app, on a click.
+  const auditAliasUsage = async (aliasPart) => {
+      const code = codeOfPart(aliasPart);
+      if (!code) return;
+      setAliasAudit({ code, loading: true, hits: [], scanned: [] });
+      // Whole-token match: H1-CPF must not match H1-CPF2, and the code may sit inside a
+      // comma-joined list ("H1-CPF, H1-MRPF") or a path-ish string.
+      const rx = new RegExp(`(^|[^A-Z0-9-])${code.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9-]|$)`, 'i');
+      const paths = (node, at, out) => {
+          if (node === null || node === undefined) return;
+          if (typeof node === 'string') { if (rx.test(node)) out.push({ path: at, value: node.slice(0, 120) }); return; }
+          if (typeof node !== 'object') return;
+          if (Array.isArray(node)) { node.forEach((v, i) => paths(v, `${at}[${i}]`, out)); return; }
+          Object.entries(node).forEach(([k, v]) => {
+              if (rx.test(k)) out.push({ path: `${at}.${k}`, value: '(field NAME)' });
+              paths(v, at ? `${at}.${k}` : k, out);
+          });
+      };
+      const COLLECTIONS = [
+          { name: 'cpq_flows', label: 'CPQ flow', blocking: true },
+          { name: 'assembly_pins', label: 'BOM pin', blocking: true },
+          { name: 'Approved_Designs', label: 'Library item', blocking: true },
+          { name: 'hq_jobs', label: 'Quote / job', blocking: false },
+          { name: 'hq_sales_orders', label: 'Sales order', blocking: false },
+      ];
+      const hits = [], scanned = [];
+      try {
+          for (const c of COLLECTIONS) {
+              let snap;
+              try { snap = await getDocs(collection(db, c.name)); }
+              catch (e) { scanned.push({ ...c, count: 0, error: e.message || String(e) }); continue; }
+              scanned.push({ ...c, count: snap.size });
+              snap.docs.forEach(d => {
+                  const data = d.data();
+                  // The alias's OWN record is not a usage — skip it, and skip the main item's
+                  // pointer back to it, or every alias would look "in use" by itself.
+                  if (c.name === 'Approved_Designs' && d.id === aliasPart.id) return;
+                  const found = [];
+                  paths(data, '', found);
+                  if (!found.length) return;
+                  hits.push({
+                      collection: c.name, label: c.label, blocking: c.blocking, docId: d.id,
+                      title: data.name || data.itemName || data.jobName || data.quoteNo || d.id,
+                      paths: found.slice(0, 6), more: Math.max(0, found.length - 6),
+                  });
+              });
+          }
+          setAliasAudit(a => (a && a.code === code ? { ...a, loading: false, hits, scanned } : a));
+      } catch (e) {
+          setAliasAudit(a => (a && a.code === code ? { ...a, loading: false, hits, scanned, error: e.message || String(e) } : a));
+      }
   };
 
   const handleDynamicFileUpload = async (key, file) => {
@@ -1403,6 +1466,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                                              <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }}>{codeOfPart(a)}</span>
                                              <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink-soft)' }}>{a.itemName}{(a.manufacturingSpecs?.collections || []).length ? ` · ${(a.manufacturingSpecs.collections).join(', ')}` : ''}</span>
                                              <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{a.manufacturingSpecs?.basePrice !== '' && a.manufacturingSpecs?.basePrice != null ? `$${parseFloat(a.manufacturingSpecs.basePrice || 0).toFixed(2)}` : 'no price'}</span>
+                                             <button onClick={() => auditAliasUsage(a)} title="Search every flow, BOM pin, library item, quote and order for this code — before deleting it" style={{ padding: '6px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>🔎 Usage</button>
                                              <button onClick={() => openPartDetails(a)} style={{ padding: '6px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Open</button>
                                              <button onClick={() => deleteAlias(a)} style={{ background: 'none', border: 'none', color: '#d9534f', fontSize: '1.1rem', cursor: 'pointer' }}>×</button>
                                          </div>
@@ -1887,6 +1951,60 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           </div>
         )}
       </div>
+
+      {/* 🔎 ALIAS USAGE — the answer to "is anything still pinning this?" before a delete. */}
+      {aliasAudit && (() => {
+          const blocking = aliasAudit.hits.filter(h => h.blocking);
+          const info = aliasAudit.hits.filter(h => !h.blocking);
+          const safe = !aliasAudit.loading && blocking.length === 0;
+          return (
+              <div onClick={() => setAliasAudit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px' }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '820px', maxWidth: '96vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)' }}>
+                      <div style={{ padding: '20px 26px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                          <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>Where is <span style={{ fontFamily: 'var(--mono)' }}>{aliasAudit.code}</span> used?</div>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                              {aliasAudit.loading ? 'Scanning every flow, BOM pin, library item, quote and order…'
+                                  : aliasAudit.scanned.map(c => `${c.name} ${c.error ? '(unreadable)' : c.count}`).join(' · ')}
+                          </div>
+                      </div>
+                      {!aliasAudit.loading && (
+                          <div style={{ padding: '16px 26px', background: safe ? 'rgba(58,125,68,.08)' : 'rgba(217,83,79,.08)', borderBottom: '1px solid var(--line)' }}>
+                              <b style={{ color: safe ? '#3a7d44' : '#d9534f', fontSize: '1rem' }}>
+                                  {safe ? '✅ Nothing pins it — safe to delete' : `⚠ IN USE — ${blocking.length} live reference${blocking.length === 1 ? '' : 's'}`}
+                              </b>
+                              <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                  {safe
+                                      ? `No flow, BOM pin or other library item mentions ${aliasAudit.code}${info.length ? `. ${info.length} historical quote/order reference${info.length === 1 ? '' : 's'} it — those keep their own snapshot, but a reopened quote would no longer resolve the code.` : '.'}`
+                                      : 'Deleting it would drop that option from whatever pins it. Repoint those first.'}
+                              </div>
+                          </div>
+                      )}
+                      <div style={{ overflow: 'auto', flex: 1, padding: '8px 26px 20px' }}>
+                          {aliasAudit.error && <div style={{ color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px', padding: '10px 0' }}>Scan error: {aliasAudit.error}</div>}
+                          {!aliasAudit.loading && aliasAudit.hits.length === 0 && (
+                              <div style={{ padding: '24px 0', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>No document anywhere mentions this code.</div>
+                          )}
+                          {[...blocking, ...info].map((h, i) => (
+                              <div key={h.collection + h.docId + i} style={{ borderBottom: '1px solid var(--paper-2)', padding: '12px 0' }}>
+                                  <div style={{ display: 'flex', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: h.blocking ? '#d9534f' : 'var(--ink-soft)', border: `1px solid ${h.blocking ? '#d9534f' : 'var(--line)'}`, padding: '2px 7px' }}>{h.label}</span>
+                                      <b style={{ fontSize: '0.95rem' }}>{h.title}</b>
+                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{h.docId}</span>
+                                  </div>
+                                  <div style={{ marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.7 }}>
+                                      {h.paths.map((pp, j) => <div key={j}>↳ {pp.path || '(root)'} = <span style={{ color: 'var(--ink)' }}>{pp.value}</span></div>)}
+                                      {h.more > 0 && <div>↳ …and {h.more} more place{h.more === 1 ? '' : 's'} in this document</div>}
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                      <div style={{ padding: '14px 26px', borderTop: '1px solid var(--line)', textAlign: 'right', background: 'var(--paper)' }}>
+                          <button onClick={() => setAliasAudit(null)} style={{ padding: '10px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Close</button>
+                      </div>
+                  </div>
+              </div>
+          );
+      })()}
 
     </div>
   );
