@@ -1297,6 +1297,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       });
   };
   const armLocksEnd = (step) => !!(step && /end treatment/i.test(step.title || '') && isArmChosenForPos(step.position));
+  // MULTI-MATERIAL POLE: the Length step must NOT show a finish grid of its own (Stuart
+  // 2026-07-31: "on step 1 if i choose the wood rod and finish, then on step two for length it
+  // shows the metal finishes? step 2 is a cpq flow step for dimensional only"). The pricing path
+  // already reads the pole's finish from the MATERIAL step — the Length step prices the pole
+  // chosen there × footage — so a second grid here is not just noise: it offers the WRONG set
+  // (step-level, unscoped → the metal list) alongside the wood finish already chosen upstream.
+  // Mirrors the pricing condition exactly: calculator/DIMENSIONS step, no linked item, no
+  // selection of its own, and a Pole/Rod Material step present in the flow.
+  // VISUAL_DIMENSIONS is deliberately EXEMPT — single-material flows fold the finish INTO that
+  // step ("Pole Length & Finish"), where it is the only place to choose one.
+  const poleFinishLivesOnMaterialStep = (step) => {
+      if (!step || step.type === 'VISUAL_DIMENSIONS') return false;
+      if (!(step.calculatorTemplate || step.type === 'DIMENSIONS')) return false;
+      if (step.linkedItemId || dynamicConfigParams[step.id]) return false;
+      return (activeFlow?.steps || []).some(s => s.type === 'STYLE_SWAP' && /pole.*material|rod material/i.test(s.title || ''));
+  };
   // Basic brackets take no backplate: when the selected bracket is flagged isBasic (the explicit
   // per-option checkbox in the Assembly Builder assign tool — foolproof) or is literally named
   // "Basic …" (fallback for hand-authored options), the backplate pick greys out and stays None.
@@ -3072,7 +3088,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           {/* Never on SIZE steps: they're selectors, not parts — a finish grid here
                               (stray finishDataSource from "Apply finishes to all steps") captured
                               clicks meant for the pole step's finish and confused the pole render. */}
-                          {currentStep.finishDataSource && currentStep.type !== SIZE_STEP_TYPE && currentStep.type !== 'PROJ_SELECT' && (() => {
+                          {currentStep.finishDataSource && currentStep.type !== SIZE_STEP_TYPE && currentStep.type !== 'PROJ_SELECT' && !poleFinishLivesOnMaterialStep(currentStep) && (() => {
                               const selStyleId = dynamicConfigParams[currentStep.id];
                               const selOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === selStyleId);
                               const scopedFinishes = (selOpt && Array.isArray(selOpt.finishAllowedOptions) && selOpt.finishAllowedOptions.length)
