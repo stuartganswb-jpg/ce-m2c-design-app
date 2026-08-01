@@ -32,7 +32,7 @@
 
 <header>
   <h1>4CO Work Center — Operations Playbook</h1>
-  <div class="sub">Reminder &amp; teaching guide · scenarios → screens → what happens behind the curtain · current as of July 28, 2026</div>
+  <div class="sub">Reminder &amp; teaching guide · scenarios → screens → what happens behind the curtain · current as of July 31, 2026</div>
 </header>
 
 <div class="section">
@@ -55,6 +55,7 @@
 <ol class="steps">
   <li>Enter Order quantities (Rec is guidance, never auto-filled).</li>
   <li><b>⚙ Generate Orders</b>: bought items → ONE PO per vendor; made items → work orders <b>parked in RTG</b> (nothing reaches the floor unreviewed).</li>
+  <li><b>The snapshot loads the WHOLE catalogue</b> (fixed 07/28/26). SuiteQL returns 1,000 rows per response and the item query never paged, so past 1,000 stocked+old items everything after the cut simply did not exist here — no history, no rollup, no tier family. If a row count ever sits suspiciously near a round number again, that is the shape of the bug.</li>
   <li><b>Sourcing decides the lane, and it is never guessed.</b> An item set <b>Both</b> in the Master Library — we make it <i>and</i> we buy it — always stops at the vendor step and asks, pre-selected to <b>⚒ make in-house</b>, so doing nothing gives you the work order. Rows carry a <span class="mono">⚖ BOTH → ASK</span> chip so you see it before you generate. An <b>assembly</b> is built here and never becomes a PO candidate, whatever its in-house flag says.</li>
   <li>Short on raw cores? Tap the row's <b>⇄</b> to attach a <i>convert suggestion</i> (pick a sister finish with shelf stock + qty). It rides the WO to the Setup Queue — the floor executes it, the snapshot never posts anything.</li>
   <li><b>✂ on 8-ft rods</b> — cut orders route to WMS ROD CUTS and post the 2-line NetSuite adjustment at scan.</li>
@@ -122,6 +123,9 @@
   <li><b>Tap any job window</b> (task card title, pole card, pipeline row) → read-only details: NetSuite WO, item, qty, parts coat n/m, poles coat n/m, task grid, notes.</li>
   <li><b>Tap a station on the twin</b> — RED sled, BLUE sled, OVEN, POLE RACK, HAND FINISH — for 🎛 manual controls: ▶ Start / ⏸ Stop / ✓ Complete / ↩ Reopen per task, bypassing every gate (paint mix, roles, interlocks). <b>Every tap is logged with times</b> — that log becomes the real step-time data for the scheduler.</li>
   <li><b>⚠ Force Oven Clear</b> (twin header or the oven panel): resets every Running bake to Pending — un-jams a locked oven; nothing gets marked complete.</li>
+  <li><b>⤴ Waiting on a press</b> (panel at the top, added 07/30/26): every order whose CURRENT coat is fully ticked. These are not being worked — a stopped step marks that <i>step</i> done, and the COAT only moves on a separate press. That press is what takes a finished order off this floor, which is why orders sat here with every box green. Each row carries its own advance button; “last coat — this finishes the order” means the press completes it, “waits for the other stream” means poles or parts still have coats to run and it correctly stays. Every press still PINs and still runs the QC gate.</li>
+  <li><b>The prompt after the last step of a coat</b>: stop the final step and the floor now says what happens next — advance to the next coat, or run QC and send the order to WMS Packing — with the button right there. “Not yet” dismisses it.</li>
+  <li><b>Who PIN'd every step:</b> the order popup shows <span class="mono">▶ Maria · 9:14</span> from the Start and <span class="mono">■ Maria · 9:52 · 38m</span> from the Stop. A step reading Complete with <b>no name</b> is outlined red — it was completed by something other than a PIN'd stop (a station card, a force-complete, or a pre-manual-mode write). That is how a forgotten PIN becomes visible instead of inferred.</li>
   <li><b>Final-step QC gate:</b> completing the last coat asks GOOD vs SCRAP.
     <ul>
       <li><b>Stock builds:</b> the good count is what posts to NetSuite (the WO's assembly build receives GOOD pcs into the home bin).</li>
@@ -196,6 +200,46 @@
 </ul>
 </div>
 
+<div class="section pagebreak">
+<h2>9.5 · Customer pricing, fees &amp; checkout add-ons (HQ 4.6) — added 07/29–31/26</h2>
+<p class="why">One screen for “what does THIS customer pay for THIS collection”, plus the fee catalogue behind the add-on step at checkout. It replaced re-uploading a spreadsheet to change one number.</p>
+
+<h3>Two stores, and which one CPQ reads</h3>
+<table>
+  <tr><th>Where</th><th>What it drives</th></tr>
+  <tr><td><b>Customer Alias &amp; Pricing</b><br>(the box on the item; Master Library, and ⚙ P / EP in 4.6)</td><td>The <b>CPQ price levels</b>. Painted and plated tiers side by side, each with cost / wholesale / retail, plus their part #s. Used when the quote's price level is Fabricut Cost / Wholesale / Retail.</td></tr>
+  <tr><td><b>Client Pricing rows</b><br>(the grid in 4.6; Client-Specific Pricing on the item)</td><td>What the customer is <b>charged</b> in CPQ, Quick Ship and the portal. Used at the STANDARD price level.</td></tr>
+</table>
+<div class="rule"><b>Both are live — the price level on the quote decides which applies.</b> At Standard the box is never consulted; at a Fabricut level the box overrides client pricing and base price alike. <b>An edit in 4.6 writes BOTH</b>, so they cannot drift. It never creates a box on an item that has none, a variant writes its own values rather than moving its siblings, and pattern #s and the “$0 · w/ arm” flags are never touched.</div>
+<ul>
+  <li><b>Collection mode</b> — pick a customer and a collection: every part, with base price, their SKU, their net, their sales, their retail. Edit in place, one Save. Filters for ALL / Priced / Not priced; the counter is your gap list.</li>
+  <li><b>Fees &amp; Add-ons mode</b> — the brand's whole fee catalogue (fees are brand-wide, not collection-scoped, which is why they never showed under a collection filter). Adds: how it's charged, unit, %, min $, and a PORTAL tick.</li>
+  <li><b>The row shows the tiers</b> — <span class="mono">PAINTED 35 · 70 · 140   PLATED 43 · 86 · 172   # H1-FRPF / H1-FREPF</span>. A fee missing its premium price is obvious by its absence. <span class="mono">$0</span> prints as $0 (included with the arm); blank means no price at that tier.</li>
+  <li><b>Searching for something not in the collection</b> offers to add it — this is how a fee joins FABRICUT H1, since fees are rarely tagged.</li>
+  <li><b>Suggestions in brass</b> = numbers already in the pricing box but never written as customer rows, so nothing quotes from them yet. “Adopt” makes them real.</li>
+  <li><b>Import Control File</b> reads a customer's workbook and shows a DIFF — new / changed / same / not-in-library — before writing. Blank cells are “no opinion” and can never erase a price. Base prices stay out unless ticked.</li>
+</ul>
+
+<h3>Fees: four shapes, not one price</h3>
+<table>
+  <tr><th>Shape</th><th>Set it as</th><th>Examples</th></tr>
+  <tr><td>Flat per unit</td><td>Flat × quantity, unit “each”</td><td>cover plate · packaging · flat-rate shipping</td></tr>
+  <tr><td>Per named unit</td><td>Flat × quantity, unit per return / foot / bend / strike-off</td><td>returns · traverse track per foot · arch bend</td></tr>
+  <tr><td>% of order</td><td>Percentage, % filled</td><td>outdoor coating 25%</td></tr>
+  <tr><td>% with a floor</td><td>Percentage + Min $</td><td>“10% or $100 minimum” = 10 in %, 100 in Min $</td></tr>
+</table>
+<div class="rule">A PERCENTAGE fee is worked out from the <b>configuration subtotal</b> — parts and labour, net of trade discount, BEFORE any other fee and before shipping. So two percentage fees on one order never compound, and adding shipping cannot inflate a rush fee.</div>
+
+<h3>Add-ons at checkout (CPQ)</h3>
+<ul>
+  <li>The last panel before <b>Submit Quote to Pipeline</b>. Fees nobody wants to model as a flow step — rush, packaging, shipping, strike-offs, colour upcharges — are picked here and each becomes <b>its own line</b> on the order.</li>
+  <li>A per-unit fee takes a quantity (the unit says what you are counting); a percentage fee is a tick. Every selected row prints its own arithmetic — <span class="mono">2 returns × 40.00</span>, <span class="mono">10% of 400.00 = 40.00 — below the 100.00 minimum, so the minimum applies</span>.</li>
+  <li>Prices come from the same resolver the quote uses, so the picker and the quote cannot disagree. Fees a flow already bills are untouched.</li>
+  <li>The <b>Portal</b> tick per fee decides whether a customer can pick it themselves; leave it off for internal-only fees.</li>
+</ul>
+<p class="why">＋ New fee creates the fee item and the customer's association in one action. Don't create one for the cover-plate upcharge — CPQ already charges the difference when a coverplate replaces the standard backplate, priced on the CP/RCP plate items; give it the customer's code in Collection mode instead.</p>
+</div>
+
 <div class="section">
 <h2>10 · NetSuite sync — the 11.1 controls, how writes travel &amp; how to read trouble</h2>
 <h3>The two direction cards (11.1) — added 07/28/26</h3>
@@ -213,6 +257,12 @@
   <li>The box turns brass and states the scope in words whenever it's set. It is <b>deliberately forgotten</b> between visits — a remembered scope would silently narrow somebody's next full sync.</li>
   <li>A scoped run never creates a NetSuite item outside the scope. BOM components outside it still resolve from items already in the library.</li>
 </ul>
+<h3>Premium means OUTSOURCED FINISH, not “/EP” (corrected 07/29/26)</h3>
+<p class="why">Every tier test used to be “does the suffix start with EP”. <span class="mono">/P25</span> is an outsourced plated finish whose suffix starts with P, so it was read as an in-house paint and priced off the PAINTED tier — half price on a quote, the wrong pattern #, and the importer STAMPED it that way. The rule is now “is this suffix an outsourced finish”, reading the configured Outsourced Master Finishes plus /P25, so a new outsourced code is premium everywhere the day you add it.</p>
+<ul>
+  <li><b>🔧 Repair Premium-Tier Prices (/P25)</b> — walks the library and rewrites only the variants provably mis-stamped, from the plated tier already on their own base item. Prints the full list before writing, never touches numbers edited by hand, and is a no-op once clean. Safe to re-run.</li>
+</ul>
+
 <h3>Recipe: an item is right in the app but missing from the Stock View snapshot</h3>
 <ol class="steps">
   <li>Confirm the app's own Stocked box is right (Mass Update → tier filter <span class="mono">/P</span> → Set Stocked Finished Assembly).</li>
