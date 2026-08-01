@@ -23,7 +23,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatch } from "firebase/firestore";
 import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
-import { FEE_MODES, FEE_UNITS, feeRuleOf } from '../Shared/feeRules';
+import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable } from '../Shared/feeRules';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -141,7 +141,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     // FEES mode lists the brand's fee catalogue instead of a collection's parts. Fees are brand-wide,
     // not collection-scoped — a rush or shipping fee applies to any order — and they are almost never
     // tagged into a collection, which is exactly why they were invisible here (Stuart 2026-07-30).
-    const [mode, setMode] = useState('COLLECTION');        // COLLECTION | FEES
+    const [mode, setMode] = useState('COLLECTION');        // COLLECTION | FEES | CHECKOUT
     const [edits, setEdits] = useState({});                 // docId → { clientSku, price, clientSalesPrice, basePrice }
     const [saving, setSaving] = useState(false);
     const [addSearch, setAddSearch] = useState('');
@@ -213,9 +213,15 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
 
     const members = useMemo(() => {
         if (mode === 'FEES') return inventory.filter(isFeeItem);
+        // CHECKOUT ITEMS (Stuart 2026-07-31): what the CPQ checkout screen offers. By default the
+        // list IS the curated set, so you see exactly what a customer sees. Type in the search box
+        // and it searches the WHOLE library instead — that is how you find something new to tick.
+        if (mode === 'CHECKOUT') return upper(search).trim()
+            ? inventory.filter(p => p?.manufacturingSpecs?.isRetired !== true)
+            : inventory.filter(isCheckoutSelectable);
         if (!coll) return [];
         return inventory.filter(p => collectionsOf(p.manufacturingSpecs).includes(upper(coll)));
-    }, [inventory, coll, mode]);
+    }, [inventory, coll, mode, search]);
 
     // Legacy-struct suggestions for THIS customer, keyed by doc id. Built once per customer/library
     // change rather than per render — it resolves a base doc per variant to find the pattern code.
@@ -253,6 +259,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     feePercent: rv('feePercent', rule.percent ?? ''),
                     feeMin: rv('feeMin', rule.minAmount ?? ''),
                     feePortal: rv('feePortal', rule.portalSelectable),
+                    checkout: rv('checkout', isCheckoutSelectable(p)),
+                    isFeeRec: isFeeItem(p),
                     plated: isPlatedSuffix(codeOf(p).includes('/') ? codeOf(p).split('/')[1] : '', outsourceFinishes),
                     code: codeOf(p),
                     name: p.itemName || '',
@@ -312,6 +320,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 if (e.feePercent !== undefined) patch['manufacturingSpecs.feeRule.percent'] = money(e.feePercent);
                 if (e.feeMin !== undefined) patch['manufacturingSpecs.feeRule.minAmount'] = money(e.feeMin);
                 if (e.feePortal !== undefined) patch['manufacturingSpecs.feeRule.portalSelectable'] = !!e.feePortal;
+                // On the CPQ checkout screen? Works for fees AND real items — the flag is the item's,
+                // not the customer's, so ticking it once serves every quote.
+                if (e.checkout !== undefined) patch['manufacturingSpecs.checkoutSelectable'] = !!e.checkout;
                 // Keep the legacy box in step — Fabricut's price levels read it, not the rows.
                 if (legacySrc) Object.assign(patch, fabricutWriteBack(p, next, outsourceFinishes) || {});
                 batch.update(doc(db, 'Approved_Designs', id), patch);
@@ -557,15 +568,15 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
                 <div style={{ display: 'flex', border: `1px solid ${theme.line}` }}>
-                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons']].map(([k, l]) => (
-                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
+                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons'], ['CHECKOUT', '🛒 Checkout Items']].map(([k, l]) => (
+                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : k === 'CHECKOUT' ? 'What the CPQ checkout screen offers as add-on lines — fees OR real items. Only ticked items appear there.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
                     ))}
                 </div>
                 <select value={coll} onChange={e => { setColl(e.target.value); setEdits({}); }} title={mode === 'FEES' ? 'In Fees mode this does not filter the list (fees are brand-wide) — it is the collection a NEW fee gets tagged into.' : 'Parts carrying this collection'} style={{ ...fld, minWidth: '220px' }}>
                     <option value="">{mode === 'FEES' ? '— tag new fees into… (optional) —' : '— pick a collection —'}</option>
                     {allCollections.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
-                {(coll || mode === 'FEES') && (
+                {(coll || mode !== 'COLLECTION') && (
                     <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
                         {members.length} {mode === 'FEES' ? 'fee' : 'part'}{members.length === 1 ? '' : 's'} · <span style={{ color: pricedCount ? theme.green : theme.red }}>{pricedCount} priced</span>
                         {suggestions.size > 0 && <> · <span style={{ color: theme.brass }}>{suggestions.size} suggested</span></>}
@@ -596,6 +607,19 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 <b>{suggestions.size} part(s) already carry {customer?.name} numbers in the {legacySrc?.label}</b> — shown below in brass. They are <i>not</i> customer price rows yet, so CPQ, Quick Ship and the portal don't use them. Adopt them to make them real, or edit a cell first and save it yourself.
                             </span>
                             <button onClick={adoptSuggestions} disabled={saving} style={btn(true, { background: theme.brass, borderColor: theme.brass })}>{saving ? 'Writing…' : `⇄ Adopt ${suggestions.size} into Client Pricing`}</button>
+                        </div>
+                    )}
+
+                    {mode === 'CHECKOUT' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
+                            <span style={{ fontSize: '0.88rem', color: theme.ink, flex: 1, minWidth: '420px' }}>
+                                Tick what the <b>CPQ checkout screen</b> offers as add-on lines — <b>fees or real items</b>, it doesn't matter which. Anything a flow already decides (a french return, a cover-plate upcharge) should stay <i>un</i>ticked: CPQ charges those itself, and offering them again here double-bills.
+                                <span style={{ display: 'block', color: theme.inkSoft, marginTop: '4px' }}>
+                                    The list below <b>is</b> the checkout screen. To add something new, <b>search</b> — that searches the whole library — then tick it and Save. A real item added this way stays a real part on the quote: its own NetSuite line, routed by its own Part Handling.
+                                    {' '}<b style={{ color: theme.brassDark }}>{inventory.filter(isCheckoutSelectable).length} on checkout today.</b>
+                                    {inventory.filter(isCheckoutSelectable).length === 0 && <span style={{ color: theme.red }}> Until at least one is ticked, checkout falls back to showing every fee — which is what you're seeing now.</span>}
+                                </span>
+                            </span>
                         </div>
                     )}
 
@@ -640,6 +664,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead style={{ position: 'sticky', top: 0, background: theme.paper, zIndex: 5 }}>
                                 <tr>
+                                    {mode === 'CHECKOUT' && <th style={{ ...th, textAlign: 'center', width: '78px' }} title="Ticked = it appears on the CPQ checkout screen as an add-on line. Fees and real items both work; a real item stays a real part line (own NetSuite line, own routing).">On&nbsp;checkout</th>}
                                     <th style={th}>Item #</th>
                                     <th style={{ ...th, width: '38%' }}>Description</th>
                                     <th style={{ ...th, textAlign: 'right' }} title="OUR price — shared by every customer. Editing it here changes it everywhere.">Base $</th>
@@ -660,6 +685,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                             <tbody>
                                 {rows.flatMap(r => [(
                                     <tr key={r.p.id} style={{ background: r.dirty ? 'rgba(176,141,87,.07)' : '#fff' }}>
+                                        {mode === 'CHECKOUT' && (
+                                            <td style={{ ...td, textAlign: 'center' }}>
+                                                <input type="checkbox" checked={!!r.checkout} onChange={e => setEdit(r.p.id, 'checkout', e.target.checked)} title={r.checkout ? 'Showing on the checkout screen' : 'Not offered at checkout'} style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: r.isFeeRec ? theme.brassDark : theme.inkSoft, marginTop: '3px' }}>{r.isFeeRec ? 'FEE' : 'ITEM'}</div>
+                                            </td>
+                                        )}
                                         <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.code}
                                             {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '10px', color: theme.brassDark, fontWeight: 600 }}>SUGGESTED</span>}
                                             {r.plated && <span title="Outsourced (plated) finish — priced off the PREMIUM tier. /P25 counts as premium too, not just /EP*." style={{ marginLeft: '8px', fontSize: '10px', color: theme.blueDark, fontWeight: 600 }}>PREMIUM</span>}
@@ -711,7 +742,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     </tr>
                                 ), tierRow === r.p.id ? (
                                     <tr key={r.p.id + '-tiers'}>
-                                        <td colSpan={mode === 'FEES' ? 13 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
+                                        <td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
                                                 <span style={{ fontFamily: theme.serif, fontSize: '1.15rem', color: theme.ink }}>Customer Alias &amp; Pricing — {r.code}</span>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>drives the CPQ price levels · blank = no price at that tier</span>
@@ -747,7 +778,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     </tr>
                                 ) : null])}
                                 {rows.length === 0 && (
-                                    <tr><td colSpan={mode === 'FEES' ? 13 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
+                                    <tr><td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
                                         {members.length === 0 ? `No parts carry the ${coll} collection yet — add them with the search on the right.` : 'No parts match this filter.'}
                                         {searchMisses.length > 0 && (
                                             <div style={{ marginTop: '18px', fontStyle: 'normal', fontFamily: theme.sans }}>

@@ -131,6 +131,7 @@ export function buildFeeCatalog(parts, { priceFor, portalOnly = false } = {}) {
                 code: String(p.legacyErpId || p.itemId || '').toUpperCase(),
                 name: p.itemName || '',
                 partHandling: p?.manufacturingSpecs?.partHandling || '',
+                isFee: true,
                 rule, unitPrice: unitPrice ?? null,
                 portalOk: rule.portalSelectable,
                 summary: feeRuleSummary(rule, unitPrice),
@@ -142,6 +143,39 @@ export function buildFeeCatalog(parts, { priceFor, portalOnly = false } = {}) {
 
 // selections = { [catalogId]: qty }. configSubtotal is the base for percentage fees — parts and
 // labour only. Returns quote-shaped breakdown lines; a zero/blank quantity contributes nothing.
+// ── WHAT THE CHECKOUT SCREEN OFFERS (Stuart 2026-07-31) ────────────────────────────────────────
+// "not all the fee's that we set up should appear here, for instance french return is a fee but it
+// is decided in the cpq itself … we have simple items that we would like to make available to add
+// to the sale without needing to go thru cpq, shouldn't matter fee or actual item."
+//
+// So checkout is a CURATED list, not "every fee". The tick lives on the item
+// (manufacturingSpecs.checkoutSelectable) and is set in 4.6 → Checkout Items. A REAL item is
+// welcome: it carries isFee=false through to the quote line so it stays a real part — its own
+// NetSuite line, routed by its own Part Handling — instead of being folded into the fee rollup.
+export const isCheckoutSelectable = (part) => part?.manufacturingSpecs?.checkoutSelectable === true;
+export const anyCheckoutSelectable = (parts) => (parts || []).some(isCheckoutSelectable);
+
+export function buildCheckoutCatalog(parts, { priceFor } = {}) {
+    return (parts || [])
+        .filter(isCheckoutSelectable)
+        .filter(p => p?.manufacturingSpecs?.isRetired !== true)
+        .map(p => {
+            const rule = feeRuleOf(p.manufacturingSpecs);   // a plain item defaults to FLAT × EACH
+            const unitPrice = typeof priceFor === 'function' ? priceFor(p) : num(p?.manufacturingSpecs?.basePrice);
+            return {
+                id: p.id,
+                code: String(p.legacyErpId || p.itemId || '').toUpperCase(),
+                name: p.itemName || '',
+                partHandling: p?.manufacturingSpecs?.partHandling || '',
+                isFee: isFeeItemRecord(p),
+                rule, unitPrice: unitPrice ?? null,
+                portalOk: rule.portalSelectable,
+                summary: feeRuleSummary(rule, unitPrice),
+            };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+}
+
 export function buildAddOnLines(selections, catalog, configSubtotal) {
     const out = [];
     (catalog || []).forEach(entry => {
@@ -156,7 +190,9 @@ export function buildAddOnLines(selections, catalog, configSubtotal) {
             qty: entry.rule.mode === 'PERCENT' ? 1 : qty,
             price: entry.rule.mode === 'PERCENT' ? amount : (num(entry.unitPrice) ?? 0),
             total: amount,
-            isFee: true, isAddOn: true,
+            // A curated REAL item stays a real part line (own NetSuite line, routed by its own
+            // Part Handling); only genuine fees ride as fees.
+            isFee: entry.isFee !== false, isAddOn: true,
             partId: entry.id, legacyErpId: entry.code,
             partHandling: entry.partHandling || '',
             explain,

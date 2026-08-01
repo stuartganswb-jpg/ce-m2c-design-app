@@ -8,7 +8,7 @@ import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
-import { buildFeeCatalog, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
+import { buildFeeCatalog, buildCheckoutCatalog, anyCheckoutSelectable, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
 
@@ -680,9 +680,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const addOnCustKeys = useMemo(
       () => customerKeys(jobData.customerId, combinedCustomers.find(c => c.id === jobData.customerId)),
       [jobData.customerId, combinedCustomers]);
-  const addOnCatalog = useMemo(() => buildFeeCatalog(libraryParts, {
-      priceFor: (p) => clientPriceFor(p.clientPricing, addOnCustKeys) ?? (parseFloat(p.manufacturingSpecs?.basePrice) || 0),
-  }), [libraryParts, addOnCustKeys]);
+  // The checkout list is CURATED in 4.6 → Checkout Items (Stuart 2026-07-31: "we need better
+  // control of what appears here … french return is a fee but it is decided in the cpq itself").
+  // Ticked items win — fees AND real items. Until anything is ticked it falls back to the whole fee
+  // catalogue, so the screen never goes blank on the way to being curated.
+  const addOnCatalog = useMemo(() => {
+      const priceFor = (p) => clientPriceFor(p.clientPricing, addOnCustKeys) ?? (parseFloat(p.manufacturingSpecs?.basePrice) || 0);
+      return anyCheckoutSelectable(libraryParts)
+          ? buildCheckoutCatalog(libraryParts, { priceFor })
+          : buildFeeCatalog(libraryParts, { priceFor });
+  }, [libraryParts, addOnCustKeys]);
 
   // TRADE DISCOUNT (customer's CRM discountCode, e.g. D20 = less 20%). Applies per cart item,
   // AFTER the full pricing chain, display-side only: STANDARD-level items only (Fabricut levels
@@ -2148,7 +2155,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           addOnLines.forEach(l => mergedBreakdown.push({
               name: `  - ${l.name}`, qty: l.qty, price: l.price, total: l.total,
               partHandling: l.partHandling || '', partId: l.partId || null, legacyErpId: l.legacyErpId || null,
-              isFee: true, isAddOn: true, addOnExplain: l.explain || '',
+              // Real items added at checkout are NOT fees: they push as their own NetSuite line and
+              // route by their own Part Handling, exactly as if the flow had produced them.
+              isFee: l.isFee !== false, isAddOn: true, addOnExplain: l.explain || '',
           }));
           grandTotal += addOnsTotal(addOnLines);
       }
