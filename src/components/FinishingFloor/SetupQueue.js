@@ -19,6 +19,11 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
     .filter(w => w.currentPhase === 'Painting')
     .reduce((sum, w) => sum + (Number(w.totalParts) || 0), 0);
   const [activeSpecs, setActiveSpecs] = useState(null);
+  // 📝 ORDER NOTES (Stuart 2026-08-01) — free notes tied to ONE work order, with the author
+  // stamped and a READ LOG beneath, so "did the floor see this?" is answerable after the fact
+  // rather than a conversation. Stored on the WO doc: orderNotes[] and noteReads[].
+  const [noteWo, setNoteWo] = useState(null);   // the WO whose notes panel is open
+  const [noteDraft, setNoteDraft] = useState('');
   const [cfgQuote, setCfgQuote] = useState(null); // "view configured item" read-only 3D modal
 
   // (Stuart 2026-07-17: Direct Order Intake removed — every WO now arrives through the real
@@ -172,6 +177,49 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
   // currentPhase 'Closed' drops it from every queue/planner. If a REAL NetSuite work order
   // backs it (nsWoId, Route A stock builds), the NetSuite WO close is queued through the
   // outbox too, so On-Ord stops counting it. Old pre-NetSuite WOs close app-side only.
+  // WHO IS READING/WRITING. The finishing app identifies people by their chip PIN; currentUser is
+  // whoever opened the screen. A note is worthless without a name against it, so an unnamed
+  // session is asked once rather than allowed to post anonymously.
+  const noteActor = () => {
+      const u = String(currentUser || '').trim();
+      if (u) return u;
+      const typed = window.prompt('Your name (it is stamped on the note):');
+      return String(typed || '').trim();
+  };
+  const notesOf = (wo) => Array.isArray(wo?.orderNotes) ? wo.orderNotes : [];
+  const readsOf = (wo) => Array.isArray(wo?.noteReads) ? wo.noteReads : [];
+  const stamp = (ms) => ms ? new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+
+  // OPENING THE PANEL IS THE READ. Recorded once per person per NOTE — if the same person opens it
+  // again with nothing new posted since, it is not logged twice; a new note makes their next open
+  // count again. That keeps the log meaningful ("who has seen the CURRENT note") instead of a
+  // thousand identical rows.
+  const openNotes = async (wo) => {
+      setNoteWo(wo); setNoteDraft('');
+      const notes = notesOf(wo);
+      if (!notes.length) return;
+      const who = String(currentUser || '').trim();
+      if (!who) return;                                  // never invent a reader
+      const newest = Math.max(...notes.map(n => n.at || 0));
+      const mine = readsOf(wo).filter(r => String(r.by || '') === who).map(r => r.at || 0);
+      if (mine.length && Math.max(...mine) >= newest) return;   // already seen this one
+      try {
+          await updateDoc(doc(db, 'fin_workorders', wo.id), { noteReads: [...readsOf(wo), { by: who, at: Date.now() }] });
+      } catch (e) { /* a read receipt must never block reading */ }
+  };
+
+  const addNote = async () => {
+      const text = noteDraft.trim();
+      if (!text || !noteWo) return;
+      const by = noteActor();
+      if (!by) return;
+      try {
+          await updateDoc(doc(db, 'fin_workorders', noteWo.id), { orderNotes: [...notesOf(noteWo), { text, by, at: Date.now() }] });
+          if (writeLog) writeLog(`📝 Note added to ${noteWo.nsWoTran || noteWo.woNum || noteWo.id} by ${by}: ${text.slice(0, 80)}`, 'info');
+          setNoteDraft('');
+      } catch (e) { alert('Could not save the note: ' + (e.message || e)); }
+  };
+
   const closeOrder = async (wo) => {
       const nsNote = wo.nsWoId
           ? `\n\nThis WO has a NetSuite work order (${wo.nsWoTran || wo.nsWoId}) — closing here ALSO queues the NetSuite WO close (watch 11.1 → NetSuite Sync Queue).`
@@ -539,7 +587,22 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                     </div>
                 </div>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '12px' }}><span style={{color:'var(--ink-soft)'}}>Customer:</span> {wo.customer || wo.clientName || 'N/A'}</div>
-                <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '16px' }}><span style={{color:'var(--ink-soft)'}}>Req Date:</span> <span style={{ fontWeight: 500 }}>{wo.reqDate || 'ASAP'}</span></div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--ink)' }}><span style={{color:'var(--ink-soft)'}}>Req Date:</span> <span style={{ fontWeight: 500 }}>{wo.reqDate || 'ASAP'}</span></div>
+                    {(() => {
+                        const n = notesOf(wo);
+                        const has = n.length > 0;
+                        const last = has ? n[n.length - 1] : null;
+                        return (
+                            <button onClick={() => openNotes(wo)}
+                                title={has ? `${n.length} note${n.length === 1 ? '' : 's'} · latest by ${last.by || 'unknown'} ${stamp(last.at)} — ${String(last.text || '').slice(0, 120)}` : 'No notes on this order yet — add one'}
+                                style={{ padding: '4px 12px', borderRadius: '999px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap',
+                                    background: has ? 'var(--brass)' : 'transparent', color: has ? '#fff' : 'var(--ink-soft)', border: `1px solid ${has ? 'var(--brass)' : 'var(--line)'}` }}>
+                                📝 Notes{has ? ` · ${n.length}` : ''}
+                            </button>
+                        );
+                    })()}
+                </div>
                 
                 <div style={{ fontSize: '0.85rem', lineHeight: '1.6', color: 'var(--ink)' }}>
                     <span style={{color:'var(--ink-soft)'}}>Type:</span> {(wo.type || wo.itemName || 'Custom').toUpperCase()} | <span style={{color:'var(--ink-soft)'}}>Total Parts:</span> {wo.totalParts || wo.qty || 1} <br/>
@@ -664,6 +727,67 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               </div>
           </div>
       )}
+
+      {/* 📝 ORDER NOTES — the note, who left it and when, and every operator who has read it. */}
+      {noteWo && (() => {
+          const wo = workOrders.find(w => w.id === noteWo.id) || noteWo;
+          const notes = notesOf(wo), reads = readsOf(wo);
+          const newest = notes.length ? Math.max(...notes.map(n => n.at || 0)) : 0;
+          return (
+              <div onClick={() => setNoteWo(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '620px', maxWidth: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,.28)' }}>
+                      <div style={{ padding: '18px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                              <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)' }}>Order notes</div>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '3px', letterSpacing: '.06em' }}>
+                                  {wo.nsWoTran || wo.woNum || wo.displayId || wo.id} · {wo.customer || wo.clientName || 'N/A'}
+                              </div>
+                          </div>
+                          <button onClick={() => setNoteWo(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.6rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                      </div>
+
+                      <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+                          {notes.length === 0 && <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', padding: '8px 0 18px' }}>No notes on this order yet.</div>}
+                          {notes.map((n, i) => (
+                              <div key={i} style={{ border: '1px solid var(--line)', borderLeft: '3px solid var(--brass)', padding: '12px 14px', marginBottom: '10px', background: 'var(--paper)' }}>
+                                  <div style={{ fontSize: '0.95rem', color: 'var(--ink)', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{n.text}</div>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '8px', letterSpacing: '.04em' }}>
+                                      — {n.by || 'unknown'} · {stamp(n.at)}
+                                  </div>
+                              </div>
+                          ))}
+
+                          <div style={{ marginTop: '16px' }}>
+                              <textarea value={noteDraft} onChange={e => setNoteDraft(e.target.value)} rows={3} placeholder="Add a note for this order…"
+                                  style={{ width: '100%', boxSizing: 'border-box', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.95rem', resize: 'vertical' }} />
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', gap: '10px', flexWrap: 'wrap' }}>
+                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.04em' }}>Stamped with your name and the time · notes are never edited or deleted, only added</span>
+                                  <button onClick={addNote} disabled={!noteDraft.trim()} style={{ padding: '10px 18px', background: noteDraft.trim() ? 'var(--ink)' : 'var(--paper-2)', color: noteDraft.trim() ? '#fff' : 'var(--ink-soft)', border: noteDraft.trim() ? 'none' : '1px solid var(--line)', cursor: noteDraft.trim() ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>＋ Add note</button>
+                              </div>
+                          </div>
+
+                          {/* READ LOG — who has opened this, and whether they saw the LATEST note. */}
+                          <div style={{ marginTop: '22px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '10px' }}>Read by</div>
+                              {reads.length === 0 ? (
+                                  <div style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>Nobody has opened this yet.</div>
+                              ) : (
+                                  [...reads].sort((a, b) => (b.at || 0) - (a.at || 0)).map((r, i) => {
+                                      const current = (r.at || 0) >= newest;
+                                      return (
+                                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '6px 0', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '11px' }}>
+                                              <span style={{ color: 'var(--ink)' }}>{r.by || 'unknown'}</span>
+                                              <span style={{ color: current ? '#3a7d44' : 'var(--ink-soft)' }}>{stamp(r.at)}{current ? '' : ' · before the latest note'}</span>
+                                          </div>
+                                      );
+                                  })
+                              )}
+                          </div>
+                      </div>
+                  </div>
+              </div>
+          );
+      })()}
     </div>
   );
 };
