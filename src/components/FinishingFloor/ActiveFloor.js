@@ -366,8 +366,53 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       });
   };
 
+  // ---- ONE OPEN STEP PER OPERATOR (Stuart 2026-08-01) ----------------------------------------
+  // "they must pin to complete before they can pin to start the next job (by user) this way they
+  // have to complete their jobs and their pins so we get accurate time data."
+  //
+  // The timing data is only worth having if a Start is always closed by a Stop. One operator with
+  // three half-open steps makes every duration on the floor meaningless — and it is also how jobs
+  // ended up looking half-done. So a PIN'd Start is refused while that same person already has a
+  // step running somewhere on the floor.
+  //
+  // THE OVEN IS EXEMPT, both ways: a bake is the machine working, not the operator, so a running
+  // bake never blocks anybody, and it is not the thing they have to go back and close before
+  // moving on. Everything a person physically does — setup, spray, pole spray, hand finish —
+  // counts.
+  const OVEN_KEYS = new Set(['spinBake', 'poleBake']);
+  const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const openStepFor = (actorName, exceptWoId, exceptKey) => {
+      if (!String(actorName || '').trim()) return null;
+      for (const w of activeWOs) {
+          const tasks = w.tasks || {};
+          for (const k of Object.keys(tasks)) {
+              if (OVEN_KEYS.has(k)) continue;                 // a job in the oven never holds you
+              const tk = tasks[k];
+              if (!tk || tk.status !== 'Running') continue;
+              if (!sameName(tk.assignedTo, actorName)) continue;
+              if (w.id === exceptWoId && k === exceptKey) continue;
+              return { wo: w, key: k, task: tk };
+          }
+      }
+      return null;
+  };
+  const TASK_LABEL = { spinSetup: 'Sled Setup', spinSpray: 'Spray Coat', spinBake: 'Sled Bake', poleSpray: 'Pole Spray', poleBake: 'Pole Bake', hand: 'Hand Finish' };
+
   const manualTask = async (wo, taskKey, action, actor) => {
       const t = (wo.tasks || {})[taskKey] || {};
+      // The gate. Checked at PIN time, because until they PIN we do not know who is asking.
+      if (action === 'START') {
+          const open = openStepFor(actor, wo.id, taskKey);
+          if (open) {
+              const mins = open.task.startTime ? Math.floor((Date.now() - open.task.startTime) / 60000) : null;
+              await logManual({
+                  u: actor, msg: `BLOCKED START · ${taskKey} · ${woRef(wo)} — ${actor} still has ${TASK_LABEL[open.key] || open.key} open on ${woRef(open.wo)}`,
+                  action: 'BLOCKED', station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '',
+              });
+              alert(`${actor} already has a step running.\n\n${TASK_LABEL[open.key] || open.key} on ${woRef(open.wo)}${mins !== null ? ` — started ${mins} min ago` : ''}.\n\nStop that one first (■ Stop = it ran and is done). One open step per person keeps the step times real.\n\nA job in the OVEN is the exception — a running bake never blocks you.`);
+              return;
+          }
+      }
       const startedMs = t.startTime || null;
       const elapsedMs = (action !== 'START' && t.status === 'Running' && startedMs) ? (Date.now() - startedMs) : null;
       const updates = { [`tasks.${taskKey}.manual`]: true };
@@ -652,6 +697,28 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                 <div>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Manual mode · find the cart → scan the setup label → PIN → run the steps</span>
                     <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>🖐 Manual Floor Control</span>
+                    {(() => {
+                        // WHO HAS SOMETHING OPEN, before anyone PINs — so "you already have a step
+                        // running" is never a surprise at the keypad. Bakes are excluded, matching
+                        // the rule: a job in the oven is not an open step.
+                        const open = [];
+                        activeWOs.forEach(w => Object.keys(w.tasks || {}).forEach(k => {
+                            if (OVEN_KEYS.has(k)) return;
+                            const tk = (w.tasks || {})[k];
+                            if (tk && tk.status === 'Running' && tk.assignedTo) open.push({ w, k, tk });
+                        }));
+                        if (!open.length) return null;
+                        return (
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em', lineHeight: 1.7 }}>
+                                <span style={{ color: 'var(--brass)' }}>OPEN NOW</span> — one step per person; stop it before starting the next (the oven does not count):
+                                {open.map(({ w, k, tk }, i) => (
+                                    <span key={i} style={{ display: 'block', color: 'var(--ink)' }}>
+                                        • {tk.assignedTo} · {TASK_LABEL[k] || k} on {woRef(w)}{tk.startTime ? ` · ${Math.floor((now - tk.startTime) / 60000)}m` : ''}
+                                    </span>
+                                ))}
+                            </div>
+                        );
+                    })()}
                 </div>
                 <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                     <input autoFocus value={manualScan} onChange={e => setManualScan(e.target.value)} onKeyDown={e => e.key === 'Enter' && resolveManualScan()} placeholder="SCAN SETUP LABEL…" style={{ padding: '12px 14px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '1rem', outline: 'none', width: '260px', textTransform: 'uppercase' }} />
@@ -1227,7 +1294,12 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
     activeWOs.forEach(w => {
         if(w.tasks) {
             Object.entries(w.tasks).forEach(([tType, t]) => {
-                if(t.status === 'Running' && t.assignedTo === currentOp && ['spinSetup', 'spinSpray', 'spinBake', 'poleSpray', 'poleBake', 'hand'].includes(tType)) {
+                // THE OVEN DOES NOT MAKE YOU BUSY (Stuart 2026-08-01). The station cards already
+                // enforced one open step per operator — but they counted BAKES, so an operator with
+                // a job in the oven read as Busy and could not start anything while it dried, which
+                // is the one case he wants allowed. Bake keys dropped, so this now matches the rule
+                // the PIN'd manual path enforces.
+                if(t.status === 'Running' && t.assignedTo === currentOp && ['spinSetup', 'spinSpray', 'poleSpray', 'hand'].includes(tType)) {
                     selectedOpManualLoad++;
                 }
             });
