@@ -78,7 +78,13 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
 
     const addStepRow = () => setSteps([...steps, { step: steps.length + 1, color: '', app: 'None' }]);
 
-    const canEdit = user && ['admin', 'floor_manager', 'paint_manager'].includes(user.role);
+    // EDIT / DELETE GATE — normalised (Stuart 2026-08-01: "did we lose the ability to edit or delete
+    // a recipe?"). It was an exact match against the underscored spellings, so a role stored as
+    // "Paint Manager", "PAINT_MANAGER" or "paintManager" — all of which the app uses elsewhere —
+    // silently hid the buttons, and SUPER ADMIN was missing entirely, which is the standing gotcha
+    // on this codebase (a super admin reaches the tab and then cannot use it).
+    const roleKey = String(user?.role || '').toLowerCase().replace(/[^a-z]/g, '');
+    const canEdit = !!user && (user.superAdmin === true || ['admin', 'superadmin', 'floormanager', 'paintmanager', 'programmer'].includes(roleKey));
 
     return (
         <div style={{ padding: '40px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'var(--sans)' }}>

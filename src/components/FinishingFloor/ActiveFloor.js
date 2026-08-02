@@ -1039,9 +1039,35 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           // stop (a station card, a force-complete, or a legacy write), and that is precisely the
           // gap worth seeing.
           const clock = (ms) => ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
+          // WHAT THIS RECIPE ACTUALLY CALLS FOR (Stuart 2026-08-01: "it is looking for a hand
+          // finishing step, but this recipe does not call for any hand finishing steps — when a
+          // recipe does not have a step it should be greyed out"). makeFullTasks() seeds EVERY task
+          // key on every order, so a spray-only recipe still carried a Hand Finish task and the grid
+          // showed it Pending forever. The floor's own logic already ignores it — nextPartsAction
+          // reads the CURRENT coat's `app` and only looks at `hand` for a Hand Applied step — so the
+          // order was never actually blocked. The grid was simply telling the operator to do
+          // something the recipe never asked for.
+          const rSteps = (resolveRecipe(recipes, wo.recipe)?.steps) || [];
+          const anyHand = rSteps.some(x => x.app === 'Hand Applied');
+          const anySpray = rSteps.some(x => x.app && x.app !== 'Hand Applied');
+          const appliesTo = { spinSetup: anySpray, spinSpray: anySpray, spinBake: anySpray, hand: anyHand, poleSpray: hasP, poleBake: hasP };
           const chip = (label, key) => {
               const tk = t[key] || {};
               const st = tk.status;
+              // Not in this recipe → greyed, no status, no audit line. Nothing to do and nothing to
+              // chase. rSteps empty means the recipe could not be resolved — say nothing rather
+              // than grey out a step that may well be required.
+              if (rSteps.length && appliesTo[key] === false) {
+                  return (
+                      <div key={label} style={{ padding: '8px 10px', border: '1px dashed var(--line)', background: 'var(--paper)', opacity: 0.7 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--line)' }}>{label}</span>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--line)' }}>n/a</span>
+                          </div>
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '3px' }}>not in recipe {wo.recipe || ''}</div>
+                      </div>
+                  );
+              }
               const started = clock(tk.startTime), done = clock(tk.completedAt);
               const mins = (tk.startTime && tk.completedAt) ? Math.max(0, Math.round((tk.completedAt - tk.startTime) / 60000)) : null;
               const noPin = st === 'Complete' && !tk.completedBy && !tk.assignedTo;
