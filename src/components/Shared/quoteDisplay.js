@@ -1,0 +1,29 @@
+// WHICH NUMBER A QUOTE SHOWS ON SCREEN — one rule, one place (Stuart 2026-08-03: "the
+// sales/quotes are displaying with the app internal id rather than following the rule we put in to
+// use either the Netsuite id when exists, if not the shortned version using the date").
+//
+// A job accumulates up to three identities over its life:
+//   netsuiteEstimateId  the NetSuite record, once ERP Push/Pull has transmitted it — the number
+//                       staff and the customer can both quote back at each other
+//   quoteNo             the short date-stamped number minted at save (initials + MMDDYY + seq,
+//                       e.g. SG080326-01) — readable, sortable, and ours
+//   jobId / id          the internal doc id (QUOTE-1784673212204) — an epoch timestamp, meaningful
+//                       to nobody, and the thing that was leaking onto the CRM cards
+//
+// Precedence follows what the OTHER party can act on: NetSuite's number beats ours, ours beats the
+// raw doc id, and the doc id is the last resort so a screen is never blank.
+export const quoteDisplayNo = (job) => {
+    if (!job) return '';
+    const ns = String(job.netsuiteEstimateId || '').trim();
+    // ERP Push/Pull stores this sentinel when NetSuite accepted the write but returned no id —
+    // it is a status, not a number, so it must never be shown as one.
+    if (ns && ns.toUpperCase() !== 'CREATED_CHECK_NETSUITE') return ns;
+    const q = String(job.quoteNo || '').trim();
+    if (q) return q;
+    return String(job.jobId || job.id || '');
+};
+
+// True when what we're showing is the raw internal id — nothing better exists yet. Screens can use
+// this to style it quietly rather than presenting an epoch stamp as if it were a quote number.
+export const isInternalId = (job) => quoteDisplayNo(job) === String((job && (job.jobId || job.id)) || '')
+    && !String((job && job.quoteNo) || '').trim();

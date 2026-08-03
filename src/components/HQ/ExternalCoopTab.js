@@ -4,6 +4,7 @@ import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
+import { quoteDisplayNo } from '../Shared/quoteDisplay';
 import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
 import FormPreview from '../Shared/FormPreview';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
@@ -741,7 +742,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       .filter(job => {
           const q = searchQuery.toLowerCase();
           const entity = job.customer?.name || '';
-          return (!q || (job.jobId || job.id).toLowerCase().includes(q) || entity.toLowerCase().includes(q) || (job.sidemark && job.sidemark.toLowerCase().includes(q))) &&
+          return (!q || (job.jobId || job.id).toLowerCase().includes(q) || quoteDisplayNo(job).toLowerCase().includes(q) || entity.toLowerCase().includes(q) || (job.sidemark && job.sidemark.toLowerCase().includes(q))) &&
                  (!startDate || job.dateSaved >= startDate) &&
                  (!endDate || job.dateSaved <= endDate);
       });
@@ -991,12 +992,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
               <button onClick={() => { setActiveSubTab('PIPELINE'); setActiveCrmRecord(null); }} style={{ padding: '16px 20px', textAlign: 'left', background: activeSubTab === 'PIPELINE' ? 'var(--paper-2)' : '#fff', color: activeSubTab === 'PIPELINE' ? 'var(--ink)' : 'var(--ink-soft)', border: 'none', borderBottom: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.95rem', cursor: 'pointer', borderLeft: activeSubTab === 'PIPELINE' ? '2px solid var(--brass)' : '2px solid transparent', transition: 'all 0.2s ease' }}>Global Pipeline</button>
           </div>
 
-          <div style={{ flex: 1, background: '#fff', border: '1px solid var(--line)', minHeight: '600px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+          <div style={{ flex: 1, minWidth: 0, background: '#fff', border: '1px solid var(--line)', minHeight: '600px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
               
               {['CUSTOMERS', 'VENDORS'].includes(activeSubTab) && (
                   <div style={{ display: 'flex', height: '100%' }}>
                       
-                      <div style={{ width: '320px', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
+                      <div style={{ width: '320px', flexShrink: 0, borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
                           <div style={{ padding: '20px 24px', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)' }}>
                               <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>{activeSubTab === 'CUSTOMERS' ? 'Customers' : 'Vendors'}</span>
                               <div style={{ display: 'flex', gap: '8px' }}>
@@ -1038,16 +1039,16 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                           </div>
                       </div>
 
-                      <div style={{ flex: 1, padding: '30px', overflowY: 'auto', background: '#fff' }}>
+                      <div style={{ flex: 1, minWidth: 0, padding: '30px', overflowY: 'auto', background: '#fff' }}>
                           {!activeCrmRecord ? (
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>
                                   Select a {activeSubTab === 'CUSTOMERS' ? 'customer' : 'vendor'} to view profile
                               </div>
                           ) : (
-                              <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
+                              <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
                                   
                                   {/* Left Panel: Profile & Financials */}
-                                  <div style={{ flex: 1.5, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                                  <div style={{ flex: '1.5 1 460px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '24px' }}>
                                       
                                       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px' }}>
                                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
@@ -1200,7 +1201,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                   </div>
 
                                   {/* Right Panel: Active & Archived Pipeline with Collapsibles */}
-                                  <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', flex: 1 }}>
+                                  <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', flex: '1 1 360px', minWidth: 0 }}>
 
                                       {/* --- PLATING SHIPMENTS (vendors only) --- */}
                                       {activeSubTab === 'VENDORS' && (() => {
@@ -1259,7 +1260,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                               {getCrmActivePipeline(activeCrmRecord.id).map(job => (
                                                   <div key={job.id} style={{ border: `1px solid ${job.portalDeleted ? '#e2b8b8' : 'var(--line)'}`, borderLeft: job.portalDeleted ? '4px solid #d9534f' : undefined, padding: '16px', background: job.portalDeleted ? '#fdf3f3' : 'var(--paper)' }}>
                                                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                          <span style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', textDecoration: job.portalDeleted ? 'line-through' : 'none' }}>{job.jobId || job.id}</span>
+                                                          <span title={job.jobId || job.id} style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', textDecoration: job.portalDeleted ? 'line-through' : 'none', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{quoteDisplayNo(job)}</span>
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: `1px solid ${job.portalDeleted ? '#d9534f' : 'var(--line)'}`, background: job.portalDeleted ? '#d9534f' : '#fff', color: job.portalDeleted ? '#fff' : 'var(--ink)' }}>{job.portalDeleted ? '🗑 Deleted by client' : job.status.replace(/_/g, ' ')}</span>
                                                       </div>
                                                       {/* The customer withdrew this from their portal. The record is KEPT — this is the
@@ -1274,16 +1275,16 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                       {job.cpqData?.totalPrice && <div style={{ fontSize: '0.9rem', fontWeight: 500, marginTop: '8px', color: 'var(--ink)' }}>Est: ${job.cpqData.totalPrice.toFixed(2)}</div>}
                                                       
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
-                                                          <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>🔍 View Item</button>
+                                                          <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>🔍 View Item</button>
                                                           {job.status === 'CONFIGURED' && (
-                                                              <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Approve</button>
+                                                              <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Approve</button>
                                                           )}
-                                                          <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${job.jobId || job.id} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
-                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
-                                                          <button onClick={() => openEditJobModal(job)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
-                                                          <button onClick={() => reopenQuoteInCpq(job)} title="Reopen this quote's configuration in the CPQ Configurator" style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer' }}>Reopen CPQ</button>
-                                                          <button onClick={() => reopenQuoteInVision(job)} title="Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)" style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer' }}>Reopen Vision</button>
-                                                          <button onClick={() => handleDeleteJob(job.id)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
+                                                          <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${quoteDisplayNo(job)} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
+                                                          <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
+                                                          <button onClick={() => openEditJobModal(job)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
+                                                          <button onClick={() => reopenQuoteInCpq(job)} title="Reopen this quote's configuration in the CPQ Configurator" style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer' }}>Reopen CPQ</button>
+                                                          <button onClick={() => reopenQuoteInVision(job)} title="Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)" style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer' }}>Reopen Vision</button>
+                                                          <button onClick={() => handleDeleteJob(job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
                                                   </div>
                                               ))}
@@ -1332,7 +1333,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                               {getCrmArchivedPipeline(activeCrmRecord.id).map(job => (
                                                   <div key={job.id} style={{ border: '1px solid var(--line)', padding: '16px', background: '#fff', opacity: 0.8 }}>
                                                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                          <span style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--ink)' }}>{job.jobId || job.id}</span>
+                                                          <span title={job.jobId || job.id} style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--ink)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{quoteDisplayNo(job)}</span>
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{job.status.replace(/_/g, ' ')}</span>
                                                       </div>
                                                       <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>{job.sidemark || job.note || 'No description'}</div>
@@ -1398,7 +1399,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                       filteredConfigured.map(job => (
                                           <tr key={job.id} style={{ borderBottom: '1px solid var(--line)', background: job.status === 'APPROVED' ? 'var(--paper)' : '#fff' }}>
                                               <td style={{ padding: '16px 20px' }}>
-                                                  <div style={{ fontWeight: 500, color: 'var(--ink)' }}>{job.jobId || job.id}</div>
+                                                  <div title={job.jobId || job.id} style={{ fontWeight: 500, color: 'var(--ink)' }}>{quoteDisplayNo(job)}</div>
                                                   <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>{job.sidemark || job.note || 'No description'}</div>
                                               </td>
                                               <td style={{ padding: '16px 20px', color: 'var(--ink)' }}>{job.customer?.name || job.clientName || 'N/A'}</td>
