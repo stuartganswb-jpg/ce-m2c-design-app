@@ -16,6 +16,7 @@ import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack } from '../Shared/workOrderContract';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import { qtyText } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
@@ -1258,7 +1259,17 @@ const ShopFloor = () => {
                             {order.cutList.map((c, i) => (
                                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '6px', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
                                     <span style={{ color: 'var(--ink)' }}>{c.name}</span>
-                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>Qty {c.qty}{c.cutLength ? ` · ${c.cutLength}"` : ''}</span>
+                                    {/* "2 × 7" beats a bare 14 (Stuart 2026-08-03): a doubled count
+                                        hides that this is two identical builds, and it stopped
+                                        matching the per-unit figures on the configured-item viewer. */}
+                                    {(() => { const m = Number(c.configQty) || 1; const t = qtyText(c.qtyEach != null ? c.qtyEach : c.qty, m); return (
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>
+                                            {m > 1
+                                                ? <>Qty <b style={{ color: 'var(--brass)' }}>{t.short}</b> = {t.total}</>
+                                                : <>Qty {c.qty}</>}
+                                            {c.cutLength ? ` · ${c.cutLength}"` : ''}
+                                        </span>
+                                    ); })()}
                                 </div>
                             ))}
                         </div>

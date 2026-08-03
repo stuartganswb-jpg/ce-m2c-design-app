@@ -2147,6 +2147,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               mergedBreakdown.push({
                   name: `  - ${line.name}`,
                   qty: line.qty * item.qty,
+                  // Keep BOTH figures on the merged line (Stuart 2026-08-03): the quote shows the
+                  // multiplied total, but every downstream floor screen needs the per-configuration
+                  // count and the multiplier so it can say "2 × 7" instead of a bare 14.
+                  qtyEach: line.qty,
+                  configQty: item.qty,
                   price: line.price,
                   total: line.total * item.qty,
                   partHandling: line.partHandling || '',

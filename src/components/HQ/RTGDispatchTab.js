@@ -664,6 +664,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 const cutList = customLines.map(l => ({
                     name: cleanLineName(l.name),
                     qty: Number(l.qty) || 1,
+                    // Per-configuration count + multiplier, so the shop card can say "2 × 7"
+                    // rather than a bare 14 (Stuart 2026-08-03).
+                    qtyEach: l.qtyEach != null ? Number(l.qtyEach) : null,
+                    configQty: l.configQty != null ? Number(l.configQty) : null,
                     cutLength: l.cutLength || null,
                     partId: l.partId || null,
                     legacyErpId: l.legacyErpId || l.partId || null

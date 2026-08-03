@@ -5,6 +5,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel, EngineeringSpecsStrip } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
+import { configQtyOf, perUnitQty, qtyText, multiplierNote } from './configQty';
 
 // Read-only viewer for a CONFIRMED configured item, opened from the shop floor / finishing floor /
 // HQ work-order windows. Loads the saved job by quoteId, re-renders the frozen `renderState`
@@ -71,6 +72,12 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
     }
     const notes = item?.engineeringNotes || job?.engineeringNotes || null;
     const breakdown = (item?.pricingBreakdown || []).filter(l => l && !l.isHeader);
+    // HOW MANY OF THIS EXACT CONFIGURATION (Stuart 2026-08-03). The cart line's breakdown is saved
+    // PER UNIT while the quote and the shop card show it multiplied — so this modal read "×7" for a
+    // pole the paperwork called 14, and the two looked like they disagreed about the order. The
+    // per-configuration figures stay exactly as they are; the multiplier is now stated out loud.
+    const mult = configQtyOf(item);
+    const multNote = multiplierNote(mult);
     const svg = item?.draftSvg || null;
     const rawHangers = (notes && Array.isArray(notes.hangerLocations)) ? notes.hangerLocations : [];
     const bracketNotes = Array.isArray(item?.bracketNotes) ? item.bracketNotes : [];
@@ -126,11 +133,14 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft, #888)', marginTop: '4px' }}>
                             Confirmed Order · Read-Only{job?.customer?.name ? ` · ${job.customer.name}` : ''}{quoteId ? ` · ${quoteId}` : ''}
                         </div>
+                        {multNote && (
+                            <div style={{ display: 'inline-block', marginTop: '8px', background: 'var(--brass)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, letterSpacing: '.1em', padding: '4px 12px' }}>{multNote.headline}</div>
+                        )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         {items.length > 1 && (
                             <select value={lineIdx} onChange={e => setLineIdx(Number(e.target.value))} style={{ padding: '8px', border: '1px solid var(--line)', background: '#fff', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>
-                                {items.map((it, i) => <option key={i} value={i}>{it.sidemark || it.assemblyName || `Line ${i + 1}`}</option>)}
+                                {items.map((it, i) => { const m = configQtyOf(it); return <option key={i} value={i}>{it.sidemark || it.assemblyName || `Line ${i + 1}`}{m > 1 ? `  ·  × ${m}` : ''}</option>; })}
                             </select>
                         )}
                         <button onClick={onClose} style={{ background: 'var(--ink)', color: '#fff', border: 'none', borderRadius: '2px', padding: '8px 14px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Close</button>
@@ -143,6 +153,14 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                     {error && !loading && <div style={{ flex: 1, textAlign: 'center', padding: '60px', color: 'var(--ink-soft)' }}>{error}</div>}
                     {!loading && !error && job && (
                         <>
+                            {/* The whole point of the modal when qty > 1: say it once, at the top,
+                                before anyone reads a single count below it. */}
+                            {multNote && (
+                                <div style={{ flex: '1 1 100%', background: '#fff', border: '2px solid var(--brass)', borderLeft: '8px solid var(--brass)', padding: '12px 16px', display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '1.15rem', fontWeight: 700, color: 'var(--brass)', letterSpacing: '.08em' }}>{multNote.headline}</span>
+                                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}>{multNote.detail}</span>
+                                </div>
+                            )}
                             {/* Live 3D */}
                             <div style={{ flex: '1 1 440px', minWidth: '320px', minHeight: '440px', background: 'var(--paper-2, #efeae0)', border: '1px solid var(--line)', borderRadius: '2px', position: 'relative' }}>
                                 {rs?.cadUrl ? (
@@ -197,7 +215,7 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
 
                             {/* Bill of Materials / factory router */}
                             <div style={{ flex: '1 1 360px', minWidth: '300px', maxHeight: '320px', overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '14px 16px' }}>
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Bill of Materials · Router</span>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Bill of Materials · Router{mult > 1 ? '  ·  per unit' : ''}</span>
                                 {breakdown.length === 0
                                     ? <div style={{ color: 'var(--ink-soft)', fontSize: '0.8rem' }}>No line items recorded.</div>
                                     : breakdown.map((l, i) => {
@@ -210,7 +228,12 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                                                 <div style={{ color: code ? 'var(--ink-soft)' : 'var(--ink)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</div>
                                                 {(l.partHandling || l.cutLength) && <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '2px' }}>{l.partHandling ? `→ ${l.partHandling}` : ''}{l.cutLength ? ` · cut ${l.cutLength}"` : ''}</div>}
                                             </div>
-                                            <div style={{ color: 'var(--ink-soft)', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>×{l.qty}</div>
+                                            {(() => { const t = qtyText(perUnitQty(l, mult), mult); return (
+                                                <div style={{ fontSize: '0.78rem', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                                                    <div style={{ color: 'var(--ink)', fontFamily: 'var(--mono)', fontWeight: 600 }}>×{t.each}{mult > 1 ? ' ea' : ''}</div>
+                                                    {mult > 1 && <div style={{ color: 'var(--brass)', fontFamily: 'var(--mono)', fontSize: '9px' }}>{t.total} total</div>}
+                                                </div>
+                                            ); })()}
                                         </div>
                                         );
                                     })}
@@ -223,7 +246,12 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.code}</div>
                                                     <div style={{ color: 'var(--ink-soft)', fontSize: '0.76rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.name}{a.via ? ` · rides "${a.via}"` : ''}</div>
                                                 </div>
-                                                <div style={{ color: 'var(--ink-soft)', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>×{a.qty}</div>
+                                                {(() => { const t = qtyText(a.qty, mult); return (
+                                                    <div style={{ fontSize: '0.78rem', whiteSpace: 'nowrap', textAlign: 'right' }}>
+                                                        <div style={{ color: 'var(--ink)', fontFamily: 'var(--mono)', fontWeight: 600 }}>×{t.each}{mult > 1 ? ' ea' : ''}</div>
+                                                        {mult > 1 && <div style={{ color: 'var(--brass)', fontFamily: 'var(--mono)', fontSize: '9px' }}>{t.total} total</div>}
+                                                    </div>
+                                                ); })()}
                                             </div>
                                         ))}
                                     </>
