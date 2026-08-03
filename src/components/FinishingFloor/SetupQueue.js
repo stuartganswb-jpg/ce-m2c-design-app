@@ -7,6 +7,7 @@ import { nsProxyFetch } from '../Shared/nsProxy';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
+import OrderStatusChips from '../Shared/OrderStatusChips';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
 // Finishing converts only ever run for the shop brands.
@@ -587,6 +588,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                     </div>
                 </div>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '12px' }}><span style={{color:'var(--ink-soft)'}}>Customer:</span> {wo.customer || wo.clientName || 'N/A'}</div>
+                {/* The same status every other screen shows — so "where is it" reads identically here. */}
+                <OrderStatusChips wo={wo} recipeLen={((recipes[wo.recipe] || recipes[(wo.recipe || '').toUpperCase()] || {}).steps || []).length} style={{ marginBottom: '12px' }} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
                     <div style={{ fontSize: '0.9rem', color: 'var(--ink)' }}><span style={{color:'var(--ink-soft)'}}>Req Date:</span> <span style={{ fontWeight: 500 }}>{wo.reqDate || 'ASAP'}</span></div>
                     {(() => {

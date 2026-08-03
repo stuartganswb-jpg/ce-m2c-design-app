@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveRecipe } from '../Shared/finishingTime';
+import OrderStatusChips from '../Shared/OrderStatusChips';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
 // Source numbers first: the REAL NetSuite WO # leads wherever it exists; long app id is the fallback.
@@ -1167,6 +1168,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           <button onClick={() => setViewWo(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
                       </div>
                       <div style={{ padding: '20px 26px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <OrderStatusChips wo={wo} recipeLen={len} size="md" style={{ marginBottom: '14px' }} />
                           {row('NetSuite WO', wo.nsWoTran || wo.nsWoId || 'not posted yet')}
                           {row('Item', wo.stockErpId || wo.type || '')}
                           {row('Recipe', wo.recipe || '')}
