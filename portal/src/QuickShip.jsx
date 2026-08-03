@@ -43,11 +43,11 @@ const cell = { flex: 1, minWidth: 160 };
 
 const EMPTY_KB = { poleId: '', poleQty: '', bracketId: '', bracketQty: '', centerBracketId: '', centerBracketQty: '', ringId: '', ringQty: '', finialId: '', finialQty: '', cutRequired: false, cutFeeId: '', cutLen: '' };
 const KB_SLOTS = [
-  { label: 'Pole', idKey: 'poleId', qtyKey: 'poleQty', poolKey: 'poles' },
-  { label: 'Outer Brackets', idKey: 'bracketId', qtyKey: 'bracketQty', poolKey: 'outerBrackets' },
-  { label: 'Center Brackets', idKey: 'centerBracketId', qtyKey: 'centerBracketQty', poolKey: 'centerBrackets' },
-  { label: 'Rings', idKey: 'ringId', qtyKey: 'ringQty', poolKey: 'rings' },
-  { label: 'Finials', idKey: 'finialId', qtyKey: 'finialQty', poolKey: 'finials' },
+  { label: 'Pole', idKey: 'poleId', qtyKey: 'poleQty', poolKey: 'poles', cat: 'POLE' },
+  { label: 'Outer Brackets', idKey: 'bracketId', qtyKey: 'bracketQty', poolKey: 'outerBrackets', cat: 'BRACKET' },
+  { label: 'Center Brackets', idKey: 'centerBracketId', qtyKey: 'centerBracketQty', poolKey: 'centerBrackets', cat: 'BRACKET' },
+  { label: 'Rings', idKey: 'ringId', qtyKey: 'ringQty', poolKey: 'rings', cat: 'RING' },
+  { label: 'Finials', idKey: 'finialId', qtyKey: 'finialQty', poolKey: 'finials', cat: 'FINIAL' },
 ];
 
 export default function QuickShip() {
@@ -112,6 +112,38 @@ export default function QuickShip() {
   const finishes = useMemo(() => [...new Set(scoped.map(finishCodeOf).filter(Boolean))].sort(), [scoped]);
 
   const byCat = (cat) => scoped.filter((it) => catOf(it) === cat && isFinished(it));
+
+  // WHY a slot is empty (Stuart 2026-08-03: "the rest of the fields do not populate correctly …
+  // maybe something is not set up all the way for H1?"). Every empty list used to read the same
+  // "none at this diameter/finish", which is four different setup problems wearing one sentence —
+  // so it could never answer his question. Walk the same cascade the pool does and name the step
+  // that emptied it.
+  //
+  // The one that matters here: an item with NO rod-diameter key can never match a chosen diameter,
+  // so it silently disappears the moment a diameter is picked. Size keys are stamped (System Admin
+  // → 🧬 Size-Family Stamper) or derived from a family's code grammar; a family with neither leaves
+  // its items unkeyed, and this is the only place that says so out loud.
+  const emptyReasonFor = (cat) => {
+    if (!scoped.length) return 'nothing in this collection is set up for Quick Ship yet';
+    const inCat = scoped.filter((it) => catOf(it) === cat);
+    if (!inCat.length) return 'none in this collection';
+    const finished = inCat.filter(isFinished);
+    if (!finished.length) return 'mill finish only — no pre-finished stock items';
+    if (dia) {
+      const keyed = finished.filter((it) => diaCandidatesFor(it).length > 0);
+      if (!keyed.length) return 'these carry no rod-diameter key — not stamped to a size family';
+      if (!keyed.filter((it) => diaCandidatesFor(it).includes(dia)).length) return 'none at this diameter';
+    }
+    if (fin && !atDia(finished).filter((it) => finishCodeOf(it) === fin).length) return 'none in this finish';
+    return 'none available';
+  };
+
+  // Setup read-out for the chosen collection — the numbers that decide whether anything can show.
+  const scopeStats = useMemo(() => {
+    const finished = scoped.filter(isFinished);
+    return { total: scoped.length, finished: finished.length, keyed: finished.filter((it) => diaCandidatesFor(it).length > 0).length };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scoped, index, scope]);
   const atDia = (list) => dia ? list.filter((it) => diaCandidatesFor(it).includes(dia)) : list;
   const atFinish = (list) => fin ? list.filter((it) => finishCodeOf(it) === fin) : list;
   const pool = (cat) => atFinish(atDia(byCat(cat)));
@@ -230,7 +262,7 @@ export default function QuickShip() {
     return (
       <div key={s.label} style={{ ...row, marginBottom: 12, alignItems: 'flex-end' }}>
         <div style={{ ...cell, flex: 3 }}>
-          <label style={lbl}>{s.label}{list.length === 0 ? ' — none at this diameter/finish' : ''}</label>
+          <label style={lbl}>{s.label}{list.length === 0 ? ` — ${emptyReasonFor(s.cat)}` : ''}</label>
           <select style={field} value={kb[s.idKey]} onChange={(e) => setK(s.idKey, e.target.value)} disabled={list.length === 0}>
             <option value="">—</option>
             {list
@@ -291,6 +323,13 @@ export default function QuickShip() {
                 </select>
               </div>
             </div>
+            {(scope || data.collections.length === 1) && scopeStats.total > 0 && scopeStats.keyed === 0 && (
+              <div className="empty" style={{ marginBottom: 14 }}>
+                {scopeStats.finished === 0
+                  ? `${scopeStats.total} item(s) are enabled for this collection but none are pre-finished stock — Quick Ship only sells finished "/CODE" variants.`
+                  : `${scopeStats.finished} pre-finished item(s) here carry no rod-diameter key, so choosing a diameter hides them all. Leave Rod Diameter on "Any", or have them stamped to a size family.`}
+              </div>
+            )}
             {scope || data.collections.length === 1 ? (
               <>
                 {slotSelect(KB_SLOTS[0])}
