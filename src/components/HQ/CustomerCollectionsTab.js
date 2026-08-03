@@ -24,7 +24,7 @@ import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatc
 import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
 import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable } from '../Shared/feeRules';
-import { PLATE_ROLES, plateRoleOf, pairedBackplateCode } from '../Shared/plateRules';
+import { PLATE_ROLES, plateRoleOf, pairedBackplateCode, includesPlate } from '../Shared/plateRules';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -142,6 +142,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     // FEES mode lists the brand's fee catalogue instead of a collection's parts. Fees are brand-wide,
     // not collection-scoped — a rush or shipping fee applies to any order — and they are almost never
     // tagged into a collection, which is exactly why they were invisible here (Stuart 2026-07-30).
+    const [bulkVals, setBulkVals] = useState({});        // the shared pricing bulk bar
     const [bulkUp, setBulkUp] = useState('');            // PLATES bulk bar: painted upcharge
     const [bulkUpPrem, setBulkUpPrem] = useState('');    // …and the /EP //P25 premium tier
     const [mode, setMode] = useState('COLLECTION');        // COLLECTION | FEES | CHECKOUT | PLATES
@@ -223,6 +224,13 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         // one place, it is tedious to do this all via master library"). Every plate in the brand,
         // because the role is ITEM metadata — setting it once serves every customer and every flow.
         if (mode === 'PLATES') return inventory.filter(p => /PLATE/i.test(String(p.manufacturingSpecs?.productType || '')) && p.manufacturingSpecs?.isRetired !== true);
+        // ARMS: everything that can CARRY a plate — bracket arms and the return fees that replace
+        // them. This is where "which parts include a backplate" is answered.
+        if (mode === 'ARMS') return inventory.filter(p => {
+            if (p.manufacturingSpecs?.isRetired === true) return false;
+            const pt = String(p.manufacturingSpecs?.productType || '').toUpperCase();
+            return /BRACKET|ARM/.test(pt) || isFeeItem(p);
+        });
         if (mode === 'CHECKOUT') return upper(search).trim()
             ? inventory.filter(p => p?.manufacturingSpecs?.isRetired !== true)
             : inventory.filter(isCheckoutSelectable);
@@ -268,6 +276,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     feePortal: rv('feePortal', rule.portalSelectable),
                     checkout: rv('checkout', isCheckoutSelectable(p)),
                     plateRole: rv('plateRole', plateRoleOf(p)),
+                    carriesPlate: rv('carriesPlate', includesPlate(p)),
                     plateUpgradeOf: rv('plateUpgradeOf', p.manufacturingSpecs?.plateUpgradeOf || ''),
                     plateUpcharge: rv('plateUpcharge', p.manufacturingSpecs?.plateUpcharge ?? ''),
                     plateUpchargePremium: rv('plateUpchargePremium', p.manufacturingSpecs?.plateUpchargePremium ?? ''),
@@ -338,6 +347,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 // Plate pricing role + its tiered upcharge. Blank is stored as '' rather than 0 —
                 // "no figure entered" and "free" are different answers and the engine reads them so.
                 if (e.plateRole !== undefined) patch['manufacturingSpecs.plateRole'] = e.plateRole || '';
+                // Stored only when it is FALSE — the default (an arm covers its plate) stays absent,
+                // so ticking everything on doesn't write a field to every item in the catalogue.
+                if (e.carriesPlate !== undefined) patch['manufacturingSpecs.includesPlate'] = e.carriesPlate ? null : false;
                 if (e.plateUpgradeOf !== undefined) patch['manufacturingSpecs.plateUpgradeOf'] = upper(e.plateUpgradeOf);
                 if (e.plateUpcharge !== undefined) patch['manufacturingSpecs.plateUpcharge'] = money(e.plateUpcharge);
                 if (e.plateUpchargePremium !== undefined) patch['manufacturingSpecs.plateUpchargePremium'] = money(e.plateUpchargePremium);
@@ -586,8 +598,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
                 <div style={{ display: 'flex', border: `1px solid ${theme.line}` }}>
-                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons'], ['CHECKOUT', '🛒 Checkout Items'], ['PLATES', '🔗 Plate Pricing']].map(([k, l]) => (
-                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : k === 'PLATES' ? 'Backplate / cover-plate pricing roles for the whole brand at once — which plates ride free with the arm, and what the upgrade costs painted vs premium.' : k === 'CHECKOUT' ? 'What the CPQ checkout screen offers as add-on lines — fees OR real items. Only ticked items appear there.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
+                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons'], ['CHECKOUT', '🛒 Checkout Items'], ['PLATES', '🔗 Plate Pricing'], ['ARMS', '🦾 Arms & Returns']].map(([k, l]) => (
+                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : k === 'ARMS' ? 'Which bracket arms and return fees carry a free backplate in their price. Everything does by default — untick the exceptions.' : k === 'PLATES' ? 'Backplate / cover-plate pricing roles for the whole brand at once — which plates ride free with the arm, and what the upgrade costs painted vs premium.' : k === 'CHECKOUT' ? 'What the CPQ checkout screen offers as add-on lines — fees OR real items. Only ticked items appear there.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
                     ))}
                 </div>
                 <select value={coll} onChange={e => { setColl(e.target.value); setEdits({}); }} title={mode === 'FEES' ? 'In Fees mode this does not filter the list (fees are brand-wide) — it is the collection a NEW fee gets tagged into.' : 'Parts carrying this collection'} style={{ ...fld, minWidth: '220px' }}>
@@ -628,6 +640,51 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         </div>
                     )}
 
+                    {/* Set any pricing column across every row currently listed (Stuart 2026-08-03:
+                        "why not add to the top all the fields so that we can add Base $, Their SKU,
+                        Their Net $, Their Sales $, Their Retail all at once"). SEARCH first — "all
+                        shown" means exactly the rows below. Nothing is written until Save. */}
+                    {(() => {
+                        const FIELDS = [
+                            { k: 'basePrice', label: 'Base $', w: '90px' },
+                            { k: 'clientSku', label: 'Their SKU', w: '130px' },
+                            { k: 'price', label: 'Their Net $', w: '100px' },
+                            { k: 'clientSalesPrice', label: 'Their Sales $', w: '100px' },
+                            { k: 'clientRetailPrice', label: 'Their Retail $', w: '100px' },
+                        ];
+                        const filled = FIELDS.filter(f => String(bulkVals[f.k] ?? '').trim() !== '');
+                        const applyPricing = () => setEdits(prev => {
+                            const next = { ...prev };
+                            rows.forEach(r => {
+                                const e = { ...(next[r.p.id] || {}) };
+                                filled.forEach(f => { e[f.k] = bulkVals[f.k]; });
+                                next[r.p.id] = e;
+                            });
+                            return next;
+                        });
+                        const needsCustomer = filled.some(f => f.k !== 'basePrice');
+                        return (
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '12px 18px', display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, alignSelf: 'center' }}>Set on all {rows.length} shown</span>
+                                {FIELDS.map(f => (
+                                    <label key={f.k} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>{f.label}</span>
+                                        <input value={bulkVals[f.k] ?? ''} onChange={e => setBulkVals(v => ({ ...v, [f.k]: e.target.value }))} placeholder="—" style={{ ...fld, width: f.w }} />
+                                    </label>
+                                ))}
+                                <button onClick={applyPricing} disabled={!rows.length || !filled.length || (needsCustomer && !custId)}
+                                    title={needsCustomer && !custId ? 'Pick a customer first — Their SKU / Net / Sales / Retail are per-customer' : 'Stage these values on every row listed below'}
+                                    style={btn(true, { background: theme.green, borderColor: theme.green })}>
+                                    Apply {filled.length ? `${filled.length} field${filled.length === 1 ? '' : 's'}` : ''}
+                                </button>
+                                {filled.length > 0 && <button onClick={() => setBulkVals({})} style={btn(false)}>Clear</button>}
+                                <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, alignSelf: 'center' }}>
+                                    Blank fields are left alone{needsCustomer && !custId ? ' · pick a customer for the per-customer columns' : ''}
+                                </span>
+                            </div>
+                        );
+                    })()}
+
                     {mode === 'PLATES' && (() => {
                         const applyAll = (field, value) => setEdits(prev => {
                             const next = { ...prev };
@@ -657,6 +714,31 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 </div>
                                 <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '8px', letterSpacing: '.04em' }}>
                                     Nothing is written until you press Save — search first to narrow what "all shown" means.
+                                </div>
+                            </div>
+                        );
+                    })()}
+
+                    {mode === 'ARMS' && (() => {
+                        const off = members.filter(p => !includesPlate(p)).length;
+                        const applyAll = (v) => setEdits(prev => {
+                            const next = { ...prev };
+                            rows.forEach(r => { next[r.p.id] = { ...(next[r.p.id] || {}), carriesPlate: v }; });
+                            return next;
+                        });
+                        return (
+                            <div style={{ background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
+                                <div style={{ fontSize: '0.88rem', color: theme.ink }}>
+                                    This is the other half of the plate rule: <b>which arms and returns carry a free backplate</b>. A miter or french return is a fee item — it shows here too, so a return can include its plate exactly like an arm does.
+                                    <span style={{ display: 'block', color: theme.inkSoft, marginTop: '4px' }}>
+                                        Everything is included <b>by default</b>, because that is how the catalogue has always worked — untick only the exceptions. Unticking makes that arm's plate bill at its own price, and the quote line says which arm declined to cover it.
+                                        {' '}<b style={{ color: off ? theme.red : theme.brassDark }}>{off === 0 ? 'No exceptions set — every arm and return covers its plate.' : `${off} exception${off === 1 ? '' : 's'} set.`}</b>
+                                    </span>
+                                </div>
+                                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', borderTop: `1px solid ${theme.line}`, paddingTop: '12px', marginTop: '12px' }}>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Apply to all {rows.length} shown</span>
+                                    <button onClick={() => applyAll(true)} disabled={!rows.length} style={btn(false)}>✓ Includes its plate</button>
+                                    <button onClick={() => applyAll(false)} disabled={!rows.length} style={btn(false)}>✕ Does not include</button>
                                 </div>
                             </div>
                         );
@@ -716,6 +798,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead style={{ position: 'sticky', top: 0, background: theme.paper, zIndex: 5 }}>
                                 <tr>
+                                    {mode === 'ARMS' && <th style={{ ...th, textAlign: 'center', width: '120px', borderLeft: `2px solid ${theme.ink}` }} title="Ticked = this arm or return's price already covers its backplate, so the plate quotes at $0. Unticked = the plate bills on its own.">Includes&nbsp;plate</th>}
                                     {mode === 'PLATES' && <>
                                         <th style={{ ...th, borderLeft: `2px solid ${theme.ink}`, width: '210px' }} title="How this plate prices in a quote. None = exactly as today.">Plate role</th>
                                         <th style={th} title="The backplate this cover plate replaces. Blank = derived from the code.">Upgrade over</th>
@@ -743,6 +826,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                             <tbody>
                                 {rows.flatMap(r => [(
                                     <tr key={r.p.id} style={{ background: r.dirty ? 'rgba(176,141,87,.07)' : '#fff' }}>
+                                        {mode === 'ARMS' && (
+                                            <td style={{ ...td, textAlign: 'center', borderLeft: `2px solid ${theme.ink}` }}>
+                                                <input type="checkbox" checked={!!r.carriesPlate} onChange={e => setEdit(r.p.id, 'carriesPlate', e.target.checked)} style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
+                                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: r.isFeeRec ? theme.brassDark : theme.inkSoft, marginTop: '3px' }}>{r.isFeeRec ? 'RETURN / FEE' : 'ARM'}</div>
+                                            </td>
+                                        )}
                                         {mode === 'PLATES' && <>
                                             <td style={{ ...td, borderLeft: `2px solid ${theme.ink}` }}>
                                                 <select value={r.plateRole || ''} onChange={e => setEdit(r.p.id, 'plateRole', e.target.value)} style={{ ...cellInput(edits[r.p.id]?.plateRole !== undefined), width: '200px', textAlign: 'left' }}>
@@ -816,7 +905,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     </tr>
                                 ), tierRow === r.p.id ? (
                                     <tr key={r.p.id + '-tiers'}>
-                                        <td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
+                                        <td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : mode === 'ARMS' ? 9 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
                                                 <span style={{ fontFamily: theme.serif, fontSize: '1.15rem', color: theme.ink }}>Customer Alias &amp; Pricing — {r.code}</span>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>drives the CPQ price levels · blank = no price at that tier</span>
@@ -852,7 +941,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     </tr>
                                 ) : null])}
                                 {rows.length === 0 && (
-                                    <tr><td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
+                                    <tr><td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : mode === 'ARMS' ? 9 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
                                         {members.length === 0 ? `No parts carry the ${coll} collection yet — add them with the search on the right.` : 'No parts match this filter.'}
                                         {searchMisses.length > 0 && (
                                             <div style={{ marginTop: '18px', fontStyle: 'normal', fontFamily: theme.sans }}>

@@ -32,6 +32,20 @@ import { isPlatedSuffix } from './priceLevels';
 // way every other price in the app is — painted vs plated — and the tier is decided by the same
 // isPlatedSuffix the Fabricut ladder uses, so /EP1-6 and /P25 agree everywhere. /P is phosphate,
 // an in-house paint step, and stays on the painted tier.
+// WHICH ARMS AND RETURNS CARRY A FREE PLATE (Stuart 2026-08-03: "where can i assign the parts that
+// the backplates are included? i do not see how using this tool i can tell it to include backplates
+// and upgrade cover plates for miter returns").
+//
+// He is right that there was nowhere to say it. The rule was IMPLICIT — any main selection on the
+// step (bracket arm, or a french/miter return that replaces the arm) included the plate. That is
+// the correct DEFAULT, because it is how the catalogue actually works, but it left no way to see
+// which items carry a plate or to name an exception.
+//
+// So the tick is an OVERRIDE, not a gate: manufacturingSpecs.includesPlate === false means THIS arm
+// or fee does NOT cover its plate, and the plate bills normally. Undefined keeps today's behaviour.
+// Declaring it as an allow-list instead would have silently un-included every arm nobody got to yet.
+export const includesPlate = (parentPart) => specsOf(parentPart).includesPlate !== false;
+
 export const PLATE_ROLES = [
     { id: '', label: '— none (priced normally) —' },
     { id: 'INCLUDED', label: 'Backplate — included with the arm / return ($0 on the quote)' },
@@ -79,7 +93,7 @@ export const pairedBackplateCode = (part) => {
  * @param {function} findByCode   (CODE) => part, to resolve the paired backplate
  * @returns {{price:number, note:string}|null}  null = no association, caller keeps normalPrice
  */
-export function platePrice({ plate, baseDoc, normalPrice, hasParent, finishCode, outsourceCodes, findByCode }) {
+export function platePrice({ plate, baseDoc, normalPrice, hasParent, parentPart, finishCode, outsourceCodes, findByCode }) {
     // The role is declared on whichever doc carries it. A finish VARIANT (H1-1CP-V/EP4) is usually a
     // separate record from its mill base, and nobody should have to tag all of them — so the base
     // doc answers for its variants, exactly as the finish-variant price chain already does.
@@ -92,7 +106,9 @@ export function platePrice({ plate, baseDoc, normalPrice, hasParent, finishCode,
         // Nothing to be included IN — a plate chosen with no arm/return on the step is a plate the
         // customer is buying on its own, so it bills.
         if (!hasParent) return { price: base, note: 'no arm on this step — plate billed on its own' };
-        return { price: 0, note: 'included in the arm / return price' };
+        // …or the arm/return on this step is one that has been told it does NOT cover its plate.
+        if (!includesPlate(parentPart)) return { price: base, note: `${codeOfPart(parentPart) || 'this arm'} does not include its plate — billed` };
+        return { price: 0, note: `included in ${codeOfPart(parentPart) || 'the arm / return'} price` };
     }
 
     // UPGRADE. Tiered: a plated upgrade may cost more than a painted one, and the premium field

@@ -1560,6 +1560,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const selectedValue = dynamicConfigParams[step.id];
           // CUSTOM WORK on this step: overrules the library routing for everything it emits, and
           // adds its own priced fee line. The fee item's Part Handling is the destination floor.
+          // Declared at STEP scope on purpose: the priced-line block below closes before the plate
+          // sub-line is built, so a capture inside it would be out of scope exactly where the plate
+          // needs to ask "does my arm cover me?".
+          let resolvedArmPart = null;
           const ovr = customOverrides[step.id];
           const ovrActive = !!(ovr && ovr.feeItemId && ovr.handling);
           const ovrHandling = ovrActive ? ovr.handling : null;
@@ -1649,6 +1653,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
 
                   resolvedErpId = partObj?.legacyErpId || partObj?.itemId || styleOpt?.legacyErpId || null;
                   resolvedHandling = partObj?.manufacturingSpecs?.partHandling || null;
+                  resolvedArmPart = partObj || null;
                   if (isFeePart(partObj, styleOpt)) lineIsFee = true;
 
                   if (partObj) itemName = `${step.title} (${lineNameFor(partObj, styleOpt)})`;
@@ -1835,9 +1840,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // a french/miter return, which REPLACES the arm and carries the plate itself.
                   let plateNote = '';
                   const plateHasParent = !!selectedValue || returnLocksBracket(step) || isReturnChosenForPos(step.position);
+                  // WHICH item is doing the including — the arm chosen on this step, or (when a
+                  // return has replaced the arm) the return fee itself. It is passed so an item can
+                  // say it does NOT cover its plate, and so the quote line can name what covers it.
+                  const plateParent = (() => {
+                      if (selectedValue) return resolvedArmPart;
+                      const rp = (activeFlow?.steps || []).find(st => (st.position || '').toUpperCase() === String(step.position || '').toUpperCase() && /end treatment/i.test(st.title || ''));
+                      const rsel = rp && dynamicConfigParams[rp.id];
+                      const ropt = rsel && (rp.styleOptions || []).find(x => (x.optId || x.partId) === rsel);
+                      return ropt ? (findLibPart(ropt.partId) || findLibPart(ropt.partName)) : null;
+                  })();
                   const pp = platePrice({
                       plate: subPart || subBase, baseDoc: subBase || subBase0, normalPrice: subPrice,
-                      hasParent: plateHasParent, finishCode: finishCodeForStep(step.id),
+                      hasParent: plateHasParent, parentPart: plateParent, finishCode: finishCodeForStep(step.id),
                       outsourceCodes: outsourceFinishes, findByCode: findLibPart
                   });
                   if (pp) { subPrice = pp.price; plateNote = pp.note; }
