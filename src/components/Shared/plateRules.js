@@ -25,6 +25,13 @@
 //                 covering and the customer pays only for the upgrade.
 //   anything else / unset → priced exactly as before. No blast radius.
 
+import { isPlatedSuffix } from './priceLevels';
+
+// PREMIUM TIER (Stuart 2026-08-03: "the rule is affected also by the /p or /ep premium"). A plated
+// cover plate costs more to upgrade to than a painted one, so the upcharge is TIERED exactly the
+// way every other price in the app is — painted vs plated — and the tier is decided by the same
+// isPlatedSuffix the Fabricut ladder uses, so /EP1-6 and /P25 agree everywhere. /P is phosphate,
+// an in-house paint step, and stays on the painted tier.
 export const PLATE_ROLES = [
     { id: '', label: '— none (priced normally) —' },
     { id: 'INCLUDED', label: 'Backplate — included with the arm / return ($0 on the quote)' },
@@ -39,6 +46,14 @@ export const plateRoleOf = (part) => {
     const r = String(specsOf(part).plateRole || '').trim().toUpperCase();
     return (r === 'INCLUDED' || r === 'UPGRADE') ? r : '';
 };
+
+export const suffixOfCode = (code) => { const c = String(code || ''); const i = c.lastIndexOf('/'); return i > 0 ? c.slice(i + 1).toUpperCase() : ''; };
+
+// Is THIS line the premium tier? Either the resolved plate is itself a plated variant, or the step's
+// chosen finish is a plated code (the case where the plate doc is the suffixless base).
+export const isPremiumPlate = (plate, finishCode, outsourceCodes) =>
+    isPlatedSuffix(suffixOfCode(codeOfPart(plate)), outsourceCodes) ||
+    isPlatedSuffix(String(finishCode || '').toUpperCase(), outsourceCodes);
 
 // The backplate a cover plate replaces. Explicit field wins; otherwise the house naming convention
 // — …CP… ⇄ …BP… on the same stem, finish suffix preserved — which is how every H1 plate is named.
@@ -64,9 +79,13 @@ export const pairedBackplateCode = (part) => {
  * @param {function} findByCode   (CODE) => part, to resolve the paired backplate
  * @returns {{price:number, note:string}|null}  null = no association, caller keeps normalPrice
  */
-export function platePrice(plate, normalPrice, hasParent, findByCode) {
-    const role = plateRoleOf(plate);
+export function platePrice({ plate, baseDoc, normalPrice, hasParent, finishCode, outsourceCodes, findByCode }) {
+    // The role is declared on whichever doc carries it. A finish VARIANT (H1-1CP-V/EP4) is usually a
+    // separate record from its mill base, and nobody should have to tag all of them — so the base
+    // doc answers for its variants, exactly as the finish-variant price chain already does.
+    const role = plateRoleOf(plate) || plateRoleOf(baseDoc);
     if (!role) return null;
+    const src = plateRoleOf(plate) ? plate : baseDoc;   // the doc whose fields we read
     const base = Math.max(0, num(normalPrice) ?? 0);
 
     if (role === 'INCLUDED') {
@@ -76,11 +95,17 @@ export function platePrice(plate, normalPrice, hasParent, findByCode) {
         return { price: 0, note: 'included in the arm / return price' };
     }
 
-    // UPGRADE: the flat upcharge if one is set, else the difference over the plate it replaces.
-    const explicit = num(specsOf(plate).plateUpcharge);
-    if (explicit !== null) return { price: Math.max(0, explicit), note: `upgrade over ${pairedBackplateCode(plate) || 'the standard plate'}` };
+    // UPGRADE. Tiered: a plated upgrade may cost more than a painted one, and the premium field
+    // falls back to the painted one when it is left blank, so a single figure still works.
+    const premium = isPremiumPlate(plate, finishCode, outsourceCodes);
+    const tierNote = premium ? ' premium' : '';
+    const explicit = premium
+        ? (num(specsOf(src).plateUpchargePremium) ?? num(specsOf(src).plateUpcharge))
+        : num(specsOf(src).plateUpcharge);
+    // Pair off the RESOLVED plate so the finish suffix carries into the code we look up.
+    const bpCode = pairedBackplateCode(plate) || pairedBackplateCode(src);
+    if (explicit !== null) return { price: Math.max(0, explicit), note: `${tierNote ? 'premium ' : ''}upgrade over ${bpCode || 'the standard plate'}` };
 
-    const bpCode = pairedBackplateCode(plate);
     const bp = bpCode && typeof findByCode === 'function' ? findByCode(bpCode) : null;
     const bpPrice = bp ? (num(specsOf(bp).basePrice ?? bp.basePrice) ?? 0) : null;
     if (bpPrice === null) {
@@ -88,5 +113,5 @@ export function platePrice(plate, normalPrice, hasParent, findByCode) {
         // say why, rather than silently under-charging.
         return { price: base, note: `no paired backplate found${bpCode ? ` (${bpCode})` : ''} — billed in full` };
     }
-    return { price: Math.max(0, base - bpPrice), note: `upgrade over ${bpCode} ($${bpPrice.toFixed(2)})` };
+    return { price: Math.max(0, base - bpPrice), note: `${tierNote ? 'premium ' : ''}upgrade over ${bpCode} ($${bpPrice.toFixed(2)})` };
 }

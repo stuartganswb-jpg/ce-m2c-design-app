@@ -1835,7 +1835,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // a french/miter return, which REPLACES the arm and carries the plate itself.
                   let plateNote = '';
                   const plateHasParent = !!selectedValue || returnLocksBracket(step) || isReturnChosenForPos(step.position);
-                  const pp = platePrice(subPart || subBase, subPrice, plateHasParent, findLibPart);
+                  const pp = platePrice({
+                      plate: subPart || subBase, baseDoc: subBase || subBase0, normalPrice: subPrice,
+                      hasParent: plateHasParent, finishCode: finishCodeForStep(step.id),
+                      outsourceCodes: outsourceFinishes, findByCode: findLibPart
+                  });
                   if (pp) { subPrice = pp.price; plateNote = pp.note; }
                   // Price level on plate sub-lines: BP → $0 (in the arm), CP → the flat upcharge.
                   // Fabricut levels stay authoritative for their own customers — they carry the same

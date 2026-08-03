@@ -24,6 +24,7 @@ import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatc
 import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
 import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable } from '../Shared/feeRules';
+import { PLATE_ROLES, plateRoleOf, pairedBackplateCode } from '../Shared/plateRules';
 
 const theme = {
     paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46',
@@ -141,7 +142,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     // FEES mode lists the brand's fee catalogue instead of a collection's parts. Fees are brand-wide,
     // not collection-scoped — a rush or shipping fee applies to any order — and they are almost never
     // tagged into a collection, which is exactly why they were invisible here (Stuart 2026-07-30).
-    const [mode, setMode] = useState('COLLECTION');        // COLLECTION | FEES | CHECKOUT
+    const [bulkUp, setBulkUp] = useState('');            // PLATES bulk bar: painted upcharge
+    const [bulkUpPrem, setBulkUpPrem] = useState('');    // …and the /EP //P25 premium tier
+    const [mode, setMode] = useState('COLLECTION');        // COLLECTION | FEES | CHECKOUT | PLATES
     const [edits, setEdits] = useState({});                 // docId → { clientSku, price, clientSalesPrice, basePrice }
     const [saving, setSaving] = useState(false);
     const [addSearch, setAddSearch] = useState('');
@@ -216,6 +219,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         // CHECKOUT ITEMS (Stuart 2026-07-31): what the CPQ checkout screen offers. By default the
         // list IS the curated set, so you see exactly what a customer sees. Type in the search box
         // and it searches the WHOLE library instead — that is how you find something new to tick.
+        // PLATES (Stuart 2026-08-03: "can we add the bulk tool to 4.6 so we can add/update all in
+        // one place, it is tedious to do this all via master library"). Every plate in the brand,
+        // because the role is ITEM metadata — setting it once serves every customer and every flow.
+        if (mode === 'PLATES') return inventory.filter(p => /PLATE/i.test(String(p.manufacturingSpecs?.productType || '')) && p.manufacturingSpecs?.isRetired !== true);
         if (mode === 'CHECKOUT') return upper(search).trim()
             ? inventory.filter(p => p?.manufacturingSpecs?.isRetired !== true)
             : inventory.filter(isCheckoutSelectable);
@@ -260,6 +267,11 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     feeMin: rv('feeMin', rule.minAmount ?? ''),
                     feePortal: rv('feePortal', rule.portalSelectable),
                     checkout: rv('checkout', isCheckoutSelectable(p)),
+                    plateRole: rv('plateRole', plateRoleOf(p)),
+                    plateUpgradeOf: rv('plateUpgradeOf', p.manufacturingSpecs?.plateUpgradeOf || ''),
+                    plateUpcharge: rv('plateUpcharge', p.manufacturingSpecs?.plateUpcharge ?? ''),
+                    plateUpchargePremium: rv('plateUpchargePremium', p.manufacturingSpecs?.plateUpchargePremium ?? ''),
+                    derivedPair: pairedBackplateCode(p),
                     isFeeRec: isFeeItem(p),
                     plated: isPlatedSuffix(codeOf(p).includes('/') ? codeOf(p).split('/')[1] : '', outsourceFinishes),
                     code: codeOf(p),
@@ -323,6 +335,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 // On the CPQ checkout screen? Works for fees AND real items — the flag is the item's,
                 // not the customer's, so ticking it once serves every quote.
                 if (e.checkout !== undefined) patch['manufacturingSpecs.checkoutSelectable'] = !!e.checkout;
+                // Plate pricing role + its tiered upcharge. Blank is stored as '' rather than 0 —
+                // "no figure entered" and "free" are different answers and the engine reads them so.
+                if (e.plateRole !== undefined) patch['manufacturingSpecs.plateRole'] = e.plateRole || '';
+                if (e.plateUpgradeOf !== undefined) patch['manufacturingSpecs.plateUpgradeOf'] = upper(e.plateUpgradeOf);
+                if (e.plateUpcharge !== undefined) patch['manufacturingSpecs.plateUpcharge'] = money(e.plateUpcharge);
+                if (e.plateUpchargePremium !== undefined) patch['manufacturingSpecs.plateUpchargePremium'] = money(e.plateUpchargePremium);
                 // Keep the legacy box in step — Fabricut's price levels read it, not the rows.
                 if (legacySrc) Object.assign(patch, fabricutWriteBack(p, next, outsourceFinishes) || {});
                 batch.update(doc(db, 'Approved_Designs', id), patch);
@@ -568,8 +586,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
                 <div style={{ display: 'flex', border: `1px solid ${theme.line}` }}>
-                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons'], ['CHECKOUT', '🛒 Checkout Items']].map(([k, l]) => (
-                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : k === 'CHECKOUT' ? 'What the CPQ checkout screen offers as add-on lines — fees OR real items. Only ticked items appear there.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
+                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons'], ['CHECKOUT', '🛒 Checkout Items'], ['PLATES', '🔗 Plate Pricing']].map(([k, l]) => (
+                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : k === 'PLATES' ? 'Backplate / cover-plate pricing roles for the whole brand at once — which plates ride free with the arm, and what the upgrade costs painted vs premium.' : k === 'CHECKOUT' ? 'What the CPQ checkout screen offers as add-on lines — fees OR real items. Only ticked items appear there.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
                     ))}
                 </div>
                 <select value={coll} onChange={e => { setColl(e.target.value); setEdits({}); }} title={mode === 'FEES' ? 'In Fees mode this does not filter the list (fees are brand-wide) — it is the collection a NEW fee gets tagged into.' : 'Parts carrying this collection'} style={{ ...fld, minWidth: '220px' }}>
@@ -609,6 +627,40 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                             <button onClick={adoptSuggestions} disabled={saving} style={btn(true, { background: theme.brass, borderColor: theme.brass })}>{saving ? 'Writing…' : `⇄ Adopt ${suggestions.size} into Client Pricing`}</button>
                         </div>
                     )}
+
+                    {mode === 'PLATES' && (() => {
+                        const applyAll = (field, value) => setEdits(prev => {
+                            const next = { ...prev };
+                            rows.forEach(r => { next[r.p.id] = { ...(next[r.p.id] || {}), [field]: value }; });
+                            return next;
+                        });
+                        const declared = members.filter(p => plateRoleOf(p)).length;
+                        return (
+                            <div style={{ background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
+                                <div style={{ fontSize: '0.88rem', color: theme.ink, marginBottom: '10px' }}>
+                                    The arm's price has always covered its backplate; the cover plate is the paid upgrade. Declare it once here and the quote says so at <b>every</b> price level.
+                                    <span style={{ display: 'block', color: theme.inkSoft, marginTop: '4px' }}>
+                                        <b>Premium</b> is the /EP and /P25 tier — leave it blank and the painted figure is used for both. Leave <b>Upgrade over</b> blank and the pairing is read from the code ({'H1-1CP-R → H1-1BP-R'}). A plate with no role is priced exactly as it is today.
+                                        {' '}<b style={{ color: theme.brassDark }}>{declared} of {members.length} plates declared.</b>
+                                    </span>
+                                </div>
+                                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', borderTop: `1px solid ${theme.line}`, paddingTop: '12px' }}>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Apply to all {rows.length} shown</span>
+                                    <button onClick={() => applyAll('plateRole', 'INCLUDED')} disabled={!rows.length} style={btn(false)}>Backplate — included</button>
+                                    <button onClick={() => applyAll('plateRole', 'UPGRADE')} disabled={!rows.length} style={btn(false)}>Cover plate — upgrade</button>
+                                    <button onClick={() => applyAll('plateRole', '')} disabled={!rows.length} style={btn(false)}>Clear role</button>
+                                    <span style={{ width: '1px', height: '22px', background: theme.line }} />
+                                    <input placeholder="upcharge $" value={bulkUp} onChange={e => setBulkUp(e.target.value)} style={{ ...fld, width: '110px' }} />
+                                    <input placeholder="premium $" value={bulkUpPrem} onChange={e => setBulkUpPrem(e.target.value)} style={{ ...fld, width: '110px' }} />
+                                    <button onClick={() => { if (bulkUp !== '') applyAll('plateUpcharge', bulkUp); if (bulkUpPrem !== '') applyAll('plateUpchargePremium', bulkUpPrem); }}
+                                        disabled={!rows.length || (bulkUp === '' && bulkUpPrem === '')} style={btn(true, { background: theme.brass, borderColor: theme.brass })}>Set on all shown</button>
+                                </div>
+                                <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '8px', letterSpacing: '.04em' }}>
+                                    Nothing is written until you press Save — search first to narrow what "all shown" means.
+                                </div>
+                            </div>
+                        );
+                    })()}
 
                     {mode === 'CHECKOUT' && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
@@ -664,6 +716,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                             <thead style={{ position: 'sticky', top: 0, background: theme.paper, zIndex: 5 }}>
                                 <tr>
+                                    {mode === 'PLATES' && <>
+                                        <th style={{ ...th, borderLeft: `2px solid ${theme.ink}`, width: '210px' }} title="How this plate prices in a quote. None = exactly as today.">Plate role</th>
+                                        <th style={th} title="The backplate this cover plate replaces. Blank = derived from the code.">Upgrade over</th>
+                                        <th style={{ ...th, textAlign: 'right' }} title="Flat upcharge for choosing this cover plate. Blank = this plate's base minus the backplate's.">Upcharge $</th>
+                                        <th style={{ ...th, textAlign: 'right' }} title="The /EP and /P25 premium tier. Blank = same as the painted upcharge.">Premium $</th>
+                                    </>}
                                     {mode === 'CHECKOUT' && <th style={{ ...th, textAlign: 'center', width: '78px' }} title="Ticked = it appears on the CPQ checkout screen as an add-on line. Fees and real items both work; a real item stays a real part line (own NetSuite line, own routing).">On&nbsp;checkout</th>}
                                     <th style={th}>Item #</th>
                                     <th style={{ ...th, width: '38%' }}>Description</th>
@@ -685,6 +743,22 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                             <tbody>
                                 {rows.flatMap(r => [(
                                     <tr key={r.p.id} style={{ background: r.dirty ? 'rgba(176,141,87,.07)' : '#fff' }}>
+                                        {mode === 'PLATES' && <>
+                                            <td style={{ ...td, borderLeft: `2px solid ${theme.ink}` }}>
+                                                <select value={r.plateRole || ''} onChange={e => setEdit(r.p.id, 'plateRole', e.target.value)} style={{ ...cellInput(edits[r.p.id]?.plateRole !== undefined), width: '200px', textAlign: 'left' }}>
+                                                    {PLATE_ROLES.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                                                </select>
+                                            </td>
+                                            <td style={td}>
+                                                <input value={r.plateUpgradeOf} onChange={e => setEdit(r.p.id, 'plateUpgradeOf', e.target.value.toUpperCase())} disabled={r.plateRole !== 'UPGRADE'} placeholder={r.derivedPair || '—'} title={r.derivedPair ? `Blank uses ${r.derivedPair}, read from this item's code` : 'No pairing can be derived from this code — name it here'} style={{ ...cellInput(edits[r.p.id]?.plateUpgradeOf !== undefined), width: '140px', textAlign: 'left', background: r.plateRole !== 'UPGRADE' ? theme.paper2 : '#fff' }} />
+                                            </td>
+                                            <td style={{ ...td, textAlign: 'right' }}>
+                                                <input value={r.plateUpcharge} onChange={e => setEdit(r.p.id, 'plateUpcharge', e.target.value)} disabled={r.plateRole !== 'UPGRADE'} placeholder={r.plateRole === 'UPGRADE' ? 'diff' : '—'} style={{ ...cellInput(edits[r.p.id]?.plateUpcharge !== undefined), width: '72px', background: r.plateRole !== 'UPGRADE' ? theme.paper2 : '#fff' }} />
+                                            </td>
+                                            <td style={{ ...td, textAlign: 'right' }}>
+                                                <input value={r.plateUpchargePremium} onChange={e => setEdit(r.p.id, 'plateUpchargePremium', e.target.value)} disabled={r.plateRole !== 'UPGRADE'} placeholder={r.plateRole === 'UPGRADE' ? 'same' : '—'} style={{ ...cellInput(edits[r.p.id]?.plateUpchargePremium !== undefined), width: '72px', background: r.plateRole !== 'UPGRADE' ? theme.paper2 : '#fff' }} />
+                                            </td>
+                                        </>}
                                         {mode === 'CHECKOUT' && (
                                             <td style={{ ...td, textAlign: 'center' }}>
                                                 <input type="checkbox" checked={!!r.checkout} onChange={e => setEdit(r.p.id, 'checkout', e.target.checked)} title={r.checkout ? 'Showing on the checkout screen' : 'Not offered at checkout'} style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
@@ -742,7 +816,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     </tr>
                                 ), tierRow === r.p.id ? (
                                     <tr key={r.p.id + '-tiers'}>
-                                        <td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
+                                        <td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
                                                 <span style={{ fontFamily: theme.serif, fontSize: '1.15rem', color: theme.ink }}>Customer Alias &amp; Pricing — {r.code}</span>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>drives the CPQ price levels · blank = no price at that tier</span>
@@ -778,7 +852,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     </tr>
                                 ) : null])}
                                 {rows.length === 0 && (
-                                    <tr><td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
+                                    <tr><td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
                                         {members.length === 0 ? `No parts carry the ${coll} collection yet — add them with the search on the right.` : 'No parts match this filter.'}
                                         {searchMisses.length > 0 && (
                                             <div style={{ marginTop: '18px', fontStyle: 'normal', fontFamily: theme.sans }}>

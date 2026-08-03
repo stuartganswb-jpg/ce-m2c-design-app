@@ -479,7 +479,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         wallMount: baseSpecs.wallMount || { partId: "", desc: "" },
         plateRole: baseSpecs.plateRole || "",
         plateUpgradeOf: baseSpecs.plateUpgradeOf || "",
-        plateUpcharge: baseSpecs.plateUpcharge ?? ""
+        plateUpcharge: baseSpecs.plateUpcharge ?? "",
+        plateUpchargePremium: baseSpecs.plateUpchargePremium ?? ""
     });
   };
 
@@ -1546,6 +1547,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                            <div>
                                <label style={labelStyle}>Upcharge $ (blank = difference)</label>
                                <input value={editSpecs.plateUpcharge ?? ''} onChange={e => setEditSpecs(prev => ({ ...prev, plateUpcharge: e.target.value }))} placeholder="e.g. 10" title="Flat amount charged for choosing this cover plate over its backplate. Blank = this plate's base price minus the backplate's, worked out per quote." style={fieldStyle} />
+                           </div>
+                           <div>
+                               <label style={labelStyle}>Premium Upcharge $ (/EP, /P25)</label>
+                               <input value={editSpecs.plateUpchargePremium ?? ''} onChange={e => setEditSpecs(prev => ({ ...prev, plateUpchargePremium: e.target.value }))} placeholder="blank = same as painted" title="The plated tier costs more to upgrade to. Applies when the plate resolves to an /EP1-6 or /P25 variant, or the step's chosen finish is one. Blank = the painted figure is used for both. (/P phosphate is an in-house paint step and stays on the painted tier.)" style={fieldStyle} />
                            </div>
                        </>)}
                        <div>
