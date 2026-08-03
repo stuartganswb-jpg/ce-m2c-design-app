@@ -565,12 +565,22 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
     const after = event.data && event.data.after && event.data.after.exists ? event.data.after.data() : null;
     if (!after) return;
     if (after.orderType !== 'stock' || !after.nsWoId || after.nsCompletionQueued) return;
-    const isPole = !!(after.poles || after.totalPoles);
-    const tasks = after.tasks || {};
-    const bakeDone = isPole
-        ? (tasks.poleBake && tasks.poleBake.status === 'Complete')
-        : (tasks.spinBake && tasks.spinBake.status === 'Complete');
-    if (!bakeDone) return;
+    // ⚖ THE BUILD POSTS AT THE BIN SCAN, NOT AT THE BAKE (Stuart 2026-08-03: "the bin count is
+    // already off as the assembly build populated the bin — this build should happen after
+    // completion of painting AND the packing screen has scanned them to their bin").
+    //
+    // It used to fire the moment the bake task went Complete, which put finished goods on the
+    // NetSuite books while the parts were still physically on a cart: the bin held stock nobody
+    // could find, and the receive bin was a GUESS — the first entry of the item's comma-joined
+    // bin list from the library, not where the parts actually went. Now the trigger waits for
+    // packing to put them away, and receives into the bin that was actually scanned.
+    //
+    // Painting completion is unaffected and still happens where it did: the floor stamps
+    // currentPhase 'Complete' when both streams finish, so the order reads COMPLETE on the
+    // finishing screen and appears in the WMS packing queue immediately. Only the NetSuite
+    // INVENTORY posting moved.
+    if (after.packStatus !== 'Packed') return;
+    const scannedBin = String(after.putawayBin || '').trim().toUpperCase();
 
     const fdb = admin.firestore();
     const woDocId = event.params.woId;
@@ -578,10 +588,11 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
     await fdb.doc(`fin_workorders/${woDocId}`).set({ nsCompletionQueued: true }, { merge: true });
 
     const qty = Number(after.completedParts) > 0 ? Number(after.completedParts) : (Number(after.totalParts) || 1);
-    // Home bin for the built assembly (a bin-managed location wants a receive bin).
-    let bin = '';
+    // The bin the packer actually scanned is the truth. The library lookup below survives only as
+    // a fallback for an order put away without one recorded.
+    let bin = scannedBin;
     try {
-        if (after.stockErpId) {
+        if (!bin && after.stockErpId) {
             const q = await fdb.collection('Approved_Designs').where('legacyErpId', '==', after.stockErpId).limit(1).get();
             // binLocation is the item sync's mergedBins — a COMMA-JOINED list of every bin the
             // item has balance rows in ("U S19-E2L-R4, M E5R-N16-R1"). A refName must be ONE
@@ -598,12 +609,12 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
         // "invalid work order" on these (learned 2026-07-21, WO11308-12).
         id: obRef.id, kind: 'workordercompletion',
         label: `Build NS WO ${after.nsWoTran || after.nsWoId} — ${after.stockErpId || woDocId} ×${qty}`,
-        sourceApp: 'FINISHING', createdBy: 'auto (bake complete)',
+        sourceApp: 'FINISHING', createdBy: `auto (put away${scannedBin ? ` · bin ${scannedBin}` : ''})`,
         targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${after.nsWoId}/!transform/assemblyBuild`,
         method: 'POST',
         payload: {
             quantity: qty,
-            memo: `Stock build ${woDocId} complete [app push ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' })} #${obRef.id.slice(0, 6)}]`,
+            memo: `Stock build ${woDocId} put away${scannedBin ? ` ${scannedBin}` : ''} [app push ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' })} #${obRef.id.slice(0, 6)}]`,
             ...(bin ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: qty }] } } } : {})
         },
         writeBack: { collection: 'fin_workorders', docId: woDocId, patch: { nsWoCompletionPosted: true }, idField: 'nsWoCompletionId', tranField: 'nsWoCompletionTran' },

@@ -838,10 +838,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // ⤓ Tracking pull below brings the tracking # back onto the sales order.
             let nsNote = '';
             if (isStockPutaway) {
-                // Stock put-away: the NetSuite assembly build already received the finished goods
-                // at completion — no sales order, no fulfillment. Shelf and done.
+                // Stock put-away: THIS is what posts the NetSuite assembly build (onStockBuildDone
+                // fires on packStatus Packed, receiving into the bin scanned here — it used to fire
+                // at bake complete, which put stock on the books before it reached a shelf and
+                // guessed the bin). No sales order, no fulfillment: shelf and done.
                 setPackOrderId(null);
-                alert(`📦 ${packRef(job)} put away → bin ${bin}.`);
+                alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\nThe NetSuite assembly build is queued now and receives into ${bin} — watch it land in 11.1 → NetSuite Sync Queue (~1 min).`);
                 return;
             }
             try {
@@ -2650,7 +2652,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
                                 <div style={{ marginTop: '30px', borderTop: `1px solid ${theme.line}`, paddingTop: '20px' }}>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: '15px' }}>PICKED — AWAITING STAGING:</div>
-                                    {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging').map(job => {
+                                    {/* An order that has already been PACKED/put away is finished — it must not
+                                        still read "awaiting staging" (Stuart 2026-08-03: "you can see items still
+                                        sitting in pick, that must be marked as picked"). pickStatus alone never
+                                        cleared, so a WO that had been through packing hours ago still sat here. */}
+                                    {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging' && j.packStatus !== 'Packed' && j.currentPhase !== 'Closed').map(job => {
                                         const custReady = !job.hasCustomSibling || job.customFabStatus === 'Complete';
                                         const open = expandedStaged === job.id;
                                         const so = soIndex[String(job.salesOrderId || '')] || soIndex[String(job.soNum || '')] || null;
