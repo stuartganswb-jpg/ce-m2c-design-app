@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import WhereIsIt from '../Shared/WhereIsIt';
+import { groupPickLines, groupingSummary } from '../Shared/pickOrder';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -2571,7 +2572,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const customer = job.customerName || job.clientName || so?.customer || '';
                                     const sidemark = so?.memo || job.note || '';
                                     const poNum = so?.poNum || so?.po || so?.otherrefnum || '';
-                                    const pickable = pickableLines(job);
+                                    // ONE STOP PER ITEM, IN RACK ORDER (Stuart 2026-08-03). A custom
+                                    // order's BOM is written per configuration, so the same code
+                                    // repeats down the list and the operator walked back to the same
+                                    // bin a dozen times. Merged here and sorted by bin — quantities
+                                    // are summed, nothing is dropped.
+                                    const rawPickable = pickableLines(job);
+                                    const pickable = groupPickLines(rawPickable, { binOf: lineBin });
+                                    const grouping = groupingSummary(rawPickable, pickable);
                                     return (
                                     <div key={job.id} style={{ border: `1px solid ${theme.line}`, marginBottom: '15px' }}>
                                         {/* Header row toggles the BOM detail; START PICKING stops propagation. */}
@@ -2587,7 +2595,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     </div>
                                                 )}
                                                 <OrderStatusChips wo={job} style={{ marginTop: '8px' }} />
-                                                <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Items{pickable.length !== (job.partsList?.length || 0) ? ` (${(job.partsList?.length || 0) - pickable.length} return/fee line(s) ride the shop order)` : ''} · tap for parts</div>
+                                                <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Item{pickable.length === 1 ? '' : 's'}{grouping.changed ? ` (${grouping.from} BOM lines grouped into ${grouping.to} picks)` : ''}{rawPickable.length !== (job.partsList?.length || 0) ? ` · ${(job.partsList?.length || 0) - rawPickable.length} return/fee line(s) ride the shop order` : ''} · tap for parts</div>
                                             </div>
                                             <button onClick={(e) => { e.stopPropagation(); setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setPickShorts([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
                                                 START PICKING
@@ -2625,6 +2633,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         <div style={{ flex: 1, minWidth: 0 }}>
                                                             <span style={{ fontFamily: theme.mono, fontSize: '11px', fontWeight: 600, color: theme.ink }}>{l.legacyErpId || l.partId || '—'}</span>
                                                             <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, marginLeft: '8px' }}>{l.name}</span>
+                                                            {l.mergedFrom > 1 && <span title={`${l.mergedFrom} BOM lines for this code, picked in one go`} style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, marginLeft: '8px', border: `1px solid ${theme.brass}`, padding: '1px 5px', whiteSpace: 'nowrap' }}>×{l.mergedFrom} lines</span>}
                                                         </div>
                                                         <span style={{ width: '130px', fontFamily: theme.mono, fontSize: '11px', color: theme.brass }} title={(liveOf(l)?.bins || []).map(b => `${b.bin}: ${b.qty}`).join(' · ') || 'no live data yet — tap ⟳ Live'}>
                                                             {lineBin(l)}{(() => { const lv = liveOf(l); return lv ? <span style={{ color: lv.bins.length ? '#3a7d44' : '#d9534f' }}> · {lv.bins.length ? `${lv.bins[0].qty} live` : (lv.total > 0 ? `${lv.total} unbinned` : 'none live')}</span> : null; })()}
@@ -2674,6 +2683,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         {!job.hasCustomSibling ? '● small-only' : (custReady ? '● custom ready' : '○ awaiting shop')}
                                                     </span>
                                                 </div>
+                                                {/* The same chips as everywhere else — this panel said only "small-only",
+                                                    so a row gave no clue whether finishing had moved on (2026-08-03). */}
+                                                <div style={{ padding: '0 12px 10px' }}><OrderStatusChips wo={job} showWho={false} /></div>
                                                 {open && (
                                                     <div style={{ borderTop: `1px solid ${theme.line}`, padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, lineHeight: 1.8 }}>
                                                         {(job.nsWoTran || job.soNum) && <div style={{ color: theme.ink }}>{job.nsWoTran ? `NetSuite WO: ${job.nsWoTran}` : ''}{job.nsWoTran && job.soNum ? ' · ' : ''}{job.soNum ? `SO: ${job.soNum}` : ''}</div>}
