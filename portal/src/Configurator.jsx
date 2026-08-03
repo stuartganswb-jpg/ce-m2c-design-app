@@ -659,6 +659,38 @@ export default function Configurator({ flowId, flowName, onExit }) {
         return (Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [''])[0];
       })();
       const itemNos = [...new Set(lines.map((l) => String(l.itemNo || '').trim().toUpperCase()).filter(Boolean))];
+
+      // WHAT THIS CONFIGURATION ACTUALLY CHOSE, component by component (Stuart 2026-08-03: "it is
+      // just reading the bracket arm … this tool needs to read that meta data and only show the
+      // relevant arm/backplate combo that is selected rather than every image with the same
+      // bracket arm code").
+      //
+      // The quote LINES can't answer this: at their price levels an item # is a bare Fabricut
+      // pattern code, so an arm and its plate can share one number and a line cannot say which
+      // plate is in the photo. The SELECTIONS can — each step's main option is the arm and its
+      // `__sub` option is the plate, both carrying our part codes — and the batch processor tags
+      // every image with exactly those two codes (fab.pairedCode / fab.plateCode). So the filter
+      // is run selection-to-tag, in our codes, on both sides.
+      const codesOfOpt = (o) => [o?.partId, o?.partName, o?.label, o?.optId]
+        .map((x) => String(x || '').trim().toUpperCase()).filter(Boolean);
+      const chosenArms = new Set();
+      const chosenPlates = new Set();
+      steps.forEach((st) => {
+        const main = (st.styleOptions || []).find((o) => (o.optId || o.partId) === params[st.id]);
+        if (main) codesOfOpt(main).forEach((c) => chosenArms.add(c));
+        const sub = (st.subOptions || []).find((o) => (o.optId || o.partId) === params[`${st.id}__sub`]);
+        if (sub) codesOfOpt(sub).forEach((c) => chosenPlates.add(c));
+      });
+      // A tagged code counts as chosen when the selection names it — compared both ways so a
+      // partId that is a doc id, and an option whose name embeds the code, both resolve.
+      const wasChosen = (set, code) => {
+        const c = String(code || '').trim().toUpperCase();
+        if (!c) return false;
+        if (set.has(c)) return true;
+        for (const v of set) { if (v.includes(c) || c.includes(v)) return true; }
+        return false;
+      };
+
       const scored = assets.map((a) => {
         const blob = a.blob || '';
         let hits = 0; let firstCode = '';
@@ -669,17 +701,35 @@ export default function Configurator({ flowId, flowName, onExit }) {
           hits++; if (!firstCode) firstCode = base;
         });
         if (!hits) return null;
+
+        // THE COMBO GATE. An image tagged with a plate is a photo OF that arm-and-plate pairing —
+        // so if this configuration picked a different plate, the image is simply wrong, however
+        // well its arm code matches. Only applies when the tag exists AND this configuration
+        // actually chose a plate, so untagged images and plateless (basic) brackets are unaffected.
+        const plateTag = a.fab?.plateCode || '';
+        const armTag = a.fab?.pairedCode || '';
+        const plateWrong = plateTag && chosenPlates.size && !wasChosen(chosenPlates, plateTag);
+        const armWrong = armTag && chosenArms.size && !wasChosen(chosenArms, armTag);
+        const comboOk = !plateWrong && !armWrong;
+
         let score = hits * 10;
-        if (a.fab?.pairedCode && a.fab?.plateCode) score += 2; // the arm + backplate combo shot
-        return { a, score, code: firstCode };
+        // The exact pairing on this quote — both halves confirmed — outranks a lone-part shot.
+        if (plateTag && armTag && wasChosen(chosenPlates, plateTag) && wasChosen(chosenArms, armTag)) score += 6;
+        else if (plateTag && wasChosen(chosenPlates, plateTag)) score += 3;
+        return { a, score, code: firstCode, comboOk };
       }).filter(Boolean).sort((x, y) => y.score - x.score);
+      // The gate REMOVES wrong pairings — but a gallery that has only combo shots of other
+      // pairings would otherwise leave the page blank, and a page with roughly-right images beats
+      // no page at all. Same shape as the finish fallback below it.
+      const gated = scored.filter((x) => x.comboOk);
+      const matched = gated.length ? gated : scored;
       // The quote's finish is a HARD filter — at their price levels the line item #s are bare
       // Fabricut codes (no finish suffix), and without this every finish variant of the same
       // bracket matched (Stuart 2026-07-27: "it returned a lot of the same bracket… it should
       // have just been in the one color from the quote"). Falls back to all matches only if the
       // gallery has nothing in that finish.
-      const inFinish = domFin ? scored.filter(({ a }) => (a.blob || '').includes(String(domFin).toLowerCase())) : scored;
-      const pool = inFinish.length ? inFinish : scored;
+      const inFinish = domFin ? matched.filter(({ a }) => (a.blob || '').includes(String(domFin).toLowerCase())) : matched;
+      const pool = inFinish.length ? inFinish : matched;
       // One image per item # first, so a single bracket can never fill the page; leftovers fill
       // remaining slots after every code is represented.
       const picks = [];
