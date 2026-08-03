@@ -199,10 +199,14 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // Fee detection mirrors the FEES class filter above verbatim, so the editor and the list agree.
   const openPT = String(editSpecs.productType || '').toUpperCase();
   const openErp = String(activePart?.legacyErpId || activePart?.itemId || editSpecs.tempLegacyId || '').toUpperCase();
-  const isFeeRecord = openPT === 'FEE' || activePart?.partClass === 'Fee' || /(^|-)FEE-/.test(openErp);
+  // The class being EDITED wins over the stored one, so the panel re-shapes the moment the Record
+  // Class dropdown changes — switch a mis-classed fee to Fee and it reads as a fee immediately,
+  // rather than only after a save-and-reopen.
+  const openClass = editSpecs.partClass !== undefined ? editSpecs.partClass : (activePart?.partClass || '');
+  const isFeeRecord = openClass === 'Fee' || openPT === 'FEE' || /(^|-)FEE-/.test(openErp);
   const isBracketRecord = openPT.includes('BRACKET');
   const isBackplateRecord = openPT.includes('BACKPLATE') || openPT.includes('BACK PLATE');
-  const isAssemblyRecord = activePart?.partClass === 'Assembly' || activePart?.partClass === 'Master Assembly';
+  const isAssemblyRecord = openClass === 'Assembly' || openClass === 'Master Assembly';
   // Geometry (L/W/H) feeds the O2O maths for plates/brackets and cut-to-size parts; nothing else reads it.
   const usesGeometry = isBracketRecord || isBackplateRecord || !!editSpecs.parametric?.isCutToSize;
 
@@ -764,11 +768,24 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   };
 
   const handleCreateNewPart = () => {
-    const actualClass = partClassFilter === 'ALL' || partClassFilter === 'INVENTORY' || partClassFilter === 'OUTSOURCED' ? 'Inventory' : 'Assembly';
-    const newId = `${activeBrand.toUpperCase()}-${actualClass === 'Inventory' ? 'INV' : 'ASM'}-${Math.floor(1000+Math.random()*9000)}`;
+    // RECORD CLASS IS A REAL DISTINCTION, not a by-product of which filter was on (Stuart
+    // 2026-08-03: "these are all fees yet some are classified (inside) as inventory some
+    // assemblies and some as (Fee) … each of these are very different"). The old rule had only
+    // two outcomes — Inventory on ALL/INVENTORY/OUTSOURCED, Assembly on everything ELSE — so a fee
+    // created while the Fees filter was up came out an ASSEMBLY, with a CE-ASM- id to match. That
+    // is exactly the mess on his screen; the id prefix was the SYMPTOM of the class, never a cause.
+    //   Fee       a charge. No stock, no BOM, no NetSuite item — its id is a reference only, and
+    //             the amount rolls into the CPQ mainline.
+    //   Inventory a NetSuite item, bought on a PO and resold.
+    //   Assembly  a NetSuite item with a BOM — made or bought.
+    const actualClass = partClassFilter === 'FEES' ? 'Fee'
+        : (partClassFilter === 'ALL' || partClassFilter === 'INVENTORY' || partClassFilter === 'OUTSOURCED') ? 'Inventory'
+        : 'Assembly';
+    const prefix = actualClass === 'Fee' ? 'FEE' : actualClass === 'Inventory' ? 'INV' : 'ASM';
+    const newId = `${activeBrand.toUpperCase()}-${prefix}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
-    setEditSpecs({ productType: "", uom: "EA", collections: [], project: "", routingType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], bomRevision: "", binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", weight: "", reorderPoint: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "", customOverrideFee: false }); 
+    setEditSpecs({ productType: actualClass === 'Fee' ? 'FEE' : "", uom: "EA", collections: [], project: "", routingType: "", watchList: "NONE", tempName: `NEW ${actualClass.toUpperCase()}`, tempLegacyId: "", clientPricing: [], bomRevision: "", binLocation: "", isInHouse: partClassFilter !== 'OUTSOURCED', programNum: "", material: "", layeringSequence: "10", vendorName: "", vendorId: "", vendorUrl: "", altVendorUrl: "", cost: "", leadTime: "", moq: "", weight: "", reorderPoint: "", sharedBrands: [activeBrand], customData: {}, dynamicDicts: {}, parametric: { isCutToSize: false, fixedDiameter: "", length: "", width: "", height: "" }, isProjectManaged: false, partHandling: "", customOverrideFee: false }); 
     setPdfFile(null); setCadFile(null); setCloneSourceId(""); setWoTargetQty(1);
   };
 
@@ -816,6 +833,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           project: editSpecs.project || "",
           routingType: editSpecs.routingType || "",
           productType: editSpecs.productType || "",
+          // Only written when the operator actually changed it, so an untouched record keeps the
+          // class it already had rather than being re-stamped by every save.
+          ...(editSpecs.partClass !== undefined ? { partClass: editSpecs.partClass } : {}),
           manufacturingSpecs: compiledSpecs,
           updatedAt: new Date().toISOString()
       });
@@ -1287,8 +1307,28 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                          <input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activePart.legacyErpId === "PENDING" ? "" : activePart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
                      </div>
                      <div>
-                         <label style={labelStyle}>BOM Revision</label>
-                         <input name="bomRevision" value={editSpecs.bomRevision || ''} onChange={handleSpecChange} placeholder="N/A" style={fieldStyle} />
+                         <label style={labelStyle}>{isFeeRecord ? 'Reference only' : 'BOM Revision'}</label>
+                         {isFeeRecord
+                             ? <div style={{ ...fieldStyle, background: 'var(--paper-2)', color: 'var(--ink-soft)', fontSize: '0.8rem', lineHeight: 1.35, display: 'flex', alignItems: 'center' }}>A fee has no BOM and no NetSuite item.</div>
+                             : <input name="bomRevision" value={editSpecs.bomRevision || ''} onChange={handleSpecChange} placeholder="N/A" style={fieldStyle} />}
+                     </div>
+                 </div>
+
+                 {/* RECORD CLASS — explicit, and the ONLY thing that decides it. Changing it here is
+                     how the fees that were created as Assembly/Inventory get corrected. */}
+                 <div style={{ marginBottom: '24px' }}>
+                     <label style={labelStyle}>Record Class</label>
+                     <select value={editSpecs.partClass !== undefined ? editSpecs.partClass : (activePart.partClass || 'Inventory')}
+                         onChange={e => setEditSpecs(prev => ({ ...prev, partClass: e.target.value }))} style={fieldStyle}>
+                         <option value="Inventory">Inventory — a NetSuite item, bought on a PO and resold</option>
+                         <option value="Assembly">Assembly — a NetSuite item with a BOM, made or bought</option>
+                         <option value="Master Assembly">Master Assembly — the mainline product an order is built around</option>
+                         <option value="Fee">Fee — a charge. No stock, no BOM, no NetSuite item</option>
+                     </select>
+                     <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px' }}>
+                         {isFeeRecord
+                             ? 'A fee bills through the CPQ flow and rolls into the mainline — its ERP Legacy ID above is a REFERENCE, not a NetSuite item number, and nothing here is ever pushed to NetSuite as an item.'
+                             : 'This is what the record IS. Entering an ERP Legacy ID never changes it — the id prefix follows the class, not the other way round.'}
                      </div>
                  </div>
 
