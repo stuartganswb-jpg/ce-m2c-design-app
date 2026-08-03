@@ -20,7 +20,7 @@
 // everywhere on the next snapshot. No mirror, no deploy.
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatch } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatch, deleteField } from "firebase/firestore";
 import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
 import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable } from '../Shared/feeRules';
@@ -223,11 +223,19 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         // PLATES (Stuart 2026-08-03: "can we add the bulk tool to 4.6 so we can add/update all in
         // one place, it is tedious to do this all via master library"). Every plate in the brand,
         // because the role is ITEM metadata — setting it once serves every customer and every flow.
-        if (mode === 'PLATES') return inventory.filter(p => /PLATE/i.test(String(p.manufacturingSpecs?.productType || '')) && p.manufacturingSpecs?.isRetired !== true);
+        // SCOPED BY THE COLLECTION PICKER (Stuart 2026-08-03 — he opened Arms & Returns with
+        // FABRICUT H1 selected and got a list of H2 items). The role is item metadata, so
+        // brand-wide was defensible, but the screen still SHOWS a collection selector: a list that
+        // quietly ignores it reads as a bug, and on a screen with an apply-to-all button that is
+        // genuinely dangerous. Scope to the chosen collection; no collection = the whole brand.
+        if (mode === 'PLATES') return inventory.filter(p => /PLATE/i.test(String(p.manufacturingSpecs?.productType || ''))
+            && p.manufacturingSpecs?.isRetired !== true
+            && (!coll || collectionsOf(p.manufacturingSpecs).includes(upper(coll))));
         // ARMS: everything that can CARRY a plate — bracket arms and the return fees that replace
         // them. This is where "which parts include a backplate" is answered.
         if (mode === 'ARMS') return inventory.filter(p => {
             if (p.manufacturingSpecs?.isRetired === true) return false;
+            if (coll && !collectionsOf(p.manufacturingSpecs).includes(upper(coll)) && !isFeeItem(p)) return false;
             const pt = String(p.manufacturingSpecs?.productType || '').toUpperCase();
             return /BRACKET|ARM/.test(pt) || isFeeItem(p);
         });
@@ -349,7 +357,14 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 if (e.plateRole !== undefined) patch['manufacturingSpecs.plateRole'] = e.plateRole || '';
                 // Stored only when it is FALSE — the default (an arm covers its plate) stays absent,
                 // so ticking everything on doesn't write a field to every item in the catalogue.
-                if (e.carriesPlate !== undefined) patch['manufacturingSpecs.includesPlate'] = e.carriesPlate ? null : false;
+                if (e.carriesPlate !== undefined) {
+                    // Included is the DEFAULT, carried by the field being absent. Ticking a row that
+                    // is already included must write nothing — otherwise an apply-to-all stamps a
+                    // redundant field onto every item in the catalogue for no behaviour change.
+                    const wasExcepted = p.manufacturingSpecs?.includesPlate === false;
+                    if (!e.carriesPlate) patch['manufacturingSpecs.includesPlate'] = false;
+                    else if (wasExcepted) patch['manufacturingSpecs.includesPlate'] = deleteField();
+                }
                 if (e.plateUpgradeOf !== undefined) patch['manufacturingSpecs.plateUpgradeOf'] = upper(e.plateUpgradeOf);
                 if (e.plateUpcharge !== undefined) patch['manufacturingSpecs.plateUpcharge'] = money(e.plateUpcharge);
                 if (e.plateUpchargePremium !== undefined) patch['manufacturingSpecs.plateUpchargePremium'] = money(e.plateUpchargePremium);
@@ -688,7 +703,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     {mode === 'PLATES' && (() => {
                         const applyAll = (field, value) => setEdits(prev => {
                             const next = { ...prev };
-                            rows.forEach(r => { next[r.p.id] = { ...(next[r.p.id] || {}), [field]: value }; });
+                            rows.forEach(r => { if (String(r[field] ?? '') !== String(value ?? '')) next[r.p.id] = { ...(next[r.p.id] || {}), [field]: value }; });
                             return next;
                         });
                         const declared = members.filter(p => plateRoleOf(p)).length;
@@ -721,9 +736,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
 
                     {mode === 'ARMS' && (() => {
                         const off = members.filter(p => !includesPlate(p)).length;
+                        // Only stage rows that would actually CHANGE — otherwise the Save button
+                        // announces "785 changes" for a press that alters nothing, and a count you
+                        // cannot trust is worse than no count.
                         const applyAll = (v) => setEdits(prev => {
                             const next = { ...prev };
-                            rows.forEach(r => { next[r.p.id] = { ...(next[r.p.id] || {}), carriesPlate: v }; });
+                            rows.forEach(r => { if (includesPlate(r.p) !== v) next[r.p.id] = { ...(next[r.p.id] || {}), carriesPlate: v }; });
                             return next;
                         });
                         return (
