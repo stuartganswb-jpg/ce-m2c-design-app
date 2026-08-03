@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
-import { ref, deleteObject } from "firebase/storage";
+import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
 import FormPreview from '../Shared/FormPreview';
@@ -95,6 +95,38 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
     setPriceLevel(lvl);
     try { await updateDoc(doc(db, 'crm_records', customerId), { portalPriceLevel: lvl }); }
     catch (e) { alert('Could not update price level: ' + (e.message || e)); }
+  };
+
+  // ---- CLIENT LOGO (Stuart 2026-08-02: "load a client logo and then have it shown at the top of
+  // the portal when they log in"). Stored on the CRM record; the portal reads it through the BFF
+  // (portalBranding), so no bucket rule has to open up — a getDownloadURL token URL is what the
+  // customer's browser fetches, and those bypass storage rules by design.
+  const [logoUrl, setLogoUrl] = useState('');
+  const [logoBusy, setLogoBusy] = useState(false);
+  useEffect(() => { setLogoUrl(customer?.portalLogoUrl || ''); }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const uploadLogo = async (file) => {
+    if (!file || !customerId) return;
+    if (!/^image\//.test(file.type)) return alert('That is not an image — PNG or SVG with a transparent background works best.');
+    if (file.size > 2 * 1024 * 1024) return alert('That file is over 2 MB. A header logo only needs to be a couple of hundred KB.');
+    setLogoBusy(true);
+    try {
+      const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const r = ref(storage, `portal_logos/${customerId}.${ext}`);
+      await uploadBytes(r, file, { contentType: file.type });
+      const url = await getDownloadURL(r);
+      await updateDoc(doc(db, 'crm_records', customerId), { portalLogoUrl: url });
+      setLogoUrl(url);
+    } catch (e) { alert('Logo upload failed: ' + (e.message || e)); }
+    setLogoBusy(false);
+  };
+  const clearLogo = async () => {
+    if (!window.confirm('Remove this client\'s logo from their portal header?')) return;
+    setLogoBusy(true);
+    try {
+      await updateDoc(doc(db, 'crm_records', customerId), { portalLogoUrl: '' });
+      setLogoUrl('');
+    } catch (e) { alert('Could not remove it: ' + (e.message || e)); }
+    setLogoBusy(false);
   };
 
   // ---- COLLECTIONS + QUICK SHIP PACKS (Stuart 2026-07-25) -------------------------------------
@@ -269,6 +301,24 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
               </select>
             </div>
             <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.04em' }}>The customer only ever sees this level — CE→Fabricut cost is never available in the portal.</div>
+
+            {/* CLIENT LOGO — shown at the top of their portal the moment it is saved. */}
+            <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px dashed var(--line)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Client logo</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                <div style={{ width: '150px', height: '54px', border: '1px solid var(--line)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4px', boxSizing: 'border-box' }}>
+                  {logoUrl
+                    ? <img src={logoUrl} alt="Client logo" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                    : <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>no logo</span>}
+                </div>
+                <label style={{ padding: '9px 14px', border: '1px solid var(--line)', background: logoBusy ? 'var(--paper-2)' : '#fff', cursor: logoBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)' }}>
+                  {logoBusy ? 'Uploading…' : (logoUrl ? 'Replace' : '⬆ Upload logo')}
+                  <input type="file" accept="image/*" disabled={logoBusy} onChange={e => { uploadLogo(e.target.files[0]); e.target.value = ''; }} style={{ display: 'none' }} />
+                </label>
+                {logoUrl && <button onClick={clearLogo} disabled={logoBusy} style={{ padding: '9px 12px', border: '1px solid var(--line)', background: '#fff', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Remove</button>}
+              </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '8px', letterSpacing: '.04em' }}>Appears beside ours at the top of their portal. PNG or SVG with a transparent background, wider than tall — it is capped at 190×52 so nothing can distort the header.</div>
+            </div>
           </div>
 
           {/* WHICH COLLECTIONS THIS CUSTOMER SEES — scopes the stock catalog (Quick Ship today,
@@ -1207,11 +1257,19 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
                                               {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No active configurations pending.</div>}
                                               {getCrmActivePipeline(activeCrmRecord.id).map(job => (
-                                                  <div key={job.id} style={{ border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)' }}>
+                                                  <div key={job.id} style={{ border: `1px solid ${job.portalDeleted ? '#e2b8b8' : 'var(--line)'}`, borderLeft: job.portalDeleted ? '4px solid #d9534f' : undefined, padding: '16px', background: job.portalDeleted ? '#fdf3f3' : 'var(--paper)' }}>
                                                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                          <span style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)' }}>{job.jobId || job.id}</span>
-                                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: '1px solid var(--line)', background: '#fff' }}>{job.status.replace(/_/g, ' ')}</span>
+                                                          <span style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', textDecoration: job.portalDeleted ? 'line-through' : 'none' }}>{job.jobId || job.id}</span>
+                                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: `1px solid ${job.portalDeleted ? '#d9534f' : 'var(--line)'}`, background: job.portalDeleted ? '#d9534f' : '#fff', color: job.portalDeleted ? '#fff' : 'var(--ink)' }}>{job.portalDeleted ? '🗑 Deleted by client' : job.status.replace(/_/g, ' ')}</span>
                                                       </div>
+                                                      {/* The customer withdrew this from their portal. The record is KEPT — this is the
+                                                          alert, so nobody chases a quote the client has already dropped. */}
+                                                      {job.portalDeleted && (
+                                                          <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#a33', marginTop: '8px', letterSpacing: '.03em' }}>
+                                                              Was {String(job.statusBeforeDelete || '—').replace(/_/g, ' ')} · deleted{job.portalDeletedBy ? ` by ${job.portalDeletedBy}` : ''}{job.portalDeletedAt?.seconds ? ` on ${new Date(job.portalDeletedAt.seconds * 1000).toLocaleDateString()}` : ''}
+                                                              {job.portalDeletedReason ? <div style={{ marginTop: '4px', fontStyle: 'italic', color: 'var(--ink)' }}>"{job.portalDeletedReason}"</div> : null}
+                                                          </div>
+                                                      )}
                                                       <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>{job.sidemark || job.note || 'No description'}</div>
                                                       {job.cpqData?.totalPrice && <div style={{ fontSize: '0.9rem', fontWeight: 500, marginTop: '8px', color: 'var(--ink)' }}>Est: ${job.cpqData.totalPrice.toFixed(2)}</div>}
                                                       

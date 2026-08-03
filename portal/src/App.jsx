@@ -26,6 +26,7 @@ const stageClass = (stage) => {
 
 // Quote pipeline statuses → client-friendly words.
 const QUOTE_LABELS = {
+  PORTAL_REQUEST: 'Sent — awaiting pricing',
   CONFIGURED: 'In review',
   SENT_TO_CLIENT: 'Awaiting your approval',
   REVISION_REQUESTED: 'Revising',
@@ -38,16 +39,24 @@ const QUOTE_LABELS = {
   CANCELLED: 'Cancelled',
 };
 
-const LineTable = ({ lines }) => (
-  !lines?.length ? null : (
+// Their own part # gets its own column — but only when the order actually carries them, so a
+// customer without mapped numbers doesn't stare at an empty column.
+const LineTable = ({ lines }) => {
+  if (!lines?.length) return null;
+  const anySku = lines.some((l) => l.sku);
+  return (
     <div className="lines">
       <table>
         <thead>
-          <tr><th>Item</th><th style={{ width: 70 }}>Qty</th><th style={{ width: 110 }}>Price</th><th style={{ width: 110 }}>Total</th></tr>
+          <tr>
+            {anySku && <th style={{ width: 150 }}>Your Part #</th>}
+            <th>Item</th><th style={{ width: 70 }}>Qty</th><th style={{ width: 110 }}>Price</th><th style={{ width: 110 }}>Total</th>
+          </tr>
         </thead>
         <tbody>
           {lines.map((l, i) => (
             <tr key={i}>
+              {anySku && <td className="sku">{l.sku || ''}</td>}
               <td>{l.name}</td>
               <td className="num">{l.qty || ''}</td>
               <td className="num">{fmtMoney(l.price)}</td>
@@ -57,10 +66,10 @@ const LineTable = ({ lines }) => (
         </tbody>
       </table>
     </div>
-  )
-);
+  );
+};
 
-const OrderCard = ({ o, badge, badgeClass }) => {
+const OrderCard = ({ o, badge, badgeClass, onDelete }) => {
   const [open, setOpen] = useState(false);
   return (
     <div className="card">
@@ -73,7 +82,20 @@ const OrderCard = ({ o, badge, badgeClass }) => {
         {o.total !== null && o.total !== undefined ? <span className="total">{fmtMoney(o.total)}</span> : null}
         <span className={`stage ${badgeClass}`}>{badge}</span>
       </div>
-      {open && <LineTable lines={o.lines} />}
+      {open && (
+        <>
+          {/* A quote you just sent has no prices yet — say so, rather than showing blank money. */}
+          {o.awaitingPricing && (
+            <div className="await-note">Your request is with the team — this is what you sent. Pricing follows shortly.</div>
+          )}
+          <LineTable lines={o.lines} />
+          {onDelete && o.canDelete && (
+            <div className="card-foot">
+              <button className="btn-ghost danger" onClick={(e) => { e.stopPropagation(); onDelete(o); }}>Delete this quote</button>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 };
@@ -134,19 +156,42 @@ const SignIn = () => {
 const Orders = () => {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [note, setNote] = useState(null);
 
-  useEffect(() => {
-    let alive = true;
+  const load = (alive = { v: true }) => {
     httpsCallable(functions, 'portalMyOrders')()
-      .then((res) => { if (alive) setData(res.data); })
+      .then((res) => { if (alive.v) setData(res.data); })
       .catch((e) => {
-        if (!alive) return;
+        if (!alive.v) return;
         setErr(/permission/i.test(e.message || '')
           ? 'This login is not set up as a client portal account. Contact your Classical Elements representative.'
           : 'Could not load your orders right now — please try again shortly.');
       });
-    return () => { alive = false; };
+    return alive;
+  };
+
+  useEffect(() => {
+    const alive = load();
+    return () => { alive.v = false; };
   }, []);
+
+  // Deleting withdraws the quote from your list and tells the Classical Elements team. Nothing is
+  // erased on their side — they keep the record, marked deleted, so nobody chases a ghost.
+  const deleteQuote = async (q) => {
+    const why = window.prompt(`Delete quote ${q.id}?\n\nIt is withdrawn from your list and your Classical Elements team is notified.\n\nOptional — tell them why:`, '');
+    if (why === null) return;
+    setBusyId(q.docId || q.id); setNote(null);
+    try {
+      await httpsCallable(functions, 'portalDeleteQuote')({ quoteId: q.docId || q.id, reason: why });
+      setData((d) => (d ? { ...d, quotes: d.quotes.filter((x) => (x.docId || x.id) !== (q.docId || q.id)) } : d));
+      setNote({ ok: true, text: `Quote ${q.id} deleted. Your team has been notified.` });
+    } catch (e) {
+      setNote({ ok: false, text: /failed-precondition|approved/i.test(e.message || '')
+        ? 'That quote has already been approved or ordered — please contact your representative.'
+        : 'Could not delete it just now — please try again shortly.' });
+    } finally { setBusyId(null); }
+  };
 
   if (err) return <div className="empty" style={{ marginTop: 24 }}>{err}</div>;
   if (!data) return <div className="empty" style={{ marginTop: 24 }}>Loading your orders…</div>;
@@ -160,9 +205,14 @@ const Orders = () => {
         : orders.map((o) => <OrderCard key={o.id} o={o} badge={o.stage} badgeClass={stageClass(o.stage)} />)}
 
       <h2 className="sec">Quotes<span className="count">{quotes.length}</span></h2>
+      {note && <div className={`msg${note.ok ? ' ok' : ''}`} style={{ marginBottom: 14 }}>{note.text}</div>}
       {quotes.length === 0
         ? <div className="empty">No open quotes. Reach out to your representative to start one.</div>
-        : quotes.map((q) => <OrderCard key={q.id} o={q} badge={QUOTE_LABELS[q.status] || 'In review'} badgeClass="s-received" />)}
+        : quotes.map((q) => (
+            <OrderCard key={q.docId || q.id} o={q}
+              badge={busyId === (q.docId || q.id) ? 'Deleting…' : (QUOTE_LABELS[q.status] || 'In review')}
+              badgeClass="s-received" onDelete={deleteQuote} />
+          ))}
     </>
   );
 };
@@ -178,9 +228,18 @@ const TABS = [
 
 const Dashboard = ({ user }) => {
   const [tab, setTab] = useState('orders');
+  const [branding, setBranding] = useState(null);
+  // Branding is cosmetic — a failure here must never keep the portal from loading.
+  useEffect(() => {
+    let alive = true;
+    httpsCallable(functions, 'portalBranding')()
+      .then((r) => { if (alive) setBranding(r.data); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   return (
     <div className="shell">
-      <Header user={user} />
+      <Header user={user} branding={branding} />
       <nav className="tabs">
         {TABS.map((t) => (
           <button key={t.id} className={`tab${tab === t.id ? ' active' : ''}`} onClick={() => setTab(t.id)}>{t.label}</button>
@@ -217,11 +276,18 @@ const Dashboard = ({ user }) => {
   );
 };
 
-const Header = ({ user }) => (
+// Their logo sits beside ours at the top — this is their portal, so it should look like it
+// (Stuart 2026-08-02). No logo loaded = exactly the header as it was.
+const Header = ({ user, branding }) => (
   <div className="shell-head">
-    <div>
-      <span className="eyebrow">Classical Elements</span>
-      <h1>Client Portal</h1>
+    <div className="brand">
+      {branding?.logoUrl
+        ? <img className="client-logo" src={branding.logoUrl} alt={branding.customerName || 'Client'} />
+        : null}
+      <div>
+        <span className="eyebrow">Classical Elements</span>
+        <h1>{branding?.customerName ? `${branding.customerName} — Client Portal` : 'Client Portal'}</h1>
+      </div>
     </div>
     <div className="who">
       <span>{user.email}</span>

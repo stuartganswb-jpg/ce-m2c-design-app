@@ -948,9 +948,63 @@ const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i +=
 
 // Quote lines safe to show the customer: their own quoted names/qty/prices, minus internal
 // bookkeeping rows. NEVER include costs, partHandling, or internal ids.
-const sanitizeBreakdown = (cpqData) => ((cpqData && cpqData.breakdown) || [])
+// `skuOf` maps our item code -> the CUSTOMER'S own part # (Stuart 2026-08-02: "customers will need
+// to see their part# when loaded (ie. fabricut) on the sales orders"). Their number is the one they
+// can act on — ours means nothing to their warehouse — so it rides every line we hand back.
+const sanitizeBreakdown = (cpqData, skuOf) => ((cpqData && cpqData.breakdown) || [])
     .filter((l) => l && !l.isHeader && !l.isDiscount && !l.isNetLine)
-    .map((l) => ({ name: l.name || '', qty: l.qty || 0, price: l.price ?? null, total: l.total ?? null }));
+    .map((l) => ({
+        name: l.name || '',
+        qty: l.qty || 0,
+        price: l.price ?? null,
+        total: l.total ?? null,
+        sku: (typeof skuOf === 'function' ? skuOf(l.legacyErpId || l.partId) : '') || '',
+    }));
+
+// Their part #s for a set of our item codes, read from each item's clientPricing row. Matched the
+// way CPQ and Quick Ship match — by CRM id OR by customer NAME — because rows have been entered
+// both ways over the years. Chunked at 30 to respect Firestore's `in` limit.
+const buildSkuLookup = async (db, customerId, crm, codes) => {
+    const wanted = [...new Set((codes || []).map((c) => String(c || '').toUpperCase()).filter(Boolean))];
+    if (!wanted.length) return () => '';
+    const keys = new Set([customerId, crm && crm.name, crm && crm.companyName]
+        .filter(Boolean).map((x) => String(x).trim().toUpperCase()));
+    const map = {};
+    for (const group of chunk(wanted, 30)) {
+        const snap = await db.collection('Approved_Designs').where('legacyErpId', 'in', group).get();
+        snap.forEach((d) => {
+            const p = d.data();
+            const code = String(p.legacyErpId || p.itemId || '').toUpperCase();
+            const row = (p.clientPricing || []).find((r) => r && keys.has(String(r.customerId || '').trim().toUpperCase()));
+            const sku = row && String(row.clientSku || '').trim();
+            if (code && sku) map[code] = sku;
+        });
+    }
+    return (code) => map[String(code || '').toUpperCase()] || '';
+};
+
+// A PORTAL_REQUEST quote has no priced breakdown yet — staff price it in CPQ. Without this the
+// customer saw their own submitted quote as an empty card (Stuart 2026-08-02: "they need to be able
+// to see the quotes after submittal"). Rebuild what they CHOSE from the flow: each step's title and
+// the option they picked, resolved through the flow doc so the words match the configurator.
+const requestLines = (job, flowDoc) => {
+    const req = job.portalRequest || {};
+    const params = (req.selections && req.selections.params) || {};
+    const qtys = (req.selections && req.selections.quantities) || {};
+    const steps = (flowDoc && flowDoc.steps) || [];
+    const out = [];
+    steps.forEach((st) => {
+        const sel = params[st.id];
+        if (!sel || typeof sel !== 'string') return;
+        const opt = (st.styleOptions || []).find((o) => (o.optId || o.partId) === sel)
+            || (st.allowedOptions || []).find((o) => (o.id || o.optId) === sel);
+        const label = (opt && (opt.partName || opt.name || opt.label)) || sel;
+        const q = qtys[st.id];
+        out.push({ name: `${st.title || 'Option'}: ${label}`, qty: Number(q) || 0, price: null, total: null, sku: '' });
+    });
+    if (req.note) out.push({ name: `Note: ${String(req.note).slice(0, 300)}`, qty: 0, price: null, total: null, sku: '' });
+    return out;
+};
 
 // Customer-friendly stage from the floor-doc join (mirrors RTG Dispatch's rollup precedence:
 // finishing/shop presence wins, else the SO's own status).
@@ -1005,19 +1059,53 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
 
     const orderedJobIds = new Set(soDocs.map((so) => String(so.hqJobId || '')).filter(Boolean));
 
+    // A quote the CUSTOMER deleted is gone from their list but kept in HQ, flagged, so the team
+    // can see what happened rather than having a record vanish.
+    const liveJobs = jobs.filter((j) => !j.portalDeleted);
+
+    // THEIR part #s for every code on every line we are about to return — one batched lookup for
+    // the whole page rather than a read per line.
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const allCodes = [
+        ...liveJobs.flatMap((j) => ((j.cpqData && j.cpqData.breakdown) || []).map((l) => l && (l.legacyErpId || l.partId))),
+        ...soDocs.flatMap((so) => (so.lines || []).map((l) => l && (l.erp || l.itemId))),
+    ];
+    const skuOf = await buildSkuLookup(db, customerId, crm, allCodes);
+
+    // Flow docs behind any un-priced portal requests, so their selections read in words.
+    const reqFlowIds = [...new Set(liveJobs
+        .filter((j) => j.status === 'PORTAL_REQUEST' && j.portalRequest && j.portalRequest.flowId)
+        .map((j) => String(j.portalRequest.flowId)))];
+    const flowById = {};
+    await Promise.all(reqFlowIds.map(async (fid) => {
+        const fs = await db.collection('cpq_flows').doc(fid).get();
+        if (fs.exists) flowById[fid] = fs.data();
+    }));
+
     return {
-        quotes: jobs
+        quotes: liveJobs
             .filter((j) => !orderedJobIds.has(String(j.jobId || j.id)))
-            .map((j) => ({
-                id: j.quoteNo || j.jobId || j.id,
-                name: j.jobName || 'Quote',
-                sidemark: j.sidemark || '',
-                status: j.status || 'CONFIGURED',
-                date: j.dateSaved || null,
-                total: (j.cpqData && j.cpqData.totalPrice) ?? null,
-                shipping: j.shippingAmount ?? null,
-                lines: sanitizeBreakdown(j.cpqData),
-            })),
+            .map((j) => {
+                const priced = sanitizeBreakdown(j.cpqData, skuOf);
+                const isRequest = j.status === 'PORTAL_REQUEST';
+                return {
+                    id: j.quoteNo || j.jobId || j.id,
+                    docId: j.id,
+                    name: j.jobName || 'Quote',
+                    sidemark: j.sidemark || '',
+                    status: j.status || 'CONFIGURED',
+                    date: j.dateSaved || null,
+                    total: (j.cpqData && j.cpqData.totalPrice) ?? null,
+                    shipping: j.shippingAmount ?? null,
+                    // Deleting is for quotes still in the customer's own court. Once it is approved
+                    // or has become an order it is a commitment, and withdrawing it is a
+                    // conversation with their rep, not a button.
+                    canDelete: ['PORTAL_REQUEST', 'CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(String(j.status || 'CONFIGURED')),
+                    lines: priced.length ? priced : (isRequest ? requestLines(j, flowById[String(j.portalRequest.flowId)]) : []),
+                    awaitingPricing: isRequest && !priced.length,
+                };
+            }),
         orders: soDocs.map((so) => {
             const job = jobs.find((j) => String(j.jobId || j.id) === String(so.hqJobId || ''));
             return {
@@ -1027,11 +1115,65 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
                 date: so.reqDate || so.createdDate || null,
                 total: (job && job.cpqData && job.cpqData.totalPrice) ?? null,
                 stage: rollupStage(so, shopDocs, finDocs),
-                lines: job ? sanitizeBreakdown(job.cpqData)
-                    : ((so.lines || []).map((l) => ({ name: l.name || l.erp || '', qty: l.qty || 0, price: null, total: null }))),
+                lines: job ? sanitizeBreakdown(job.cpqData, skuOf)
+                    : ((so.lines || []).map((l) => ({ name: l.name || l.erp || '', qty: l.qty || 0, price: null, total: null, sku: skuOf(l.erp || l.itemId) }))),
             };
         }),
     };
+});
+
+// The customer withdraws a quote. It is NEVER hard-deleted: the jobs doc is flagged so it leaves
+// their portal while HQ keeps the record and is told what happened (Stuart 2026-08-02: "a way to
+// delete a quote and when they delete it will alert the HQ crm and mark the quote there deleted").
+exports.portalDeleteQuote = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+    const quoteId = String((request.data && request.data.quoteId) || '').trim();
+    const reason = String((request.data && request.data.reason) || '').slice(0, 500);
+    if (!quoteId) throw new HttpsError('invalid-argument', 'Which quote?');
+
+    const ref = db.collection('jobs').doc(quoteId);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError('not-found', 'That quote no longer exists.');
+    const job = snap.data();
+    // OWNERSHIP is checked against the CLAIM, never against anything the browser sent.
+    if (String((job.customer && job.customer.id) || '') !== String(customerId)) {
+        throw new HttpsError('permission-denied', 'That quote is not on your account.');
+    }
+    const status = String(job.status || 'CONFIGURED');
+    if (!['PORTAL_REQUEST', 'CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(status)) {
+        throw new HttpsError('failed-precondition', 'This quote has already been approved or ordered — please contact your representative.');
+    }
+
+    const email = String((request.auth.token && request.auth.token.email) || '');
+    await ref.update({
+        portalDeleted: true,
+        status: 'DELETED_BY_CLIENT',
+        statusBeforeDelete: status,
+        portalDeletedAt: admin.firestore.FieldValue.serverTimestamp(),
+        portalDeletedBy: email,
+        portalDeletedReason: reason,
+    });
+    // Tell the team. Same channel every other cross-app alert uses, so it surfaces where staff
+    // already look instead of needing a new inbox.
+    await db.collection('global_messages').add({
+        // 'ALL' on purpose: the comms hub filters by app/user and has no 'HQ' target, so a message
+        // addressed to one would be visible to nobody. The CRM card is the primary alert; this is
+        // the secondary one that reaches whoever is looking at the hub.
+        sender: 'Client Portal', sourceApp: 'PORTAL', target: 'ALL', isSystem: true,
+        msg: `🗑 ${(job.customer && job.customer.name) || customerId} deleted quote ${job.quoteNo || quoteId}${reason ? ` — "${reason}"` : ''} (was ${status}, by ${email}).`,
+        t: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    return { ok: true };
+});
+
+// Portal branding for the signed-in customer — their logo above the portal (Stuart 2026-08-02:
+// "load a client logo and then have it shown at the top of the portal when they log in").
+exports.portalBranding = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const snap = await admin.firestore().collection('crm_records').doc(customerId).get();
+    const crm = snap.exists ? snap.data() : {};
+    return { logoUrl: String(crm.portalLogoUrl || ''), customerName: String(crm.name || '') };
 });
 
 // ---- Collection entitlement (crm_records.portalCollections) ----------------------------------
