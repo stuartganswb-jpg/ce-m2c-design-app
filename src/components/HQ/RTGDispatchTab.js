@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
@@ -233,6 +234,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             j.soId = j.soId || f.salesOrderId; j.customer = j.customer || f.customerName || f.clientName || ''; j.quoteId = j.quoteId || f.quoteId || null;
             if (!j.orderTs) j.orderTs = toMs(f.createdAt); j.reqDate = j.reqDate || f.reqDate || '';
             j.stages.FINISHING = { status: f.currentPhase || f.stepStatus || 'Setup', id: f.id };
+            j.finDoc = f;   // the whole doc, so the row can render the SAME chips the floor sees
             touch(j, toMs(f.updatedAt) || toMs(f.createdAt));
         });
         let arr = Object.values(jobs);
@@ -1544,7 +1546,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                                     {chips.map(s => <span key={s.k} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', padding: '3px 9px', borderRadius: '10px', background: s.c, color: '#fff', letterSpacing: '.05em' }}>{s.k}</span>)}
                                                 </div>
                                             </td>
-                                            <td style={{ padding: '12px 16px', color: 'var(--ink-soft)', fontSize: '0.8rem' }}>{statusBits || '—'}</td>
+                                            <td style={{ padding: '12px 16px', color: 'var(--ink-soft)', fontSize: '0.8rem' }}>
+                                                {/* Same chips as the floor and the WMS — HQ reads the status it reads. */}
+                                                {job.finDoc ? <OrderStatusChips wo={job.finDoc} showWho={false} /> : (statusBits || '—')}
+                                            </td>
                                             <td style={{ padding: '12px 16px', color: 'var(--ink-soft)', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{job.latestTs ? new Date(job.latestTs).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                                         </tr>
                                     );

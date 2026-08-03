@@ -15,6 +15,7 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack } from '../Shared/workOrderContract';
+import OrderStatusChips from '../Shared/OrderStatusChips';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
@@ -44,6 +45,10 @@ const ShopFloor = () => {
     const [tooling, setTooling] = useState([]);
     const [materials, setMaterials] = useState([]);
     const [customOrdersRaw, setCustomOrders] = useState([]);
+    // The other half. A shop card shows the custom part; the small parts live on the finishing
+    // floor as the sibling doc, and "where's the rest of this order?" is the question the shop
+    // asks all day. Keyed by finSiblingId — the same id the mirror writes to.
+    const [finSibs, setFinSibs] = useState({});
     // DIVISION SWITCHER (Stuart 2026-07-14, matches the WMS header pattern): filter the job queues
     // in place instead of bouncing back to the landing screen. 'all' = every division; jobs WITHOUT
     // a brand stamp (legacy/shop-internal) stay visible under every division — never hide work.
@@ -121,6 +126,9 @@ const ShopFloor = () => {
     useEffect(() => {
         if (!user) return;
         const unsubs = [
+            onSnapshot(collection(db, "fin_workorders"), s => {
+                const m = {}; s.docs.forEach(d => { m[d.id] = { id: d.id, ...d.data() }; }); setFinSibs(m);
+            }),
             onSnapshot(collection(db, "Approved_Designs"), s => {
                 // Shop scope = Classical Elements + M2C only (Stuart 2026-07-17): Uniquity and
                 // Leyla Gans have no relation to the shop floor — dropped at the source so every
@@ -927,6 +935,7 @@ const ShopFloor = () => {
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '10px' }}>
                     SO {order.soNum} · Qty {order.qty}{order.cutLength ? ` · Cut ${order.cutLength}"` : ''}{order.clientName ? ` · ${order.clientName}` : ''}{order.isOutsourced ? ' · PLATED (outsourced)' : ''}
                 </div>
+                {finSibs[order.finSiblingId] && <div style={{ marginBottom: '10px' }}><OrderStatusChips wo={finSibs[order.finSiblingId]} showWho={false} /></div>}
                 <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={() => startOrder(order)} style={{ flex: 1.4, background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>▶ Start</button>
                     {order.quoteId && (
@@ -1147,6 +1156,14 @@ const ShopFloor = () => {
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: order.phosDone ? '#3a7d44' : 'var(--ink)' }}>Phosphated{order.phosDone && order.phosBy ? ` · ${order.phosBy}` : ''}</span>
                                 </label>
                             )}
+                        </div>
+                    )}
+                    {/* The other half, on the same card: shop finishing early means nothing if the
+                        small parts are on coat 1 — and the shop asks that all day (2026-08-03). */}
+                    {finSibs[order.finSiblingId] && (
+                        <div style={{ margin: '0 0 16px 0', padding: '10px 12px', border: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '7px' }}>Rest of this order</div>
+                            <OrderStatusChips wo={finSibs[order.finSiblingId]} />
                         </div>
                     )}
                     <div style={{ display: 'flex', gap: '12px', margin: '0 0 20px 0' }}>

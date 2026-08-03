@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import WhereIsIt from '../Shared/WhereIsIt';
 import { useNavigate } from 'react-router-dom';
 import { finishingDb as db, auth, functions, getOuterIdToken } from '../../firebase';
 import { collection, onSnapshot, query, doc, getDoc, addDoc, serverTimestamp, orderBy, limit } from "firebase/firestore";
@@ -180,6 +181,11 @@ const FinishingFloor = () => {
           </button>
         ))}
       </nav>
+      {/* 🧭 The lookup — same question, same answer, from any screen. Fed the orders this app
+          already subscribes to, so it adds no listener and can never be staler than the page. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 30px 0' }}>
+        <WhereIsIt orders={workOrders} recipeLenOf={(o) => ((recipes[o.recipe] || recipes[String(o.recipe || '').toUpperCase()] || {}).steps || []).length} />
+      </div>
       <main style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column' }}>
         <div style={{ backgroundColor: '#fff', border: '1px solid var(--line)', flex: 1, boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', borderRadius: '2px' }}>
           {activeTab === 'SETUP QUEUE' && <SetupQueue workOrders={workOrders} recipes={recipes} writeLog={writeLog} sysConfig={sysConfig} currentUser={user?.name || ''} />}

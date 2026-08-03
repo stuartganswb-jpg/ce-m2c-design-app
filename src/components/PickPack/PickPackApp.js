@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import WhereIsIt from '../Shared/WhereIsIt';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -2551,6 +2552,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
+                    <WhereIsIt orders={finAll} compact />
+                    <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
                     <button onClick={handleLogout} style={{ padding: '8px 16px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', background: theme.ink, color: '#fff', border: 'none', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>HUB / LOGOUT</button>
                 </div>
             </header>
@@ -2874,6 +2877,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const active = packOrderId === j.id;
                                     return (
                                         <button key={j.id} onClick={() => active ? setPackOrderId(null) : openPackOrder(j)} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
+                                            {!active && <OrderStatusChips wo={j} showWho={false} style={{ marginBottom: '6px' }} />}
                                             <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}{isQsOrder(j) && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : theme.brass, border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : theme.brass}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>QUICK SHIP</span>}{j.orderType === 'stock' && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : '#3a7d44', border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : '#3a7d44'}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>STOCK → BIN</span>}</div>
                                             <div style={{ fontFamily: theme.sans, fontSize: '0.75rem', color: active ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>
                                                 {j.customerName || j.clientName || j.customer || '—'} · {jl.length} line{jl.length === 1 ? '' : 's'}{done > 0 ? ` · ${done}/${jl.length} packed` : ''}
@@ -2958,6 +2962,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div key={j.id} style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', borderTop: `1px solid ${theme.paper2}`, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>
                                             <span style={{ fontFamily: theme.mono, color: theme.ink }}>{packRef(j)}</span>
                                             <span>{j.customerName || j.clientName || j.customer || ''}</span>
+                                            <OrderStatusChips wo={j} showWho={false} />
                                             <span style={{ fontFamily: theme.mono, fontSize: '10px', color: j.nsIfTran ? '#3a7d44' : theme.inkSoft }}>
                                                 {j.nsIfTran ? `IF ${j.nsIfTran}${j.nsFulfillStatus ? ` · ${j.nsFulfillStatus}` : ''}` : (j.nsFulfillQueued ? 'IF queued…' : '')}
                                             </span>
