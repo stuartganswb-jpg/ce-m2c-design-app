@@ -521,3 +521,6 @@ footer.portal a { color: var(--ink-soft); }
 .card-foot { padding: 12px 14px; border-top: 1px solid var(--line, #e2ded4); text-align: right; }
 .btn-ghost.danger { color: #a33; border-color: #e2b8b8; }
 .btn-ghost.danger:hover { color: #fff; background: #a33; border-color: #a33; }
+
+/* The diagnostic code on an empty showroom — quiet, but there when staff need it. */
+.empty .why-code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.75rem; opacity: .55; }

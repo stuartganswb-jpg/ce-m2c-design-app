@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, onSnapshot, query, where, doc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, getDoc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
 import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { quoteDisplayNo } from '../Shared/quoteDisplay';
@@ -155,6 +155,42 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
       () => setPackUnits([]));
     return () => { unsubCols(); unsubLists(); };
   }, []);
+
+  // ---- THE TRAP THIS PANEL COULD SPRING (Stuart 2026-08-03: "the fabricut H1 collection which is
+  // marked on the crm portal access and was accesible before these changes is no longer
+  // available?"). Flows and collections are two INDEPENDENT gates, and the collection gate is
+  // leak-safe: an assembly with NO collection tag cannot be proven allowed, so it is HIDDEN. Tick
+  // a collection here and every assigned flow whose ASSEMBLY isn't tagged into it silently
+  // vanishes from the customer's showroom — the two settings sit inches apart and never disagreed
+  // out loud. Now they do.
+  const [blockedFlows, setBlockedFlows] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      const cols = (portalCollections || []).map(c => String(c).trim().toUpperCase()).filter(Boolean);
+      if (!cols.length || !assignedFlowIds.length) { if (alive) setBlockedFlows([]); return; }
+      const allowed = new Set(cols);
+      const out = [];
+      for (const fid of assignedFlowIds) {
+        const f = brandFlows.find(x => x.id === fid);
+        if (!f) continue;
+        if (!f.linkedAssemblyId) { out.push({ name: f.name, why: 'no linked assembly' }); continue; }
+        try {
+          const a = await getDoc(doc(db, 'Approved_Designs', f.linkedAssemblyId));
+          const ms = (a.exists() && a.data().manufacturingSpecs) || {};
+          const asmCols = (Array.isArray(ms.collections) ? ms.collections
+            : (ms.customData?.collection ? [ms.customData.collection] : []))
+            .map(c => String(c || '').trim().toUpperCase()).filter(Boolean);
+          if (!asmCols.some(c => allowed.has(c))) {
+            out.push({ name: f.name, why: asmCols.length ? `tagged ${asmCols.join(', ')}` : 'assembly has no collection tag' });
+          }
+        } catch (e) { /* a read failure here must never break the panel */ }
+      }
+      if (alive) setBlockedFlows(out);
+    };
+    check();
+    return () => { alive = false; };
+  }, [assignedFlowIds, portalCollections, brandFlows]);
 
   const toggleCollection = async (name) => {
     const next = portalCollections.includes(name) ? portalCollections.filter(c => c !== name) : [...portalCollections, name];
@@ -330,6 +366,22 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: 'var(--ink-soft)' }}>Available Collections</span>
               <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: portalCollections.length ? 'var(--brass)' : 'var(--ink-soft)' }}>{portalCollections.length ? `${portalCollections.length} of ${allCollections.length}` : 'all collections'}</span>
             </div>
+            {/* The two gates disagreeing, said out loud. */}
+            {blockedFlows.length > 0 && (
+              <div style={{ border: '1px solid #d9534f', background: '#fdf3f3', padding: '12px 14px', marginBottom: '12px' }}>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', fontWeight: 700, marginBottom: '8px' }}>
+                  ⚠ {blockedFlows.length} assigned product{blockedFlows.length === 1 ? '' : 's'} hidden by this filter
+                </div>
+                {blockedFlows.map((b, i) => (
+                  <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', padding: '3px 0' }}>
+                    {b.name} <span style={{ color: '#a33' }}>— {b.why}</span>
+                  </div>
+                ))}
+                <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '8px', fontStyle: 'italic' }}>
+                  The collection gate is leak-safe: an assembly with no matching collection tag stays hidden even when its flow is ticked above. Either tick the collection its assembly carries, tag the assembly into one you have ticked (Master Library → Collections), or clear the filter to show everything assigned.
+                </div>
+              </div>
+            )}
             {allCollections.length === 0 ? (
               <div style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No collections defined yet (Mass Update 4.5 → Collections).</div>
             ) : (

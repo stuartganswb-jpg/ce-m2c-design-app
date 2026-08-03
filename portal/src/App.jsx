@@ -286,7 +286,9 @@ const Header = ({ user, branding }) => (
         : null}
       <div>
         <span className="eyebrow">Classical Elements</span>
-        <h1>{branding?.customerName ? `${branding.customerName} — Client Portal` : 'Client Portal'}</h1>
+        {/* The client's mark appears ONCE — as their logo. Repeating their name in the title read
+            as the brand shown twice (Stuart 2026-08-03), so the title is just what the page IS. */}
+        <h1>Client Portal</h1>
       </div>
     </div>
     <div className="who">

@@ -56,7 +56,20 @@ export default function Showroom() {
 
   const items = data.items || [];
   if (items.length === 0) {
-    return <div className="empty" style={{ marginTop: 24 }}>Your showroom hasn't been set up yet — contact your Classical Elements representative to have your product lines enabled.</div>;
+    // The BFF already distinguishes WHY the showroom is empty — it has for a while — but this
+    // screen collapsed every cause into one sentence, so "no flows assigned" and "the collection
+    // filter ate everything" looked identical (Stuart 2026-08-03: "the fabricut H1 collection
+    // which is marked on the crm portal access … is no longer available?"). Name the cause: the
+    // two are fixed in different places in the CRM.
+    const why = data.reason === 'NO_COLLECTIONS'
+      ? 'Your product lines are assigned, but the collection filter on your account is hiding all of them.'
+      : "Your showroom hasn't been set up yet.";
+    return (
+      <div className="empty" style={{ marginTop: 24 }}>
+        {why} Contact your Classical Elements representative to have your product lines enabled.
+        {data.reason ? <span className="why-code"> ({data.reason})</span> : null}
+      </div>
+    );
   }
 
   return (
