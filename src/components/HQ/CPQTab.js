@@ -9,6 +9,7 @@ import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
 import { buildFeeCatalog, buildCheckoutCatalog, anyCheckoutSelectable, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
+import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
 
@@ -1826,13 +1827,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       const v = clientPriceOf(subPart) ?? clientPriceOf(subBase);
                       if (v != null) subPrice = v;
                   }
+                  // PLATE ASSOCIATION (Stuart 2026-08-03) — applies at EVERY price level, which is the
+                  // gap: the arm has always included its backplate, but that only showed up in the
+                  // quote at the Fabricut levels below, so on our own pricing the plate billed in
+                  // full. Opt-in per item, so a plate with no declared role is untouched.
+                  // `hasParent` = something on this step is including the plate: the bracket arm, or
+                  // a french/miter return, which REPLACES the arm and carries the plate itself.
+                  let plateNote = '';
+                  const plateHasParent = !!selectedValue || returnLocksBracket(step) || isReturnChosenForPos(step.position);
+                  const pp = platePrice(subPart || subBase, subPrice, plateHasParent, findLibPart);
+                  if (pp) { subPrice = pp.price; plateNote = pp.note; }
                   // Price level on plate sub-lines: BP → $0 (in the arm), CP → the flat upcharge.
+                  // Fabricut levels stay authoritative for their own customers — they carry the same
+                  // intent in the imported data (retail null = included), so the two agree.
                   if (priceLevel !== 'STANDARD') {
                       const fp = fabricutPriceOf(subPart, priceLevel, undefined, outsourceFinishes);
                       if (fp != null) subPrice = fp;
                   }
                   breakdown.push({
-                      name: `${step.subLabel || 'Backplate'} (${subPart ? lineNameFor(subPart, subOpt) : subOpt.partName})`,
+                      name: `${step.subLabel || 'Backplate'} (${subPart ? lineNameFor(subPart, subOpt) : subOpt.partName})${plateNote ? ` — ${plateNote}` : ''}`,
                       qty: qty, price: subPrice, total: subPrice * qty,
                       // Backplates are tagged Small Parts in the library — that tag now routes them,
                       // instead of inheriting the bracket step's 'Custom' stamp.

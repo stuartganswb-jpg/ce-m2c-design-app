@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
@@ -475,7 +476,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         partHandling: baseSpecs.partHandling || "",
         customOverrideFee: !!baseSpecs.customOverrideFee,
         weight: baseSpecs.weight || "",
-        wallMount: baseSpecs.wallMount || { partId: "", desc: "" }
+        wallMount: baseSpecs.wallMount || { partId: "", desc: "" },
+        plateRole: baseSpecs.plateRole || "",
+        plateUpgradeOf: baseSpecs.plateUpgradeOf || "",
+        plateUpcharge: baseSpecs.plateUpcharge ?? ""
     });
   };
 
@@ -1526,6 +1530,24 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                    {/* 🔩 Backplates/cover plates typically (not always) need a wall mount — pair it here
                        and CPQ auto-adds one per plate to the BOM (cart line + NetSuite push). */}
                    {/PLATE/i.test(String(editSpecs.productType || '')) && (<>
+                       {/* HOW THIS PLATE IS PRICED IN A QUOTE. Left as none, it bills its own base
+                           price exactly as it does today — nothing changes until a role is chosen. */}
+                       <div style={{ gridColumn: '1 / -1' }}>
+                           <label style={labelStyle}>Plate Pricing Role</label>
+                           <select value={editSpecs.plateRole || ''} onChange={e => setEditSpecs(prev => ({ ...prev, plateRole: e.target.value }))} title="The arm's price has always covered its backplate; the cover plate is the paid upgrade. Declaring it here makes the quote say so at EVERY price level, not just the Fabricut ones." style={fieldStyle}>
+                               {PLATE_ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                           </select>
+                       </div>
+                       {editSpecs.plateRole === 'UPGRADE' && (<>
+                           <div>
+                               <label style={labelStyle}>Upgrade Over (Backplate #)</label>
+                               <input value={editSpecs.plateUpgradeOf || ''} onChange={e => setEditSpecs(prev => ({ ...prev, plateUpgradeOf: e.target.value.toUpperCase() }))} placeholder={pairedBackplateCode({ legacyErpId: activePart?.legacyErpId || activePart?.itemId }) || 'e.g. H1-1BP-R'} title="The backplate this cover plate replaces. Leave blank and the house naming convention is used — H1-1CP-R pairs with H1-1BP-R." style={{ ...fieldStyle, textTransform: 'uppercase' }} />
+                           </div>
+                           <div>
+                               <label style={labelStyle}>Upcharge $ (blank = difference)</label>
+                               <input value={editSpecs.plateUpcharge ?? ''} onChange={e => setEditSpecs(prev => ({ ...prev, plateUpcharge: e.target.value }))} placeholder="e.g. 10" title="Flat amount charged for choosing this cover plate over its backplate. Blank = this plate's base price minus the backplate's, worked out per quote." style={fieldStyle} />
+                           </div>
+                       </>)}
                        <div>
                            <label style={labelStyle}>Wall Mount Part #</label>
                            <input value={editSpecs.wallMount?.partId || ''} onChange={e => setEditSpecs(prev => ({ ...prev, wallMount: { ...(prev.wallMount || {}), partId: e.target.value.toUpperCase() } }))} placeholder="blank = none" title="Item # of the matching wall mount. When set, every CPQ order of this plate includes one mount per plate — in the cart breakdown and the NetSuite push." style={{ ...fieldStyle, textTransform: 'uppercase' }} />
