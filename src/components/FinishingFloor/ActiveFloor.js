@@ -3,7 +3,7 @@ import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone } from '../Shared/floorActivity';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
-import { resolveRecipe } from '../Shared/finishingTime';
+import { resolveRecipe, recipeStepCount } from '../Shared/finishingTime';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
@@ -171,12 +171,31 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // never see pole cards or pole gates at all.
   const woHasPoles = (wo) => Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0 || wo.type === 'Poles';
   const poleIdxOf = (wo) => (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null) ? wo.poleStepIndex : (wo.currentStepIndex || 0);
-  const recipeLen = (wo) => { const r = resolveRecipe(recipes, wo.recipe); return (r && r.steps && r.steps.length) || 0; };
+  const recipeLen = (wo) => recipeStepCount(recipes, wo && wo.recipe);
+
+  // ⛔ ZERO COATS IS NOT "FINISHED" (Stuart 2026-08-03, WO11374: "when the operator scanned it to
+  // start, it immediately shows completed??").
+  //
+  // recipeLen returns 0 when the recipe cannot be resolved — the doc is missing, or the text
+  // stamped on the order does not match its id. Every completion test in here is `next >= len`,
+  // and with len 0 the FIRST advance satisfies it: one touch and the order marked itself Complete,
+  // jumped the QC gate and landed in the packing queue with no coats run and no PIN against any
+  // step. That is exactly what WO11374 (recipe "N25") did, and the "coat 1 of ?" on its chips was
+  // the same missing recipe showing through.
+  //
+  // resolveRecipe now matches far more forgivingly, but a recipe can still be genuinely absent —
+  // so this refuses to advance at all and names the recipe, instead of quietly finishing the job.
+  const recipeMissing = (wo) => {
+      if (recipeLen(wo) > 0) return false;
+      alert(`⛔ Can't advance ${woRef(wo)} — its finish recipe "${wo.recipe || '(none)'}" isn't in Finish Recipes.\n\nNothing was changed. Add or rename the recipe (Finishing → FINISH RECIPES) so its code matches, then advance the coat.\n\nWithout it the app has no idea how many coats this order needs.`);
+      return true;
+  };
 
   // Advance the SMALL-PARTS stream one coat. Pole tasks are untouched — they belong to the pole
   // stream. When BOTH streams are past the last step, the order completes (currentPhase Complete
   // → it enters the WMS packing queue) and the sled frees either way.
   const finalizePartsAdvance = async (wo) => {
+      if (recipeMissing(wo)) return;
       const len = recipeLen(wo);
       const nextParts = (wo.currentStepIndex || 0) + 1;
       const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= len;
@@ -199,6 +218,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // completion posts the GOOD count), and a custom sales order with ANY scrap is redline-BLOCKED
   // with the supervisor alerted. The order only completes after QC passes.
   const handleCompleteRecipeStep = async (wo) => {
+      if (recipeMissing(wo)) return;
       const len = recipeLen(wo);
       const nextParts = (wo.currentStepIndex || 0) + 1;
       const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= len;
@@ -212,6 +232,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // Advance the POLE stream one coat (its own pointer). Completes the order when parts are
   // already done too — through the same final QC gate.
   const finalizePoleAdvance = async (wo) => {
+      if (recipeMissing(wo)) return;
       const len = recipeLen(wo);
       const next = poleIdxOf(wo) + 1;
       const partsFinished = (wo.currentStepIndex || 0) >= len;
@@ -225,6 +246,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       await updateDoc(doc(db,"fin_workorders", wo.id), updates);
   };
   const handleCompletePoleStep = async (wo) => {
+      if (recipeMissing(wo)) return;
       const len = recipeLen(wo);
       const next = poleIdxOf(wo) + 1;
       const partsFinished = (wo.currentStepIndex || 0) >= len;
@@ -428,7 +450,17 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       } else if (action === 'COMPLETE') {
           updates[`tasks.${taskKey}.status`] = 'Complete';
           updates[`tasks.${taskKey}.completedAt`] = Date.now();
-          if (actor) updates[`tasks.${taskKey}.completedBy`] = actor;
+          // ALWAYS STAMP WHO (Stuart 2026-08-03: "still not showing all the stamped steps").
+          // This used to be `if (actor)`, so a completion where the PIN prompt returned nobody
+          // wrote NO name at all — the step went green with a blank audit line and the floor had
+          // no way to tell a missing PIN from a missing feature. Somebody pressed the button;
+          // record the best identity available and say which it was.
+          updates[`tasks.${taskKey}.completedBy`] = actor || user?.name || 'Unattributed';
+          updates[`tasks.${taskKey}.completedVia`] = actor ? 'pin' : (user?.name ? 'signed-in' : 'unattributed');
+          // A step completed having never been started has no elapsed time — flag it rather than
+          // letting a blank ▶ line read as a rendering gap.
+          if (!startedMs) updates[`tasks.${taskKey}.completedNoStart`] = true;
+          if (!t.assignedTo) updates[`tasks.${taskKey}.assignedTo`] = actor || user?.name || null;
       }
       try {
           await updateDoc(doc(db, 'fin_workorders', wo.id), updates);
@@ -1193,7 +1225,11 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               }
               const started = clock(tk.startTime), done = clock(tk.completedAt);
               const mins = (tk.startTime && tk.completedAt) ? Math.max(0, Math.round((tk.completedAt - tk.startTime) / 60000)) : null;
-              const noPin = st === 'Complete' && !tk.completedBy && !tk.assignedTo;
+              // Two different gaps, and they were rendering identically: nobody was recorded at all,
+              // versus recorded but never PIN-started (so there is no elapsed time to trust).
+              const unattributed = st === 'Complete' && (!tk.completedBy || tk.completedVia === 'unattributed') && !tk.assignedTo;
+              const noStart = st === 'Complete' && !tk.startTime;
+              const noPin = unattributed || noStart;
               const line = (icon, who, at, extra) => (
                   <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '3px', lineHeight: 1.5 }}>
                       {icon} {who || <span style={{ color: '#d9534f' }}>no PIN</span>}{at ? ` · ${at}` : ''}{extra || ''}
@@ -1207,7 +1243,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                       </div>
                       {(tk.startTime || tk.assignedTo) && line('▶', tk.assignedTo, started)}
                       {st === 'Complete' && line('■', tk.completedBy || tk.assignedTo, done, mins !== null ? ` · ${mins}m` : '')}
-                      {noPin && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '2px' }}>completed without a PIN'd stop</div>}
+                      {noPin && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '2px' }}>
+                          {unattributed ? "completed with no PIN — nobody recorded" : "completed without a PIN'd start — no run time"}
+                      </div>}
                   </div>
               );
           };

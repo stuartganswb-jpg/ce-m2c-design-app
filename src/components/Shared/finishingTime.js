@@ -116,11 +116,38 @@ const isReadyWO = (w) => w.stagingStatus === 'MATCHED' || ((w.orderType || '') !
 // Resolve a recipe by key, tolerant of the "CODE - Name" display string RTG stamps onto a WO's
 // `recipe` field (the Recipes tab keys docs by CODE only). Tries the exact key, then the code
 // before the first " - ". Shared by the planner and ActiveFloor so step lookups agree.
+// WHY THIS HAD TO GET FORGIVING (Stuart 2026-08-03, WO11374): recipes are keyed by FIRESTORE DOC
+// ID, and a work order carries the recipe as free text stamped at dispatch ("N25", "BL - BLACK",
+// whatever the flow said). An exact-key lookup fails on any drift in case or spacing — and a failed
+// lookup used to mean length 0, which the floor read as "no coats left", i.e. FINISHED. An order
+// completed itself the moment anyone touched it.
+//
+// The completion guard is the real fix and lives in ActiveFloor; this widens the match so the guard
+// rarely has to fire. Order matters: exact id first, so a deliberate id always wins over a fuzzy
+// name match.
 export function resolveRecipe(recipes, key) {
   if (!recipes || !key) return null;
   if (recipes[key]) return recipes[key];
   const code = String(key).split(' - ')[0].trim();
-  return (code && recipes[code]) || null;
+  if (code && recipes[code]) return recipes[code];
+  const want = String(key).trim().toUpperCase();
+  const wantCode = code.toUpperCase();
+  const entries = Object.entries(recipes);
+  // Case/space-insensitive on the doc id.
+  const byId = entries.find(([id]) => String(id).trim().toUpperCase() === want)
+    || entries.find(([id]) => String(id).trim().toUpperCase() === wantCode);
+  if (byId) return byId[1];
+  // Then the recipe's own declared code/name — a doc stored under a generated id still resolves.
+  const byField = entries.find(([, r]) => r && [r.code, r.name, r.recipeCode].some(v => v && String(v).trim().toUpperCase() === want))
+    || entries.find(([, r]) => r && [r.code, r.name, r.recipeCode].some(v => v && String(v).trim().toUpperCase() === wantCode));
+  return byField ? byField[1] : null;
+}
+
+// Coats in a recipe, or 0 when it cannot be resolved. ZERO IS NOT "FINISHED" — every caller that
+// decides completion must check for it explicitly; see the guard in ActiveFloor.
+export function recipeStepCount(recipes, key) {
+  const r = resolveRecipe(recipes, key);
+  return (r && Array.isArray(r.steps) && r.steps.length) || 0;
 }
 
 // Price one batch (WOs that share a recipe + a sled pool) from capacity + timers.
