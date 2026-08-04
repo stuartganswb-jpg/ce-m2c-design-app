@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
@@ -2035,6 +2036,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           pricing: { ...pricing },
           pricingBreakdown: [...pricingBreakdown],
           dynamicConfigParams: { ...dynamicConfigParams },
+          // THE FINISH, IN WORDS (Stuart 2026-08-03). It was always selected and always saved, but
+          // the only thing that ever translated it was RTG at dispatch — so the floor knew the
+          // colour and the customer's quote did not. Stamped here, where CPQ already holds the
+          // finish objects, so every document downstream reads one field.
+          finishes: selectedFinishes(dynamicConfigParams, activeFlow?.steps || [], [globalFinishes, outsourceFinishes]),
+          finishLabel: finishLabelOf(selectedFinishes(dynamicConfigParams, activeFlow?.steps || [], [globalFinishes, outsourceFinishes])),
           stepQuantities: { ...stepQuantities },
           dimensionInputs: { ...dimensionInputs },
           customOverrides: { ...customOverrides },
@@ -2136,10 +2143,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           Object.assign(mergedQuantities, item.stepQuantities || {});
           Object.assign(mergedDimensions, item.dimensionInputs || {});
 
+          // The configuration header is the one row EVERY document renders — the on-screen cart,
+          // both print layouts, the customer PDF, RTG's forms and the viewer's line picker. Putting
+          // the finish here reaches all of them at once, and keeps it where it belongs: stated once
+          // per configuration, not repeated down every part row.
+          const finLabel = finishLabelOfItem(item);
           mergedBreakdown.push({
-              name: `▶ ${item.assemblyName} [${item.sidemark}]`,
+              name: `▶ ${item.assemblyName} [${item.sidemark}]${finLabel ? `  ·  ${finLabel}` : ''}`,
               qty: item.qty,
               total: grossTotal,
+              finishLabel: finLabel || null,
               isHeader: true
           });
 

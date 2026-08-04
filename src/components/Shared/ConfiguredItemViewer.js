@@ -6,6 +6,7 @@ import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel, EngineeringSpecsStrip } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
 import { configQtyOf, perUnitQty, qtyText, multiplierNote } from './configQty';
+import { finishLabelOfItem } from './finishLabel';
 
 // Read-only viewer for a CONFIRMED configured item, opened from the shop floor / finishing floor /
 // HQ work-order windows. Loads the saved job by quoteId, re-renders the frozen `renderState`
@@ -78,6 +79,8 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
     // per-configuration figures stay exactly as they are; the multiplier is now stated out loud.
     const mult = configQtyOf(item);
     const multNote = multiplierNote(mult);
+    // Blank on anything quoted before the finish was stamped — those need a Reopen CPQ + re-save.
+    const finLabel = finishLabelOfItem(item);
     const svg = item?.draftSvg || null;
     const rawHangers = (notes && Array.isArray(notes.hangerLocations)) ? notes.hangerLocations : [];
     const bracketNotes = Array.isArray(item?.bracketNotes) ? item.bracketNotes : [];
@@ -133,14 +136,17 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft, #888)', marginTop: '4px' }}>
                             Confirmed Order · Read-Only{job?.customer?.name ? ` · ${job.customer.name}` : ''}{quoteId ? ` · ${quoteId}` : ''}
                         </div>
-                        {multNote && (
-                            <div style={{ display: 'inline-block', marginTop: '8px', background: 'var(--brass)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, letterSpacing: '.1em', padding: '4px 12px' }}>{multNote.headline}</div>
+                        {(multNote || finLabel) && (
+                            <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+                                {multNote && <span style={{ background: 'var(--brass)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, letterSpacing: '.1em', padding: '4px 12px' }}>{multNote.headline}</span>}
+                                {finLabel && <span title="The finish selected in CPQ — the same one the finishing floor batches by" style={{ border: '1px solid var(--ink)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, letterSpacing: '.06em', padding: '4px 12px' }}>FINISH · {finLabel}</span>}
+                            </div>
                         )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         {items.length > 1 && (
                             <select value={lineIdx} onChange={e => setLineIdx(Number(e.target.value))} style={{ padding: '8px', border: '1px solid var(--line)', background: '#fff', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>
-                                {items.map((it, i) => { const m = configQtyOf(it); return <option key={i} value={i}>{it.sidemark || it.assemblyName || `Line ${i + 1}`}{m > 1 ? `  ·  × ${m}` : ''}</option>; })}
+                                {items.map((it, i) => { const m = configQtyOf(it); const fl = finishLabelOfItem(it); return <option key={i} value={i}>{it.sidemark || it.assemblyName || `Line ${i + 1}`}{m > 1 ? `  ·  × ${m}` : ''}{fl ? `  ·  ${fl}` : ''}</option>; })}
                             </select>
                         )}
                         <button onClick={onClose} style={{ background: 'var(--ink)', color: '#fff', border: 'none', borderRadius: '2px', padding: '8px 14px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Close</button>
