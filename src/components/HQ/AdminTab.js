@@ -1441,6 +1441,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // fascia first, then the track, then the drive. Every one of these is gated on tagged pins
       // existing, so a pole assembly emits exactly what it emitted before — nothing here runs.
       const allOpts = [...pole, ...finial, ...brackets, ...backplates, ...rings, ...riderPool];
+      let trvLeadSteps = 0;
       const trvAll = allOpts.filter(o => traverseRoleOf(o));
       const isTraverse = trvAll.length > 0;
       if (isTraverse) {
@@ -1512,6 +1513,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           // ── 3. RINGS ONLY ON THE FRONT POLE. On a traverse system the rings belong to the
           //    decorative front pole, never to the track — the carriers do that job inside it.
           rings = rings.filter(o => String(o.position || '').toUpperCase() === 'FRONT');
+          trvLeadSteps = steps.length;   // everything above stays at the front of the flow
       }
 
       // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
@@ -1598,7 +1600,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           groupFields.impliedProjInches = tagVals.length === 1 ? tagVals[0].f : null;
           if (tagVals.length >= 2) {
               const lbl = (f) => f === 0.75 ? '.75" Projection' : f === 3.625 ? '3-5/8" Projection' : f === 4.625 ? '4-5/8" Projection' : f === 6 ? '6" Projection' : `${f}" Projection`;
-              steps.unshift({ id: 'PROJ-CHOICE', title: 'Bracket Projection', type: 'PROJ_SELECT', stepRole: 'SIZE', required: true, hideQty: true, styleOptions: tagVals.map(x => ({ optId: `PROJ-${String(x.f).replace(/\./g, '_')}`, partName: lbl(x.f), projInches: x.raw })) });
+              // ON A TRAVERSE FLOW THE FASCIA COMES FIRST. This step unshifts to position 0 —
+              // correct for a pole flow, wrong here: it put Bracket Projection ahead of "choose the
+              // fascia", which is the first question (Stuart 2026-08-04). Slotted in AFTER the
+              // traverse lead-in instead, where a bracket question belongs.
+              steps.splice(trvLeadSteps, 0, { id: 'PROJ-CHOICE', title: 'Bracket Projection', type: 'PROJ_SELECT', stepRole: 'SIZE', required: true, hideQty: true, styleOptions: tagVals.map(x => ({ optId: `PROJ-${String(x.f).replace(/\./g, '_')}`, partName: lbl(x.f), projInches: x.raw })) });
           }
       }
       if (sizeFamily) {
