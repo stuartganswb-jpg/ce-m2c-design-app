@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { TRAVERSE_ROLES, DRIVE_TYPES, TRV_SETUPS } from '../Shared/traverseTags';
+import { TRAVERSE_ROLES, DRIVE_TYPES, TRV_SETUPS, suggestSetupFromName } from '../Shared/traverseTags';
 import { db, storage } from '../../firebase';
 import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { ref as sRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -937,7 +937,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // here automatically; saving stamps it onto the pins so both stay in sync.
                     // A PARKED pin reloads as a plain blank choice (⏸ hint shows) — NOT as HIDE-checked,
                     // otherwise assigning its item # later would save it as a hidden BOM part.
-                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), isCollar: !!pin?.isCollar, requiresCollar: pin?.requiresCollar || '', projInches: pin?.projInches || '', mountType: pin?.mountType || '', catOverride: pin?.catOverride || '', custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], traverseRole: pin?.traverseRole || '', driveType: pin?.driveType || '', trvSetup: pin?.trvSetup || '', alwaysShown: !!pin?.alwaysShown, thumb: '' };
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), isCollar: !!pin?.isCollar, requiresCollar: pin?.requiresCollar || '', projInches: pin?.projInches || '', mountType: pin?.mountType || '', catOverride: pin?.catOverride || '', custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], traverseRole: pin?.traverseRole || '', driveType: pin?.driveType || '', trvSetup: pin?.trvSetup || suggestSetupFromName(label, itemNo, nm), alwaysShown: !!pin?.alwaysShown, thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -1454,7 +1454,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                             {c.requiresCollar && !assignCollarCands.codes.some(code => code.toUpperCase() === String(c.requiresCollar).toUpperCase()) && <option value={c.requiresCollar}>{c.requiresCollar}</option>}
                                                         </select>
                                                     )}
-                                                    {(normalizeCategory(c.catOverride || r.category) === 'BRACKET' || ['FRENCH_RETURN', 'MITER_RETURN'].includes(String(c.endTreatment || '').toUpperCase())) && (
+                                                    {/* PROJECTION ON END CHOICES TOO (Stuart 2026-08-04: "i would need to add
+                                                        them to the projections to the miter returns and return arms to help limit
+                                                        the choices to match"). A traverse RETURN ARM is tagged FINIAL — it sits in
+                                                        the finial position — so the dropdown was hidden on exactly the rows whose
+                                                        projection has to match the bracket's. Any tagged end treatment gets it. */}
+                                                    {(normalizeCategory(c.catOverride || r.category) === 'BRACKET' || !!String(c.endTreatment || '').trim()) && (
                                                         <select value={c.projInches || ''} title="PROJECTION — the 4.5 Master-Dictionary list (BRACKET PROJECTIONS). Brackets: the exact projection this item IS (shows only at that projection). FRENCH/MITER RETURN choices: the MINIMUM projection (returns need depth — tag 4-5/8 and they show at 4-5/8 AND 6, hidden below). '— any —' = always offered." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { projInches: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.projInches ? 'var(--brass)' : 'var(--line)', color: c.projInches ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                             <option value="">proj: — any —</option>
                                                             {((dictLists && dictLists.projections) || []).map(p => <option key={p} value={String(p).toUpperCase()}>proj: {p}"</option>)}
@@ -1610,7 +1615,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                                 {c.requiresCollar && !slotCollarCands.codes.some(code => code.toUpperCase() === String(c.requiresCollar).toUpperCase()) && <option value={c.requiresCollar}>{c.requiresCollar}</option>}
                                                             </select>
                                                         )}
-                                                        {(normalizeCategory(c.catOverride || slot.category) === 'BRACKET' || ['FRENCH_RETURN', 'MITER_RETURN'].includes(String(c.endTreatment || '').toUpperCase())) && (
+                                                        {(normalizeCategory(c.catOverride || slot.category) === 'BRACKET' || !!String(c.endTreatment || '').trim()) && (
                                                             <select value={c.projInches || ''} title="PROJECTION — 4.5 Master-Dictionary list. Brackets: the exact projection this item IS. FRENCH/MITER RETURN choices: the MINIMUM projection (tag 4-5/8 → shows at 4-5/8 AND 6). '— any —' = always offered." onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { projInches: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.projInches ? 'var(--brass)' : 'var(--line)', color: c.projInches ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                                 <option value="">proj: — any —</option>
                                                                 {((dictLists && dictLists.projections) || []).map(p => <option key={p} value={String(p).toUpperCase()}>proj: {p}"</option>)}

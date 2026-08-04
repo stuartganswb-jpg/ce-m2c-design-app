@@ -202,3 +202,16 @@ export function offeredChoices(choices, { role, drive } = {}) {
         (!wantRole || traverseRoleOf(c) === wantRole) &&
         driveAllows(c, drive));
 }
+
+// SEED THE DOUBLE FROM THE NAME (Stuart 2026-08-04). His double parts already say so —
+// "Traverse Double End Return Arm", H12TRVBDBL, H1-2TRVRAD. Reading that is not a guess about
+// intent, it is reading the name the designer already wrote, and it turns a tagging pass over
+// every row into a review of the handful it flags. Always overridable; only ever SEEDS a blank.
+//
+// Deliberately narrow: DBL / DOUBLE as a whole word or code tail. "DOUBLED", "TROUBLE" and a
+// stray D do not count — a false DOUBLE hides the part from every single, which is the expensive
+// direction to be wrong in.
+export function suggestSetupFromName(...names) {
+    const hay = names.map(n => String(n || '').toUpperCase()).join(' ');
+    return /\bDOUBLE\b|\bDBL\b|DBL$|[A-Z]AD$/.test(hay) ? 'DOUBLE' : '';
+}
