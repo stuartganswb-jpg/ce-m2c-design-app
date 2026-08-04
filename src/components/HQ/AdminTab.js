@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { traverseEnds, offeredChoices, traverseRoleOf } from '../Shared/traverseTags';
+import { traverseEnds, offeredChoices, traverseRoleOf, dedupeByPart, isRider, needsSetupStep, setupsOffered } from '../Shared/traverseTags';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from "firebase/functions";
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit, writeBatch } from "firebase/firestore";
@@ -1000,7 +1000,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       const key = [cl.id, pid, position, location].join('|');
                       const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, _srcName: srcByCluster[cl.id], nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}), // TRAVERSE tags ride the option so the generator can bucket fascia / track / carrier and
                           // scope by drive (Stuart 2026-08-04). Absent on every pole assembly.
-                          ...(p.traverseRole ? { traverseRole: String(p.traverseRole).toUpperCase() } : {}), ...(p.driveType ? { driveType: String(p.driveType).toUpperCase() } : {}), ...(p.alwaysShown ? { alwaysShown: true } : {}) };
+                          ...(p.traverseRole ? { traverseRole: String(p.traverseRole).toUpperCase() } : {}), ...(p.driveType ? { driveType: String(p.driveType).toUpperCase() } : {}), ...(p.trvSetup ? { trvSetup: String(p.trvSetup).toUpperCase() } : {}), ...(p.alwaysShown ? { alwaysShown: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
                       // Fee choice: geometry + selection kept, bills as a fee (entity-priced when the
                       // partId is a Fee-class entity like CE-FEE-4594); ERP push never BOMs it.
@@ -1259,6 +1259,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           .map(({ _srcName, ...rest }) => rest);
       pole = scrub(pole, 'POLE'); finial = scrub(finial, 'FINIAL');
       brackets = scrub(brackets, 'BRACKET'); backplates = scrub(backplates, 'BACKPLATE'); rings = scrub(rings, 'RING');
+      // RIDERS ARE NEVER A CUSTOMER CHOICE. An F-clip or a carrier is built, not picked — but it is
+      // pinned on a POLE-category cluster, so it was showing up in the Pole / Rod Material dropdown
+      // beside the actual rods (Stuart 2026-08-04, "H1-2TRVCLP — F-Clip Hanger" in that list). They
+      // are collected separately by the traverse block and ride as includedParts.
+      const dropRiders = (list) => list.filter(o => !isRider(o));
+      const riderPool = [...pole, ...finial, ...brackets, ...backplates, ...rings].filter(isRider);
+      pole = dropRiders(pole); finial = dropRiders(finial);
+      brackets = dropRiders(brackets); backplates = dropRiders(backplates); rings = dropRiders(rings);
 
       // Split the pole: LEFT/RIGHT-tagged segments are END-POLE (bend vs straight) that must follow
       // that end's End Treatment selection; everything else (CENTER / untagged / shared) is the main
@@ -1425,15 +1433,18 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // A traverse system is a different grammar, so it gets its own steps AHEAD of the pole ones:
       // fascia first, then the track, then the drive. Every one of these is gated on tagged pins
       // existing, so a pole assembly emits exactly what it emitted before — nothing here runs.
-      const allOpts = [...pole, ...finial, ...brackets, ...backplates, ...rings];
+      const allOpts = [...pole, ...finial, ...brackets, ...backplates, ...rings, ...riderPool];
       const trvAll = allOpts.filter(o => traverseRoleOf(o));
       const isTraverse = trvAll.length > 0;
       if (isTraverse) {
-          const fascia = offeredChoices(allOpts, { role: 'FASCIA' });
+          // ONE MATERIAL, LISTED ONCE. A double pins the SAME rod in the front cluster AND the
+          // rear one, so the picker was offering every material twice (Stuart 2026-08-04:
+          // "currently showing 4 choices should just be 2").
+          const fascia = dedupeByPart(offeredChoices(allOpts, { role: 'FASCIA' }));
           const track = offeredChoices(allOpts, { role: 'TRACK' });
           // NEVER A QUESTION, ALWAYS BUILT: carriers ride inside, and the F-CLIP attaches the track
           // to the fascia. Both are cut/consumed per configuration, neither is ever chosen.
-          const riders = allOpts.filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o)));
+          const riders = riderPool.filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o)) || o.alwaysShown);
           const riderInc = riders.length
               ? riders.map(o => ({ partId: o.partId, partName: o.partName, qty: 1, traverseRole: traverseRoleOf(o) }))
               : null;
@@ -1478,6 +1489,18 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   ...((fascia.length ? (endInc || []) : inc).length ? { includedParts: fascia.length ? endInc : inc } : {}),
               });
           }
+
+          // ── 2b. SINGLE OR DOUBLE — asked right after the fascia, because it decides which
+          //    tracks and which brackets exist. Only when the assembly carries BOTH.
+          if (needsSetupStep(allOpts)) add({
+              id: 'TRV-SETUP', title: 'Single or Double', type: 'STYLE_SWAP', stepRole: 'TRV_SETUP',
+              partHandling: 'Small Parts', required: true, hideQty: true, useClientPricing: true,
+              styleOptions: setupsOffered(allOpts).map(t => ({
+                  optId: `OPT-SETUP-${t}`, partId: '', partName: t === 'DOUBLE' ? 'Double (two tracks)' : 'Single (one track)',
+                  trvSetup: t, price: 0, targetNode: '',
+              })),
+              geometryMap: {},
+          });
 
           // ── 3. RINGS ONLY ON THE FRONT POLE. On a traverse system the rings belong to the
           //    decorative front pole, never to the track — the carriers do that job inside it.

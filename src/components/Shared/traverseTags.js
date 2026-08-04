@@ -23,6 +23,52 @@
 export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'TRV_END', 'FCLIP', 'CARRIER'];
 export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 
+// ── SINGLE vs DOUBLE (Stuart 2026-08-04) ────────────────────────────────────────────────────────
+// "second step should ask single or double? then if single we limit to one track shown and only
+// the single brackets, if double we show both tracks and only the double brackets."
+//
+// A third axis, independent of drive: a double is TWO tracks on one bracket, so the bracket itself
+// is a different part and only one of the two tracks exists on a single. Blank means the choice
+// suits BOTH — the common case again (a fascia is a fascia), so the default costs nobody a tick.
+export const TRV_SETUPS = ['SINGLE', 'DOUBLE'];
+export const setupOf = (choice) => {
+    const v = up(choice && choice.trvSetup);
+    return TRV_SETUPS.includes(v) ? v : '';
+};
+export function setupAllows(choice, setup) {
+    const want = up(setup);
+    if (!want) return true;
+    const tag = setupOf(choice);
+    return !tag || tag === want;
+}
+// Ask only when the assembly actually carries both — a single-only collection must not be asked.
+export function needsSetupStep(choices) {
+    const tags = new Set((choices || []).map(setupOf).filter(Boolean));
+    return tags.has('SINGLE') && tags.has('DOUBLE');
+}
+export function setupsOffered(choices) {
+    const tags = [...new Set((choices || []).map(setupOf).filter(Boolean))];
+    return tags.length ? TRV_SETUPS.filter(t => tags.includes(t)) : ['SINGLE'];
+}
+
+// ONE MATERIAL, LISTED ONCE (Stuart 2026-08-04: "currently showing 4 choices should just be 2").
+// A double pins the SAME rod in the front cluster AND the rear one, so the material picker listed
+// every material twice. Dedupe on the part, keeping the first — a material chooser is asking WHICH
+// MATERIAL, not which cluster it happened to be pinned in.
+export function dedupeByPart(choices) {
+    const seen = new Set();
+    return (choices || []).filter(c => {
+        const k = String((c && (c.partId || c.optId)) || '').toUpperCase();
+        if (!k || seen.has(k)) return !k;
+        seen.add(k);
+        return true;
+    });
+}
+
+// Parts that are never a customer choice: they ride along and get built. Excluding them is what
+// keeps an F-clip out of the Pole / Rod Material picker, where it was appearing.
+export const isRider = (choice) => ['FCLIP', 'CARRIER'].includes(traverseRoleOf(choice)) || isAlwaysShown(choice);
+
 const up = (v) => String(v ?? '').trim().toUpperCase();
 
 export const traverseRoleOf = (choice) => {
