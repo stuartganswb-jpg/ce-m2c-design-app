@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { setupAllows, driveAllows } from '../Shared/traverseTags';
 import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
 import { cutText } from '../Shared/configQty';
 import { db, storage, functions } from '../../firebase';
@@ -793,7 +794,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
                       const mainOpt = step.styleOptions.find(o => (o.optId || o.partId) === next[step.id]);
                       const loc = mainOpt?.location;
-                      const pool0 = (step.subOptions || []).filter(optCustomerOk);
+                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step, { isSub: true }));
                       const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
                       const sid = firstGeom(cands.length ? cands : pool0, step.subGeometryMap);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
@@ -870,6 +871,59 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       return { name: sized ? (sized.legacyErpId || sized.itemId || o.partName) : o.partName, desc };
   };
 
+  // ── TRAVERSE RUNTIME FILTER (Stuart 2026-08-04) ────────────────────────────────────────────────
+  // The generator can only TAG options single/double and motorized/manual; something has to act on
+  // the answer. This reads the two selections and hides what the customer has just ruled out —
+  // pick Single and the double brackets and the rear track stop being offered.
+  //
+  // THE FASCIA IS DELIBERATELY UNTAGGED and therefore never filtered: a fascia system has ONE
+  // fascia whether or not it is a double (his 2026-08-04 note — a double here is two TRACKS sharing
+  // one fascia, unlike a round H2 double which really is two poles). "Blank = suits both" is
+  // exactly that rule, so nothing special is needed for it.
+  const trvSelection = React.useMemo(() => {
+      let setup = '', drive = '';
+      (activeFlow?.steps || []).forEach(s => {
+          if (s.stepRole === 'TRV_SETUP') {
+              const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === dynamicConfigParams[s.id]);
+              if (o?.trvSetup) setup = String(o.trvSetup).toUpperCase();
+          }
+          if (s.stepRole === 'TRACK') {
+              const o = (s.subOptions || []).find(x => (x.optId || x.partId) === dynamicConfigParams[`${s.id}__sub`]);
+              if (o?.driveType) drive = String(o.driveType).toUpperCase();
+          }
+      });
+      return { setup, drive };
+  }, [activeFlow, dynamicConfigParams]);
+
+  // A SELECTOR NEVER FILTERS ITSELF. The Single-or-Double step's own options carry trvSetup, and
+  // the track's traverse-end sub-options carry driveType — filtering those by the current answer
+  // would hide every alternative the moment one was picked, leaving a step that cannot be changed.
+  const trvOkFor = (step, { isSub = false } = {}) => {
+      const isSetupSelector = step?.stepRole === 'TRV_SETUP';
+      const isDriveSelector = isSub && step?.stepRole === 'TRACK';
+      return (o) => (isSetupSelector || setupAllows(o, trvSelection.setup))
+          && (isDriveSelector || driveAllows(o, trvSelection.drive));
+  };
+
+  // SWITCHING THE ANSWER MUST CLEAR WHAT IT INVALIDATES. Picking Double, choosing a double bracket,
+  // then going back to Single would otherwise leave that double bracket selected — no longer in any
+  // list, still on the quote, still in the BOM. The option would be invisible and the order wrong,
+  // which is worse than either of the two states it sits between.
+  useEffect(() => {
+      setDynamicConfigParams(prev => {
+          const next = { ...prev }; let changed = false;
+          (activeFlow?.steps || []).forEach(st => {
+              if (st.stepRole === 'TRV_SETUP') return;   // the selector keeps its own answer
+              const main = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
+              if (main && !trvOkFor(st)(main)) { delete next[st.id]; changed = true; }
+              const sub = (st.subOptions || []).find(x => (x.optId || x.partId) === next[`${st.id}__sub`]);
+              if (sub && !trvOkFor(st, { isSub: true })(sub)) { delete next[`${st.id}__sub`]; changed = true; }
+          });
+          return changed ? next : prev;
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trvSelection.setup, trvSelection.drive, activeFlow]);
+
   const getOptionsForStep = (step) => {
       // Tag-driven Mount selector: options are the distinct Location tags on the linked assembly's
       // clusters (Wall / Ceiling / Inside-End). Picking one hides the off-mount end regions.
@@ -884,7 +938,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // Identify each option by optId (unique per instance) so a part repeated at
           // multiple positions stays distinct; fall back to partId for legacy flows. Also resolve the
           // underlying part's human description so the choice shows more than the bare ERP id.
-          let opts = (step.styleOptions || []).filter(optCustomerOk);
+          let opts = (step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step));
           // 🎯 Per-assembly flows have NO size steps, so the size-matrix block below never runs
           // for them — the projection-tag gate (PROJ_SELECT pick / implied projection vs the
           // option's proj: tag, min-semantics for returns) must apply UNCONDITIONALLY.
@@ -1994,7 +2048,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (step && Array.isArray(step.subOptions) && step.subOptions.length) {
           const mainOpt = (step.styleOptions || []).find(o => (o.optId || o.partId) === value);
           const loc = mainOpt?.location;
-          const pool0 = step.subOptions.filter(optCustomerOk);
+          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step, { isSub: true }));
           const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
           const pick = cands.find(o => o.targetNode) || cands[0];
           next[`${stepId}__sub`] = pick ? pick.optId : '';
@@ -3087,7 +3141,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // matching plates show (e.g. wall plates when a wall arm is selected).
                               const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
                               const selLoc = selMainOpt?.location;
-                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(o => !selLoc || !o.location || o.location === selLoc);
+                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(trvOkFor(currentStep, { isSub: true })).filter(o => !selLoc || !o.location || o.location === selLoc);
                               // Return-aware scoping: the RETURN backplates show while this side's End
                               // Treatment is a return OR the selected bracket is flagged usesReturnPlates
                               // (e.g. In Line brackets share the return plates); regular plates otherwise —
