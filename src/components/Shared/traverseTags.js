@@ -30,25 +30,39 @@ export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 // A third axis, independent of drive: a double is TWO tracks on one bracket, so the bracket itself
 // is a different part and only one of the two tracks exists on a single. Blank means the choice
 // suits BOTH — the common case again (a fascia is a fascia), so the default costs nobody a tick.
-export const TRV_SETUPS = ['SINGLE', 'DOUBLE'];
+// BLANK MEANS SINGLE (Stuart 2026-08-04: "if left blank it should default to single as that is most
+// popular, then i only need to go in and select the doubles or both which is a much lower number").
+//
+// The DEFAULT should be the common case, and here the common case is not "suits both" — a part that
+// genuinely fits either setup is rare. So the untagged majority reads as SINGLE and only the doubles
+// (and the rare true both) need touching. That inverts the tagging work from hundreds of rows to a
+// handful, and it makes an UNTAGGED part safe: it shows on a single, which is what it almost always
+// is, instead of showing on everything.
+export const TRV_SETUPS = ['SINGLE', 'DOUBLE', 'BOTH'];
 export const setupOf = (choice) => {
     const v = up(choice && choice.trvSetup);
-    return TRV_SETUPS.includes(v) ? v : '';
+    return TRV_SETUPS.includes(v) ? v : 'SINGLE';   // ← untagged = SINGLE, not "both"
 };
 export function setupAllows(choice, setup) {
     const want = up(setup);
-    if (!want) return true;
+    if (!want) return true;                          // nothing chosen yet — everything on the table
+    // THE FASCIA IS SHARED BY DEFINITION and so are the riders. His 2026-08-04 rule: a double on a
+    // fascia system is two TRACKS behind ONE fascia — the fascia is not doubled, in the render or in
+    // the BOM. Flipping the default to SINGLE would otherwise have deleted the fascia from every
+    // double, so these roles are exempt rather than needing a BOTH tag on every one of them.
+    const role = traverseRoleOf(choice);
+    if (role === 'FASCIA' || isRider(choice)) return true;
     const tag = setupOf(choice);
-    return !tag || tag === want;
+    return tag === 'BOTH' || tag === want;
 }
-// Ask only when the assembly actually carries both — a single-only collection must not be asked.
+// Ask only when the assembly can actually be built as a double. With blank reading as SINGLE, any
+// DOUBLE-capable part means both setups exist — a collection with none of them is single-only and
+// must not be asked a question with one answer.
 export function needsSetupStep(choices) {
-    const tags = new Set((choices || []).map(setupOf).filter(Boolean));
-    return tags.has('SINGLE') && tags.has('DOUBLE');
+    return (choices || []).some(c => ['DOUBLE', 'BOTH'].includes(setupOf(c)));
 }
 export function setupsOffered(choices) {
-    const tags = [...new Set((choices || []).map(setupOf).filter(Boolean))];
-    return tags.length ? TRV_SETUPS.filter(t => tags.includes(t)) : ['SINGLE'];
+    return needsSetupStep(choices) ? ['SINGLE', 'DOUBLE'] : ['SINGLE'];
 }
 
 // ONE MATERIAL, LISTED ONCE (Stuart 2026-08-04: "currently showing 4 choices should just be 2").
