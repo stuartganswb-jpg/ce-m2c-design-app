@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { needsDriveStep, drivesOffered, offeredChoices, alwaysShownChoices, traverseRoleOf } from '../Shared/traverseTags';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from "firebase/functions";
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit, writeBatch } from "firebase/firestore";
@@ -997,7 +998,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // name regexes are the legacy fallback (flagsFor).
                       const { et, returnish, feeish, returnArm, inlineish } = flagsFor(p);
                       const key = [cl.id, pid, position, location].join('|');
-                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, _srcName: srcByCluster[cl.id], nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}) };
+                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, _srcName: srcByCluster[cl.id], nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}), // TRAVERSE tags ride the option so the generator can bucket fascia / track / carrier and
+                          // scope by drive (Stuart 2026-08-04). Absent on every pole assembly.
+                          ...(p.traverseRole ? { traverseRole: String(p.traverseRole).toUpperCase() } : {}), ...(p.driveType ? { driveType: String(p.driveType).toUpperCase() } : {}), ...(p.alwaysShown ? { alwaysShown: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
                       // Fee choice: geometry + selection kept, bills as a fee (entity-priced when the
                       // partId is a Fee-class entity like CE-FEE-4594); ERP push never BOMs it.
@@ -1417,6 +1420,51 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               });
           });
       };
+
+      // ── TRAVERSE (Stuart 2026-08-03/04) ────────────────────────────────────────────────────────
+      // A traverse system is a different grammar, so it gets its own steps AHEAD of the pole ones:
+      // fascia first, then the track, then the drive. Every one of these is gated on tagged pins
+      // existing, so a pole assembly emits exactly what it emitted before — nothing here runs.
+      const allOpts = [...pole, ...finial, ...brackets, ...backplates, ...rings];
+      const trvAll = allOpts.filter(o => traverseRoleOf(o));
+      if (trvAll.length) {
+          const fascia = offeredChoices(allOpts, { role: 'FASCIA' });
+          const track = offeredChoices(allOpts, { role: 'TRACK' });
+          // CARRIERS ARE NEVER A QUESTION. They ride as includedParts on the first real traverse
+          // step, so they reach the BOM and the render without ever becoming an option.
+          const carriers = alwaysShownChoices(allOpts).filter(o => traverseRoleOf(o) === 'CARRIER');
+          const carrierInc = carriers.length
+              ? carriers.map(o => ({ partId: o.partId, partName: o.partName, qty: 1 }))
+              : null;
+
+          // 1. FASCIA — the face of the track, chosen before the track itself.
+          if (fascia.length) add({
+              title: 'Fascia', type: 'STYLE_SWAP', partHandling: 'Small Parts', required: true, hideQty: true,
+              finishDataSource: 'master_finishes', useClientPricing: true,
+              styleOptions: fascia, geometryMap: geom(fascia), ...(carrierInc ? { includedParts: carrierInc } : {}),
+          });
+
+          // 2. TRACK — a FINISH choice. Its CUT LENGTH depends on the drive chosen next, which the
+          //    configurator resolves; nothing here invents a length.
+          if (track.length) add({
+              title: 'Track', type: 'STYLE_SWAP', partHandling: 'Custom', required: true, hideQty: true,
+              finishDataSource: 'master_finishes', useClientPricing: true,
+              styleOptions: track, geometryMap: geom(track),
+              ...(!fascia.length && carrierInc ? { includedParts: carrierInc } : {}),
+          });
+
+          // 3. DRIVE — ONLY when the assembly actually carries choices for BOTH. A manual-only
+          //    collection must never grow a step that asks a question with one answer.
+          if (needsDriveStep(allOpts)) add({
+              id: 'TRV-DRIVE', title: 'Motorized or Manual', type: 'STYLE_SWAP', stepRole: 'DRIVE',
+              partHandling: 'Small Parts', required: true, hideQty: true, useClientPricing: true,
+              styleOptions: drivesOffered(allOpts).map(d => ({
+                  optId: `OPT-DRIVE-${d}`, partId: '', partName: d === 'MOTORIZED' ? 'Motorized' : 'Manual',
+                  driveType: d, price: 0,
+              })),
+              geometryMap: {},
+          });
+      }
 
       // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
       // material the choice is fixed, so it folds into the combined Length & Finish step below.
