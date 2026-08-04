@@ -1432,9 +1432,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           const track = offeredChoices(allOpts, { role: 'TRACK' });
           // CARRIERS ARE NEVER A QUESTION. They ride as includedParts on the first real traverse
           // step, so they reach the BOM and the render without ever becoming an option.
-          const carriers = alwaysShownChoices(allOpts).filter(o => traverseRoleOf(o) === 'CARRIER');
-          const carrierInc = carriers.length
-              ? carriers.map(o => ({ partId: o.partId, partName: o.partName, qty: 1 }))
+          // The F-CLIP joins them (Stuart 2026-08-04): it attaches the track to the fascia, is never
+          // chosen, and is CUT — manual −1", motorized −3" off the fascia. Like the carriers it must
+          // reach the BOM and the shop's 3D viewer without ever becoming a question.
+          const riders = allOpts.filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o)));
+          const carrierInc = riders.length
+              ? riders.map(o => ({ partId: o.partId, partName: o.partName, qty: 1, traverseRole: traverseRoleOf(o) }))
               : null;
 
           // 1. FASCIA — the face of the track, chosen before the track itself.

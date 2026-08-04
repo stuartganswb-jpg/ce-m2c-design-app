@@ -907,7 +907,17 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // internal id — it looked wrong and re-linked wrong.
                     const synthetic = /^(HIDDEN|FEE)-/.test(String(pin?.partId || ''));
                     let itemNo = '';
-                    if (pin && !pin.isFee) {
+                    // 🩹 A FEE PIN LOST ITS TYPED CODE ON EVERY RELOAD (Stuart 2026-08-04: "if i leave
+                    // the fee checked it erases my saved id... it losses it over and over").
+                    // The SAVE was always right — a fee with an item # stores partId = that code. The
+                    // RELOAD skipped fees entirely, so the box came back empty; saving again from that
+                    // empty state then rewrote partId as the synthetic FEE-<slug> and the real code was
+                    // gone for good. The `!pin.isFee` guard exists to stop a fee auto-matching some
+                    // library part by NAME — it was never meant to discard the code the operator typed.
+                    // (`flagged` already blocks the name auto-match below, so reading it back is safe.)
+                    if (pin && pin.isFee && !synthetic && pin.partId) {
+                        itemNo = pin.partId;
+                    } else if (pin && !pin.isFee) {
                         const liveErp = byItemId.get(pin.partId) || '';
                         if (liveErp) itemNo = liveErp;
                         else if (pin.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId) && pin.legacyErpId !== pin.partId) itemNo = pin.legacyErpId;
@@ -1377,7 +1387,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         choice whose CUT depends on the drive, and the CARRIERS ride inside and are
                                                         never chosen at all. Blank on every other assembly, so nothing changes for
                                                         pole flows. */}
-                                                    <select value={c.traverseRole || ''} title="TRAVERSE ROLE — FASCIA (the track face, chosen first) · TRACK (finish choice; its cut length differs by drive) · CARRIER (rides inside, never offered). Leave blank on pole assemblies." onChange={e => { const tr = e.target.value; setChoicePatch(r.clusterId, c.nodeName, { traverseRole: tr, ...(tr === 'CARRIER' ? { alwaysShown: true, isHidden: false, isFee: false } : {}) }); }} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.traverseRole ? 'var(--brass)' : 'var(--line)', color: c.traverseRole ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                                                    <select value={c.traverseRole || ''} title="TRAVERSE ROLE — FASCIA (the track face, chosen first) · TRACK (finish choice; its cut length differs by drive) · CARRIER (rides inside, never offered). Leave blank on pole assemblies." onChange={e => { const tr = e.target.value; setChoicePatch(r.clusterId, c.nodeName, { traverseRole: tr, ...(['CARRIER', 'FCLIP'].includes(tr) ? { alwaysShown: true, isHidden: false, isFee: false } : {}) }); }} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.traverseRole ? 'var(--brass)' : 'var(--line)', color: c.traverseRole ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                         <option value="">trv: — none —</option>
                                                         {TRAVERSE_ROLES.map(t => <option key={t} value={t}>trv: {t.toLowerCase()}</option>)}
                                                     </select>

@@ -15,7 +15,7 @@
 // declares which drives it belongs to. A choice tagged for neither belongs to BOTH — the common
 // case (a fascia is a fascia however the track is driven), so the default costs nobody a tick.
 
-export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'CARRIER'];
+export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'FCLIP', 'CARRIER'];
 export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 
 const up = (v) => String(v ?? '').trim().toUpperCase();
@@ -64,21 +64,54 @@ export function drivesOffered(choices) {
     return tags.length ? DRIVE_TYPES.filter(d => tags.includes(d)) : ['MANUAL'];
 }
 
+// ── THE CUT LIST (Stuart 2026-08-04, his numbers) ───────────────────────────────────────────────
+// THE FASCIA IS THE DATUM. The customer orders a fascia length the same way they order a pole
+// length, and everything else is cut SHORTER than it by a fixed amount that depends on the drive:
+//
+//                     MANUAL      MOTORIZED
+//   fascia            as ordered  as ordered
+//   track             −0.5"       −2"
+//   F-clip            −1"         −3"
+//
+// The F-clip is the piece that attaches the track to the fascia — it was missing from the model
+// entirely until he named it, which is why it gets its own role rather than riding as hardware.
+//
+// Deductions, not allowances: the earlier shape (opening + allowance) had the sign and the datum
+// both wrong. Nothing is ever cut LONGER than the fascia, so a negative deduction is refused.
+export const TRAVERSE_DEDUCTIONS = {
+    TRACK: { MANUAL: 0.5, MOTORIZED: 2 },
+    FCLIP: { MANUAL: 1, MOTORIZED: 3 },
+    FASCIA: { MANUAL: 0, MOTORIZED: 0 },
+};
+
 /**
- * The track cut for a drive.
+ * What a traverse part is cut to, from the fascia length.
  *
- * The finished opening is the same either way — what differs is what the drive mechanism consumes
- * at the ends, so each drive carries its own allowance and the cut is opening + allowance. Returns
- * null rather than a guess when the allowance for that drive has not been set, because a track cut
- * from a made-up number is scrap.
+ * Returns null rather than a guess whenever the role, the drive or the length is unusable — a
+ * track cut from a made-up number is scrap, and a silent default is how that happens.
+ *
+ * `deductions` overrides the table above (per assembly, once there is somewhere to enter them).
  */
-export function trackCutLength({ openingInches, drive, allowances }) {
-    const opening = Number(openingInches);
-    if (!Number.isFinite(opening) || opening <= 0) return null;
-    const key = up(drive) || 'MANUAL';
-    const add = allowances ? Number(allowances[key]) : NaN;
-    if (!Number.isFinite(add)) return null;
-    return Math.round((opening + add) * 100) / 100;
+export function traverseCutLength({ fasciaInches, role, drive, deductions }) {
+    const len = Number(fasciaInches);
+    if (!Number.isFinite(len) || len <= 0) return null;
+    const r = up(role);
+    const d = up(drive) || 'MANUAL';
+    if (!DRIVE_TYPES.includes(d)) return null;
+    const table = (deductions && deductions[r]) || TRAVERSE_DEDUCTIONS[r];
+    if (!table) return null;
+    const cut = Number(table[d]);
+    if (!Number.isFinite(cut) || cut < 0) return null;
+    const out = len - cut;
+    return out > 0 ? Math.round(out * 100) / 100 : null;
+}
+
+// The whole cut list for one configuration — what the shop actually needs on the traveller.
+// Roles with no rule are simply absent rather than present-and-wrong.
+export function traverseCutList({ fasciaInches, drive, deductions }) {
+    return ['FASCIA', 'TRACK', 'FCLIP']
+        .map(role => ({ role, cutInches: traverseCutLength({ fasciaInches, role, drive, deductions }) }))
+        .filter(x => x.cutInches !== null);
 }
 
 // Choices that are never offered but always built — the carriers. Kept separate from the option
