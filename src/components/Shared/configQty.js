@@ -52,3 +52,18 @@ export function multiplierNote(mult, noun = 'unit') {
         detail: `${m} identical ${noun}s. Every figure shown is for ONE — multiply as you pull and count.`,
     };
 }
+
+// ---- EXACT ROD LENGTH ON THE PAPERWORK (Stuart 2026-08-03) ------------------------------------
+// "we need to make sure we show exact rod length in these, not just 8ft but the 94.5\" details."
+//
+// A pole line is QUANTIFIED IN FEET — the rod is bought by the foot, so qty is
+// Math.ceil(cutLength / 12) and an 8 on the quote means "eight feet of stock". The number that
+// matters to anyone reading the document is the CUT: 94.5". Both are true and only one was shown.
+//
+// The cut is per unit and never multiplies: three of a configuration is three rods cut to 94.5",
+// not one at 283.5". Trailing zeros go, because 94.50" reads like a tolerance.
+export function cutText(cutLength) {
+    const n = Number(cutLength);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return `Cut ${String(n.toFixed(2)).replace(/\.?0+$/, '')}"`;
+}

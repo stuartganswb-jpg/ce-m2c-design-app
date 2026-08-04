@@ -1,4 +1,5 @@
 import React from 'react';
+import { cutText } from './configQty';
 import Barcode from './Barcode';
 
 // Live, print-style preview of a branded document (Sales Order / Packing List / Invoice / Quote …).
@@ -104,7 +105,12 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
           {lines.map((l, i) => (
             <tr key={i} style={{ borderBottom: '1px solid var(--line)' }}>
               <td style={{ ...cell, fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.item}</td>
-              <td style={cell}>{l.desc}</td>
+              <td style={cell}>
+                {l.desc}
+                {/* The cut, not just the footage. A pole is quantified in FEET (qty 8 = eight feet
+                    of stock); the number a reader needs is the 94.5" it is cut to. */}
+                {cutText(l.cut) && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '2px' }}>{cutText(l.cut)}</div>}
+              </td>
               <td style={{ ...cell, textAlign: 'center' }}>{l.qty === '' || l.qty == null ? '' : l.qty}</td>
               {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.price == null ? '' : money(l.price)}</td>}
               {showMoney && <td style={{ ...cell, textAlign: 'right', fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: l.bold ? 600 : 400 }}>{money(lineAmount(l))}</td>}

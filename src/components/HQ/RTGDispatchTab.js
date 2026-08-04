@@ -1142,6 +1142,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             item: l.legacyErpId || l.partId || '',
             desc: String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim(),
             qty: l.qty,
+            cut: l.cutLength || null,
             price: (l.price != null) ? l.price : ((l.total != null && l.qty) ? l.total / l.qty : 0),
         }));
         return {

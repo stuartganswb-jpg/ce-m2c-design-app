@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
+import { cutText } from '../Shared/configQty';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
@@ -2396,7 +2397,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                             <div class="section-header">Configuration Details</div>
                             ${job.cpqData?.breakdown?.map(item => `
                                 <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}${item.isDiscount ? 'color: #8a6d3b;' : ''}${item.isNetLine ? 'font-weight: bold;' : ''}">
-                                    <span style="flex: 3;">${item.name}</span>
+                                    <span style="flex: 3;">${item.name}${item.cutLength ? `<span style="color:#7a736a;font-size:10px;"> &nbsp;·&nbsp; ${cutText(item.cutLength)}</span>` : ''}</span>
                                     <span style="flex: 1; text-align: center; color: #524e46;">${(item.isHeader || item.isDiscount || item.isNetLine) ? '' : `Qty: ${item.qty}`}</span>
                                     <span style="flex: 1; text-align: right;">$${item.total.toFixed(2)}</span>
                                 </div>
@@ -2444,7 +2445,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                             </div>
                             ${job.cpqData?.breakdown?.filter(item => !item.isDiscount && !item.isNetLine).map(item => `
                                 <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}">
-                                    <span style="flex: 3; font-weight: 500;">${item.name}</span>
+                                    <span style="flex: 3; font-weight: 500;">${item.name}${item.cutLength ? `<span style="color:#7a736a;font-weight:400;font-size:10px;"> &nbsp;·&nbsp; ${cutText(item.cutLength)}</span>` : ''}</span>
                                     <span style="flex: 1; text-align: right; font-size: 14px; font-weight: 500;">${item.isHeader ? '' : item.qty}</span>
                                 </div>
                             `).join('')}

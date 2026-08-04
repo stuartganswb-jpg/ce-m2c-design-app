@@ -838,6 +838,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
           price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
           amount: b.total,
+          cut: b.cutLength || null,
           bold: !!b.isNetLine || !!b.isHeader,
       }));
       if (shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt });
