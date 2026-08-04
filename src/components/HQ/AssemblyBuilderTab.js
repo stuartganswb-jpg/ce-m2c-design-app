@@ -1064,7 +1064,25 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         addLog(`Split "${choiceLabel(nodeName)}" into ${kids.length} sub-part(s).`, 'info');
         genThumbs(kids, assignGenRef.current);
     };
-    const handleSaveItemNumbers = async () => {
+    // ⛔ A PIN ID MUST BE UNIQUE PER CHOICE, NOT PER ITEM # (Stuart 2026-08-04: "the fees are again
+  // gone after save", after two earlier fixes that were both looking in the wrong place).
+  //
+  // The id was `PIN-<asm>-<cluster>-<partId>`. His three miter-return choices in ONE cluster all
+  // carry the SAME code (H1-2TRVMTR — one fee item, three arm lengths), so all three resolved to
+  // the SAME document: each setDoc overwrote the last and only the final choice kept a pin. Reload
+  // indexes pins BY CHOICE NODE, so the other two came back blank — "gone", over and over.
+  //
+  // Nothing about fees caused this. A fee is simply where it surfaces first, because a fee code is
+  // the one thing several choices legitimately share. The node name now goes into the id, so two
+  // choices can never collide. Old ids self-heal: the delete pass removes any pin on this node
+  // whose id is not the new one.
+  const pinIdFor = (asmId, clusterId, partId, nodeName) => {
+      const node = String(nodeName || '');
+      let h = 0; for (let i = 0; i < node.length; i++) { h = (h * 31 + node.charCodeAt(i)) | 0; }
+      return `PIN-${asmId}-${clusterId}-${partId}-${Math.abs(h).toString(36).slice(0, 6)}`.replace(/[^A-Za-z0-9-]/g, '_');
+  };
+
+  const handleSaveItemNumbers = async () => {
         if (!assignData) return;
         setAssignBusy(true);
         try {
@@ -1087,7 +1105,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             // listing it; assigning the # later replaces this pin (true sync above).
                             const slugP = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
                             const partIdP = `HIDDEN-${slugP}`;
-                            const pidP = `PIN-${assignData.asmId}-${r.clusterId}-${partIdP}`.replace(/[^A-Za-z0-9-]/g, '_');
+                            const pidP = pinIdFor(assignData.asmId, r.clusterId, partIdP, ch.nodeName);
                             for (const old of existing) { if (old.docId !== pidP) { await deleteDoc(old.ref); removed++; } }
                             await setDoc(doc(db, 'assembly_pins', pidP), { id: pidP, assemblyId: assignData.asmId, clusterId: r.clusterId, partId: partIdP, partName: ch.label || partIdP, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, isHiddenPart: true, parked: true });
                             parked++;
@@ -1104,7 +1122,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // A hidden choice WITH an item # keeps the real id — the generator includes it in the
                     // BOM (includedParts) at its cluster's position. HIDDEN-… synthetic = geometry-only.
                     const partId = hasItem ? ch.itemNo.trim().toUpperCase() : (ch.isHidden ? `HIDDEN-${slug}` : `FEE-${slug}`);
-                    const pid = `PIN-${assignData.asmId}-${r.clusterId}-${partId}`.replace(/[^A-Za-z0-9-]/g, '_');
+                    const pid = pinIdFor(assignData.asmId, r.clusterId, partId, ch.nodeName);
                     for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
                     await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment && !(ch.catOverride && String(ch.catOverride).toUpperCase() !== 'FINIAL') ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}), ...(hasItem && !ch.isFee && Array.isArray(ch.custIds) && ch.custIds.length ? { customerIds: ch.custIds, customerNames: ch.custNames || [] } : {}), ...(hasItem && !ch.isFee && ch.isCollar ? { isCollar: true } : {}), ...(hasItem && !ch.isFee && !ch.isCollar && String(ch.requiresCollar || '').trim() ? { requiresCollar: String(ch.requiresCollar).trim() } : {}), ...(hasItem && String(ch.projInches || '').trim() ? { projInches: String(ch.projInches).trim().toUpperCase() } : {}), ...(hasItem && !ch.isFee && String(ch.mountType || '').trim() ? { mountType: String(ch.mountType).trim().toUpperCase() } : {}), ...(hasItem && String(ch.catOverride || '').trim() ? { catOverride: String(ch.catOverride).trim().toUpperCase() } : {}), ...(String(ch.traverseRole || '').trim() ? { traverseRole: String(ch.traverseRole).trim().toUpperCase() } : {}), ...(String(ch.driveType || '').trim() ? { driveType: String(ch.driveType).trim().toUpperCase() } : {}), ...(String(ch.trvSetup || '').trim() ? { trvSetup: String(ch.trvSetup).trim().toUpperCase() } : {}), ...(ch.alwaysShown && !ch.isFee ? { alwaysShown: true } : {}), // THE FEE'S TYPED CODE, IN A FIELD OF ITS OWN (Stuart 2026-08-04: "the bug that keeps
                     // whipping out all my miter fees is still, they are yet again gone"). partId was
@@ -1410,7 +1428,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         IS a different part and only one of the two tracks exists on a single.
                                                         Blank = suits both, which is most things. */}
                                                     <select value={c.trvSetup || ''} title="SINGLE / DOUBLE — tag a bracket for the setup it fits, and each track for the setup it belongs to (front = single, rear = double). Blank = suits both. The Single-or-Double step is only asked when the assembly carries choices for BOTH." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { trvSetup: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.trvSetup ? 'var(--brass)' : 'var(--line)', color: c.trvSetup ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                        <option value="">setup: — both —</option>
+                                                        <option value="">setup: — single (default) —</option>
                                                         {TRV_SETUPS.map(t => <option key={t} value={t}>setup: {t.toLowerCase()}</option>)}
                                                     </select>
                                                     <label title="ALWAYS SHOWN — present in every configuration, never offered, never swapped. A REAL part: it bills and it renders (grey). This is what carriers need — 'hide' is its opposite and means never render at all." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.alwaysShown ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
