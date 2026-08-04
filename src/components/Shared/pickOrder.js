@@ -71,6 +71,48 @@ export function groupPickLines(lines, { binOf } = {}) {
         .map(({ _binKey, _seq, ...l }) => l);
 }
 
+// ---- WHY IS THERE NO STOCK? (Stuart 2026-08-03) -----------------------------------------------
+// The shortage banner said "stock has 0" for two completely different problems, and the wording
+// sent him hunting for rings when the answer was a bad item record.
+//
+// WO-SO58981 asked for 130 × HCUSR1-EA. Every other Brimar order asks for HCUSR1. The "-EA" suffix
+// in this system means the stocked SINGLE of a ring pack and always carries a finish
+// (HCUSR15/BL-EA) — so HCUSR1-EA is not a pack single, it is a stray library record baked into an
+// older flow. It reads as "stock has 0" and looks like a shortage; it is not one, and no amount of
+// making rings will clear it.
+//
+// FOUR DISTINCT STATES, cheapest evidence first — all of it already in memory, so this costs no
+// NetSuite call:
+//   UNKNOWN_LIBRARY   the code is in no library record at all
+//   NO_NETSUITE_LINK  a library record exists but was never linked to a NetSuite item
+//   NO_STOCK_RECORD   linked, but the live pull returned no inventory row here
+//   OUT_OF_STOCK      a genuine zero — the only one that means "go make some"
+//
+// `live.known` is set by the live-bin pull: false when NetSuite returned no row for the code. Note
+// what that does and does not prove — the pull filters by location, so "no row" means no inventory
+// record AT THIS LOCATION, not that the item is absent from NetSuite. The wording says so.
+export const CODE_STATES = {
+    UNKNOWN_LIBRARY: { label: 'not in the library', detail: 'No part record carries this code — the order line points at something that does not exist here. Fix the flow step, do not make stock.' },
+    NO_NETSUITE_LINK: { label: 'not linked to NetSuite', detail: 'A library record exists but has no NetSuite item id, so it can never hold stock. Usually a duplicate of the real code.' },
+    NO_STOCK_RECORD: { label: 'no stock record here', detail: 'NetSuite returned no inventory row for this code at this location — check the item is stocked at this location before treating it as a shortage.' },
+    OUT_OF_STOCK: { label: 'out of stock', detail: 'A genuine zero. This one really is a shortage.' },
+    OK: { label: '', detail: '' },
+};
+
+// Pure: the caller passes the library record and the live-bin entry it already has.
+export function codeHealth(code, { part, live } = {}) {
+    const c = String(code || '').trim().toUpperCase();
+    if (!c || c === 'PENDING' || c === 'N/A' || c === 'UNASSIGNED') return { state: 'OK', ...CODE_STATES.OK };
+    const state = !part ? 'UNKNOWN_LIBRARY'
+        : !(part.netSuiteInternalId || part.netsuiteInternalId) ? 'NO_NETSUITE_LINK'
+            : (live && live.known === false) ? 'NO_STOCK_RECORD'
+                : 'OUT_OF_STOCK';
+    return { state, ...CODE_STATES[state] };
+}
+
+// Only the genuine zero is the operator's problem; the other three are someone's to fix in the app.
+export const isDataProblem = (state) => state === 'UNKNOWN_LIBRARY' || state === 'NO_NETSUITE_LINK' || state === 'NO_STOCK_RECORD';
+
 // How much the grouping actually saved — shown on the card so the operator knows the list is
 // shorter on purpose and nothing went missing.
 export function groupingSummary(original, grouped) {

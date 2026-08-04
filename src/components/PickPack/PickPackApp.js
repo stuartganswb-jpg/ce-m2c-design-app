@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import WhereIsIt from '../Shared/WhereIsIt';
-import { groupPickLines, groupingSummary } from '../Shared/pickOrder';
+import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -472,10 +472,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const j = await r.json();
             if (!r.ok) throw new Error(JSON.stringify(j).slice(0, 200));
             const map = {};
-            list.forEach(c => { map[c] = { bins: [], total: 0, at: Date.now() }; });
+            // `known` = NetSuite returned at least one inventory row for this code HERE. A code it
+            // says nothing about is a different problem from a code it says zero about — the
+            // shortage banner tells them apart (Stuart 2026-08-03, HCUSR1-EA on WO-SO58981).
+            list.forEach(c => { map[c] = { bins: [], total: 0, known: false, at: Date.now() }; });
             (j.items || []).forEach(row => {
                 const id = String(row.legacy_id || '').toUpperCase();
-                if (!map[id]) map[id] = { bins: [], total: 0, at: Date.now() };
+                if (!map[id]) map[id] = { bins: [], total: 0, known: false, at: Date.now() };
+                map[id].known = true;
                 const qty = parseInt(row.onhand) || 0;
                 map[id].total += qty;
                 const bn = (row.bin_number || '').trim().toUpperCase();
@@ -515,6 +519,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (lv) return lv.total || 0;
         return nsStock[c]?.onHand || 0;
     };
+    const findPartByErpCode = (code) => { const c = String(code || '').toUpperCase(); return c ? hqParts.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === c) || null : null; };
     const shortagesFor = (job) => shortagesOf(pickableLines(job || {}), availOf);
     const shortageOfLine = (job, line) => {
         const c = String(((line && (line.legacyErpId || line.partId)) || '')).toUpperCase();
@@ -2616,6 +2621,18 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             SHORT {sh.short} · {sh.code} needs {sh.need}, stock has {sh.have}
                                                             {sh.plateable ? <span style={{ color: theme.inkSoft }}> — mill {sh.mill}: {sh.millAvail} available</span> : <span style={{ color: theme.inkSoft }}> — no outsourced finish on this code</span>}
                                                         </div>
+                                                        {(() => {
+                                                            // "stock has 0" covered two unrelated problems and sent people
+                                                            // hunting for parts when the answer was a bad item record.
+                                                            const h = codeHealth(sh.code, { part: findPartByErpCode(sh.code), live: liveBins[sh.code] || null });
+                                                            if (!isDataProblem(h.state)) return null;
+                                                            return (
+                                                                <div style={{ flexBasis: '100%', marginTop: '2px', padding: '8px 10px', background: '#fff', border: '1px solid #e2b8b8' }}>
+                                                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#a33' }}>⚠ This is not a shortage — {h.label}</div>
+                                                                    <div style={{ fontFamily: theme.sans, fontSize: '0.82rem', color: theme.ink, marginTop: '4px', lineHeight: 1.45 }}>{h.detail}</div>
+                                                                </div>
+                                                            );
+                                                        })()}
                                                         {sh.plateable && (() => {
                                                             const noMill = sh.millAvail <= 0;
                                                             return (
