@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
+import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -850,6 +851,39 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 // fires on packStatus Packed, receiving into the bin scanned here — it used to fire
                 // at bake complete, which put stock on the books before it reached a shelf and
                 // guessed the bin). No sales order, no fulfillment: shelf and done.
+                // JUST FOR PAINT closes out differently (Stuart 2026-08-03): there is no assembly
+                // and no NetSuite work order to complete, so instead of a build we post a plain
+                // inventory adjustment of the painted pieces into the bin just scanned. The
+                // onStockBuildDone trigger ignores these on its own — it requires an nsWoId.
+                if (isPaintOnlyOrder(job)) {
+                    const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
+                    const doneQty = Number(job.completedParts) > 0 ? Number(job.completedParts) : (Number(job.totalParts) || 0);
+                    setPackOrderId(null);
+                    if (!job.jfpItemId) {
+                        alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\n⚠ This paint run has no NetSuite item id recorded, so NOTHING was adjusted. Adjust ${job.jfpItemCode || 'the item'} into ${bin} manually in NetSuite.`);
+                        return;
+                    }
+                    try {
+                        await enqueueNsWrite({
+                            kind: 'inventoryadjustment',
+                            label: `JFP +${doneQty} × ${job.jfpItemCode || ''} → ${bin} (${packRef(job)})`,
+                            sourceApp: 'WMS', createdBy: operator?.name || '',
+                            targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                            method: 'POST',
+                            payload: paintOnlyAdjustment({
+                                itemId: job.jfpItemId, qty: doneQty, bin,
+                                subsidiary: nsCfg.subsidiary, location: nsCfg.location,
+                                ref: packRef(job), itemCode: job.jfpItemCode, by: operator?.name || '',
+                            }),
+                            writeBack: { collection: 'fin_workorders', docId: job.id, patch: { jfpAdjPosted: true }, idField: 'jfpAdjId', tranField: 'jfpAdjTran' },
+                        });
+                        await updateDoc(packDocOf(job), { jfpAdjQueued: true, jfpAdjQty: doneQty, jfpAdjBin: bin });
+                        alert(`📦 ${packRef(job)} — ${PAINT_ONLY_BADGE}.\n\n+${doneQty} × ${job.jfpItemCode} queued as a NetSuite inventory adjustment into ${bin}. Watch it land in 11.1 → NetSuite Sync Queue (~1 min).`);
+                    } catch (obErr) {
+                        alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\n⚠ The NetSuite adjustment could NOT be queued: ${obErr.message || obErr}\n\nThe put-away stands — retry from 11.1 or adjust ${job.jfpItemCode} manually.`);
+                    }
+                    return;
+                }
                 setPackOrderId(null);
                 alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\nThe NetSuite assembly build is queued now and receives into ${bin} — watch it land in 11.1 → NetSuite Sync Queue (~1 min).`);
                 return;
@@ -2907,6 +2941,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     return (
                                         <button key={j.id} onClick={() => active ? setPackOrderId(null) : openPackOrder(j)} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
                                             {!active && <OrderStatusChips wo={j} showWho={false} style={{ marginBottom: '6px' }} />}
+                                            {/* A paint run looks like a stock build until you read the code — say so. */}
+                                            {isPaintOnlyOrder(j) && <div title={`Legacy NetSuite item ${j.jfpItemCode || ''} — no assembly. Scanning the bin adjusts the painted pieces into it.`} style={{ display: 'inline-block', marginBottom: '6px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE} · {j.jfpItemCode || ''}</div>}
                                             <div style={{ fontFamily: theme.mono, fontSize: '0.85rem', fontWeight: 'bold' }}>{packRef(j)}{isQsOrder(j) && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : theme.brass, border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : theme.brass}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>QUICK SHIP</span>}{j.orderType === 'stock' && <span style={{ fontSize: '8px', letterSpacing: '.1em', color: active ? '#fff' : '#3a7d44', border: `1px solid ${active ? 'rgba(255,255,255,0.5)' : '#3a7d44'}`, padding: '1px 5px', marginLeft: '8px', verticalAlign: 'middle' }}>STOCK → BIN</span>}</div>
                                             <div style={{ fontFamily: theme.sans, fontSize: '0.75rem', color: active ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>
                                                 {j.customerName || j.clientName || j.customer || '—'} · {jl.length} line{jl.length === 1 ? '' : 's'}{done > 0 ? ` · ${done}/${jl.length} packed` : ''}
@@ -2956,6 +2992,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         {photos.map((u, i) => <img key={i} src={u} alt={`packed ${i + 1}`} onClick={() => window.open(u, '_blank')} style={{ height: '54px', width: '76px', objectFit: 'cover', border: `1px solid ${theme.line}`, cursor: 'zoom-in' }} />)}
                                         {photos.length === 0 && !isStockJob && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>No photo yet — a photo of the packaged parts is required.</span>}
                                         {isStockJob && !putawayBin.trim() && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#d9534f' }}>Scan the put-away bin — stocked goods go straight to the shelf.</span>}
+                                        {packJob && isPaintOnlyOrder(packJob) && <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.ink }}>{PAINT_ONLY_BADGE}: the bin you scan is where <b>{packJob.jfpItemCode}</b> gets adjusted in NetSuite — there is no assembly build.</span>}
                                         {isStockJob ? (
                                             <button onClick={() => {
                                                 const erp = String(packJob.stockErpId || packJob.type || '').toUpperCase();

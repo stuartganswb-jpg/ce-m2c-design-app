@@ -908,6 +908,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 reqDate: hqOrder.reqDate || "",
                 type: hqOrder.type || "Mixed",
                 totalParts: Number(hqOrder.totalParts) || 1,
+                // JUST FOR PAINT (Stuart 2026-08-03): a legacy item with no assembly. Everything
+                // packing needs to close it out in NetSuite rides here, because by then there is no
+                // library record to look anything up in. onStockBuildDone skips it on its own —
+                // that trigger requires an nsWoId and a paint run has none.
+                paintOnly: hqOrder.paintOnly === true,
+                jfpItemCode: hqOrder.jfpItemCode || null,
+                jfpItemId: hqOrder.jfpItemId || null,
+                jfpItemName: hqOrder.jfpItemName || null,
+                jfpFinishLabel: hqOrder.jfpFinishLabel || null,
+                stockErpId: hqOrder.paintOnly === true ? (hqOrder.jfpItemCode || null) : (hqOrder.rootItem || hqOrder.variantErpId || null),
                 // Scheduler keys. A stock build is one finished assembly -> one size + one product
                 // type, so the whole quantity packs into that size and resolves one matrix cell.
                 paintSize: (hqOrder.paintSize || '').toUpperCase() || null,

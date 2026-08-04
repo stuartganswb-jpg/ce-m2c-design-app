@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
@@ -86,6 +87,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [userPerms, setUserPerms] = useState([]);
   const [isPushingErp, setIsPushingErp] = useState(false);
   const [woTargetQty, setWoTargetQty] = useState(1);
+  // JUST FOR PAINT (Stuart 2026-08-03) — a paint run for a legacy NetSuite item the app was never
+  // taught. The item # is typed, not picked, because there is no library record behind it.
+  const [inHouseFinishes, setInHouseFinishes] = useState([]);
+  const [jfp, setJfp] = useState({ itemCode: '', finishId: '', note: '', busy: false });
 
   useEffect(() => {
       if (!currentUser) return;
@@ -138,8 +143,11 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     const unsubPrints = subscribeProgramPrints(db, setPrintMap);
 
     const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), snap => setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    // The in-house finish list the JFP run picks from — same doc CPQ reads, so a finish added there
+    // appears here without a second place to maintain.
+    const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), snap => setInHouseFinishes((snap.exists() && snap.data().finishes) || []));
 
-    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); unsubPrints(); unsubOutsource(); };
+    return () => { unsubSchema(); unsubAssets(); unsubCollections(); unsubLists(); unsubWindowConfig(); unsubVendors(); unsubCustomers(); unsubPrints(); unsubOutsource(); unsubFinishes(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -976,6 +984,73 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           type: "Stock Build", createdAt: Date.now()
       });
       return newWoId;
+  };
+
+  // JFP RUN → FINISHING (Stuart 2026-08-03). No library assembly, no NetSuite work order — the item
+  // rides as typed text and only meets NetSuite again at packing, as an adjustment.
+  //
+  // The item is resolved AGAINST NETSUITE NOW, while the person who knows it is still standing
+  // here. Finding out at the put-away bin, two weeks and one paint line later, that the code was a
+  // typo would be the worst possible moment to discover it.
+  const createPaintOnlyWO = async () => {
+      const qty = Number(woTargetQty) || 0;
+      const v = validatePaintOnlyRun({ itemCode: jfp.itemCode, finishId: jfp.finishId, qty });
+      if (!v.ok) return alert(v.error);
+      const fin = inHouseFinishes.find(f => String(f.id) === String(jfp.finishId));
+      const finishLabel = fin ? (fin.code ? `${fin.code} - ${fin.name}` : fin.name) : '';
+      const code = normalizeItemCode(jfp.itemCode);
+
+      setJfp(j => ({ ...j, busy: true }));
+      let nsItem = null;
+      try {
+          const q = `SELECT Item.id AS id, Item.itemid AS itemid, Item.displayname AS displayname FROM Item WHERE UPPER(Item.itemid) = '${code.replace(/'/g, "''")}'`;
+          const resp = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q } });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+          nsItem = (data.items && data.items[0]) || null;
+      } catch (err) {
+          setJfp(j => ({ ...j, busy: false }));
+          return alert(`Couldn't reach NetSuite to check ${code} — nothing was created. Try again.\n\n${err.message || err}`);
+      }
+      if (!nsItem) {
+          setJfp(j => ({ ...j, busy: false }));
+          return alert(`NetSuite has no item called "${code}".\n\nCheck the spelling — this is the item the finished pieces get adjusted into at packing, so it has to be right before the paint is run.`);
+      }
+
+      const desc = paintOnlyDescription({ itemCode: code, finishLabel, qty, note: jfp.note });
+      if (!window.confirm(`Send a JUST FOR PAINT run to the finishing floor?\n\n${desc}\nNetSuite item: ${nsItem.itemid}${nsItem.displayname ? ` — ${nsItem.displayname}` : ''}\n\nNo assembly, no NetSuite work order. At packing the painted pieces are adjusted into the bin that gets scanned.`)) {
+          setJfp(j => ({ ...j, busy: false }));
+          return;
+      }
+      try {
+          const stamp = Date.now().toString().slice(-6);
+          const newWoId = `WO-JFP-${String(code).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}`;
+          await setDoc(doc(db, "hq_work_orders", newWoId), {
+              id: newWoId, woId: newWoId, woDisplayId: newWoId,
+              partErpId: code, rootItem: code,
+              brand: activeBrand, status: "Approved", customer: "Internal Stock",
+              hqJobId: activePart.id, totalParts: qty,
+              reqDate: new Date(Date.now() + 6048e5).toISOString().split('T')[0],
+              type: "Just For Paint", createdAt: Date.now(),
+              // What makes it a paint run. The ORDER declares it — by packing time the library
+              // record is not in the room.
+              paintOnly: true,
+              jfpItemCode: code,
+              jfpItemId: String(nsItem.id),
+              jfpItemName: nsItem.displayname || '',
+              jfpFinishId: jfp.finishId,
+              jfpFinishLabel: finishLabel,
+              recipe: finishLabel || 'PENDING-RECIPE',
+              memo: desc,
+          });
+          alert(`✅ ${newWoId} created.\n\n${desc}\n\nDispatch it from Tab 13 (RTG) → Push to Finishing. It runs the floor like any other job; packing does a bin count and adjusts ${code} into that bin.`);
+          setJfp({ itemCode: '', finishId: '', note: '', busy: false });
+          setWoTargetQty(1);
+      } catch (err) {
+          console.error('JFP WO error:', err);
+          setJfp(j => ({ ...j, busy: false }));
+          alert('Failed to create the paint run. Check console.');
+      }
   };
 
   const handleGenerateWO = async () => {
@@ -1932,7 +2007,50 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               </div>
               )}
 
-              {activePart.partClass !== 'Master Assembly' && (
+              {/* JUST FOR PAINT — the template's own tool. It replaces the normal Stock Build form
+                  because there is nothing to build: no assembly, no NetSuite work order, just paint
+                  on a legacy item typed in by hand (Stuart 2026-08-03). Rendered whatever the record
+                  class is — the old form was gated to non-Master-Assembly, so on JFP (a Master
+                  Assembly) no tool appeared at all. */}
+              {isPaintOnlyPart(activePart) && (
+                  <div style={{ background: '#fff', border: '2px solid var(--brass)', padding: '24px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                          <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Just For Paint — Production Run</h4>
+                          <span style={{ background: 'var(--brass)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', padding: '3px 8px' }}>{PAINT_ONLY_BADGE}</span>
+                      </div>
+                      <p style={{ margin: '0 0 20px 0', fontSize: '0.88rem', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+                          For a legacy NetSuite item with no assembly in the app. Type its item #, pick the finish, set the quantity — it runs the finishing floor like any other job. At packing the operator scans a bin and the painted pieces are adjusted into it in NetSuite. No assembly build, no NetSuite work order.
+                      </p>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.4fr 0.7fr', gap: '16px', marginBottom: '16px' }}>
+                          <div>
+                              <label style={labelStyle}>NetSuite Item #</label>
+                              <input value={jfp.itemCode} onChange={e => setJfp(j => ({ ...j, itemCode: e.target.value }))} placeholder="e.g. H1-138BE/P" style={{ ...fieldStyle, fontFamily: 'var(--mono)' }} />
+                              <span style={{ display: 'block', marginTop: '5px', fontSize: '0.75rem', color: 'var(--ink-soft)' }}>Checked against NetSuite before the run is created.</span>
+                          </div>
+                          <div>
+                              <label style={labelStyle}>In-House Finish</label>
+                              <select value={jfp.finishId} onChange={e => setJfp(j => ({ ...j, finishId: e.target.value }))} style={fieldStyle}>
+                                  <option value="">— choose the finish —</option>
+                                  {inHouseFinishes.map(f => <option key={f.id} value={f.id}>{f.code ? `${f.code} - ${f.name}` : f.name}</option>)}
+                              </select>
+                          </div>
+                          <div>
+                              <label style={labelStyle}>Qty</label>
+                              <input type="number" min="1" value={woTargetQty} onChange={e => setWoTargetQty(e.target.value)} style={fieldStyle} />
+                          </div>
+                      </div>
+                      <div style={{ marginBottom: '16px' }}>
+                          <label style={labelStyle}>Note for the floor (optional)</label>
+                          <input value={jfp.note} onChange={e => setJfp(j => ({ ...j, note: e.target.value }))} placeholder="e.g. emergency for Brimar — needed Friday" style={fieldStyle} />
+                      </div>
+                      <button onClick={createPaintOnlyWO} disabled={jfp.busy}
+                          style={{ width: '100%', padding: '14px 24px', background: jfp.busy ? 'var(--ink-soft)' : 'var(--brass)', color: '#fff', border: 'none', cursor: jfp.busy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                          {jfp.busy ? 'Checking NetSuite…' : 'Create Paint Run → RTG Dispatch'}
+                      </button>
+                  </div>
+              )}
+
+              {activePart.partClass !== 'Master Assembly' && !isPaintOnlyPart(activePart) && (
                   <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '24px', marginBottom: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                       <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>
                           Generate Production Work Order
