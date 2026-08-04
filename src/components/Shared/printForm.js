@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { collectPrintStyles } from './printStyles';
 
 // Print a React element (e.g. <FormPreview/>) as a standalone document in a new window. We copy the
 // app's stylesheets + :root CSS variables so the branded form — fonts, light-grey shading, and the
@@ -8,8 +9,10 @@ export function printForm(element, title = 'Document') {
   try { markup = renderToStaticMarkup(element); }
   catch (e) { console.error('print render failed', e); alert('Could not render the form for printing.'); return; }
 
-  const headStyles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
-    .map(n => n.outerHTML).join('\n');
+  // The copy is filtered, not raw: the label printer's stylesheet lives in this same head and
+  // carries `@page{size:4in 2in}` + `body > *{display:none}`, which is how a quote ended up
+  // printing at label size (Stuart 2026-08-03). See Shared/printStyles.js.
+  const headStyles = collectPrintStyles(Array.from(document.querySelectorAll('link[rel="stylesheet"], style')));
 
   const win = window.open('', '_blank', 'width=900,height=1200');
   if (!win) { alert('Pop-up blocked — allow pop-ups for this site to print forms.'); return; }
@@ -18,7 +21,9 @@ export function printForm(element, title = 'Document') {
   win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
     ${headStyles}
     <style>
-      @page { margin: 0.5in; }
+      /* Declared LAST and with an explicit size so nothing copied above can decide the page for
+         us — a form is Letter portrait, whatever was printed in this tab before it. */
+      @page { size: Letter portrait; margin: 0.5in; }
       html, body { margin: 0; padding: 0; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     </style>
   </head><body>${markup}</body></html>`);
