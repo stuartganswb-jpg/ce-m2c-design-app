@@ -7,6 +7,11 @@
 //   FASCIA    the face of the track — chosen FIRST, before the track itself.
 //   TRACK     the extrusion. Its CHOICE is a finish choice, but its CUT LENGTH depends on the
 //             drive: a motorised track is cut differently from a manual one.
+//   TRV_END   the traverse end — a REAL PART that differs by drive (Stuart 2026-08-04: "should i
+//             just tag them the ends?" — yes). Tagging an end as TRACK put it in the track picker
+//             beside the actual extrusion, and left the motorised/manual choice as a synthetic
+//             label with no part behind it: nothing to bill, nothing to render. As its own role the
+//             ends BECOME the track's sub-choice, so picking one picks a real part.
 //   CARRIER   the pieces that ride inside. Never chosen, never changed, always present — they were
 //             being tagged HIDE, which is the opposite of what they need: hide means "never render".
 //
@@ -15,7 +20,7 @@
 // declares which drives it belongs to. A choice tagged for neither belongs to BOTH — the common
 // case (a fascia is a fascia however the track is driven), so the default costs nobody a tick.
 
-export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'FCLIP', 'CARRIER'];
+export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'TRV_END', 'FCLIP', 'CARRIER'];
 export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 
 const up = (v) => String(v ?? '').trim().toUpperCase();
@@ -62,6 +67,16 @@ export function needsDriveStep(choices) {
 export function drivesOffered(choices) {
     const tags = [...new Set((choices || []).map(driveTypeOf).filter(Boolean))];
     return tags.length ? DRIVE_TYPES.filter(d => tags.includes(d)) : ['MANUAL'];
+}
+
+// The traverse ends, split by drive. When both drives are present these are the TRACK step's
+// sub-choice; when only one is, there is nothing to ask and the single end must still be BUILT —
+// so the caller rides it as an included part rather than dropping it. A real part that vanishes
+// because it had no question attached is the failure worth designing against.
+export function traverseEnds(choices) {
+    const ends = (choices || []).filter(c => traverseRoleOf(c) === 'TRV_END' && !isAlwaysShown(c));
+    const drives = [...new Set(ends.map(driveTypeOf).filter(Boolean))];
+    return { ends, drives: DRIVE_TYPES.filter(d => drives.includes(d)), isChoice: drives.length > 1 };
 }
 
 // ── THE CUT LIST (Stuart 2026-08-04, his numbers) ───────────────────────────────────────────────

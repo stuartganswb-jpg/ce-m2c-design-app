@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { needsDriveStep, drivesOffered, offeredChoices, alwaysShownChoices, traverseRoleOf } from '../Shared/traverseTags';
+import { traverseEnds, offeredChoices, traverseRoleOf } from '../Shared/traverseTags';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from "firebase/functions";
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit, writeBatch } from "firebase/firestore";
@@ -1459,20 +1459,23 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           //    two-track system can be motorised on one and manual on the other. A standalone step
           //    could not have expressed that.
           if (track.length) {
-              const driveSubs = needsDriveStep(allOpts)
-                  ? drivesOffered(allOpts).map(d => ({
-                      optId: `OPT-DRIVE-${d}`, partId: '', partName: d === 'MOTORIZED' ? 'Motorized' : 'Manual',
-                      driveType: d, price: 0, targetNode: '',
-                  }))
-                  : [];
+              // THE ENDS ARE REAL PARTS (Stuart 2026-08-04: "should i just tag them the ends?").
+              // They were synthetic Motorized/Manual labels with no partId — nothing to bill and
+              // nothing to render. Tagged trv: end + their drive, the ENDS themselves become the
+              // track's sub-choice, so picking one picks an actual part.
+              const { ends, isChoice } = traverseEnds(allOpts);
+              // Only one drive → nothing to ask, but the end still has to be BUILT. It rides as an
+              // included part instead of vanishing for want of a question.
+              const endInc = (!isChoice && ends.length)
+                  ? ends.map(o => ({ partId: o.partId, partName: o.partName, qty: 1, traverseRole: 'TRV_END' }))
+                  : null;
+              const inc = [...(riderInc || []), ...(endInc || []), ...(!fascia.length && riderInc ? [] : [])];
               add({
                   title: 'Track', type: 'STYLE_SWAP', partHandling: 'Custom', required: true, hideQty: true,
                   finishDataSource: 'master_finishes', useClientPricing: true, stepRole: 'TRACK',
                   styleOptions: track, geometryMap: geom(track),
-                  // Only when BOTH drives exist — a manual-only collection must never be asked a
-                  // question with one answer.
-                  ...(driveSubs.length ? { subLabel: 'Traverse End', subOptions: driveSubs, subGeometryMap: {} } : {}),
-                  ...(!fascia.length && riderInc ? { includedParts: riderInc } : {}),
+                  ...(isChoice ? { subLabel: 'Traverse End', subOptions: ends, subGeometryMap: geom(ends) } : {}),
+                  ...((fascia.length ? (endInc || []) : inc).length ? { includedParts: fascia.length ? endInc : inc } : {}),
               });
           }
 
