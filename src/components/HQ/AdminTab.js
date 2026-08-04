@@ -1427,46 +1427,58 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // existing, so a pole assembly emits exactly what it emitted before — nothing here runs.
       const allOpts = [...pole, ...finial, ...brackets, ...backplates, ...rings];
       const trvAll = allOpts.filter(o => traverseRoleOf(o));
-      if (trvAll.length) {
+      const isTraverse = trvAll.length > 0;
+      if (isTraverse) {
           const fascia = offeredChoices(allOpts, { role: 'FASCIA' });
           const track = offeredChoices(allOpts, { role: 'TRACK' });
-          // CARRIERS ARE NEVER A QUESTION. They ride as includedParts on the first real traverse
-          // step, so they reach the BOM and the render without ever becoming an option.
-          // The F-CLIP joins them (Stuart 2026-08-04): it attaches the track to the fascia, is never
-          // chosen, and is CUT — manual −1", motorized −3" off the fascia. Like the carriers it must
-          // reach the BOM and the shop's 3D viewer without ever becoming a question.
+          // NEVER A QUESTION, ALWAYS BUILT: carriers ride inside, and the F-CLIP attaches the track
+          // to the fascia. Both are cut/consumed per configuration, neither is ever chosen.
           const riders = allOpts.filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o)));
-          const carrierInc = riders.length
+          const riderInc = riders.length
               ? riders.map(o => ({ partId: o.partId, partName: o.partName, qty: 1, traverseRole: traverseRoleOf(o) }))
               : null;
 
-          // 1. FASCIA — the face of the track, chosen before the track itself.
-          if (fascia.length) add({
-              title: 'Fascia', type: 'STYLE_SWAP', partHandling: 'Small Parts', required: true, hideQty: true,
-              finishDataSource: 'master_finishes', useClientPricing: true,
-              styleOptions: fascia, geometryMap: geom(fascia), ...(carrierInc ? { includedParts: carrierInc } : {}),
-          });
+          // ── 1. FASCIA — BUILT EXACTLY LIKE THE POLE (Stuart 2026-08-04: "the fascia step needs to
+          //    act like a pole step... first choose from material there are wood and metal fascia
+          //    loaded, then based off this selection we will choose the appropriate finish and enter
+          //    length"). Same two shapes the pole uses, for the same reason: with SEVERAL materials
+          //    the material step owns the finish (each option carries its own scoped finish list) and
+          //    the length step is dimensions only; with ONE material there is nothing to choose, so
+          //    finish and length combine into a single step.
+          const fasciaNodes = fascia.map(o => o.targetNode).filter(Boolean).join(', ');
+          if (fascia.length > 1) {
+              add({ title: 'Fascia Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: fascia, geometryMap: geom(fascia) });
+              add({ title: 'Fascia Length', type: 'DIMENSIONS', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: fasciaNodes, ...(riderInc ? { includedParts: riderInc } : {}) });
+          } else if (fascia.length === 1) {
+              add({ title: 'Fascia Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: fasciaNodes, ...(fascia[0]?.partId ? { linkedItemId: fascia[0].partId } : {}), ...(riderInc ? { includedParts: riderInc } : {}) });
+          }
 
-          // 2. TRACK — a FINISH choice. Its CUT LENGTH depends on the drive chosen next, which the
-          //    configurator resolves; nothing here invents a length.
-          if (track.length) add({
-              title: 'Track', type: 'STYLE_SWAP', partHandling: 'Custom', required: true, hideQty: true,
-              finishDataSource: 'master_finishes', useClientPricing: true,
-              styleOptions: track, geometryMap: geom(track),
-              ...(!fascia.length && carrierInc ? { includedParts: carrierInc } : {}),
-          });
+          // ── 2. TRACK, with the DRIVE as its SUB-CHOICE (Stuart 2026-08-04: "on each track we
+          //    choose between the motorized and manual traverse ends"). The drive belongs TO a
+          //    track, not to the order — same shape as a backplate hanging off its bracket, so a
+          //    two-track system can be motorised on one and manual on the other. A standalone step
+          //    could not have expressed that.
+          if (track.length) {
+              const driveSubs = needsDriveStep(allOpts)
+                  ? drivesOffered(allOpts).map(d => ({
+                      optId: `OPT-DRIVE-${d}`, partId: '', partName: d === 'MOTORIZED' ? 'Motorized' : 'Manual',
+                      driveType: d, price: 0, targetNode: '',
+                  }))
+                  : [];
+              add({
+                  title: 'Track', type: 'STYLE_SWAP', partHandling: 'Custom', required: true, hideQty: true,
+                  finishDataSource: 'master_finishes', useClientPricing: true, stepRole: 'TRACK',
+                  styleOptions: track, geometryMap: geom(track),
+                  // Only when BOTH drives exist — a manual-only collection must never be asked a
+                  // question with one answer.
+                  ...(driveSubs.length ? { subLabel: 'Traverse End', subOptions: driveSubs, subGeometryMap: {} } : {}),
+                  ...(!fascia.length && riderInc ? { includedParts: riderInc } : {}),
+              });
+          }
 
-          // 3. DRIVE — ONLY when the assembly actually carries choices for BOTH. A manual-only
-          //    collection must never grow a step that asks a question with one answer.
-          if (needsDriveStep(allOpts)) add({
-              id: 'TRV-DRIVE', title: 'Motorized or Manual', type: 'STYLE_SWAP', stepRole: 'DRIVE',
-              partHandling: 'Small Parts', required: true, hideQty: true, useClientPricing: true,
-              styleOptions: drivesOffered(allOpts).map(d => ({
-                  optId: `OPT-DRIVE-${d}`, partId: '', partName: d === 'MOTORIZED' ? 'Motorized' : 'Manual',
-                  driveType: d, price: 0,
-              })),
-              geometryMap: {},
-          });
+          // ── 3. RINGS ONLY ON THE FRONT POLE. On a traverse system the rings belong to the
+          //    decorative front pole, never to the track — the carriers do that job inside it.
+          rings = rings.filter(o => String(o.position || '').toUpperCase() === 'FRONT');
       }
 
       // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
@@ -1483,7 +1495,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // footage ONLY — no second finish chooser (type DIMENSIONS carries no dataSource and passes
       // the required-gate without a selection). Single-material keeps the combined Length & Finish
       // step exactly as before.
-      add(centerPole.length > 1
+      // ON A TRAVERSE ASSEMBLY THE FASCIA IS THE POLE STEP. The pole step is otherwise ALWAYS
+      // emitted (it carries the core geometry and the fab maths) — but a traverse system with no
+      // pole pins would get an empty "Length & Finish" asking for a rod that does not exist. Skip
+      // it only in that exact case: a traverse system that DOES have a front pole still gets both.
+      if (!(isTraverse && centerPole.length === 0)) add(centerPole.length > 1
           ? { title: bay.poleTitle.replace(/ & Finish/i, ''), type: 'DIMENSIONS', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) }
           : { title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
       // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that end's
