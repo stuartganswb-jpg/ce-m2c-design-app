@@ -1,4 +1,6 @@
 import React, { useState, useRef } from 'react';
+import { isFloorSupervisor } from '../Shared/finishingRoles';
+import { runningStepsOf, activityOf, activityTone } from '../Shared/floorActivity';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveRecipe } from '../Shared/finishingTime';
@@ -780,6 +782,59 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
             )}
         </div>
 
+        {/* ON THE FLOOR (Stuart 2026-08-03: "once the jobs are started there should be a visual in
+            the center of the screen of what is actively happening (and by whom)"). The Machine View
+            that used to fill this space is hidden while the machines are offline, so a started job
+            left the middle of the screen blank. Renders only when something is running — an empty
+            floor should look empty, not like a broken panel. */}
+        {(() => {
+            const steps = runningStepsOf(workOrders);
+            if (!steps.length) return null;
+            return (
+                <div style={{ marginBottom: '30px', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', padding: '18px 24px', borderBottom: '1px solid var(--line)' }}>
+                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>🔥 On the Floor</span>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>
+                            {steps.length} step{steps.length === 1 ? '' : 's'} running · longest first
+                        </span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px', padding: '20px 24px' }}>
+                        {steps.map((st, i) => {
+                            const a = activityOf(st, { cfg, now });
+                            const tone = activityTone(a.state);
+                            return (
+                                <div key={`${st.wo.id}-${st.key}-${i}`} onClick={() => { setManualWoId(st.wo.id); setViewWo(null); }} title="Open this job in Manual Floor Control"
+                                    style={{ border: `1px solid ${tone}`, borderLeft: `6px solid ${tone}`, background: a.state === 'overdue' ? '#fdf3f3' : 'var(--paper)', padding: '14px 16px', cursor: 'pointer' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)', letterSpacing: '.04em' }}>{a.isOven ? '🔥' : '🎨'} {a.label}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: tone, fontWeight: 700 }}>
+                                            {a.elapsedMins === null ? '—' : `${a.elapsedMins}m`}
+                                        </span>
+                                    </div>
+                                    {/* WHO — the half of the question the old one-line list answered last. */}
+                                    <div style={{ fontFamily: 'var(--sans)', fontSize: '1.05rem', color: 'var(--ink)', fontWeight: 500, margin: '6px 0 2px' }}>{st.operator || '— unassigned —'}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{woRef(st.wo)}{st.wo.recipe ? ` · ${st.wo.recipe}` : ''}{st.wo.customerName ? ` · ${st.wo.customerName}` : ''}</div>
+                                    {a.pct !== null && (
+                                        <div style={{ marginTop: '10px' }}>
+                                            <div style={{ height: '6px', background: 'var(--line)', overflow: 'hidden' }}>
+                                                <div style={{ width: `${a.pct}%`, height: '100%', background: tone, transition: 'width .4s' }} />
+                                            </div>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: tone, marginTop: '4px' }}>
+                                                {a.state === 'overdue' && `over by ${a.overdueMins}m · est ${a.estMins}m`}
+                                                {a.state === 'baking' && `baking · dwell ${a.estMins}m reached`}
+                                                {a.state === 'running' && `${a.remainingMins}m left of ${a.estMins}m`}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {a.state === 'untimed' && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '10px' }}>no time set for this step</div>}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        })()}
+
         {/* MACHINE VIEW — collapsed while the machines are offline; the oven stays reachable. */}
         <div style={{ marginBottom: '30px' }}>
             <div onClick={() => setMachineViewOpen(!machineViewOpen)} style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', gap: '10px', flexWrap: 'wrap' }}>
@@ -1206,9 +1261,11 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           {/* Supervisor override — a stranded order (steps stuck Pending, or a stock
                               build already assembled in NetSuite) goes straight to WMS Packing. */}
                           {(() => {
-                              const role = String(user?.role || '').toLowerCase().replace(/[^a-z]/g, '');
-                              const canForce = user?.superAdmin === true || ['superadmin', 'admin', 'floormanager', 'paintmanager'].includes(role);
-                              if (!canForce) return null;
+                              // Was a hardcoded list of four role strings, which silently excluded
+                              // 'setup_manager' however many boxes were ticked in the tab matrix —
+                              // and refused a super admin whose flag lives on the hq_users record
+                              // rather than the login token (Stuart 2026-08-03).
+                              if (!isFloorSupervisor(user, users)) return null;
                               const done = wo.currentPhase === 'Complete';
                               return (
                                   <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
