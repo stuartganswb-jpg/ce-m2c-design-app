@@ -1035,7 +1035,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               const pid = pin?.partId || cl.name;
               const cshortL = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
               const keyL = [cl.id, pid, position, location].join('|');
-              const e = map[keyL] = map[keyL] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshortL}`, partId: pid, partName: pin?.partName || cl.name, position, location, _srcName: srcByCluster[cl.id], nodes: new Set() };
+              const e = map[keyL] = map[keyL] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshortL}`, partId: pid, partName: pin?.partName || cl.name, position, location, _srcName: srcByCluster[cl.id], nodes: new Set(), // A cluster with ONE pin took this branch and lost every traverse tag — which is why the
+                  // F-clip stayed in the Pole / Rod Material picker no matter how it was tagged.
+                  ...(pin?.traverseRole ? { traverseRole: String(pin.traverseRole).toUpperCase() } : {}), ...(pin?.driveType ? { driveType: String(pin.driveType).toUpperCase() } : {}), ...(pin?.trvSetup ? { trvSetup: String(pin.trvSetup).toUpperCase() } : {}), ...(pin?.alwaysShown ? { alwaysShown: true } : {}) };
               (cl.nodes || cl.meshes || []).forEach(n => { if (n) e.nodes.add(n); });
               if (pin) {
                   const { et, returnish, feeish, returnArm, inlineish } = flagsFor(pin);
@@ -1061,7 +1063,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           });
           return Object.values(map).map(e => {
               const tags = tagsByStyle[styleKeyFor(e.partId, e.partName, e.position, cat)];
-              return { optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}), ...(tags && Object.keys(tags.projByDia).length ? { projByDia: tags.projByDia } : {}), ...(tags && Object.keys(tags.mountByDia).length ? { mountByDia: tags.mountByDia } : {}), ...(e._srcName ? { _srcName: e._srcName } : {}) };
+              return { optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}), ...(tags && Object.keys(tags.projByDia).length ? { projByDia: tags.projByDia } : {}), ...(tags && Object.keys(tags.mountByDia).length ? { mountByDia: tags.mountByDia } : {}), ...(e._srcName ? { _srcName: e._srcName } : {}), // ⛔ THE OPTION IS REBUILT FROM A WHITELIST. Adding the traverse tags to the map entry was
+                  // not enough — this return decides what actually leaves groupPlacements, and it
+                  // silently dropped them, so the generator saw a traverse assembly as an ordinary
+                  // pole one and emitted the pole steps unchanged (Stuart 2026-08-04: "i loaded
+                  // choices and retagged flow and see no difference").
+                  ...(e.traverseRole ? { traverseRole: e.traverseRole } : {}), ...(e.driveType ? { driveType: e.driveType } : {}), ...(e.trvSetup ? { trvSetup: e.trvSetup } : {}), ...(e.alwaysShown ? { alwaysShown: true } : {}) };
           });
       };
       const geom = (opts) => { const g = {}; opts.forEach(o => { if (o.targetNode) g[o.optId] = o.targetNode; }); return g; };
