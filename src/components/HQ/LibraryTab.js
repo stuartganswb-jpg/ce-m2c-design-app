@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
+import { buildStockFinPayload } from '../Shared/stockRun';
+import { makeFullTasks } from '../Shared/workOrderContract';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
@@ -91,6 +93,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // taught. The item # is typed, not picked, because there is no library record behind it.
   const [inHouseFinishes, setInHouseFinishes] = useState([]);
   const [jfp, setJfp] = useState({ itemCode: '', finishId: '', note: '', busy: false });
+  // Same idea for an ORDINARY part: choose a finish and push it to the floor from here.
+  const [runFinishId, setRunFinishId] = useState('');
+  const [runBusy, setRunBusy] = useState(false);
 
   useEffect(() => {
       if (!currentUser) return;
@@ -986,6 +991,68 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       return newWoId;
   };
 
+  // ONE RELEASE PATH — RTG keeps the record, the floor gets the job (Stuart 2026-08-03: "it should
+  // also go to rtg for file keeping and a record but we can skip having to have to go there for an
+  // extra step just to push to the floor").
+  //
+  // Both documents are written, in this order: the hq_work_orders LEDGER entry first (already
+  // stamped Dispatched, so the RTG board, the transmit log and every report read it exactly as if
+  // a dispatcher had pressed the button), then the fin_workorders job the floor actually runs. If
+  // the second write fails the first is rolled back — a ledger entry marked dispatched with no job
+  // on any floor is the one outcome nobody could diagnose from either screen.
+  const releaseRunToFloor = async ({ woId, part, qty, finishLabel, note, hqExtra = {}, finExtra = {} }) => {
+      const now = Date.now();
+      const reqDate = new Date(now + 6048e5).toISOString().split('T')[0];
+      await setDoc(doc(db, "hq_work_orders", woId), {
+          id: woId, woId, woDisplayId: woId,
+          partErpId: String(part.legacyErpId || part.itemId || '').toUpperCase(),
+          rootItem: String(part.legacyErpId || part.itemId || '').toUpperCase(),
+          brand: activeBrand, customer: "Internal Stock",
+          hqJobId: part.id, totalParts: Math.max(1, Math.floor(Number(qty) || 1)),
+          reqDate, type: "Stock Build", recipe: finishLabel || 'PENDING-RECIPE',
+          memo: note || '', createdAt: now,
+          // Released from the library, not the board — but the board still holds the record.
+          status: "Dispatched", pushedToFinishing: true,
+          dispatchedAt: now, dispatchedBy: (currentUser && (currentUser.name || currentUser.email)) || '', releasedFrom: 'MASTER_LIBRARY',
+          ...hqExtra,
+      });
+      try {
+          await setDoc(doc(db, "fin_workorders", woId), buildStockFinPayload({
+              woId, part, qty, finishLabel, brand: activeBrand,
+              createdBy: (currentUser && (currentUser.name || currentUser.email)) || '', reqDate, note,
+              tasks: makeFullTasks(), extra: finExtra, now,
+          }));
+      } catch (err) {
+          try { await deleteDoc(doc(db, "hq_work_orders", woId)); } catch (e) { /* leave the ledger entry; it is visible in RTG */ }
+          throw err;
+      }
+  };
+
+  // An ordinary library part, straight to the floor. Everything a stock build needs is already
+  // stated here — the part, the finish, the quantity — so there is nothing for a dispatcher to add.
+  const pushPartRunToFloor = async () => {
+      if (!activePart || activePart.legacyErpId === 'PENDING') return alert('Save the part with an ERP Legacy ID before generating a work order.');
+      const qty = Number(woTargetQty) || 0;
+      if (qty <= 0) return alert('Enter a target quantity.');
+      const fin = inHouseFinishes.find(f => String(f.id) === String(runFinishId));
+      if (!fin) return alert('Choose the in-house finish — it sets the recipe the floor will run.');
+      const finishLabel = fin.code ? `${fin.code} - ${fin.name}` : fin.name;
+      const erp = String(activePart.legacyErpId).toUpperCase();
+      if (!window.confirm(`Push ${qty} × ${erp} to the finishing floor in ${finishLabel}?\n\nIt lands in the Setup Queue now. RTG records it as dispatched — you just don't have to go there to release it.`)) return;
+      setRunBusy(true);
+      try {
+          const woId = `WO-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now().toString().slice(-6)}`;
+          await releaseRunToFloor({ woId, part: activePart, qty, finishLabel, note: `${erp} · ${finishLabel} · ×${qty}` });
+          alert(`✅ ${woId} is on the finishing floor.\n\n${qty} × ${erp} · ${finishLabel}\n\nIt's in the Setup Queue now and recorded in RTG.`);
+          setRunFinishId('');
+          setWoTargetQty(1);
+      } catch (err) {
+          console.error('Direct release error:', err);
+          alert('Could not release the run: ' + (err.message || err) + '\n\nNothing was left half-created.');
+      }
+      setRunBusy(false);
+  };
+
   // JFP RUN → FINISHING (Stuart 2026-08-03). No library assembly, no NetSuite work order — the item
   // rides as typed text and only meets NetSuite again at packing, as an adjustment.
   //
@@ -1025,25 +1092,19 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       try {
           const stamp = Date.now().toString().slice(-6);
           const newWoId = `WO-JFP-${String(code).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}`;
-          await setDoc(doc(db, "hq_work_orders", newWoId), {
-              id: newWoId, woId: newWoId, woDisplayId: newWoId,
-              partErpId: code, rootItem: code,
-              brand: activeBrand, status: "Approved", customer: "Internal Stock",
-              hqJobId: activePart.id, totalParts: qty,
-              reqDate: new Date(Date.now() + 6048e5).toISOString().split('T')[0],
-              type: "Just For Paint", createdAt: Date.now(),
-              // What makes it a paint run. The ORDER declares it — by packing time the library
-              // record is not in the room.
-              paintOnly: true,
-              jfpItemCode: code,
-              jfpItemId: String(nsItem.id),
-              jfpItemName: nsItem.displayname || '',
-              jfpFinishId: jfp.finishId,
-              jfpFinishLabel: finishLabel,
-              recipe: finishLabel || 'PENDING-RECIPE',
-              memo: desc,
+          // What makes it a paint run rides on BOTH documents — the order declares it, because by
+          // packing time the library record is not in the room.
+          const jfpFields = {
+              paintOnly: true, jfpItemCode: code, jfpItemId: String(nsItem.id),
+              jfpItemName: nsItem.displayname || '', jfpFinishId: jfp.finishId, jfpFinishLabel: finishLabel,
+          };
+          await releaseRunToFloor({
+              woId: newWoId, part: { ...activePart, legacyErpId: code, itemName: nsItem.displayname || code },
+              qty, finishLabel, note: desc,
+              hqExtra: { ...jfpFields, type: 'Just For Paint' },
+              finExtra: { ...jfpFields, type: nsItem.displayname || code },
           });
-          alert(`✅ ${newWoId} created.\n\n${desc}\n\nDispatch it from Tab 13 (RTG) → Push to Finishing. It runs the floor like any other job; packing does a bin count and adjusts ${code} into that bin.`);
+          alert(`✅ ${newWoId} is on the finishing floor.\n\n${desc}\n\nIt is in the Setup Queue now, and recorded in RTG. Packing does a bin count and adjusts ${code} into that bin.`);
           setJfp({ itemCode: '', finishId: '', note: '', busy: false });
           setWoTargetQty(1);
       } catch (err) {
@@ -2019,7 +2080,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                           <span style={{ background: 'var(--brass)', color: '#fff', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.1em', padding: '3px 8px' }}>{PAINT_ONLY_BADGE}</span>
                       </div>
                       <p style={{ margin: '0 0 20px 0', fontSize: '0.88rem', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
-                          For a legacy NetSuite item with no assembly in the app. Type its item #, pick the finish, set the quantity — it runs the finishing floor like any other job. At packing the operator scans a bin and the painted pieces are adjusted into it in NetSuite. No assembly build, no NetSuite work order.
+                          For a legacy NetSuite item with no assembly in the app. Type its item #, pick the finish, set the quantity — it runs the finishing floor like any other job. It lands in the finishing floor Setup Queue immediately (RTG still records it). At packing the operator scans a bin and the painted pieces are adjusted into it in NetSuite. No assembly build, no NetSuite work order.
                       </p>
                       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.4fr 0.7fr', gap: '16px', marginBottom: '16px' }}>
                           <div>
@@ -2045,7 +2106,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                       </div>
                       <button onClick={createPaintOnlyWO} disabled={jfp.busy}
                           style={{ width: '100%', padding: '14px 24px', background: jfp.busy ? 'var(--ink-soft)' : 'var(--brass)', color: '#fff', border: 'none', cursor: jfp.busy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
-                          {jfp.busy ? 'Checking NetSuite…' : 'Create Paint Run → RTG Dispatch'}
+                          {jfp.busy ? 'Checking NetSuite…' : '▶ Create Paint Run & Push to Finishing Floor'}
                       </button>
                   </div>
               )}
@@ -2055,26 +2116,35 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                       <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>
                           Generate Production Work Order
                       </h4>
-                      <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end' }}>
-                          <div style={{ flex: 1 }}>
-                              <label style={labelStyle}>Target Qty</label>
-                              <input 
-                                  type="number" 
-                                  min="1"
-                                  value={woTargetQty} 
-                                  onChange={e => setWoTargetQty(e.target.value)} 
-                                  style={fieldStyle} 
-                              />
+                      {/* Pick the finish and it goes STRAIGHT to the floor (Stuart 2026-08-03) — RTG
+                          still gets the record, it just stops being a stop. Leave the finish blank
+                          and the original routing runs unchanged, which is what an outsourced
+                          suffix (…/EP1) needs: that path checks base stock and raises plating
+                          demand rather than a paint job. */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr', gap: '16px', alignItems: 'end', marginBottom: '16px' }}>
+                          <div>
+                              <label style={labelStyle}>In-House Finish</label>
+                              <select value={runFinishId} onChange={e => setRunFinishId(e.target.value)} style={fieldStyle}>
+                                  <option value="">— none / route as today (plating, outsourced) —</option>
+                                  {inHouseFinishes.map(f => <option key={f.id} value={f.id}>{f.code ? `${f.code} - ${f.name}` : f.name}</option>)}
+                              </select>
                           </div>
-                          <button 
-                              onClick={handleGenerateWO}
-                              style={{ flex: 2, padding: '12px 24px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
-                          >
-                              Push to RTG Dispatch
-                          </button>
+                          <div>
+                              <label style={labelStyle}>Target Qty</label>
+                              <input type="number" min="1" value={woTargetQty} onChange={e => setWoTargetQty(e.target.value)} style={fieldStyle} />
+                          </div>
                       </div>
+                      <button
+                          onClick={runFinishId ? pushPartRunToFloor : handleGenerateWO}
+                          disabled={runBusy}
+                          style={{ width: '100%', padding: '14px 24px', background: runBusy ? 'var(--ink-soft)' : 'var(--brass)', color: '#fff', border: 'none', cursor: runBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
+                      >
+                          {runBusy ? 'Releasing…' : (runFinishId ? '▶ Create & Push to Finishing Floor' : 'Push to RTG Dispatch')}
+                      </button>
                       <span style={{ display: 'block', marginTop: '12px', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
-                          This generates an "Approved" Stock Build WO and sends it directly to Tab 13 (RTG Dispatch).
+                          {runFinishId
+                              ? 'Lands in the finishing floor Setup Queue immediately. RTG still records it — you just do not have to go there to release it.'
+                              : 'This generates an "Approved" Stock Build WO and sends it to Tab 13 (RTG Dispatch), where outsourced finishes are routed to plating.'}
                       </span>
                   </div>
               )}
