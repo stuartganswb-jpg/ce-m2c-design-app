@@ -11,7 +11,7 @@ import { httpsCallable } from 'firebase/functions';
 import { CATEGORY_NAME_RX } from '../Shared/itemCodeMatch';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
-import { resolveByExactKey, normalizeKey } from '../Shared/workOrderContract';
+import { resolveByExactKey, normalizeKey, stagingScanMatches } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
@@ -632,6 +632,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // pieces, scan the destination bin, done (no photo, no boxes). CUSTOM/QS orders are real
     // customer packing — photo required, small/large box flow.
     const [putawayBin, setPutawayBin] = useState('');
+    // BOTH HALVES, CONFIRMED AT THE BOX (Stuart 2026-08-03: "the app did not ask for the
+    // scanning/aligning of the poles with the small parts"). Staging matched the halves on their
+    // way IN to finishing; nothing re-checked them on the way OUT, so a packer could box one
+    // order's small parts with another's poles and every screen would still read correct.
+    const [packCustomScan, setPackCustomScan] = useState('');
+    const [expandedPacked, setExpandedPacked] = useState(null);
     // Two order sources share this station: custom finishing WOs (fin_workorders) and Quick Ship
     // stocked sales orders from HQ tab 7 (hq_sales_orders, orderClass QUICKSHIP — queue once
     // Picked off the shelf). Writes land on whichever doc the order came from.
@@ -836,10 +842,22 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const confirmMsg = isStockPutaway
             ? `Put away ${packRef(job)} to bin ${bin}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} confirmed · stocked goods to the shelf (no customer packing).`
             : `Complete packing for ${packRef(job)}?\n\n${lines.length} line${lines.length === 1 ? '' : 's'} packed · ${(job.packPhotos || []).length} photo${(job.packPhotos || []).length === 1 ? '' : 's'}\nSmall parts box: ${packBoxSel.SMALL || '—'}\nPole box: ${packBoxSel.POLE || '—'}`;
+        // BOTH HALVES OR NEITHER. Staging matched poles to small parts on the way IN to finishing;
+        // nothing re-checked them at the box, so one order's parts could ship with another's poles
+        // and every screen would still read correct (Stuart 2026-08-03, WO-SO59176).
+        const custMatch = normalizeKey(packCustomScan);
+        if (job.hasCustomSibling && !job.packCustomMatchedAt) {
+            if (!stagingScanMatches(job, custMatch)) {
+                return alert(`Scan the CUSTOM SHOP label on the poles first.\n\nThe poles for ${packRef(job)} came off the shop order — they are not on the parts list you just packed, so nothing here proves the right ones are in the box.`);
+            }
+        }
         if (!window.confirm(confirmMsg)) return;
         packCompletingRef.current = true;
         try {
-            await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY' } : { packBoxes: packBoxSel }) });
+            await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer',
+                ...(job.hasCustomSibling && !job.packCustomMatchedAt ? { packCustomMatchedAt: Date.now(), packCustomMatchedBy: operator?.name || '', packCustomMatchedScan: custMatch } : {}),
+                ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY' } : { packBoxes: packBoxSel }) });
+            setPackCustomScan('');
             writeLog(isStockPutaway ? `Put away ${packRef(job)} → bin ${bin} (${lines.length} lines)` : `Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
             // PACKED → NETSUITE (Stuart 2026-07-18): transform the NetSuite SO into an Item
             // Fulfillment at status Packed (staged via the outbox — serial, retried, visible in
@@ -2885,7 +2903,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const packed = packJob ? lines.filter(isPacked) : [];
                     const photos = packJob ? (packJob.packPhotos || []) : [];
                     const isStockJob = !!(packJob && packJob.orderType === 'stock');
-                    const canComplete = packJob && toPack.length === 0 && (isStockJob ? !!putawayBin.trim() : photos.length > 0);
+                    // A custom order's poles come off the SHOP order, not this parts list — so
+                    // "every line packed" says nothing about whether the right poles are in the box.
+                    const needsPoleMatch = !!(packJob && packJob.hasCustomSibling && !packJob.packCustomMatchedAt);
+                    const poleMatched = !needsPoleMatch || stagingScanMatches(packJob, packCustomScan);
+                    const canComplete = packJob && toPack.length === 0 && poleMatched && (isStockJob ? !!putawayBin.trim() : photos.length > 0);
                     const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
                     const boxSelect = (slot, label) => (
                         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>
@@ -2955,10 +2977,28 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             {/* WORKSPACE — TO PACK left, physically confirmed pieces move right */}
                             {packJob ? (
                                 <>
+                                    {needsPoleMatch && (
+                                        <div style={{ background: poleMatched ? '#f0f7f1' : '#fdf3f3', border: `1px solid ${poleMatched ? '#3a7d44' : '#d9534f'}`, padding: '14px 16px', marginBottom: '16px' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: poleMatched ? '#3a7d44' : '#d9534f', marginBottom: '6px' }}>
+                                                {poleMatched ? '✓ Both halves match' : '⚠ Match the poles to these small parts'}
+                                            </div>
+                                            <div style={{ fontFamily: theme.sans, fontSize: '0.88rem', color: theme.ink, marginBottom: '10px', lineHeight: 1.5 }}>
+                                                The poles for this order came off the CUSTOM SHOP order — they are not on the parts list you just packed. Scan the shop label on the poles to prove the two halves belong together before the box closes.
+                                            </div>
+                                            <input autoFocus value={packCustomScan} onChange={e => setPackCustomScan(e.target.value)} placeholder="SCAN CUSTOM SHOP LABEL…"
+                                                style={{ width: '100%', maxWidth: '420px', boxSizing: 'border-box', padding: '12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '1rem', outline: 'none' }} />
+                                            {packCustomScan.trim() && !poleMatched && (
+                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', marginTop: '8px' }}>
+                                                    ✖ "{packCustomScan.trim()}" is a different order — these poles do NOT belong with these parts. Find the right ones.
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px', background: theme.paper2, border: `1px solid ${theme.line}`, marginBottom: '16px' }}>
                                         <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{packRef(packJob)}</span>
                                         <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>{packJob.customerName || packJob.clientName || packJob.customer || ''}{packJob.recipe ? ` · ${packJob.recipe}` : ''}</span>
                                         {Number(packJob.packScrap) > 0 && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', border: '1px solid #d9534f', padding: '3px 8px' }}>⚠ {packJob.packScrap} scrap reported</span>}
+                                        {packJob.packCustomMatchedAt && <span title={`Matched by ${packJob.packCustomMatchedBy || ''}`} style={{ fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44', border: '1px solid #3a7d44', padding: '3px 8px' }}>✓ poles matched</span>}
                                         <span style={{ marginLeft: 'auto', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
                                             {isStockJob ? (
                                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>
@@ -3026,7 +3066,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '10px' }}>Recently Packed</div>
                                     {packedRecent.map(j => (
                                         <div key={j.id} style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', borderTop: `1px solid ${theme.paper2}`, fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft }}>
-                                            <span style={{ fontFamily: theme.mono, color: theme.ink }}>{packRef(j)}</span>
+                                            <span onClick={() => setExpandedPacked(expandedPacked === j.id ? null : j.id)} title="Show the lines that were packed" style={{ fontFamily: theme.mono, color: theme.ink, cursor: 'pointer' }}>
+                                                <span style={{ color: theme.inkSoft, marginRight: '6px' }}>{expandedPacked === j.id ? '▾' : '▸'}</span>{packRef(j)}
+                                            </span>
                                             <span>{j.customerName || j.clientName || j.customer || ''}</span>
                                             <OrderStatusChips wo={j} showWho={false} />
                                             <span style={{ fontFamily: theme.mono, fontSize: '10px', color: j.nsIfTran ? '#3a7d44' : theme.inkSoft }}>
@@ -3038,6 +3080,34 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <button onClick={() => pullFulfillment(j)} title="Pull fulfillment status + tracking # from NetSuite" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⤓ Tracking</button>
                                                 {!isQsOrder(j) && <button onClick={() => reportPackScrap(j)} title="Bad pieces found after packing — record scrap" style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>⚠ Scrap</button>}
                                             </span>
+                                            {/* WHAT WAS IN THE BOX, AFTER THE FACT (Stuart 2026-08-03: "we need access here to be
+                                                able to see the order lines again and reprint labels"). A packed order used to be a
+                                                one-line receipt — no way to answer "what shipped?" or replace a label that tore,
+                                                short of hunting the order down on another screen. */}
+                                            {expandedPacked === j.id && (
+                                                <div style={{ flexBasis: '100%', marginTop: '8px', padding: '12px 14px', background: theme.paper, border: `1px solid ${theme.line}` }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Packed lines</span>
+                                                        <span style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                                            <button onClick={() => printZebraLabel(j, 'SMALL_PARTS')} title="Reprint the small-parts / setup label" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Setup Label</button>
+                                                            {j.orderType === 'stock' && <button onClick={() => printZebraLabel(j, 'PUT_AWAY')} title="Reprint the put-away label" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Put-Away</button>}
+                                                            {j.hasCustomSibling && <button onClick={() => printZebraLabel(j, 'CUSTOM_SHOP')} title="Reprint the custom shop label (the poles' label)" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Shop Label</button>}
+                                                        </span>
+                                                    </div>
+                                                    {packLinesOf(j).map(l => (
+                                                        <div key={l.key} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '5px 0', borderBottom: `1px dashed ${theme.line}`, fontSize: '0.85rem' }}>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', fontWeight: 600, color: theme.ink, minWidth: '110px' }}>{l.erp || '—'}</span>
+                                                            <span style={{ flex: 1, color: theme.inkSoft }}>{l.name}</span>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>×{l.qty}</span>
+                                                        </div>
+                                                    ))}
+                                                    {packLinesOf(j).length === 0 && <div style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: theme.inkSoft, fontStyle: 'italic' }}>No line detail recorded on this order.</div>}
+                                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, marginTop: '8px' }}>
+                                                        {j.packCustomMatchedAt ? `poles matched by ${j.packCustomMatchedBy || '—'}` : (j.hasCustomSibling ? 'poles were NOT match-scanned at packing' : '')}
+                                                        {j.putawayBin ? `${j.hasCustomSibling ? ' · ' : ''}bin ${j.putawayBin}` : ''}
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
