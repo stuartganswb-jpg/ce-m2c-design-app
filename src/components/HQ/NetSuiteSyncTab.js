@@ -419,6 +419,27 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 addLog(`⏳ TEMP checkbox (custitem_app_temp) not found in NetSuite — syncing without it. Create the item checkbox field with that exact ID to enable temp-item tracking.`, 'info');
             }
 
+            // HOW MANY SHOULD ARRIVE (Stuart 2026-08-04: "parts not syncing from netsuite even when
+            // tagged"). The CUSTOMER sync has counted first and verified at the end since 2026-07 —
+            // the item sync never did, so a run that stopped short reported success and the missing
+            // items simply never appeared. Same WHERE as the page query, minus the row-multiplying
+            // joins (a single item fans out across BOM components, bins and vendors), so this
+            // counts ITEMS, not rows.
+            let expectedItems = 0;
+            try {
+                const cntQ = `SELECT COUNT(DISTINCT item.id) AS n FROM item
+                    LEFT JOIN ItemSubsidiaryMap ON ItemSubsidiaryMap.item = item.id
+                    WHERE item.custitem_sync_to_cpq = 'T' AND item.isinactive = 'F'
+                    AND item.itemid NOT LIKE 'STD-%'
+                    AND ItemSubsidiaryMap.subsidiary = ${targetSubsidiary}
+                    AND (item.itemtype = 'InvtPart' OR item.itemtype = 'Assembly')${scopeSql('item.itemid', scopeTerms)}`;
+                const cnt = await executeSuiteQL(cntQ);
+                expectedItems = parseInt(cnt.items?.[0]?.n) || 0;
+                addLog(`NetSuite reports ${expectedItems} tagged item(s) for subsidiary ${targetSubsidiary}${scopeTerms.length ? ` in scope ${scopeLabel(scopeTerms)}` : ''}.`, 'info');
+            } catch (cErr) {
+                addLog(`⚠ Couldn't count the tagged items first (${cErr.message || cErr}) — the run will still import, but it can't prove it got everything.`, 'warn');
+            }
+
             let allRawRecords = [];
             let lastId = 0;
             let hasMore = true;
@@ -488,11 +509,23 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 const result = await executeSuiteQL(q);
                 const batch = result.items || [];
                 allRawRecords = allRawRecords.concat(batch);
-                
+
                 if (batch.length > 0) {
+                    const prevLastId = lastId;
                     lastId = batch[batch.length - 1].id;
-                    if (batch.length < 1000) hasMore = false; 
-                    else pageCount++;
+                    // NETSUITE'S OWN ANSWER BEATS OUR GUESS. `batch.length < 1000` assumed the
+                    // response cap is exactly 1000 — any page that came back one row short of it
+                    // ended the loop and silently dropped every item after that id. SuiteQL returns
+                    // `hasMore` on the response; use it when present and keep the row count only as
+                    // the fallback for a response that omits it.
+                    hasMore = (typeof result.hasMore === 'boolean') ? result.hasMore : (batch.length >= 1000);
+                    // A page that doesn't advance the key would loop forever (one item fanning out
+                    // past a full page across its BOM/bin joins). Stop, and say what was lost.
+                    if (hasMore && String(lastId) === String(prevLastId)) {
+                        addLog(`⚠ Item ${lastId} fans out past a full page of joined rows — paging stopped here to avoid a loop. Its BOM/bin detail may be partial and later items were NOT fetched. Re-run scoped to that item.`, 'warn');
+                        hasMore = false;
+                    }
+                    if (hasMore) pageCount++;
                 } else {
                     hasMore = false;
                 }
@@ -544,6 +577,18 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             }
 
             const records = Object.values(uniqueRecordsMap);
+            // The whole point of counting first. A short run must never read as a clean one.
+            if (expectedItems && records.length < expectedItems) {
+                const missing = expectedItems - records.length;
+                addLog(`⚠️ TRUNCATED: NetSuite has ${expectedItems} tagged item(s), this run only pulled ${records.length} — ${missing} MISSING. They will not appear in the library. Re-run; if it persists, sync a narrower item # range and tell Claude.`, 'warn');
+                if (!window.confirm(`⚠ This sync came back SHORT.\n\nNetSuite: ${expectedItems} tagged items\nDownloaded: ${records.length}\nMissing: ${missing}\n\nWriting anyway will update the ${records.length} that DID arrive and silently leave the rest as they are.\n\nOK = write what arrived · Cancel = stop and re-run`)) {
+                    addLog('Sync stopped by operator — nothing was written.', 'warn');
+                    setIsSyncing(false);
+                    return;
+                }
+            } else if (expectedItems) {
+                addLog(`✓ All ${records.length} tagged item(s) accounted for.`, 'success');
+            }
             let successCount = 0;
             let stockedCount = 0, inHouseCount = 0, oldCount = 0, tempCount = 0;
 
