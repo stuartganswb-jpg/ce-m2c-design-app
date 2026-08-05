@@ -36,7 +36,11 @@ const finial = [
     opt({ optId: 'RAD-L', partId: 'p-rad', partName: 'H1-2TRVRAD', position: 'LEFT', trvSetup: 'DOUBLE' }),
     opt({ optId: 'MTR-L', partId: 'p-mtr', partName: 'H1-2TRVMTR', position: 'LEFT', trvSetup: 'SINGLE', projInches: '4.625', endTreatment: 'MITER_RETURN' }),
     opt({ optId: 'RA-R', partId: 'p-ra', partName: 'H1-2TRVSRA', position: 'RIGHT', trvSetup: 'SINGLE', projInches: '3.625' }),
+    // The plug and the pulley are each pinned at BOTH ends — manual gets two plugs, motorised two
+    // pulleys. That is the either/or the Drive step has to collapse into one question.
     opt({ optId: 'PLUG-L', partId: 'p-plug', partName: 'H1-2TRVPLUG', position: 'LEFT', traverseRole: 'TRV_END', driveType: 'MANUAL' }),
+    opt({ optId: 'PLUG-R', partId: 'p-plug', partName: 'H1-2TRVPLUG', position: 'RIGHT', traverseRole: 'TRV_END', driveType: 'MANUAL' }),
+    opt({ optId: 'PULL-L', partId: 'p-pull', partName: 'HSOM-04', position: 'LEFT', traverseRole: 'TRV_END', driveType: 'MOTORIZED' }),
     opt({ optId: 'PULL-R', partId: 'p-pull', partName: 'HSOM-04', position: 'RIGHT', traverseRole: 'TRV_END', driveType: 'MOTORIZED' }),
 ];
 
@@ -87,6 +91,7 @@ test('step order matches the flow Stuart described', () => {
         'Fascia Material',
         'Fascia Length',
         'Single or Double',
+        'Traverse Drive',
         'Bracket Projection',
         'Track',
         'Left End Treatment',
@@ -113,19 +118,31 @@ test('the Track step exists — proving the OTHER pool now reaches the generator
     assert.equal(track.styleOptions.length, 2); // single + double instances, filtered at runtime by setup
 });
 
-test('the drive is the track sub-choice, from real end parts', () => {
+test('the drive is ITS OWN step — an either/or for the order, never a per-track sub-choice', () => {
     const { steps } = run();
     const track = steps.find(s => s.title === 'Track');
-    assert.equal(track.subLabel, 'Traverse End');
-    assert.deepEqual(track.subOptions.map(o => o.driveType).sort(), ['MANUAL', 'MOTORIZED']);
+    assert.equal(track.subOptions, undefined, 'drive must not hang off the track');
+    const drive = steps.find(s => s.stepRole === 'TRV_DRIVE');
+    assert.ok(drive, 'no Drive step');
+    // exactly two answers, no combination — one per drive, not one per end
+    assert.deepEqual(drive.styleOptions.map(o => o.driveType), ['MOTORIZED', 'MANUAL']);
+    assert.deepEqual(drive.styleOptions.map(o => o.partName), ['HSOM-04', 'H1-2TRVPLUG']);
 });
 
-test('one drive only → no question, but the end still gets built', () => {
+test('one answer lights BOTH ends — the plug is pinned left and right', () => {
+    const { steps } = run();
+    const drive = steps.find(s => s.stepRole === 'TRV_DRIVE');
+    const manual = drive.styleOptions.find(o => o.driveType === 'MANUAL');
+    assert.deepEqual(manual.targetNode.split(', ').sort(), ['N-PLUG-L', 'N-PLUG-R']);
+    assert.deepEqual(drive.geometryMap[manual.optId], manual.targetNode);
+});
+
+test('one drive only → no question, but the ends still get built', () => {
     const manualOnly = finial.filter(o => o.driveType !== 'MOTORIZED');
     const { steps } = run({ finial: manualOnly });
+    assert.equal(steps.some(s => s.stepRole === 'TRV_DRIVE'), false);
     const track = steps.find(s => s.title === 'Track');
-    assert.equal(track.subOptions, undefined);
-    assert.deepEqual(track.includedParts.map(p => p.partName), ['H1-2TRVPLUG']);
+    assert.deepEqual(track.includedParts.map(p => p.partName), ['H1-2TRVPLUG', 'H1-2TRVPLUG']);
 });
 
 test('setup gates projection: the question is skipped on DOUBLE', () => {

@@ -11,7 +11,7 @@
 //             just tag them the ends?" — yes). Tagging an end as TRACK put it in the track picker
 //             beside the actual extrusion, and left the motorised/manual choice as a synthetic
 //             label with no part behind it: nothing to bill, nothing to render. As its own role the
-//             ends BECOME the track's sub-choice, so picking one picks a real part.
+//             ends BECOME the answer to the Drive step, so picking one picks a real part.
 //   CARRIER   the pieces that ride inside. Never chosen, never changed, always present — they were
 //             being tagged HIDE, which is the opposite of what they need: hide means "never render".
 //
@@ -156,9 +156,10 @@ export function drivesOffered(choices) {
     return tags.length ? DRIVE_TYPES.filter(d => tags.includes(d)) : ['MANUAL'];
 }
 
-// The traverse ends, split by drive. When both drives are present these are the TRACK step's
-// sub-choice; when only one is, there is nothing to ask and the single end must still be BUILT —
-// so the caller rides it as an included part rather than dropping it. A real part that vanishes
+// The traverse ends, split by drive. When both drives are present they ARE the Drive step — an
+// either/or for the whole order (Stuart 2026-08-05: "no combination"), not a per-track sub-choice.
+// When only one drive exists there is nothing to ask and the single end must still be BUILT — so
+// the caller rides it as an included part rather than dropping it. A real part that vanishes
 // because it had no question attached is the failure worth designing against.
 export function traverseEnds(choices) {
     const ends = (choices || []).filter(c => traverseRoleOf(c) === 'TRV_END' && !isAlwaysShown(c));

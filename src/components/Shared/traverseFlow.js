@@ -24,8 +24,16 @@
 // 6. So Single-or-Double is asked first, and on DOUBLE the projection question has no content and
 // is not asked at all.
 
+// THE DRIVE IS A PROPERTY OF THE ORDER, NOT OF A TRACK (Stuart 2026-08-05: "they must pick between
+// the two... it is an either or, either manual or motorized ends, no combination. this question can
+// come at any point the order is not really important"). It was built as a SUB-choice hanging off
+// the Track step on the theory that a two-track system could be motorised on one and manual on the
+// other. It cannot. One question, two answers, applied to the whole system — and the answer is what
+// the cut list reads: a motorised track is cut −2" against the fascia where a manual one is −0.5",
+// and the F-clip −3" against −1" (see TRAVERSE_DEDUCTIONS).
+
 import {
-    offeredChoices, dedupeByPart, traverseRoleOf, traverseEnds,
+    offeredChoices, dedupeByPart, traverseRoleOf, traverseEnds, driveTypeOf,
     needsSetupStep, setupsOffered, isRider,
 } from './traverseTags';
 
@@ -89,7 +97,13 @@ export function buildTraverseFlow({
     // Track is NOT deduped: the single track and the double's second track are the same PART at
     // different nodes, separated only by their setup tag. Merging them would erase that distinction.
     const track = offeredChoices(allOpts, { role: 'TRACK' });
-    const { ends, isChoice: driveIsChoice } = traverseEnds(allOpts);
+    const { ends, drives, isChoice: driveIsChoice } = traverseEnds(allOpts);
+    // ONE OPTION PER DRIVE, owning both ends. The same plug is pinned at LEFT and at RIGHT, so
+    // deduping by part and merging the nodes turns "a plug on each end" into a single answer —
+    // which is what an either/or question needs. Two DIFFERENT parts on one drive would stay two
+    // options rather than silently losing one: visible and diagnosable beats quietly wrong.
+    const endsForDrive = (d) => dedupeByPart(ends.filter(e => driveTypeOf(e) === d))
+        .map(o => ({ ...o, driveType: d }));
 
     // ── Never a question, always built ───────────────────────────────────────────────────────────
     // Carriers ride inside the track; the F-clip attaches the track to the fascia. Both are cut and
@@ -158,7 +172,25 @@ export function buildTraverseFlow({
         geometryMap: {},
     });
 
-    // ── 3. BRACKET PROJECTION — gated by the setup answer ────────────────────────────────────────
+    // ── 3. DRIVE — motorised or manual, for the whole order ──────────────────────────────────────
+    // Its position in the flow genuinely does not matter (Stuart: "this question can come at any
+    // point"); it sits beside Single-or-Double because both are system-level either/ors that gate
+    // parts further down, and answering them together reads better than scattering them.
+    //
+    // THE ENDS ARE REAL PARTS ("should i just tag them the ends?"). As synthetic Motorized/Manual
+    // labels they had no partId — nothing to bill and nothing to render. Tagged trv:end + their
+    // drive, the ends ARE the answer, so picking one picks an actual part.
+    if (driveIsChoice) {
+        const driveOpts = drives.flatMap(endsForDrive);
+        add({
+            id: 'TRV-DRIVE', title: 'Traverse Drive', type: 'STYLE_SWAP', stepRole: 'TRV_DRIVE',
+            partHandling: 'Custom', required: true, hideQty: true,
+            finishDataSource: 'master_finishes', useClientPricing: true,
+            styleOptions: driveOpts, geometryMap: geom(driveOpts),
+        });
+    }
+
+    // ── 4. BRACKET PROJECTION — gated by the setup answer ────────────────────────────────────────
     // Every DOUBLE part is proj:any, so on a double this question has nothing to ask. trvSetupOnly
     // tells CPQ to skip the step entirely when DOUBLE is chosen (see CPQTab's disabled-step pass);
     // with no setup step at all it is simply always asked.
@@ -173,23 +205,17 @@ export function buildTraverseFlow({
         })),
     });
 
-    // ── 4. TRACK, with the DRIVE as its sub-choice ───────────────────────────────────────────────
-    // Stuart 2026-08-04: "on each track we choose between the motorized and manual traverse ends".
-    // The drive belongs TO a track, not to the order — same shape as a backplate hanging off its
-    // bracket, so a two-track system can be motorised on one and manual on the other.
-    //
-    // THE ENDS ARE REAL PARTS ("should i just tag them the ends?"). As synthetic Motorized/Manual
-    // labels they had no partId — nothing to bill and nothing to render. Tagged trv:end + their
-    // drive, the ends BECOME the sub-choice, so picking one picks an actual part.
+    // ── 5. TRACK — the extrusion, chosen for its finish ──────────────────────────────────────────
+    // Its CUT LENGTH depends on the drive answered above (−0.5" manual, −2" motorised against the
+    // fascia), but that is a fabrication consequence, not a second question.
     if (track.length) add({
         title: 'Track', type: 'STYLE_SWAP', partHandling: 'Custom', required: true, hideQty: true,
         finishDataSource: 'master_finishes', useClientPricing: true, stepRole: 'TRACK',
         styleOptions: track, geometryMap: geom(track),
-        ...(driveIsChoice ? { subLabel: 'Traverse End', subOptions: ends, subGeometryMap: geom(ends) } : {}),
         ...(endInc ? { includedParts: endInc } : {}),
     });
 
-    // ── 5. ENDS AND BRACKETS ─────────────────────────────────────────────────────────────────────
+    // ── 6. ENDS AND BRACKETS ─────────────────────────────────────────────────────────────────────
     // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that
     // end's outer bracket step, so each end is settled first and no bracket is picked that then
     // disappears. Traverse has no LEFT/RIGHT pole segments, so no end-pole geometry rides along.
@@ -206,7 +232,7 @@ export function buildTraverseFlow({
         qtyHelperText: 'Number of rings', styleOptions: ringOpts, geometryMap: geom(ringOpts),
     });
 
-    // ── 6. FEES — same as the pole flow ──────────────────────────────────────────────────────────
+    // ── 7. FEES — same as the pole flow ──────────────────────────────────────────────────────────
     add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
     add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
 

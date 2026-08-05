@@ -98,7 +98,10 @@ is free. Traverse is the first flow where a customer answer removes options.
   never runs a line of the pole path. 13 steps → 9.
 - **`groupPlacements('OTHER')` is now collected** and consumed only by the traverse generator, so
   the tracks/carriers/nuts finally arrive. No re-homing by hand needed (this was §B4 over §A1).
-- **Order is fascia → length → setup → projection → track → ends → brackets → fees.**
+- **Order is fascia → length → setup → drive → projection → track → ends → brackets → fees.**
+- **The drive is its own step**, not a sub-choice of the track (Stuart 2026-08-05: "either manual or
+  motorized ends, no combination"). One option per drive, owning both ends' geometry — the plug is
+  pinned left and right, so one answer lights both. `stepRole: 'TRV_DRIVE'`.
 - **Projection is skipped on DOUBLE** via `trvSetupOnly: 'SINGLE'` + a matching disable rule in
   `CPQTab.js`'s existing disabled-steps effect.
 - **15 node tests** built from the real tag dump: `sh scripts/run-traverse-tests.sh`.
@@ -156,8 +159,11 @@ reading first, then tag.
 
 ### D. Not in this pass
 
-- Fascia length never reaches `traverseCutLength()` — tested and correct, nothing calls it. Needs
-  the Fascia Length step to carry a dimension and the deductions to have a home on the assembly.
+- **THE CUT LIST — the point of the drive question.** `traverseCutLength()` is written and tested and
+  **nothing calls it**. Fascia as ordered; track −0.5" manual / −2" motorised; F-clip −1" / −3". Now
+  that the drive is answered once for the order, both inputs exist — the missing pieces are the
+  Fascia Length step carrying its dimension through, and a decision about **where the cut list is
+  surfaced** (the traveller? the BOM? the work order?). That destination is Stuart's call.
 - F-clip "hidden in CPQ, visible on the shop floor" — that state does not exist; needs a third
   visibility state, deliberately built.
 - Pricing. Stuart: "$0.00 doesn't concern me yet, I still need to assign pricing."

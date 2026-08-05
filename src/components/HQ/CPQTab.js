@@ -794,7 +794,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
                       const mainOpt = step.styleOptions.find(o => (o.optId || o.partId) === next[step.id]);
                       const loc = mainOpt?.location;
-                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step, { isSub: true }));
+                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step));
                       const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
                       const sid = firstGeom(cands.length ? cands : pool0, step.subGeometryMap);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
@@ -887,8 +887,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === dynamicConfigParams[s.id]);
               if (o?.trvSetup) setup = String(o.trvSetup).toUpperCase();
           }
-          if (s.stepRole === 'TRACK') {
-              const o = (s.subOptions || []).find(x => (x.optId || x.partId) === dynamicConfigParams[`${s.id}__sub`]);
+          // THE DRIVE IS ITS OWN STEP (Stuart 2026-08-05: "it is an either or, either manual or
+          // motorized ends, no combination"). It used to be read off the Track step's sub-choice,
+          // on the theory that each track could be driven differently — it cannot, so the whole
+          // order answers once.
+          if (s.stepRole === 'TRV_DRIVE') {
+              const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === dynamicConfigParams[s.id]);
               if (o?.driveType) drive = String(o.driveType).toUpperCase();
           }
       });
@@ -898,9 +902,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // A SELECTOR NEVER FILTERS ITSELF. The Single-or-Double step's own options carry trvSetup, and
   // the track's traverse-end sub-options carry driveType — filtering those by the current answer
   // would hide every alternative the moment one was picked, leaving a step that cannot be changed.
-  const trvOkFor = (step, { isSub = false } = {}) => {
+  const trvOkFor = (step) => {
       const isSetupSelector = step?.stepRole === 'TRV_SETUP';
-      const isDriveSelector = isSub && step?.stepRole === 'TRACK';
+      const isDriveSelector = step?.stepRole === 'TRV_DRIVE';
       return (o) => (isSetupSelector || setupAllows(o, trvSelection.setup))
           && (isDriveSelector || driveAllows(o, trvSelection.drive));
   };
@@ -917,7 +921,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const main = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
               if (main && !trvOkFor(st)(main)) { delete next[st.id]; changed = true; }
               const sub = (st.subOptions || []).find(x => (x.optId || x.partId) === next[`${st.id}__sub`]);
-              if (sub && !trvOkFor(st, { isSub: true })(sub)) { delete next[`${st.id}__sub`]; changed = true; }
+              if (sub && !trvOkFor(st)(sub)) { delete next[`${st.id}__sub`]; changed = true; }
           });
           return changed ? next : prev;
       });
@@ -2060,7 +2064,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (step && Array.isArray(step.subOptions) && step.subOptions.length) {
           const mainOpt = (step.styleOptions || []).find(o => (o.optId || o.partId) === value);
           const loc = mainOpt?.location;
-          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step, { isSub: true }));
+          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step));
           const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
           const pick = cands.find(o => o.targetNode) || cands[0];
           next[`${stepId}__sub`] = pick ? pick.optId : '';
@@ -3153,7 +3157,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // matching plates show (e.g. wall plates when a wall arm is selected).
                               const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
                               const selLoc = selMainOpt?.location;
-                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(trvOkFor(currentStep, { isSub: true })).filter(o => !selLoc || !o.location || o.location === selLoc);
+                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(trvOkFor(currentStep)).filter(o => !selLoc || !o.location || o.location === selLoc);
                               // Return-aware scoping: the RETURN backplates show while this side's End
                               // Treatment is a return OR the selected bracket is flagged usesReturnPlates
                               // (e.g. In Line brackets share the return plates); regular plates otherwise —
