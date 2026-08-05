@@ -78,14 +78,32 @@ export function setupsOffered(choices) {
 // A double pins the SAME rod in the front cluster AND the rear one, so the material picker listed
 // every material twice. Dedupe on the part, keeping the first — a material chooser is asking WHICH
 // MATERIAL, not which cluster it happened to be pinned in.
+// ⚠ DEDUPE MUST MERGE THE GEOMETRY, NOT DISCARD IT (Stuart 2026-08-04: "when H1-2RCTAR is selected
+// the fascia disappears").
+//
+// H1-2RCTAR is pinned in BOTH fascia clusters — SHORT-ROD-CENTER and NEW-SLOT-POLE-CENTER — and each
+// copy carries its OWN nodes. Keeping the first and dropping the second meant selecting that
+// material lit one cluster's node and left the other's controlled by nothing, so the fascia the eye
+// was looking for never appeared. H1-2RCTWR happened to survive because its surviving copy was the
+// one holding the visible geometry; that is luck, not correctness, and it is exactly why it looked
+// random.
+//
+// So the duplicates COLLAPSE INTO ONE OPTION THAT OWNS EVERY COPY'S NODES. One material, listed
+// once, rendering all of itself.
 export function dedupeByPart(choices) {
-    const seen = new Set();
-    return (choices || []).filter(c => {
+    const byKey = new Map();
+    const out = [];
+    (choices || []).forEach(c => {
         const k = String((c && (c.partId || c.optId)) || '').toUpperCase();
-        if (!k || seen.has(k)) return !k;
-        seen.add(k);
-        return true;
+        if (!k) { out.push(c); return; }              // unidentifiable: never merged away
+        const hit = byKey.get(k);
+        if (!hit) { const copy = { ...c }; byKey.set(k, copy); out.push(copy); return; }
+        const nodes = [hit.targetNode, c.targetNode]
+            .flatMap(t => String(t || '').split(','))
+            .map(x => x.trim()).filter(Boolean);
+        hit.targetNode = [...new Set(nodes)].join(', ');
     });
+    return out;
 }
 
 // Parts that are never a customer choice: they ride along and get built. Excluding them is what
