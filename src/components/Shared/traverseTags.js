@@ -60,7 +60,14 @@ export function setupAllows(choice, setup) {
     // the BOM. Flipping the default to SINGLE would otherwise have deleted the fascia from every
     // double, so these roles are exempt rather than needing a BOTH tag on every one of them.
     const role = traverseRoleOf(choice);
-    if (role === 'FASCIA' || isRider(choice)) return true;
+    // THE TRACK IN THE PICKER IS THE BASE TRACK, and a double has it too. The generator has already
+    // partitioned the tracks: a setup:DOUBLE pin is the ADDED track and never becomes an option at
+    // all (it rides on the DOUBLE answer's geometry), so whatever survives into the Track step is
+    // present in every configuration. Filtering it by setup removed the front track from its own
+    // one-option picker the moment DOUBLE was chosen — the pool emptied, the selection was dropped,
+    // and the front vanished (Stuart 2026-08-05: "switch to double and rear now appears but front
+    // goes away"). Exempt by role for the same reason the fascia is: shared by definition.
+    if (role === 'FASCIA' || role === 'TRACK' || isRider(choice)) return true;
     const tag = setupOf(choice);
     return !tag || tag === 'BOTH' || tag === want;   // untagged rides both setups
 }

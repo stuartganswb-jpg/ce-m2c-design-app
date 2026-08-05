@@ -939,11 +939,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // so the arms vanished. The double arm is tagged, and is sitting in the list: hand
               // the step its new default rather than an empty slot. Only when no option survives
               // does the selection actually go away.
+              const pool = (st.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(st));
               const main = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
               if (main && !trvOkFor(st)(main)) {
-                  const repl = defaultOptionFor((st.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(st)), st.geometryMap, st.defaultOptId);
+                  const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
                   if (repl) next[st.id] = repl; else delete next[st.id];
                   changed = true;
+              } else if (!next[st.id] && st.required && st.type === 'STYLE_SWAP' && pool.length) {
+                  // AND HEAL WHAT AN EARLIER ANSWER EMPTIED. Clearing runs on an INVALID selection;
+                  // it has nothing to say about a step already sitting empty. So a step whose pool
+                  // emptied under one answer stayed unselected forever once the pool came back —
+                  // switch to Double, lose the track, switch back to Single and it never returns
+                  // (Stuart 2026-08-05: "try to switch back and both disappear"). A REQUIRED step
+                  // with valid options must never sit empty. Optional steps are left alone, so a
+                  // deliberately-cleared End Treatment stays cleared.
+                  const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
+                  if (repl) { next[st.id] = repl; changed = true; }
               }
               const sub = (st.subOptions || []).find(x => (x.optId || x.partId) === next[`${st.id}__sub`]);
               if (sub && !trvOkFor(st)(sub)) {

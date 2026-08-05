@@ -128,6 +128,18 @@ test('SINGLE is the default — the standard build, not the one that happens to 
     assert.equal(setup.styleOptions.find(o => o.trvSetup === 'SINGLE').targetNode, '');
 });
 
+test('the base track survives BOTH setups — it is never filtered out of its own picker', async () => {
+    const { setupAllows } = await import('./traverseTags.mjs');
+    const base = other.find(o => o.optId === 'TRK-S');   // tagged setup: single
+    assert.equal(setupAllows(base, 'SINGLE'), true);
+    // a double HAS the base track too. Filtering it here emptied the one-option Track picker the
+    // moment DOUBLE was chosen, and the front track vanished.
+    assert.equal(setupAllows(base, 'DOUBLE'), true);
+    // brackets are still filtered normally — the exemption is by ROLE, not blanket
+    const dblBracket = brackets.find(o => o.trvSetup === 'DOUBLE');
+    assert.equal(setupAllows(dblBracket, 'SINGLE'), false);
+});
+
 test('a DOUBLE pin on the SAME mesh as the base track adds nothing — it never hides the single', () => {
     // the duplicate-pinning pattern: both track pins pointing at one mesh. Left alone, the AND
     // across steps would hide the only track whenever SINGLE was chosen.
