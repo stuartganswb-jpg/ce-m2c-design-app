@@ -1216,6 +1216,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           });
       });
 
+      // A TRAVERSE STEP THAT ONLY EXISTS FOR ONE SETUP (Stuart 2026-08-04). Every DOUBLE part is
+      // tagged proj:any — only the SINGLE brackets carry 3-5/8 / 4-5/8 / 6 — so on a double the
+      // Bracket Projection question has nothing to ask. The traverse generator marks that step
+      // trvSetupOnly:'SINGLE' and it drops out the moment DOUBLE is chosen. Disabling rather than
+      // hiding reuses the machinery already here: nav skips it and the effect below clears its
+      // selection, so it leaves the price, the BOM and the render together. Pole flows never carry
+      // the field, so nothing changes for them.
+      if (trvSelection.setup) (activeFlow?.steps || []).forEach(step => {
+          if (!step.trvSetupOnly || String(step.trvSetupOnly).toUpperCase() === trvSelection.setup) return;
+          if (!newFlags.disabledSteps.includes(step.title)) newFlags.disabledSteps.push(step.title);
+      });
+
       const selectedItemIds = Object.values(dynamicConfigParams);
 
       const allParts = [...libraryParts, ...liveAssemblies];
@@ -1288,7 +1300,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       });
 
       setEngineFlags(newFlags);
-  }, [dynamicConfigParams, cpqRules, libraryParts, liveAssemblies, dynamicAssets, globalFinishes, outsourceFinishes, activeFlow]);
+  }, [dynamicConfigParams, cpqRules, libraryParts, liveAssemblies, dynamicAssets, globalFinishes, outsourceFinishes, activeFlow, trvSelection.setup]);
 
   // A step disabled by a rule (e.g. an end-arm bracket that replaces a finial / miter return) must
   // contribute NOTHING — clear its selection, sub-pick, finish, and qty so it drops out of the price,

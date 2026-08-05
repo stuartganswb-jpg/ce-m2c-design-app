@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { traverseEnds, offeredChoices, traverseRoleOf, dedupeByPart, isRider, needsSetupStep, setupsOffered } from '../Shared/traverseTags';
+import { isRider } from '../Shared/traverseTags';
+import { isTraverseAssembly, buildTraverseFlow } from '../Shared/traverseFlow';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from "firebase/functions";
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDocs, query, where, updateDoc, orderBy, limit, writeBatch } from "firebase/firestore";
@@ -1174,6 +1175,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       let brackets = groupPlacements('BRACKET');
       let backplates = groupPlacements('BACKPLATE');
       let rings = groupPlacements('RING');
+      // 🆕 OTHER was never collected — five categories reached the generator (POLE/FINIAL/BRACKET/
+      // BACKPLATE/RING) and nothing read OTHER. Stuart's traverse tracks, carriers and nuts are all
+      // pinned on OTHER clusters, correctly tagged and completely invisible: no Track step, no drive
+      // question, no carriers in the BOM. Only the TRAVERSE generator consumes this pool, so a pole
+      // flow is unchanged — an OTHER cluster with no trv: role still reaches nothing.
+      const other = groupPlacements('OTHER');
 
       // ── 🔍 GENERATE-TIME REVIEW GATE (Stuart 2026-07-24: explicit control over heuristics) ──
       // For codeRx families (the ones the union runs on — H2 today; H1 has no codeRx and
@@ -1436,119 +1443,62 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           });
       };
 
-      // ── TRAVERSE (Stuart 2026-08-03/04) ────────────────────────────────────────────────────────
-      // A traverse system is a different grammar, so it gets its own steps AHEAD of the pole ones:
-      // fascia first, then the track, then the drive. Every one of these is gated on tagged pins
-      // existing, so a pole assembly emits exactly what it emitted before — nothing here runs.
-      const allOpts = [...pole, ...finial, ...brackets, ...backplates, ...rings, ...riderPool];
-      let trvLeadSteps = 0;
-      const trvAll = allOpts.filter(o => traverseRoleOf(o));
-      const isTraverse = trvAll.length > 0;
+      // ── TRAVERSE HAS ITS OWN GENERATOR (Stuart 2026-08-04) ───────────────────────────────────────
+      // "traverse generator should be saved as its own, since it is very different... i do not think
+      // we need to try and make all the code work for both."
+      //
+      // The two grammars were sharing one function and the fascia paid for it: it is pinned on POLE
+      // clusters, so the pole path below collected it a SECOND time and emitted a phantom
+      // "Pole / Rod Material" + "Pole Length" pair carrying the SAME geometry nodes as the Fascia
+      // step, each with its own selection. That is why the aluminium fascia rendered as disconnected
+      // bars — two steps lighting two different materials' nodes at once — and why the material
+      // picker showed 4 choices where there are 2.
+      //
+      // Forked, a traverse assembly never runs a line of the pole path, and the pole path is exactly
+      // what it was before traverse existed. Shared/traverseFlow.js owns which steps exist and in
+      // what order; the low-level helpers below (add / addPerPosition / addEndTreatment / geom) stay
+      // shared because turning options into steps is the same job in both worlds.
+      const allOpts = [...pole, ...finial, ...brackets, ...backplates, ...rings, ...riderPool, ...other];
+      const isTraverse = isTraverseAssembly(allOpts);
       if (isTraverse) {
-          // ONE MATERIAL, LISTED ONCE. A double pins the SAME rod in the front cluster AND the
-          // rear one, so the picker was offering every material twice (Stuart 2026-08-04:
-          // "currently showing 4 choices should just be 2").
-          const fascia = dedupeByPart(offeredChoices(allOpts, { role: 'FASCIA' }));
-          const track = offeredChoices(allOpts, { role: 'TRACK' });
-          // NEVER A QUESTION, ALWAYS BUILT: carriers ride inside, and the F-CLIP attaches the track
-          // to the fascia. Both are cut/consumed per configuration, neither is ever chosen.
-          const riders = riderPool.filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o)) || o.alwaysShown);
-          const riderInc = riders.length
-              ? riders.map(o => ({ partId: o.partId, partName: o.partName, qty: 1, traverseRole: traverseRoleOf(o) }))
-              : null;
-
-          // ── 1. FASCIA — BUILT EXACTLY LIKE THE POLE (Stuart 2026-08-04: "the fascia step needs to
-          //    act like a pole step... first choose from material there are wood and metal fascia
-          //    loaded, then based off this selection we will choose the appropriate finish and enter
-          //    length"). Same two shapes the pole uses, for the same reason: with SEVERAL materials
-          //    the material step owns the finish (each option carries its own scoped finish list) and
-          //    the length step is dimensions only; with ONE material there is nothing to choose, so
-          //    finish and length combine into a single step.
-          const fasciaNodes = fascia.map(o => o.targetNode).filter(Boolean).join(', ');
-          if (fascia.length > 1) {
-              add({ title: 'Fascia Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: fascia, geometryMap: geom(fascia) });
-              add({ title: 'Fascia Length', type: 'DIMENSIONS', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: fasciaNodes, ...(riderInc ? { includedParts: riderInc } : {}) });
-          } else if (fascia.length === 1) {
-              add({ title: 'Fascia Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: fasciaNodes, ...(fascia[0]?.partId ? { linkedItemId: fascia[0].partId } : {}), ...(riderInc ? { includedParts: riderInc } : {}) });
-          }
-
-          // ── 2. TRACK, with the DRIVE as its SUB-CHOICE (Stuart 2026-08-04: "on each track we
-          //    choose between the motorized and manual traverse ends"). The drive belongs TO a
-          //    track, not to the order — same shape as a backplate hanging off its bracket, so a
-          //    two-track system can be motorised on one and manual on the other. A standalone step
-          //    could not have expressed that.
-          if (track.length) {
-              // THE ENDS ARE REAL PARTS (Stuart 2026-08-04: "should i just tag them the ends?").
-              // They were synthetic Motorized/Manual labels with no partId — nothing to bill and
-              // nothing to render. Tagged trv: end + their drive, the ENDS themselves become the
-              // track's sub-choice, so picking one picks an actual part.
-              const { ends, isChoice } = traverseEnds(allOpts);
-              // Only one drive → nothing to ask, but the end still has to be BUILT. It rides as an
-              // included part instead of vanishing for want of a question.
-              const endInc = (!isChoice && ends.length)
-                  ? ends.map(o => ({ partId: o.partId, partName: o.partName, qty: 1, traverseRole: 'TRV_END' }))
-                  : null;
-              const inc = [...(riderInc || []), ...(endInc || []), ...(!fascia.length && riderInc ? [] : [])];
-              add({
-                  title: 'Track', type: 'STYLE_SWAP', partHandling: 'Custom', required: true, hideQty: true,
-                  finishDataSource: 'master_finishes', useClientPricing: true, stepRole: 'TRACK',
-                  styleOptions: track, geometryMap: geom(track),
-                  ...(isChoice ? { subLabel: 'Traverse End', subOptions: ends, subGeometryMap: geom(ends) } : {}),
-                  ...((fascia.length ? (endInc || []) : inc).length ? { includedParts: fascia.length ? endInc : inc } : {}),
-              });
-          }
-
-          // ── 2b. SINGLE OR DOUBLE — asked right after the fascia, because it decides which
-          //    tracks and which brackets exist. Only when the assembly carries BOTH.
-          if (needsSetupStep(allOpts)) add({
-              id: 'TRV-SETUP', title: 'Single or Double', type: 'STYLE_SWAP', stepRole: 'TRV_SETUP',
-              partHandling: 'Small Parts', required: true, hideQty: true, useClientPricing: true,
-              styleOptions: setupsOffered(allOpts).map(t => ({
-                  optId: `OPT-SETUP-${t}`, partId: '', partName: t === 'DOUBLE' ? 'Double (two tracks)' : 'Single (one track)',
-                  trvSetup: t, price: 0, targetNode: '',
-              })),
-              geometryMap: {},
+          const trv = buildTraverseFlow({
+              pole, finial, brackets, backplates, rings, other,
+              add, addPerPosition, addEndTreatment, geom, takeIncluded,
+              bay, singleMode, sizeFamily: null,
           });
+          groupFields.impliedProjInches = trv.impliedProjInches;
+      } else {
 
-          // ── 3. RINGS ONLY ON THE FRONT POLE. On a traverse system the rings belong to the
-          //    decorative front pole, never to the track — the carriers do that job inside it.
-          rings = rings.filter(o => String(o.position || '').toUpperCase() === 'FRONT');
-          trvLeadSteps = steps.length;   // everything above stays at the front of the flow
+          // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
+          // material the choice is fixed, so it folds into the combined Length & Finish step below.
+          if (centerPole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: centerPole, geometryMap: geom(centerPole) });
+          // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
+          // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +
+          // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
+          const poleInc = takeIncluded(''); // shared/untagged hidden accessories ride the always-present pole step
+          // linkedItemId = the pole ITEM (single-material case): this step's selection is the FINISH, so
+          // without it the pricing engine has no physical part to price the per-foot qty against.
+          // Multi-material flows (Flat Iron steel/wood; Fabricut once wood/acrylic land): the MATERIAL
+          // step above owns the finish (per-option scoped lists), so the Length step is dimensions +
+          // footage ONLY — no second finish chooser (type DIMENSIONS carries no dataSource and passes
+          // the required-gate without a selection). Single-material keeps the combined Length & Finish
+          // step exactly as before.
+          add(centerPole.length > 1
+              ? { title: bay.poleTitle.replace(/ & Finish/i, ''), type: 'DIMENSIONS', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) }
+              : { title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
+          // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that end's
+          // outer bracket step (returnHidesBracket), so the customer settles each end first and never picks
+          // a bracket that then disappears. It's ALWAYS emitted — even with 0 finials it carries the Mitered
+          // / Bent / Flush return options that render the end shape and feed the fab math.
+          addEndTreatment(finial, endPole);
+          // Part-chooser steps are emitted only when they actually have options — 0-choice steps are skipped.
+          addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate', stepRole: 'BRACKET' }); // adds nothing if brackets is empty
+          if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
+          if (rings.length) add({ title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts', finishDataSource: 'master_finishes', useClientPricing: true, qtyHelperText: 'Number of rings', styleOptions: rings, geometryMap: geom(rings) });
+          // Fee steps — always kept, as-is.
+          add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
+          add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
       }
-
-      // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
-      // material the choice is fixed, so it folds into the combined Length & Finish step below.
-      if (centerPole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: centerPole, geometryMap: geom(centerPole) });
-      // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
-      // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +
-      // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
-      const poleInc = takeIncluded(''); // shared/untagged hidden accessories ride the always-present pole step
-      // linkedItemId = the pole ITEM (single-material case): this step's selection is the FINISH, so
-      // without it the pricing engine has no physical part to price the per-foot qty against.
-      // Multi-material flows (Flat Iron steel/wood; Fabricut once wood/acrylic land): the MATERIAL
-      // step above owns the finish (per-option scoped lists), so the Length step is dimensions +
-      // footage ONLY — no second finish chooser (type DIMENSIONS carries no dataSource and passes
-      // the required-gate without a selection). Single-material keeps the combined Length & Finish
-      // step exactly as before.
-      // ON A TRAVERSE ASSEMBLY THE FASCIA IS THE POLE STEP. The pole step is otherwise ALWAYS
-      // emitted (it carries the core geometry and the fab maths) — but a traverse system with no
-      // pole pins would get an empty "Length & Finish" asking for a rod that does not exist. Skip
-      // it only in that exact case: a traverse system that DOES have a front pole still gets both.
-      if (!(isTraverse && centerPole.length === 0)) add(centerPole.length > 1
-          ? { title: bay.poleTitle.replace(/ & Finish/i, ''), type: 'DIMENSIONS', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) }
-          : { title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
-      // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that end's
-      // outer bracket step (returnHidesBracket), so the customer settles each end first and never picks
-      // a bracket that then disappears. It's ALWAYS emitted — even with 0 finials it carries the Mitered
-      // / Bent / Flush return options that render the end shape and feed the fab math.
-      addEndTreatment(finial, endPole);
-      // Part-chooser steps are emitted only when they actually have options — 0-choice steps are skipped.
-      addPerPosition(brackets, 'Bracket & Mount', { clone: true, subOpts: backplates, subLabel: 'Backplate', stepRole: 'BRACKET' }); // adds nothing if brackets is empty
-      if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
-      if (rings.length) add({ title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts', finishDataSource: 'master_finishes', useClientPricing: true, qtyHelperText: 'Number of rings', styleOptions: rings, geometryMap: geom(rings) });
-      // Fee steps — always kept, as-is.
-      add({ title: 'Splice', type: 'STATIC_FEE', qtyHelperText: 'Number of splices', basePrice: '0' });
-      add({ title: 'Cut / Splice Fee', type: 'STATIC_FEE', qtyHelperText: 'Per cut / splice', basePrice: '0' });
 
       // SIZE MATRIX: when the assembly's pinned parts belong to a size family (sizeKey stamped by
       // the Fabricut importer), inject the two top-level SIZE steps — Rod Diameter + Bracket
@@ -1556,7 +1506,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // regenerates. One flow then covers the whole diameter × projection matrix: CPQ pricing, ERP
       // push and Vision resolve every configured part through Shared/sizeMatrix at quote time.
       const usedParts = [...new Set(pins.map(p => p.partId).filter(Boolean))].map(pid => partsById[pid]).filter(Boolean);
-      const sizeFamily = singleMode ? null : sizeFamilyOfParts(usedParts);
+      // A traverse assembly never joins a size family — its projection question is built from the
+      // proj: tags inside buildTraverseFlow, ahead of the brackets it gates.
+      const sizeFamily = (singleMode || isTraverse) ? null : sizeFamilyOfParts(usedParts);
       // 🔍 Reviewed matrix → baked + persisted. The SIZE-PROJ step's per-option dias arrays
       // become EXACTLY the checked diameters (explicit even when they match the registry, so the
       // registry fallback can never resurrect an unchecked diameter; a projection checked
@@ -1576,7 +1528,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           review.diasByOpt = diasByOpt;
           reviewExclusions = { optionKeys: [...review.excludedKeys].sort(), projMatrix, reviewedAt: ts };
       }
-      if (!sizeFamily && singleMode) {
+      if (!isTraverse && !sizeFamily && singleMode) {
           // 🎯 Per-assembly Projection question FROM THE TAGS (Stuart 2026-07-24: "it needs to
           // check back to the tags on the brackets") — the distinct proj: values across this
           // assembly's options become a top-level PROJ_SELECT step; the pick gates tagged
@@ -1600,11 +1552,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           groupFields.impliedProjInches = tagVals.length === 1 ? tagVals[0].f : null;
           if (tagVals.length >= 2) {
               const lbl = (f) => f === 0.75 ? '.75" Projection' : f === 3.625 ? '3-5/8" Projection' : f === 4.625 ? '4-5/8" Projection' : f === 6 ? '6" Projection' : `${f}" Projection`;
-              // ON A TRAVERSE FLOW THE FASCIA COMES FIRST. This step unshifts to position 0 —
-              // correct for a pole flow, wrong here: it put Bracket Projection ahead of "choose the
-              // fascia", which is the first question (Stuart 2026-08-04). Slotted in AFTER the
-              // traverse lead-in instead, where a bracket question belongs.
-              steps.splice(trvLeadSteps, 0, { id: 'PROJ-CHOICE', title: 'Bracket Projection', type: 'PROJ_SELECT', stepRole: 'SIZE', required: true, hideQty: true, styleOptions: tagVals.map(x => ({ optId: `PROJ-${String(x.f).replace(/\./g, '_')}`, partName: lbl(x.f), projInches: x.raw })) });
+              steps.unshift({ id: 'PROJ-CHOICE', title: 'Bracket Projection', type: 'PROJ_SELECT', stepRole: 'SIZE', required: true, hideQty: true, styleOptions: tagVals.map(x => ({ optId: `PROJ-${String(x.f).replace(/\./g, '_')}`, partName: lbl(x.f), projInches: x.raw })) });
           }
       }
       if (sizeFamily) {
