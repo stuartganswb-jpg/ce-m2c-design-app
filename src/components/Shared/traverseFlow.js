@@ -110,8 +110,11 @@ export function buildTraverseFlow({
     // deduping by part and merging the nodes turns "a plug on each end" into a single answer —
     // which is what an either/or question needs. Two DIFFERENT parts on one drive would stay two
     // options rather than silently losing one: visible and diagnosable beats quietly wrong.
+    // The merged answer carries NO setup tag: a drive answer is about the drive, and the rear
+    // track's ends are separated by the setup step's geometry instead (see doubleOnlyNodes). Left
+    // tagged, a copy pinned setup:DOUBLE would filter the whole answer out of its own picker.
     const endsForDrive = (d) => dedupeByPart(ends.filter(e => driveTypeOf(e) === d))
-        .map(o => ({ ...o, driveType: d }));
+        .map(o => ({ ...o, driveType: d, trvSetup: '' }));
 
     // ── Never a question, always built ───────────────────────────────────────────────────────────
     // Carriers ride inside the track; the F-clip attaches the track to the fascia. Both are cut and
@@ -147,6 +150,11 @@ export function buildTraverseFlow({
         add({
             title: 'Fascia Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true,
             required: true, useClientPricing: true, stepRole: 'TRV_FASCIA',
+            // "on the fascia just need to add the selection of finish" (Stuart 2026-08-05). With
+            // several materials the MATERIAL step owns the finish — same as the Track and Rings
+            // steps — because the length step below is dimensions only and has no item to price a
+            // finish against.
+            finishDataSource: 'master_finishes',
             styleOptions: fascia, geometryMap: geom(fascia),
         });
         add({
@@ -174,15 +182,22 @@ export function buildTraverseFlow({
     const hasSetupStep = needsSetupStep(allOpts);
     const nodesOf = (list) => (list || []).flatMap(o => String(o.targetNode || '').split(','))
         .map(s => s.trim()).filter(Boolean);
-    // ⚠ THE SECOND TRACK MUST BE ITS OWN GEOMETRY. If the DOUBLE pin points at the SAME mesh the
-    // base track already controls — the duplicate-pinning pattern that runs through this assembly —
-    // then the AND across steps turns destructive: on SINGLE the Track step says show and this step
-    // says hide, so the ONLY track disappears (Stuart 2026-08-05: "when i move to single front
-    // disappears"). Excluding nodes the base track already owns makes the failure harmless and
-    // legible instead: DOUBLE simply adds nothing visible, which reads as "there is no second track
-    // modelled" rather than breaking the single.
-    const baseTrackNodes = new Set(nodesOf(track));
-    const secondTrackNodes = [...new Set(nodesOf(doubleTracks))].filter(n => !baseTrackNodes.has(n)).join(', ');
+    // EVERYTHING THAT EXISTS ONLY ON A DOUBLE rides the DOUBLE answer — not just the added track
+    // but the added track's ENDS (Stuart 2026-08-05: "the rear pulleys for the double are visible
+    // with no track, either we start with track and pulleys or neither"). A rear pulley was showing
+    // on every single because it is tagged shared, so nothing gated it.
+    //
+    // The ends still belong to the DRIVE step as well, and that is the point: visibilityOverrides
+    // ANDs every step that mentions a node, so a rear pulley listed by BOTH renders only when
+    // MOTORIZED *and* DOUBLE. Neither step needs to know about the other.
+    //
+    // ⚠ Nodes any non-double part also owns are excluded. Without that, a DOUBLE pin sharing the
+    // base track's mesh would make this step hide the ONLY track on a single — destructive rather
+    // than merely inert.
+    const doubleOnly = allOpts.filter(o => setupOf(o) === 'DOUBLE'
+        && ['TRACK', 'TRV_END'].includes(traverseRoleOf(o)));
+    const sharedNodes = new Set(nodesOf(allOpts.filter(o => setupOf(o) !== 'DOUBLE')));
+    const secondTrackNodes = [...new Set(nodesOf(doubleOnly))].filter(n => !sharedNodes.has(n)).join(', ');
     if (hasSetupStep) add({
         id: 'TRV-SETUP', title: 'Single or Double', type: 'STYLE_SWAP', stepRole: 'TRV_SETUP',
         partHandling: 'Custom', required: true, hideQty: true, useClientPricing: true,
@@ -216,8 +231,10 @@ export function buildTraverseFlow({
         const driveOpts = drives.flatMap(endsForDrive);
         add({
             id: 'TRV-DRIVE', title: 'Traverse Drive', type: 'STYLE_SWAP', stepRole: 'TRV_DRIVE',
-            partHandling: 'Custom', required: true, hideQty: true,
-            finishDataSource: 'master_finishes', useClientPricing: true,
+            partHandling: 'Custom', required: true, hideQty: true, useClientPricing: true,
+            // NO FINISH on this step (Stuart 2026-08-05: "these options do not require a finish
+            // choice"). A plug and a drive pulley come as they come — the swatch grid was asking a
+            // question with no answer behind it.
             styleOptions: driveOpts, geometryMap: geom(driveOpts),
         });
     }

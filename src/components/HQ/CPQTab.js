@@ -922,52 +922,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           && (isDriveSelector || driveAllows(o, trvSelection.drive));
   };
 
-  // SWITCHING THE ANSWER MUST CLEAR WHAT IT INVALIDATES. Picking Double, choosing a double bracket,
-  // then going back to Single would otherwise leave that double bracket selected — no longer in any
-  // list, still on the quote, still in the BOM. The option would be invisible and the order wrong,
-  // which is worse than either of the two states it sits between.
-  useEffect(() => {
-      setDynamicConfigParams(prev => {
-          const next = { ...prev }; let changed = false;
-          (activeFlow?.steps || []).forEach(st => {
-              // A selector keeps its own answer — filtering a question by its own answer would hide
-              // every alternative the moment one was picked.
-              if (st.stepRole === 'TRV_SETUP' || st.stepRole === 'TRV_DRIVE') return;
-              // RE-SEED, DON'T JUST CLEAR (Stuart 2026-08-05: switching to Double "removes the
-              // bracket arms rather than adding a second track"). Picking Double invalidates every
-              // single-only return arm, and clearing alone left that end controlled by NOTHING —
-              // so the arms vanished. The double arm is tagged, and is sitting in the list: hand
-              // the step its new default rather than an empty slot. Only when no option survives
-              // does the selection actually go away.
-              const pool = (st.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(st));
-              const main = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
-              if (main && !trvOkFor(st)(main)) {
-                  const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
-                  if (repl) next[st.id] = repl; else delete next[st.id];
-                  changed = true;
-              } else if (!next[st.id] && st.required && st.type === 'STYLE_SWAP' && pool.length) {
-                  // AND HEAL WHAT AN EARLIER ANSWER EMPTIED. Clearing runs on an INVALID selection;
-                  // it has nothing to say about a step already sitting empty. So a step whose pool
-                  // emptied under one answer stayed unselected forever once the pool came back —
-                  // switch to Double, lose the track, switch back to Single and it never returns
-                  // (Stuart 2026-08-05: "try to switch back and both disappear"). A REQUIRED step
-                  // with valid options must never sit empty. Optional steps are left alone, so a
-                  // deliberately-cleared End Treatment stays cleared.
-                  const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
-                  if (repl) { next[st.id] = repl; changed = true; }
-              }
-              const sub = (st.subOptions || []).find(x => (x.optId || x.partId) === next[`${st.id}__sub`]);
-              if (sub && !trvOkFor(st)(sub)) {
-                  const repl = defaultOptionFor((st.subOptions || []).filter(optCustomerOk).filter(trvOkFor(st)), st.subGeometryMap);
-                  if (repl) next[`${st.id}__sub`] = repl; else delete next[`${st.id}__sub`];
-                  changed = true;
-              }
-          });
-          return changed ? next : prev;
-      });
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trvSelection.setup, trvSelection.drive, activeFlow]);
-
   const getOptionsForStep = (step) => {
       // Tag-driven Mount selector: options are the distinct Location tags on the linked assembly's
       // clusters (Wall / Ceiling / Inside-End). Picking one hides the off-mount end regions.
@@ -2774,6 +2728,63 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           || (o.isFee && /return|miter|mitre|french|bend/i.test(String(o.partName || '')));
       return returnish ? (flowProjSel >= f - 0.01) : (Math.abs(f - flowProjSel) < 0.01);
   };
+
+  // The single predicate a step's option list is judged by — the same one getOptionsForStep uses
+  // for the dropdown. Keeping the reconcile below in step with the dropdown is the whole point: a
+  // selection the customer cannot see in the list must not survive on the quote.
+  const stepOptOk = (st) => { const trv = trvOkFor(st); return (o) => trv(o) && projTagOk(o); };
+
+  // SWITCHING THE ANSWER MUST CLEAR WHAT IT INVALIDATES. Picking Double, choosing a double bracket,
+  // then going back to Single would otherwise leave that double bracket selected — no longer in any
+  // list, still on the quote, still in the BOM. The option would be invisible and the order wrong,
+  // which is worse than either of the two states it sits between.
+  //
+  // PROJECTION IS ONE OF THOSE ANSWERS TOO (Stuart 2026-08-05: picking a bracket projection made
+  // "all the end arms and brackets disappear"). Every bracket and arm is tagged to a projection, so
+  // choosing one invalidates the seeded selection on every bracket and End Treatment step at once —
+  // and this reconcile only ever watched the setup and drive axes, so nothing put a valid option
+  // back. It now watches the projection as well and judges by the SAME predicate the dropdown uses.
+  useEffect(() => {
+      setDynamicConfigParams(prev => {
+          const next = { ...prev }; let changed = false;
+          (activeFlow?.steps || []).forEach(st => {
+              // A selector keeps its own answer — filtering a question by its own answer would hide
+              // every alternative the moment one was picked.
+              if (st.stepRole === 'TRV_SETUP' || st.stepRole === 'TRV_DRIVE') return;
+              // RE-SEED, DON'T JUST CLEAR (Stuart 2026-08-05: switching to Double "removes the
+              // bracket arms rather than adding a second track"). Picking Double invalidates every
+              // single-only return arm, and clearing alone left that end controlled by NOTHING —
+              // so the arms vanished. The double arm is tagged, and is sitting in the list: hand
+              // the step its new default rather than an empty slot. Only when no option survives
+              // does the selection actually go away.
+              const pool = (st.styleOptions || []).filter(optCustomerOk).filter(stepOptOk(st));
+              const main = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
+              if (main && !stepOptOk(st)(main)) {
+                  const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
+                  if (repl) next[st.id] = repl; else delete next[st.id];
+                  changed = true;
+              } else if (!next[st.id] && st.required && st.type === 'STYLE_SWAP' && pool.length) {
+                  // AND HEAL WHAT AN EARLIER ANSWER EMPTIED. Clearing runs on an INVALID selection;
+                  // it has nothing to say about a step already sitting empty. So a step whose pool
+                  // emptied under one answer stayed unselected forever once the pool came back —
+                  // switch to Double, lose the track, switch back to Single and it never returns
+                  // (Stuart 2026-08-05: "try to switch back and both disappear"). A REQUIRED step
+                  // with valid options must never sit empty. Optional steps are left alone, so a
+                  // deliberately-cleared End Treatment stays cleared.
+                  const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
+                  if (repl) { next[st.id] = repl; changed = true; }
+              }
+              const sub = (st.subOptions || []).find(x => (x.optId || x.partId) === next[`${st.id}__sub`]);
+              if (sub && !stepOptOk(st)(sub)) {
+                  const repl = defaultOptionFor((st.subOptions || []).filter(optCustomerOk).filter(stepOptOk(st)), st.subGeometryMap);
+                  if (repl) next[`${st.id}__sub`] = repl; else delete next[`${st.id}__sub`];
+                  changed = true;
+              }
+          });
+          return changed ? next : prev;
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trvSelection.setup, trvSelection.drive, flowProjSel, activeFlow]);
 
   const visibilityOverrides = useMemo(() => {
       if (!activeFlow) return {};

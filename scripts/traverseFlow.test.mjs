@@ -166,6 +166,30 @@ test('DOUBLE ADDS the second track — it does not swap for it', () => {
     assert.equal(single.partId, '');
 });
 
+test('the REAR track\'s ends ride the DOUBLE answer too — no rear pulley on a single', () => {
+    // his rear-end pins, tagged setup:double so they belong to the second track
+    const withRearEnds = [
+        ...other,
+        opt({ optId: 'PULL-RD', partId: 'p-pull', partName: 'HSOM-04', traverseRole: 'TRV_END', driveType: 'MOTORIZED', trvSetup: 'DOUBLE' }),
+    ];
+    const { steps } = run({ other: withRearEnds });
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    // the rear pulley is gated by DOUBLE...
+    assert.ok(setup.geometryMap['OPT-SETUP-DOUBLE'].split(', ').includes('N-PULL-RD'));
+    // ...AND by the drive, because visibilityOverrides ANDs every step that lists the node
+    const drive = steps.find(s => s.stepRole === 'TRV_DRIVE');
+    const motor = drive.styleOptions.find(o => o.driveType === 'MOTORIZED');
+    assert.ok(motor.targetNode.split(', ').includes('N-PULL-RD'));
+    // and the drive answer carries no setup tag, so it is never filtered out of its own picker
+    assert.equal(motor.trvSetup, '');
+});
+
+test('the drive step asks for no finish, and the fascia material step does', () => {
+    const { steps } = run();
+    assert.equal(steps.find(s => s.stepRole === 'TRV_DRIVE').finishDataSource, undefined);
+    assert.equal(steps.find(s => s.title === 'Fascia Material').finishDataSource, 'master_finishes');
+});
+
 test('with no DOUBLE-tagged track the setup step still works, carrying no extra geometry', () => {
     const noSecond = other.filter(o => o.optId !== 'TRK-D');
     const { steps } = run({ other: noSecond });

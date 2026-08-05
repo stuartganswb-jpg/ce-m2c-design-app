@@ -993,13 +993,31 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // the stronger rule needed when returns keep the bracket step. Options keep the
                   // author's arrow order via choiceSort.
                   const cshort = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
+                  // PINS THAT DIFFER BY GATE MUST STAY SEPARATE OPTIONS. The key below is
+                  // (cluster, part, position, location) — so EIGHT miter-return pins sharing one
+                  // item # in one cluster collapsed into a single option and the last pin's proj:
+                  // tag won. At 4-5/8" that option gated against 6" and the miter return vanished
+                  // from the picker, while the return ARMS — four different item #s, so four
+                  // options — stayed (Stuart 2026-08-05: "the miter return fee option for this
+                  // projection is not offered"). The discriminator is appended ONLY where a group
+                  // genuinely differs, so a cluster whose pins agree keeps byte-identical ids and
+                  // every existing flow's authored prices still match on regenerate.
+                  const gateOf = (p) => `${String(p.projInches || '').trim().toUpperCase()}~${String(p.trvSetup || '').trim().toUpperCase()}`;
+                  const gatesByGroup = {};
+                  choicePins.forEach(p => {
+                      const g = [cl.id, p.partId || cl.name, position, location].join('|');
+                      (gatesByGroup[g] = gatesByGroup[g] || new Set()).add(gateOf(p));
+                  });
                   [...choicePins].sort((a, b) => ((a.choiceSort ?? 9999) - (b.choiceSort ?? 9999)) || String(a.partName || '').localeCompare(String(b.partName || ''))).forEach(p => {
                       const pid = p.partId || cl.name;
                       // Explicit endTreatment tag (1.6 per-choice select / pin.endTreatment) is CANONICAL;
                       // name regexes are the legacy fallback (flagsFor).
                       const { et, returnish, feeish, returnArm, inlineish } = flagsFor(p);
-                      const key = [cl.id, pid, position, location].join('|');
-                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}`, partId: pid, partName: p.partName || pid, position, location, _srcName: srcByCluster[cl.id], nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}), // TRAVERSE tags ride the option so the generator can bucket fascia / track / carrier and
+                      const grp = [cl.id, pid, position, location].join('|');
+                      const gate = (gatesByGroup[grp] || new Set()).size > 1 ? gateOf(p) : '';
+                      const key = gate ? `${grp}|${gate}` : grp;
+                      const gsfx = gate ? `-G${gate.replace(/[^A-Za-z0-9]/g, '').slice(0, 8)}` : '';
+                      const e = map[key] = map[key] || { optId: `OPT-${cat}-${String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 24)}-${position || 'X'}-${location || 'X'}-C${cshort}${gsfx}`, partId: pid, partName: p.partName || pid, position, location, _srcName: srcByCluster[cl.id], nodes: new Set(), ...(et ? { endTreatment: et } : {}), ...(returnish ? { returnOnly: true } : {}), // TRAVERSE tags ride the option so the generator can bucket fascia / track / carrier and
                           // scope by drive (Stuart 2026-08-04). Absent on every pole assembly.
                           ...(p.traverseRole ? { traverseRole: String(p.traverseRole).toUpperCase() } : {}), ...(p.driveType ? { driveType: String(p.driveType).toUpperCase() } : {}), ...(p.trvSetup ? { trvSetup: String(p.trvSetup).toUpperCase() } : {}), ...(p.alwaysShown ? { alwaysShown: true } : {}) };
                       e.nodes.add(String(p.choiceNode).trim());
