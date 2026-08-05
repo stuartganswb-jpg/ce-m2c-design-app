@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { setupAllows, driveAllows } from '../Shared/traverseTags';
 import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
 import { cutText } from '../Shared/configQty';
@@ -761,34 +761,41 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // that have no value yet (so a customer's pick, or a value seeded on an earlier pass once
   // activeAssembly loads, is never clobbered) — which also makes re-fires from cpq_flows
   // snapshots a no-op.
+  // ONE DEFINITION OF "THE DEFAULT OPTION", used by the opening seed below AND by the re-seed that
+  // runs when a traverse answer invalidates a selection. They used to disagree — the seed ignored
+  // the traverse filter entirely, so it could hand a step back exactly the option the filter had
+  // just removed: selected, absent from its own dropdown, still rendering.
+  //
+  // A default must be the STANDARD configuration — never a FEE, a french/miter return, or an inside
+  // mount. After the size-matrix regenerate the modeled FRENCH RETURN became the first
+  // geometry-bearing option on the End Treatment steps, so an untouched flow opened pre-charged with
+  // two $50 return fees (and the returns hid the rod ends). A step whose options are all fee/return-
+  // ish seeds nothing and stays unselected.
+  const seedable = useCallback((opts) => (opts || []).filter(o =>
+      !o.isFee && !isReturnOption(o) && String(o.endTreatment || '').toUpperCase() !== 'INSIDE_MOUNT'), []);
+  // Prefer the first option that actually controls geometry, so the default shows a real part rather
+  // than a fee-only placeholder; fall back to the first option.
+  const defaultOptionFor = useCallback((opts, gmap) => {
+      const pool = seedable(opts);
+      const withGeom = pool.find(o => {
+          const csv = (gmap && gmap[o.optId || o.partId]) || o.targetNode;
+          return csv && String(csv).trim();
+      });
+      const pick = withGeom || pool[0];
+      return pick && (pick.optId || pick.partId);
+  }, [seedable]);
+
   useEffect(() => {
       if (!activeFlow || activeDraftId) return;
       const steps = activeFlow.steps || [];
       setDynamicConfigParams(prev => {
           const next = { ...prev };
           let changed = false;
-          // Pick the first option that actually controls geometry (so the default shows a real
-          // part, not a fee-only placeholder like the End Treatment miter/bend fees), falling
-          // back to the first option.
-          const firstGeom = (opts, gmap) => {
-              const withGeom = (opts || []).find(o => {
-                  const id = o.optId || o.partId;
-                  const csv = (gmap && gmap[id]) || o.targetNode;
-                  return csv && String(csv).trim();
-              });
-              const pick = withGeom || (opts || [])[0];
-              return pick && (pick.optId || pick.partId);
-          };
-          // A DEFAULT must be the standard configuration — never a FEE, french/miter return, or
-          // inside mount. After the size-matrix regenerate the modeled FRENCH RETURN became the
-          // first geometry-bearing option on the End Treatment steps, so an untouched flow opened
-          // pre-charged with two $50 return fees (and the returns hid the rod ends). Steps whose
-          // options are all fee/return-ish seed nothing and stay unselected.
-          const seedable = (opts) => (opts || []).filter(o =>
-              !o.isFee && !isReturnOption(o) && String(o.endTreatment || '').toUpperCase() !== 'INSIDE_MOUNT');
           steps.forEach(step => {
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
-                  if (!next[step.id]) { const id = firstGeom(seedable((step.styleOptions || []).filter(optCustomerOk)), step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
+                  // trvOkFor here is the fix for "selected but not in the list": the sub-seed below
+                  // and the dropdown itself both filter by it, and only this line did not.
+                  if (!next[step.id]) { const id = defaultOptionFor((step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step)), step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
                   // Secondary chooser in the same step (e.g. the backplate paired with the bracket),
                   // seeded to a plate whose location matches the chosen bracket's mount.
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
@@ -796,7 +803,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       const loc = mainOpt?.location;
                       const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step));
                       const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
-                      const sid = firstGeom(cands.length ? cands : pool0, step.subGeometryMap);
+                      const sid = defaultOptionFor(cands.length ? cands : pool0, step.subGeometryMap);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
                   }
               } else if (step.mountSelector && !next[step.id]) {
@@ -917,11 +924,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setDynamicConfigParams(prev => {
           const next = { ...prev }; let changed = false;
           (activeFlow?.steps || []).forEach(st => {
-              if (st.stepRole === 'TRV_SETUP') return;   // the selector keeps its own answer
+              // A selector keeps its own answer — filtering a question by its own answer would hide
+              // every alternative the moment one was picked.
+              if (st.stepRole === 'TRV_SETUP' || st.stepRole === 'TRV_DRIVE') return;
+              // RE-SEED, DON'T JUST CLEAR (Stuart 2026-08-05: switching to Double "removes the
+              // bracket arms rather than adding a second track"). Picking Double invalidates every
+              // single-only return arm, and clearing alone left that end controlled by NOTHING —
+              // so the arms vanished. The double arm is tagged, and is sitting in the list: hand
+              // the step its new default rather than an empty slot. Only when no option survives
+              // does the selection actually go away.
               const main = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
-              if (main && !trvOkFor(st)(main)) { delete next[st.id]; changed = true; }
+              if (main && !trvOkFor(st)(main)) {
+                  const repl = defaultOptionFor((st.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(st)), st.geometryMap);
+                  if (repl) next[st.id] = repl; else delete next[st.id];
+                  changed = true;
+              }
               const sub = (st.subOptions || []).find(x => (x.optId || x.partId) === next[`${st.id}__sub`]);
-              if (sub && !trvOkFor(st)(sub)) { delete next[`${st.id}__sub`]; changed = true; }
+              if (sub && !trvOkFor(st)(sub)) {
+                  const repl = defaultOptionFor((st.subOptions || []).filter(optCustomerOk).filter(trvOkFor(st)), st.subGeometryMap);
+                  if (repl) next[`${st.id}__sub`] = repl; else delete next[`${st.id}__sub`];
+                  changed = true;
+              }
           });
           return changed ? next : prev;
       });

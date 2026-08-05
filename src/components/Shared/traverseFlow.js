@@ -33,7 +33,7 @@
 // and the F-clip −3" against −1" (see TRAVERSE_DEDUCTIONS).
 
 import {
-    offeredChoices, dedupeByPart, traverseRoleOf, traverseEnds, driveTypeOf,
+    offeredChoices, dedupeByPart, traverseRoleOf, traverseEnds, driveTypeOf, setupOf,
     needsSetupStep, setupsOffered, isRider,
 } from './traverseTags';
 
@@ -94,9 +94,17 @@ export function buildTraverseFlow({
     // pinned in two clusters is still one material; dedupe MERGES the copies' nodes so the option
     // renders all of itself rather than half.
     const fascia = dedupeByPart(offeredChoices(allOpts, { role: 'FASCIA' }));
-    // Track is NOT deduped: the single track and the double's second track are the same PART at
-    // different nodes, separated only by their setup tag. Merging them would erase that distinction.
-    const track = offeredChoices(allOpts, { role: 'TRACK' });
+    // THE SECOND TRACK IS NOT A CHOICE — IT IS WHAT "DOUBLE" MEANS (Stuart 2026-08-05: "when i make
+    // the switch from single to double it removes the bracket arms rather than adding a second
+    // track"). A double ADDS a track; it does not swap one for another. So a track tagged
+    // setup:DOUBLE never enters the Track picker — offering it there would put two identical
+    // extrusions in one dropdown and ask the customer to pick between a thing and itself. It rides
+    // on the DOUBLE answer instead, which is exactly what a geometryMap entry is for.
+    const allTracks = offeredChoices(allOpts, { role: 'TRACK' });
+    const doubleTracks = allTracks.filter(t => setupOf(t) === 'DOUBLE');
+    // What the customer actually chooses: the track itself, for its finish. Deduped by part —
+    // the same extrusion pinned at two nodes is one track, listed once.
+    const track = dedupeByPart(allTracks.filter(t => setupOf(t) !== 'DOUBLE'));
     const { ends, drives, isChoice: driveIsChoice } = traverseEnds(allOpts);
     // ONE OPTION PER DRIVE, owning both ends. The same plug is pinned at LEFT and at RIGHT, so
     // deduping by part and merging the nodes turns "a plug on each end" into a single answer —
@@ -160,16 +168,25 @@ export function buildTraverseFlow({
     // ── 2. SINGLE OR DOUBLE — before everything it gates ─────────────────────────────────────────
     // It decides which tracks and which brackets exist, so it cannot be asked after them. Only when
     // the assembly can actually be built both ways: a step with one answer is not a question.
+    // The DOUBLE answer OWNS the second track: its nodes render and its part bills only while
+    // DOUBLE is selected, and SINGLE carries no extra geometry at all. That makes the step
+    // additive, which is what a double physically is — one fascia, two tracks.
     const hasSetupStep = needsSetupStep(allOpts);
+    const secondTrackNodes = doubleTracks.map(o => o.targetNode).filter(Boolean).join(', ');
     if (hasSetupStep) add({
         id: 'TRV-SETUP', title: 'Single or Double', type: 'STYLE_SWAP', stepRole: 'TRV_SETUP',
-        partHandling: 'Small Parts', required: true, hideQty: true, useClientPricing: true,
-        styleOptions: setupsOffered(allOpts).map(t => ({
-            optId: `OPT-SETUP-${t}`, partId: '',
-            partName: t === 'DOUBLE' ? 'Double (two tracks)' : 'Single (one track)',
-            trvSetup: t, price: 0, targetNode: '',
-        })),
-        geometryMap: {},
+        partHandling: 'Custom', required: true, hideQty: true, useClientPricing: true,
+        styleOptions: setupsOffered(allOpts).map(t => {
+            const isDouble = t === 'DOUBLE';
+            return {
+                optId: `OPT-SETUP-${t}`,
+                partId: isDouble ? (doubleTracks[0]?.partId || '') : '',
+                partName: isDouble ? 'Double (two tracks)' : 'Single (one track)',
+                trvSetup: t, price: 0,
+                targetNode: isDouble ? secondTrackNodes : '',
+            };
+        }),
+        geometryMap: secondTrackNodes ? { 'OPT-SETUP-DOUBLE': secondTrackNodes } : {},
     });
 
     // ── 3. DRIVE — motorised or manual, for the whole order ──────────────────────────────────────

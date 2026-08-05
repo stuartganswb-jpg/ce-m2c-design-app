@@ -115,7 +115,31 @@ test('the Track step exists — proving the OTHER pool now reaches the generator
     const track = steps.find(s => s.title === 'Track');
     assert.ok(track, 'no Track step');
     assert.equal(track.stepRole, 'TRACK');
-    assert.equal(track.styleOptions.length, 2); // single + double instances, filtered at runtime by setup
+    // ONE track to choose. The double's second track is not an alternative to the first, so it is
+    // never offered as one — asking the customer to pick between a thing and itself.
+    assert.equal(track.styleOptions.length, 1);
+});
+
+test('DOUBLE ADDS the second track — it does not swap for it', () => {
+    const { steps } = run();
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    const dbl = setup.styleOptions.find(o => o.trvSetup === 'DOUBLE');
+    const single = setup.styleOptions.find(o => o.trvSetup === 'SINGLE');
+    // the DOUBLE answer owns the extra track's geometry and bills its part
+    assert.equal(dbl.targetNode, 'N-TRK-D');
+    assert.equal(dbl.partId, 'p-trk');
+    assert.equal(setup.geometryMap['OPT-SETUP-DOUBLE'], 'N-TRK-D');
+    // SINGLE adds nothing — it is the base configuration, not a variant
+    assert.equal(single.targetNode, '');
+    assert.equal(single.partId, '');
+});
+
+test('with no DOUBLE-tagged track the setup step still works, carrying no extra geometry', () => {
+    const noSecond = other.filter(o => o.optId !== 'TRK-D');
+    const { steps } = run({ other: noSecond });
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    assert.deepEqual(setup.geometryMap, {});
+    assert.equal(steps.find(s => s.title === 'Track').styleOptions.length, 1);
 });
 
 test('the drive is ITS OWN step — an either/or for the order, never a per-track sub-choice', () => {

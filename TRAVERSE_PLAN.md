@@ -126,18 +126,17 @@ is free. Traverse is the first flow where a customer answer removes options.
    question below. Today `OTHER·SHARED` = `double` and `OTHER·CENTER` = `single`, which renders one
    track either way. That is coherent, if not yet right.
 
-### ❓ Open question — is the second track a choice or an automatic part?
+### ✅ ANSWERED — the second track is additive
 
-The two track pins are the **same part** (`H1-2TRVTRK/C`) at different nodes, separated only by
-their setup tag. That leaves two readings, and they need different code:
+Stuart 2026-08-05: switching to double "removes the bracket arms rather than **adding a second
+track**." A double ADDS a track; it does not swap one for another. Implemented: a track tagged
+`setup: DOUBLE` never enters the Track picker — the DOUBLE *answer* owns its geometry and bills its
+part. The Track step is a one-option finish chooser, which is all it ever was.
 
-- **Automatic** — a double simply *has* two tracks. Then the second one is an `includedPart` whose
-  geometry turns on with DOUBLE, and the Track step stays a one-option finish chooser.
-- **A choice** — the customer picks each track. Then the step needs two independent pickers.
-
-Retagging to "shared + double" (the brief's advice) only makes sense under the first reading, and
-under the current code it would put **two identical options in one picker** on a double. Settle the
-reading first, then tag.
+This also means **§A6 is resolved**: the current track tags are already right. `OTHER·CENTER` =
+`single` is the base track and `OTHER·SHARED` = `double` is the addition. No retag needed. (The
+`single` tag on the base track is harmless — it could be `both (shared)` for clarity, since a double
+has that track too, but nothing reads it: the base track is what the picker offers either way.)
 
 ### B. Generator — remaining
 
@@ -148,14 +147,16 @@ reading first, then tag.
 
 ### C. Runtime — `CPQTab.js`
 
-1. **Apply `trvOkFor` to the main-option seed** (`:791`) — one-line parity with `:797`. The sub-option
-   seed and the display filter both apply it; the main seed does not, so a selection can be seeded to
-   an option the filter forbids: on the quote, absent from the dropdown, still rendering.
-2. **Make seeding gated, not all-at-once.** `CPQTab.js:764` pre-answers every step on load — that is
-   why step 1 already showed three priced lines. Seed a step's default only once the steps that gate
-   it are answered. This is the architectural fix, and it reduces the clearing effect (`:912`) to a
-   no-op in normal use. *Deferred deliberately: it touches the shared runtime, and the fork above
-   should be verified in isolation first.*
+1. ✅ **DONE — the seed and the filter now agree.** `seedable` + `defaultOptionFor` are hoisted to
+   one definition used by both the opening seed and the re-seed, and the main-option seed applies
+   `trvOkFor` (the sub-seed and the dropdown always did; only that line did not).
+2. ✅ **DONE — the clearing effect RE-SEEDS instead of just clearing.** This was the disappearing
+   arms: picking DOUBLE invalidates every single-only return arm, and clearing alone left that end
+   controlled by nothing. Now the step is handed its new default — the DOUBLE arm, which was tagged
+   and sitting in the list the whole time. The selection is only removed when no option survives.
+3. ⏳ **Still open: seeding is all-at-once.** `CPQTab.js` still pre-answers every step on load, which
+   is why the pricing breakdown lists answers the customer never gave. Item 2 makes this survivable
+   rather than wrong, but gating the seed on the steps that gate it is the honest fix.
 
 ### D. Not in this pass
 
