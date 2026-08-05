@@ -39,9 +39,18 @@ export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 // handful, and it makes an UNTAGGED part safe: it shows on a single, which is what it almost always
 // is, instead of showing on everything.
 export const TRV_SETUPS = ['SINGLE', 'DOUBLE', 'BOTH'];
+// ⚠ REVERTED 2026-08-04, and his own tag dump is why. Blank meant SINGLE for exactly one commit,
+// on the theory that "most parts are single parts". The H1-2TRV data says otherwise: rings, plugs,
+// drive pulleys, carriers, nuts, the centre/right brackets and every return arm are untagged — and
+// under blank=SINGLE every one of them disappeared the moment DOUBLE was chosen. A double order
+// rendered a bare rail because almost the whole assembly had been filtered out.
+//
+// The parts that are genuinely exclusive are a SMALL, PAIRED set — the single bracket vs the double
+// bracket, the front track vs the rear. Those are worth tagging on BOTH sides, and everything else
+// is shared. So blank means SHARED again: only an explicitly tagged part is ever filtered.
 export const setupOf = (choice) => {
     const v = up(choice && choice.trvSetup);
-    return TRV_SETUPS.includes(v) ? v : 'SINGLE';   // ← untagged = SINGLE, not "both"
+    return TRV_SETUPS.includes(v) ? v : '';        // blank = shared, filtered by nothing
 };
 export function setupAllows(choice, setup) {
     const want = up(setup);
@@ -53,7 +62,7 @@ export function setupAllows(choice, setup) {
     const role = traverseRoleOf(choice);
     if (role === 'FASCIA' || isRider(choice)) return true;
     const tag = setupOf(choice);
-    return tag === 'BOTH' || tag === want;
+    return !tag || tag === 'BOTH' || tag === want;   // untagged rides both setups
 }
 // Ask only when the assembly can actually be built as a double. With blank reading as SINGLE, any
 // DOUBLE-capable part means both setups exist — a collection with none of them is single-only and
