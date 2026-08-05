@@ -172,10 +172,25 @@ export function buildTraverseFlow({
     // DOUBLE is selected, and SINGLE carries no extra geometry at all. That makes the step
     // additive, which is what a double physically is — one fascia, two tracks.
     const hasSetupStep = needsSetupStep(allOpts);
-    const secondTrackNodes = doubleTracks.map(o => o.targetNode).filter(Boolean).join(', ');
+    const nodesOf = (list) => (list || []).flatMap(o => String(o.targetNode || '').split(','))
+        .map(s => s.trim()).filter(Boolean);
+    // ⚠ THE SECOND TRACK MUST BE ITS OWN GEOMETRY. If the DOUBLE pin points at the SAME mesh the
+    // base track already controls — the duplicate-pinning pattern that runs through this assembly —
+    // then the AND across steps turns destructive: on SINGLE the Track step says show and this step
+    // says hide, so the ONLY track disappears (Stuart 2026-08-05: "when i move to single front
+    // disappears"). Excluding nodes the base track already owns makes the failure harmless and
+    // legible instead: DOUBLE simply adds nothing visible, which reads as "there is no second track
+    // modelled" rather than breaking the single.
+    const baseTrackNodes = new Set(nodesOf(track));
+    const secondTrackNodes = [...new Set(nodesOf(doubleTracks))].filter(n => !baseTrackNodes.has(n)).join(', ');
     if (hasSetupStep) add({
         id: 'TRV-SETUP', title: 'Single or Double', type: 'STYLE_SWAP', stepRole: 'TRV_SETUP',
         partHandling: 'Custom', required: true, hideQty: true, useClientPricing: true,
+        // SINGLE IS THE STANDARD BUILD and must be what the step opens on. It cannot be found by
+        // "the first option carrying geometry" — the rule the seeder uses everywhere else — because
+        // SINGLE deliberately carries none: a double ADDS a track, a single adds nothing. So the
+        // step names its own default rather than letting that rule pick DOUBLE by elimination.
+        defaultOptId: 'OPT-SETUP-SINGLE',
         styleOptions: setupsOffered(allOpts).map(t => {
             const isDouble = t === 'DOUBLE';
             return {

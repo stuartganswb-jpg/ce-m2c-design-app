@@ -775,8 +775,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       !o.isFee && !isReturnOption(o) && String(o.endTreatment || '').toUpperCase() !== 'INSIDE_MOUNT'), []);
   // Prefer the first option that actually controls geometry, so the default shows a real part rather
   // than a fee-only placeholder; fall back to the first option.
-  const defaultOptionFor = useCallback((opts, gmap) => {
+  const defaultOptionFor = useCallback((opts, gmap, preferId) => {
       const pool = seedable(opts);
+      // A step may NAME its own default (step.defaultOptId). The traverse Single-or-Double selector
+      // needs this: SINGLE is the standard build but carries no geometry of its own — a double ADDS
+      // a track, a single adds nothing — so the geometry-first rule below would pick DOUBLE by
+      // elimination and open every quote on the wrong configuration.
+      const named = preferId && pool.find(o => (o.optId || o.partId) === preferId);
+      if (named) return named.optId || named.partId;
       const withGeom = pool.find(o => {
           const csv = (gmap && gmap[o.optId || o.partId]) || o.targetNode;
           return csv && String(csv).trim();
@@ -795,7 +801,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
                   // trvOkFor here is the fix for "selected but not in the list": the sub-seed below
                   // and the dropdown itself both filter by it, and only this line did not.
-                  if (!next[step.id]) { const id = defaultOptionFor((step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step)), step.geometryMap); if (id) { next[step.id] = id; changed = true; } }
+                  if (!next[step.id]) { const id = defaultOptionFor((step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step)), step.geometryMap, step.defaultOptId); if (id) { next[step.id] = id; changed = true; } }
                   // Secondary chooser in the same step (e.g. the backplate paired with the bracket),
                   // seeded to a plate whose location matches the chosen bracket's mount.
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
@@ -935,7 +941,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               // does the selection actually go away.
               const main = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
               if (main && !trvOkFor(st)(main)) {
-                  const repl = defaultOptionFor((st.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(st)), st.geometryMap);
+                  const repl = defaultOptionFor((st.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(st)), st.geometryMap, st.defaultOptId);
                   if (repl) next[st.id] = repl; else delete next[st.id];
                   changed = true;
               }

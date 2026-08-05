@@ -120,6 +120,26 @@ test('the Track step exists — proving the OTHER pool now reaches the generator
     assert.equal(track.styleOptions.length, 1);
 });
 
+test('SINGLE is the default — the standard build, not the one that happens to carry geometry', () => {
+    const { steps } = run();
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    assert.equal(setup.defaultOptId, 'OPT-SETUP-SINGLE');
+    // and SINGLE genuinely has no geometry, which is exactly why the seeder needed telling
+    assert.equal(setup.styleOptions.find(o => o.trvSetup === 'SINGLE').targetNode, '');
+});
+
+test('a DOUBLE pin on the SAME mesh as the base track adds nothing — it never hides the single', () => {
+    // the duplicate-pinning pattern: both track pins pointing at one mesh. Left alone, the AND
+    // across steps would hide the only track whenever SINGLE was chosen.
+    const sameMesh = other.map(o => o.optId === 'TRK-D' ? { ...o, targetNode: 'N-TRK-S' } : o);
+    const { steps } = run({ other: sameMesh });
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    assert.deepEqual(setup.geometryMap, {});
+    assert.equal(setup.styleOptions.find(o => o.trvSetup === 'DOUBLE').targetNode, '');
+    // the base track is still offered and still owns its mesh
+    assert.equal(steps.find(s => s.title === 'Track').geometryMap['TRK-S'], 'N-TRK-S');
+});
+
 test('DOUBLE ADDS the second track — it does not swap for it', () => {
     const { steps } = run();
     const setup = steps.find(s => s.stepRole === 'TRV_SETUP');

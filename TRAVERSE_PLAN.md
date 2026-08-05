@@ -106,6 +106,25 @@ is free. Traverse is the first flow where a customer answer removes options.
   `CPQTab.js`'s existing disabled-steps effect.
 - **15 node tests** built from the real tag dump: `sh scripts/run-traverse-tests.sh`.
 
+### 🔴 THE SECOND TRACK IS NOT MODELLED
+
+Both track pins control the **same mesh**. Proven from behaviour, 2026-08-05: DOUBLE showed one
+track and SINGLE showed none. `visibilityOverrides` ANDs every step that mentions a node, so with
+one shared node the Track step said *show* and the setup step said *hide*, and on SINGLE the only
+track vanished. Two different meshes cannot produce that.
+
+The generator now excludes any DOUBLE-pin node the base track already owns, so the failure is
+harmless — DOUBLE adds nothing visible instead of destroying the single. **But nothing will render a
+second track until one exists.** Options, Stuart's call:
+
+1. **Model it** — a second track mesh in the GLB, pinned in its own cluster, tagged `setup: double`.
+   Everything downstream already works; this is the only step missing.
+2. **Clone it** — if the rear track is geometrically identical and merely offset, the existing
+   "clone along pole" machinery (`cloneSpecs`) could place it without new geometry. Cheaper, but it
+   needs an offset convention that does not exist yet.
+
+Until then a double bills correctly and renders as a single.
+
 ### A. Tagging — Stuart, in 1.6
 
 1. **Tag the traverse ends.** Nothing in the dump is `trv: end`. `H12TRVPLUG` (manual) and
