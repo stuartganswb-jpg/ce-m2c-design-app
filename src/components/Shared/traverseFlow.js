@@ -198,6 +198,29 @@ export function buildTraverseFlow({
         && ['TRACK', 'TRV_END'].includes(traverseRoleOf(o)));
     const sharedNodes = new Set(nodesOf(allOpts.filter(o => setupOf(o) !== 'DOUBLE')));
     const secondTrackNodes = [...new Set(nodesOf(doubleOnly))].filter(n => !sharedNodes.has(n)).join(', ');
+    // ── FRONT RAIL — a double may carry a decorative pole instead of a front track ───────────────
+    // Stuart 2026-08-05: "make this its own option that when selected the front track disappears and
+    // the rear track stays... it should be chosen as an extra drop down selection on step 3, if
+    // double is selected then it can appear and state front as track (current) or front as ring on
+    // pole. this option is only for the double."
+    //
+    // A sub-choice on the setup step, not a step of its own: it is a property OF being a double, and
+    // it has no meaning on a single. Both options are tagged setup:DOUBLE so the picker simply is not
+    // there until DOUBLE is chosen.
+    //
+    // The ring choice does not hide the front track by owning its geometry — it flags
+    // hidesStepRole:'TRACK', which disables the Track step. That way the front track leaves the
+    // RENDER, the PRICE and the BOM together: an order with a ring on the front is not an order with
+    // an unbilled invisible track. The ring itself is hidden until chosen, by the ordinary
+    // hidden-until-chosen rule (it appears in the sub geometry map, so nothing selecting it = hidden).
+    const frontRail = traverseChoicePool(rings);
+    const frontRailSubs = frontRail.length ? [
+        { optId: 'OPT-FRONT-TRACK', partId: '', partName: 'Front as track', trvSetup: 'DOUBLE', price: 0, targetNode: '' },
+        ...frontRail.map((o, i) => ({
+            ...o, optId: `OPT-FRONT-RING-${i}`, partName: 'Front as ring on pole',
+            trvSetup: 'DOUBLE', hidesStepRole: 'TRACK',
+        })),
+    ] : [];
     if (hasSetupStep) add({
         id: 'TRV-SETUP', title: 'Single or Double', type: 'STYLE_SWAP', stepRole: 'TRV_SETUP',
         partHandling: 'Custom', required: true, hideQty: true, useClientPricing: true,
@@ -217,6 +240,13 @@ export function buildTraverseFlow({
             };
         }),
         geometryMap: secondTrackNodes ? { 'OPT-SETUP-DOUBLE': secondTrackNodes } : {},
+        ...(frontRailSubs.length ? {
+            subLabel: 'Front Rail', subOptions: frontRailSubs,
+            // Only the RING carries geometry. "Front as track" adds nothing — the Track step already
+            // owns that mesh — so listing it here would make this map fight that one.
+            subGeometryMap: geom(frontRailSubs.filter(o => o.hidesStepRole)),
+            defaultSubOptId: 'OPT-FRONT-TRACK',
+        } : {}),
     });
 
     // ── 3. DRIVE — motorised or manual, for the whole order ──────────────────────────────────────
@@ -275,7 +305,9 @@ export function buildTraverseFlow({
     const bracketPositions = new Set(bracketOpts.map(b => b.position || ''));
     const looseBackplates = backplateOpts.filter(bp => !bracketPositions.has(bp.position || ''));
     if (looseBackplates.length) addPerPosition(looseBackplates, 'Backplate');
-    if (ringOpts.length) add({
+    // Rings consumed by the Front Rail sub-choice are not ALSO a rings step — there they are the
+    // front rail itself, not curtain rings threaded onto one.
+    if (ringOpts.length && !frontRailSubs.length) add({
         title: 'Rings', type: 'STYLE_SWAP', partHandling: 'Small Parts',
         finishDataSource: 'master_finishes', useClientPricing: true,
         qtyHelperText: 'Number of rings', styleOptions: ringOpts, geometryMap: geom(ringOpts),

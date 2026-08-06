@@ -287,9 +287,37 @@ test('a single fascia material folds finish and length into one step', () => {
     assert.equal(steps[0].linkedItemId, 'p-wr');
 });
 
-test('rings stay on the FRONT pole only — never on the track', () => {
+test('a ring becomes the Front Rail sub-choice, not a Rings step', () => {
     const { steps } = run();
+    // his H1-2RCTPR is the front-rail alternative, so it must not ALSO be a rings picker
     assert.equal(titles(steps).includes('Rings'), false);
-    const front = [opt({ optId: 'RF', partId: 'p-ring', partName: 'H1-2RCTPR', position: 'FRONT' })];
-    assert.ok(titles(run({ rings: front }).steps).includes('Rings'));
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    assert.equal(setup.subLabel, 'Front Rail');
+    assert.deepEqual(setup.subOptions.map(o => o.partName), ['Front as track', 'Front as ring on pole']);
+});
+
+test('the Front Rail picker exists only on a double, and opens on track', () => {
+    const { steps } = run();
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    // both options are DOUBLE-tagged, so the sub list is empty until DOUBLE is chosen
+    assert.deepEqual([...new Set(setup.subOptions.map(o => o.trvSetup))], ['DOUBLE']);
+    assert.equal(setup.defaultSubOptId, 'OPT-FRONT-TRACK');
+});
+
+test('front-as-ring removes the front track from render, price and BOM together', () => {
+    const { steps } = run();
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    const ring = setup.subOptions.find(o => o.hidesStepRole);
+    // it disables the TRACK step rather than fighting it for the same mesh
+    assert.equal(ring.hidesStepRole, 'TRACK');
+    assert.equal(steps.find(s => s.title === 'Track').stepRole, 'TRACK');
+    // only the ring carries geometry, so it stays hidden until chosen
+    assert.deepEqual(Object.keys(setup.subGeometryMap), [ring.optId]);
+    assert.equal(setup.subGeometryMap[ring.optId], 'N-RING');
+    assert.equal(setup.subOptions.find(o => o.optId === 'OPT-FRONT-TRACK').targetNode, '');
+});
+
+test('no ring pinned → no Front Rail picker at all', () => {
+    const { steps } = run({ rings: [] });
+    assert.equal(steps.find(s => s.stepRole === 'TRV_SETUP').subOptions, undefined);
 });

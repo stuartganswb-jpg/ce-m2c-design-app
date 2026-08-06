@@ -807,9 +807,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
                       const mainOpt = step.styleOptions.find(o => (o.optId || o.partId) === next[step.id]);
                       const loc = mainOpt?.location;
-                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step));
+                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step, { isSub: true }));
                       const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
-                      const sid = defaultOptionFor(cands.length ? cands : pool0, step.subGeometryMap);
+                      const sid = defaultOptionFor(cands.length ? cands : pool0, step.subGeometryMap, step.defaultSubOptId);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
                   }
               } else if (step.mountSelector && !next[step.id]) {
@@ -915,9 +915,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // A SELECTOR NEVER FILTERS ITSELF. The Single-or-Double step's own options carry trvSetup, and
   // the track's traverse-end sub-options carry driveType — filtering those by the current answer
   // would hide every alternative the moment one was picked, leaving a step that cannot be changed.
-  const trvOkFor = (step) => {
-      const isSetupSelector = step?.stepRole === 'TRV_SETUP';
-      const isDriveSelector = step?.stepRole === 'TRV_DRIVE';
+  // A SELECTOR NEVER FILTERS ITS OWN ANSWERS — but its SUB-choices are ordinary options and must
+  // filter normally. The Front Rail sub-picker hangs off the Single-or-Double step and exists only
+  // on a double; that is expressed by tagging its options setup:DOUBLE, which only works if the sub
+  // list is filtered even though the step it lives on is the setup selector.
+  const trvOkFor = (step, { isSub = false } = {}) => {
+      const isSetupSelector = !isSub && step?.stepRole === 'TRV_SETUP';
+      const isDriveSelector = !isSub && step?.stepRole === 'TRV_DRIVE';
       return (o) => (isSetupSelector || setupAllows(o, trvSelection.setup))
           && (isDriveSelector || driveAllows(o, trvSelection.drive));
   };
@@ -1224,6 +1228,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (trvSelection.setup) (activeFlow?.steps || []).forEach(step => {
           if (!step.trvSetupOnly || String(step.trvSetupOnly).toUpperCase() === trvSelection.setup) return;
           if (!newFlags.disabledSteps.includes(step.title)) newFlags.disabledSteps.push(step.title);
+      });
+
+      // AN OPTION THAT REPLACES ANOTHER STEP'S PART (Stuart 2026-08-05: the front rail can be a ring
+      // on a pole instead of a track — "when selected the front track disappears and the rear track
+      // stays"). Front-as-ring is a sub-choice on Single-or-Double flagged hidesStepRole:'TRACK', so
+      // choosing it disables the Track step: the existing pass below clears that step, and a cleared
+      // step's geometry, price and BOM line all go together. No new visibility rule needed, and no
+      // front track billed on an order that does not have one.
+      (activeFlow?.steps || []).forEach(step => {
+          const pick = (o) => o && (o.optId || o.partId);
+          const chosen = [
+              (step.styleOptions || []).find(o => pick(o) === dynamicConfigParams[step.id]),
+              (step.subOptions || []).find(o => pick(o) === dynamicConfigParams[`${step.id}__sub`]),
+          ].filter(o => o && o.hidesStepRole);
+          chosen.forEach(o => {
+              const want = String(o.hidesStepRole).toUpperCase();
+              (activeFlow?.steps || []).forEach(t => {
+                  if (String(t.stepRole || '').toUpperCase() !== want) return;
+                  if (!newFlags.disabledSteps.includes(t.title)) newFlags.disabledSteps.push(t.title);
+              });
+          });
       });
 
       const selectedItemIds = Object.values(dynamicConfigParams);
@@ -2058,7 +2083,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       if (step && Array.isArray(step.subOptions) && step.subOptions.length) {
           const mainOpt = (step.styleOptions || []).find(o => (o.optId || o.partId) === value);
           const loc = mainOpt?.location;
-          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step));
+          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step, { isSub: true }));
           const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
           const pick = cands.find(o => o.targetNode) || cands[0];
           next[`${stepId}__sub`] = pick ? pick.optId : '';
@@ -2715,6 +2740,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const f = parseFloat(String(o?.projInches ?? '').replace(/[^0-9.]/g, ''));
       return Number.isFinite(f) ? f : null;
   }, [activeFlow, dynamicConfigParams]);
+  // A flow built by the traverse generator — recognised by the steps only it emits. Used where the
+  // two grammars genuinely need different rules rather than a shared one bent to serve both.
+  const isTraverseFlow = useMemo(() => (activeFlow?.steps || [])
+      .some(s => ['TRV_SETUP', 'TRV_DRIVE', 'TRV_FASCIA', 'TRACK'].includes(s.stepRole)), [activeFlow]);
   const projTagOk = (o) => {
       if (flowProjSel == null || !o?.projInches) return true;
       const f = parseFloat(String(o.projInches).replace(/[^0-9.]/g, ''));
@@ -2726,13 +2755,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const et = String(o.endTreatment || '').toUpperCase();
       const returnish = et === 'FRENCH_RETURN' || et === 'MITER_RETURN'
           || (o.isFee && /return|miter|mitre|french|bend/i.test(String(o.partName || '')));
-      return returnish ? (flowProjSel >= f - 0.01) : (Math.abs(f - flowProjSel) < 0.01);
+      // ON A TRAVERSE FLOW A RETURN IS EXACT, NOT A MINIMUM (Stuart 2026-08-05: step 6 "is showing
+      // the fee item twice, one is for the 3.625" projection and the other is 4.625""). Minimum
+      // semantics fit a pole flow, where a return is a FEE gated on having enough depth. Here each
+      // miter return is a real modelled part built for one projection — H12RCTAR3625LEFT and
+      // H12RCTAR4625LEFT are different geometry, not the same charge at two depths — so ">=" listed
+      // every shallower one alongside the right one.
+      if (returnish && !isTraverseFlow) return flowProjSel >= f - 0.01;
+      return Math.abs(f - flowProjSel) < 0.01;
   };
 
   // The single predicate a step's option list is judged by — the same one getOptionsForStep uses
   // for the dropdown. Keeping the reconcile below in step with the dropdown is the whole point: a
   // selection the customer cannot see in the list must not survive on the quote.
-  const stepOptOk = (st) => { const trv = trvOkFor(st); return (o) => trv(o) && projTagOk(o); };
+  const stepOptOk = (st, opts) => { const trv = trvOkFor(st, opts); return (o) => trv(o) && projTagOk(o); };
 
   // SWITCHING THE ANSWER MUST CLEAR WHAT IT INVALIDATES. Picking Double, choosing a double bracket,
   // then going back to Single would otherwise leave that double bracket selected — no longer in any
@@ -2748,22 +2784,26 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setDynamicConfigParams(prev => {
           const next = { ...prev }; let changed = false;
           (activeFlow?.steps || []).forEach(st => {
-              // A selector keeps its own answer — filtering a question by its own answer would hide
-              // every alternative the moment one was picked.
-              if (st.stepRole === 'TRV_SETUP' || st.stepRole === 'TRV_DRIVE') return;
+              // A DISABLED step is meant to be empty — the effect below clears it deliberately
+              // (an option flagged hidesStepRole, e.g. Front-as-ring removing the front track).
+              // Healing it here would fight that and put the step straight back.
+              if ((engineFlags.disabledSteps || []).includes(st.title)) return;
               // RE-SEED, DON'T JUST CLEAR (Stuart 2026-08-05: switching to Double "removes the
               // bracket arms rather than adding a second track"). Picking Double invalidates every
               // single-only return arm, and clearing alone left that end controlled by NOTHING —
               // so the arms vanished. The double arm is tagged, and is sitting in the list: hand
               // the step its new default rather than an empty slot. Only when no option survives
               // does the selection actually go away.
+              // A selector keeps its own answer — filtering a question by its own answer would hide
+              // every alternative the moment one was picked. Its SUB-choices still reconcile below.
+              const isSelector = st.stepRole === 'TRV_SETUP' || st.stepRole === 'TRV_DRIVE';
               const pool = (st.styleOptions || []).filter(optCustomerOk).filter(stepOptOk(st));
-              const main = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
+              const main = isSelector ? null : (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
               if (main && !stepOptOk(st)(main)) {
                   const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
                   if (repl) next[st.id] = repl; else delete next[st.id];
                   changed = true;
-              } else if (!next[st.id] && st.required && st.type === 'STYLE_SWAP' && pool.length) {
+              } else if (!isSelector && !next[st.id] && st.required && st.type === 'STYLE_SWAP' && pool.length) {
                   // AND HEAL WHAT AN EARLIER ANSWER EMPTIED. Clearing runs on an INVALID selection;
                   // it has nothing to say about a step already sitting empty. So a step whose pool
                   // emptied under one answer stayed unselected forever once the pool came back —
@@ -2774,17 +2814,24 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
                   if (repl) { next[st.id] = repl; changed = true; }
               }
+              const subPool = (st.subOptions || []).filter(optCustomerOk).filter(stepOptOk(st, { isSub: true }));
               const sub = (st.subOptions || []).find(x => (x.optId || x.partId) === next[`${st.id}__sub`]);
-              if (sub && !stepOptOk(st)(sub)) {
-                  const repl = defaultOptionFor((st.subOptions || []).filter(optCustomerOk).filter(stepOptOk(st)), st.subGeometryMap);
+              if (sub && !stepOptOk(st, { isSub: true })(sub)) {
+                  const repl = defaultOptionFor(subPool, st.subGeometryMap, st.defaultSubOptId);
                   if (repl) next[`${st.id}__sub`] = repl; else delete next[`${st.id}__sub`];
                   changed = true;
+              } else if (!next[`${st.id}__sub`] && subPool.length) {
+                  // The Front Rail sub-picker appears only once DOUBLE is chosen, so its options go
+                  // from none to two mid-flow. Without this it would sit unanswered and the default
+                  // (front as track) would never be applied.
+                  const repl = defaultOptionFor(subPool, st.subGeometryMap, st.defaultSubOptId);
+                  if (repl) { next[`${st.id}__sub`] = repl; changed = true; }
               }
           });
           return changed ? next : prev;
       });
       // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trvSelection.setup, trvSelection.drive, flowProjSel, activeFlow]);
+  }, [trvSelection.setup, trvSelection.drive, flowProjSel, engineFlags.disabledSteps, activeFlow]);
 
   const visibilityOverrides = useMemo(() => {
       if (!activeFlow) return {};
@@ -3208,7 +3255,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               // matching plates show (e.g. wall plates when a wall arm is selected).
                               const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
                               const selLoc = selMainOpt?.location;
-                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(trvOkFor(currentStep)).filter(o => !selLoc || !o.location || o.location === selLoc);
+                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(trvOkFor(currentStep, { isSub: true })).filter(o => !selLoc || !o.location || o.location === selLoc);
                               // Return-aware scoping: the RETURN backplates show while this side's End
                               // Treatment is a return OR the selected bracket is flagged usesReturnPlates
                               // (e.g. In Line brackets share the return plates); regular plates otherwise —
