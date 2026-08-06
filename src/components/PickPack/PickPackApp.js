@@ -16,7 +16,7 @@ import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
-import { readConvertDiag, diagSummary, LINE_STATES } from '../Shared/convertDiag';
+import { readConvertDiag, diagSummary, isHealthyState } from '../Shared/convertDiag';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
@@ -3401,7 +3401,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                                 ) : (
                                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                                                         {dg.lines.map((l, i) => {
-                                                                            const ok = l.state === LINE_STATES.OK;
+                                                                            const ok = isHealthyState(l.state);
                                                                             const isTail = dg.tailUncommitted && i === dg.lines.length - 1;
                                                                             return (
                                                                                 <div key={i} style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>

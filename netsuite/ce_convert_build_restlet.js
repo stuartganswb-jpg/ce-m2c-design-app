@@ -122,6 +122,7 @@ define(['N/record', 'N/query'], function (record, query) {
                 var qBom = Number(u.getCurrentSublistValue({ sublistId: 'component', fieldId: 'bomquantity' })) || 0;
                 var qtyBack = qLine > 0 ? qLine : (qBom > 0 ? qBom * Number(body.quantity) : Number(body.quantity));
                 var lineDiag = { line: i, item: u.getCurrentSublistValue({ sublistId: 'component', fieldId: 'item' }), qLine: qLine, qBom: qBom, qtyUsed: qtyBack, detailed: false };
+                var committedC = false;
                 if (qtyBack > 0) {
                     try {
                         var invC = u.getCurrentSublistSubrecord({ sublistId: 'component', fieldId: 'componentinventorydetail' });
@@ -145,8 +146,17 @@ define(['N/record', 'N/query'], function (record, query) {
                         invC.setCurrentSublistValue({ sublistId: 'inventoryassignment', fieldId: 'quantity', value: qtyBack });
                         invC.commitLine({ sublistId: 'inventoryassignment' });
                         u.commitLine({ sublistId: 'component' });
+                        committedC = true;
                         detailed++; lineDiag.detailed = true; lineDiag.toBinId = toBinId;
                     } catch (cErr) { lineDiag.error = String(cErr && cErr.message || cErr); }
+                }
+                // Same rule as the build (see the note in post()): a line that was selected and never
+                // committed is still open at save. The unbuild walks components identically, so it
+                // carries the identical trap -- fixed here too rather than waiting for a BREAK APART
+                // to hit a BOM whose non-detail component happens to sit last.
+                if (!committedC) {
+                    try { u.cancelLine({ sublistId: 'component' }); lineDiag.cancelled = true; }
+                    catch (cancelErr) { lineDiag.cancelError = String(cancelErr && cancelErr.message || cancelErr); }
                 }
                 diag.push(lineDiag);
             }
@@ -215,6 +225,7 @@ define(['N/record', 'N/query'], function (record, query) {
                 var qBom = Number(b.getCurrentSublistValue({ sublistId: 'component', fieldId: 'bomquantity' })) || 0;
                 var qtyNeeded = qLine > 0 ? qLine : (qBom > 0 ? qBom * Number(body.quantity) : Number(body.quantity));
                 var lineDiag = { line: i, item: b.getCurrentSublistValue({ sublistId: 'component', fieldId: 'item' }), reqd: reqd, qLine: qLine, qBom: qBom, qtyUsed: qtyNeeded, detailed: false };
+                var committed = false;
 
                 if (qtyNeeded > 0) {
                     // Resolve the real bin id + status from live on-hand for THIS component item (prefer the
@@ -256,6 +267,7 @@ define(['N/record', 'N/query'], function (record, query) {
                             lineDiag.detailLines = n2;
                         } catch (totErr) { /* best-effort */ }
                         b.commitLine({ sublistId: 'component' });
+                        committed = true;
                         detailed++;
                         lineDiag.detailed = true;
                     } catch (lineErr) {
@@ -263,6 +275,22 @@ define(['N/record', 'N/query'], function (record, query) {
                         lineDiag.error = (lineErr && lineErr.message) ? lineErr.message : String(lineErr);
                         if (needs) { diag.push(lineDiag); throw lineErr; }
                     }
+                }
+                // NEVER LEAVE A LINE OPEN (Stuart 2026-08-06: "You still need to reconfigure the
+                // inventory detail record after changing the quantity. (at step: save)"). selectLine
+                // opens a line for editing; only commitLine closes it. A component that cannot take
+                // inventory detail -- Phosphating answers "You cannot create an inventory detail for
+                // this item" -- throws, is caught above, and used to be left OPEN. Anywhere but last
+                // that is invisible, because the next selectLine discards it. As the LAST line it is
+                // still open when save() runs, NetSuite resolves it during the save, and a line
+                // resolving mid-save reads as a quantity changing after the details were written --
+                // which is the sentence above, on an assembly whose bins were all accepted.
+                // So the same BOM built in a different component order behaved differently: HNFSPR138/P
+                // (Phosphating last) failed while H1-138IM/P in the same cart went through.
+                // cancelLine discards the untouched line explicitly, so position stops mattering.
+                if (!committed) {
+                    try { b.cancelLine({ sublistId: 'component' }); lineDiag.cancelled = true; }
+                    catch (cancelErr) { lineDiag.cancelError = String(cancelErr && cancelErr.message || cancelErr); }
                 }
                 diag.push(lineDiag);
             }

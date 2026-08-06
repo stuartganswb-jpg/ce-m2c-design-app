@@ -31,19 +31,29 @@ const isNum = (v) => v !== undefined && v !== null && Number.isFinite(Number(v))
 // SKIPPED is the one to look at next, and NO_STOCK is a data answer rather than a script one.
 export const LINE_STATES = {
     OK: 'OK',                 // detail written, into a bin that holds stock, totalling the line qty
+    NOT_TRACKED: 'NOT_TRACKED', // takes no detail (a Phosphating charge) AND was closed — the healthy path
     MISMATCH: 'MISMATCH',     // detail written but the assigned total != the line quantity
     NO_STOCK: 'NO_STOCK',     // nothing on hand to consume — NetSuite cannot assign a bin at all
-    SKIPPED: 'SKIPPED',       // NetSuite refused the detail subrecord; the loop tolerated it
+    SKIPPED: 'SKIPPED',       // NetSuite refused the detail subrecord and the line was left OPEN
     BLOCKED: 'BLOCKED',       // the line REQUIRED detail and threw — the RESTlet aborts on these
 };
+// A state that is not a problem. Kept as one list so the summary, the verdict and the row icon
+// cannot disagree about whether a line is fine.
+export const isHealthyState = (s) => s === LINE_STATES.OK || s === LINE_STATES.NOT_TRACKED;
 
 // One component line of the RESTlet's `diag` array, read into something with a name.
 export function readLine(d) {
     const requiresDetail = d.reqd === true || d.reqd === 'T' || d.reqd === 1 || d.reqd === '1';
     const assigned = isNum(d.detailTotal) ? num(d.detailTotal) : null;
     const needed = num(d.qtyUsed);
+    // `cancelled` is stamped by the FIXED RESTlet when it explicitly closes a line it could not
+    // detail. Its presence is how this readout tells the two scripts apart: without it a skipped
+    // line is left open (and the tail rule applies), with it the line is closed and harmless. That
+    // matters because the same reply must stop accusing the RESTlet once the fix is uploaded.
+    const cancelled = d.cancelled === true;
     let state;
     if (d.error && requiresDetail) state = LINE_STATES.BLOCKED;
+    else if ((d.error || !d.detailed) && cancelled) state = LINE_STATES.NOT_TRACKED;
     else if (d.error || !d.detailed) state = LINE_STATES.SKIPPED;
     else if (!d.srcOnhand && !d.useBinId) state = LINE_STATES.NO_STOCK;
     else if (assigned !== null && needed > 0 && Math.abs(assigned - needed) > 1e-9) state = LINE_STATES.MISMATCH;
@@ -68,6 +78,7 @@ export function readLine(d) {
         assignedLines: isNum(d.detailLines) ? num(d.detailLines) : null,
         detailed: !!d.detailed,
         requiresDetail,
+        cancelled,
         error: d.error || null,
         state,
     };
@@ -101,7 +112,7 @@ export function readConvertDiag(res) {
     // The tail rule (see the header): only a SKIPPED/BLOCKED line in LAST position is still open when
     // save() runs. Anywhere else the next selectLine discards it.
     const last = lines.length ? lines[lines.length - 1] : null;
-    const tailUncommitted = !!last && (last.state === LINE_STATES.SKIPPED || last.state === LINE_STATES.BLOCKED);
+    const tailUncommitted = !!last && !last.cancelled && (last.state === LINE_STATES.SKIPPED || last.state === LINE_STATES.BLOCKED);
 
     const blocked = lines.filter(l => l.state === LINE_STATES.BLOCKED);
     const noStock = lines.filter(l => l.state === LINE_STATES.NO_STOCK);
@@ -131,8 +142,11 @@ export function readConvertDiag(res) {
         verdict = VERDICTS.NO_RECEIVE_BIN;
         advice = `Every component resolved, but the finished assembly's receive detail did not: ${built.error || 'the put-away bin could not be resolved at this location'}. Check the put-away bin exists at this location.`;
     } else {
+        const closed = lines.filter(l => l.state === LINE_STATES.NOT_TRACKED);
         verdict = VERDICTS.READY;
-        advice = 'Every component resolved to a bin with stock and the receive bin took its detail. Nothing here explains a save-time rejection — if this line still fails, the reply above is what to send on.';
+        advice = closed.length
+            ? `Every stock component resolved to a bin, and line ${closed[0].line + 1} takes no inventory detail at all (NetSuite: "${closed[0].error || 'not detail-tracked'}") — the script closed that line explicitly, so it is not left open at save. This line should build.`
+            : 'Every component resolved to a bin with stock and the receive bin took its detail. Nothing here explains a save-time rejection — if this line still fails, the reply above is what to send on.';
     }
 
     return {
@@ -148,6 +162,6 @@ export function readConvertDiag(res) {
 export const diagSummary = (r) => {
     if (!r) return '';
     if (r.verdict === VERDICTS.ERROR) return 'check failed';
-    const bad = r.lines.filter(l => l.state !== LINE_STATES.OK).length;
+    const bad = r.lines.filter(l => !isHealthyState(l.state)).length;
     return bad ? `${bad} of ${r.lines.length} component line${r.lines.length === 1 ? '' : 's'} unresolved` : `${r.lines.length} component line${r.lines.length === 1 ? '' : 's'} all resolved`;
 };
