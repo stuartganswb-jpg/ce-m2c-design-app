@@ -148,8 +148,8 @@ test('a DOUBLE pin on the SAME mesh as the base track adds nothing — it never 
     const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
     assert.deepEqual(setup.geometryMap, {});
     assert.equal(setup.styleOptions.find(o => o.trvSetup === 'DOUBLE').targetNode, '');
-    // the base track is still offered and still owns its mesh
-    assert.equal(steps.find(s => s.title === 'Track').geometryMap['TRK-S'], 'N-TRK-S');
+    // the base track is still offered and still owns its mesh (alongside its own ends)
+    assert.ok(steps.find(s => s.title === 'Track').geometryMap['TRK-S'].split(', ').includes('N-TRK-S'));
 });
 
 test('DOUBLE ADDS the second track — it does not swap for it', () => {
@@ -315,6 +315,24 @@ test('front-as-ring removes the front track from render, price and BOM together'
     assert.deepEqual(Object.keys(setup.subGeometryMap), [ring.optId]);
     assert.equal(setup.subGeometryMap[ring.optId], 'N-RING');
     assert.equal(setup.subOptions.find(o => o.optId === 'OPT-FRONT-TRACK').targetNode, '');
+});
+
+test('the front track\'s ends ride WITH the front track, the rear\'s do not', () => {
+    const withRearEnds = [
+        ...other,
+        opt({ optId: 'PULL-RD', partId: 'p-pull', partName: 'HSOM-04', traverseRole: 'TRV_END', driveType: 'MOTORIZED', trvSetup: 'DOUBLE' }),
+    ];
+    const { steps } = run({ other: withRearEnds });
+    const trackGeom = steps.find(s => s.title === 'Track').geometryMap['TRK-S'].split(', ');
+    // the Track step co-owns the FRONT ends, so disabling it (front-as-ring) takes them with it
+    assert.ok(trackGeom.includes('N-TRK-S'));
+    ['N-PLUG-L', 'N-PLUG-R', 'N-PULL-L', 'N-PULL-R'].forEach(n =>
+        assert.ok(trackGeom.includes(n), `front end ${n} missing from the track's map`));
+    // the REAR end answers to the setup step instead — a ring up front leaves the rear dressed
+    assert.equal(trackGeom.includes('N-PULL-RD'), false);
+    // and the drive still gates them all, because visibilityOverrides ANDs the two steps
+    const drive = steps.find(s => s.stepRole === 'TRV_DRIVE');
+    assert.ok(drive.styleOptions.find(o => o.driveType === 'MANUAL').targetNode.includes('N-PLUG-L'));
 });
 
 test('no ring pinned → no Front Rail picker at all', () => {

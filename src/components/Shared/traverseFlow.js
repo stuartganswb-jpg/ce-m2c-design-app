@@ -287,10 +287,29 @@ export function buildTraverseFlow({
     // ── 5. TRACK — the extrusion, chosen for its finish ──────────────────────────────────────────
     // Its CUT LENGTH depends on the drive answered above (−0.5" manual, −2" motorised against the
     // fascia), but that is a fabrication consequence, not a second question.
+    //
+    // THE FRONT TRACK'S ENDS BELONG TO THE FRONT TRACK (Stuart 2026-08-05: "the track ends still
+    // remained when i selected front as ring on pole, they should disappear with the track"). The
+    // ends are listed by the DRIVE step, so disabling the Track step left them behind — a plug
+    // floating where its track used to be.
+    //
+    // Listing them here TOO is what fixes it, because visibilityOverrides ANDs every step that
+    // mentions a node: a front plug now needs the Track step alive AND its drive chosen. Kill the
+    // track and its ends go with it; change the drive and they still follow. The REAR track's ends
+    // are deliberately not here — they answer to the setup step instead, so a ring on the front
+    // leaves the rear rail fully dressed.
+    const frontEndNodes = [...new Set(nodesOf(ends.filter(e => setupOf(e) !== 'DOUBLE')))].join(', ');
+    const trackGeom = {};
+    track.forEach(o => {
+        const n = [o.targetNode, frontEndNodes].filter(Boolean).join(', ');
+        if (n) trackGeom[o.optId] = n;
+    });
     if (track.length) add({
         title: 'Track', type: 'STYLE_SWAP', partHandling: 'Custom', required: true, hideQty: true,
         finishDataSource: 'master_finishes', useClientPricing: true, stepRole: 'TRACK',
-        styleOptions: track, geometryMap: geom(track),
+        // targetNode stays the track's own — only the VISIBILITY map is widened, so the BOM and the
+        // price still describe a track and nothing else.
+        styleOptions: track, geometryMap: trackGeom,
         ...(endInc ? { includedParts: endInc } : {}),
     });
 
