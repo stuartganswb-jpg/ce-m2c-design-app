@@ -16,6 +16,7 @@ import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
+import { readConvertDiag, diagSummary, LINE_STATES } from '../Shared/convertDiag';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
@@ -979,7 +980,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [breakToCore, setBreakToCore] = useState(false); // chain a second unbuild: eaches -> raw core
     const [breakCoreScan, setBreakCoreScan] = useState(""); // bin the raw core goes into
     const [packDiag, setPackDiag] = useState(null);       // what NetSuite says the BOM actually sources
-    const [packDiagNames, setPackDiagNames] = useState({}); // NetSuite id -> { code, name } for unmapped components
+    const [diagNames, setDiagNames] = useState({}); // NetSuite id -> { code, name } for unmapped components (BOTH diagnostics)
+    const [cartDiag, setCartDiag] = useState(null);  // { lineId, res } — the same BOM check, for one conversion-cart line
     const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
     const [cutSrcScan, setCutSrcScan] = useState('');
     const [cutDestScan, setCutDestScan] = useState('');
@@ -1496,6 +1498,42 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             pullNetSuiteStock();
         } catch (e) { console.error('convert line failed', e); alert("❌ NetSuite rejected the build:\n\n" + (e.message || e) + "\n\nIf it still mentions the component list / inventory detail, the raw isn't in the cart bin in NetSuite yet (stage it first), or the field name differs (componentInventoryDetail) — paste the error and I'll correct it."); }
         finally { setIsSyncing(false); }
+    };
+
+    // ASK WHAT THIS LINE'S BOM ACTUALLY SOURCES, WITHOUT BUILDING (Stuart 2026-08-06). Same RESTlet,
+    // same `diag:true` mode as the Ring Packs BOM check — it stops at step 'built-detail' and returns
+    // the component structure instead of saving, so this posts NOTHING and can be run on the bench
+    // while an operator is standing at the failing line.
+    //
+    // It is deliberately given the EXACT arguments the real convert would use — the cart bin as the
+    // consume bin, the operator's put-away bin, the line quantity — because a check run with different
+    // inputs answers a different question than the one that failed.
+    const runCartDiag = async (line) => {
+        if (!convBatch || !line || !line.targetErpId) return;
+        const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
+        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
+        const newBin = (cartBinEdits[line.lineId] ?? line.newBin ?? '').trim().toUpperCase();
+        try {
+            setIsSyncing(true);
+            setCartDiag(null);
+            const assembly = await resolveItemDetail(line.targetErpId);
+            if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${line.targetErpId} in NetSuite by item id.`); }
+            const res = await postConvertBuild({
+                itemId: assembly.id, quantity: line.qty,
+                subsidiary: nsConfig.subsidiary, location: nsConfig.location,
+                bin: (convBatch.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase(),
+                toBin: newBin,
+                memo: 'BOM check', diag: true,
+            });
+            setCartDiag({ lineId: line.lineId, res });
+            const unknown = (res && Array.isArray(res.diag) ? res.diag : [])
+                .filter(d => d && d.item !== undefined)
+                .map(d => String(d.item))
+                .filter(id => !hqParts.some(p => String(p.netSuiteInternalId || '') === id));
+            if (unknown.length) setDiagNames(await resolveItemNames(unknown));
+        } catch (e) {
+            setCartDiag({ lineId: line.lineId, res: { error: (e && e.message) ? e.message : String(e) } });
+        } finally { setIsSyncing(false); }
     };
 
     const closeCartBatch = async () => {
@@ -2316,7 +2354,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
         try {
             setIsSyncing(true);
-            setPackDiag(null); setPackDiagNames({});
+            setPackDiag(null); setDiagNames({});
             const assembly = await resolveItemDetail(erpOf(packTarget));
             if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${erpOf(packTarget)} in NetSuite.`); }
             const res = await postConvertBuild({
@@ -2332,7 +2370,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 .filter(d => d && d.item !== undefined)
                 .map(d => String(d.item))
                 .filter(id => !hqParts.some(p => String(p.netSuiteInternalId || '') === id));
-            if (unknown.length) setPackDiagNames(await resolveItemNames(unknown));
+            if (unknown.length) setDiagNames(await resolveItemNames(unknown));
         } catch (e) {
             setPackDiag({ error: (e && e.message) ? e.message : String(e) });
         } finally { setIsSyncing(false); }
@@ -2361,7 +2399,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!want) return '';
         const hit = hqParts.find(p => String(p.netSuiteInternalId || '') === want);
         if (hit) return erpOf(hit);
-        const looked = packDiagNames[want];
+        const looked = diagNames[want];
         return looked && looked.code ? `${looked.code} (NS #${want}, not in this brand's library)` : `NS #${want}`;
     };
 
@@ -3335,15 +3373,63 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <tbody>
                                         {(convBatch.lines || []).map(line => {
                                             const done = line.status === 'converted';
+                                            const dg = cartDiag && cartDiag.lineId === line.lineId ? readConvertDiag(cartDiag.res) : null;
                                             return (
-                                                <tr key={line.lineId} style={{ borderBottom: `1px solid ${theme.line}`, opacity: done ? 0.55 : 1 }}>
+                                            <React.Fragment key={line.lineId}>
+                                                <tr style={{ borderBottom: dg ? 'none' : `1px solid ${theme.line}`, opacity: done ? 0.55 : 1 }}>
                                                     <td style={{ padding: '10px 12px' }}><div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{line.rawErpId}</div><div style={{ color: theme.ink }}>{line.rawName}</div></td>
                                                     <td style={{ padding: '10px 12px', fontFamily: theme.mono }}>{line.qty}</td>
                                                     <td style={{ padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{line.srcBin} → {convBatch.cartBin}</td>
                                                     <td style={{ padding: '10px 12px', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{line.targetErpId}</td>
                                                     <td style={{ padding: '10px 12px' }}>{done ? <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass }}>{line.newBin || '—'}</span> : <input value={cartBinEdits[line.lineId] ?? line.newBin ?? ''} onChange={e => setCartBinEdits(prev => ({ ...prev, [line.lineId]: e.target.value.toUpperCase() }))} placeholder="bin…" style={{ width: '100px', padding: '6px', fontFamily: theme.mono, fontSize: '11px', border: `1px solid ${theme.line}`, textAlign: 'center', outline: 'none' }} />}</td>
-                                                    <td style={{ padding: '10px 12px', textAlign: 'right' }}>{done ? <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#2f7d3b', textTransform: 'uppercase' }}>Converted ✓</span> : <button onClick={() => convertCartLine(line)} disabled={isSyncing} style={{ padding: '8px 14px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Convert ▸</button>}</td>
+                                                    <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>{done ? <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#2f7d3b', textTransform: 'uppercase' }}>Converted ✓</span> : (<>
+                                                        {/* Reads the BOM through the RESTlet's diag mode — posts NOTHING. Run it on a line
+                                                            NetSuite rejected: it names which component line is unresolved and why. */}
+                                                        <button onClick={() => (dg ? setCartDiag(null) : runCartDiag(line))} disabled={isSyncing} style={{ padding: '8px 12px', marginRight: '8px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>{dg ? 'Hide' : 'Check BOM'}</button>
+                                                        <button onClick={() => convertCartLine(line)} disabled={isSyncing} style={{ padding: '8px 14px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Convert ▸</button>
+                                                    </>)}</td>
                                                 </tr>
+                                                {dg && (
+                                                    <tr style={{ borderBottom: `1px solid ${theme.line}` }}>
+                                                        <td colSpan="6" style={{ padding: '0 12px 14px 12px', background: theme.paper }}>
+                                                            <div style={{ border: `1px solid ${theme.line}`, background: '#fff', padding: '14px 16px' }}>
+                                                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '10px' }}>
+                                                                    What NetSuite's BOM sources for {line.targetErpId} · {diagSummary(dg)} · nothing was posted
+                                                                </div>
+                                                                {dg.error ? (
+                                                                    <div style={{ fontFamily: theme.mono, fontSize: '11px', color: '#d9534f' }}>{dg.error}</div>
+                                                                ) : (
+                                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                                        {dg.lines.map((l, i) => {
+                                                                            const ok = l.state === LINE_STATES.OK;
+                                                                            const isTail = dg.tailUncommitted && i === dg.lines.length - 1;
+                                                                            return (
+                                                                                <div key={i} style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+                                                                                    <span style={{ color: ok ? '#3f8b45' : '#d9534f', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
+                                                                                    <span style={{ fontWeight: 600 }}>line {l.line + 1}</span>
+                                                                                    <span title={(diagNames[String(l.item)] || {}).name || ''}>{codeForNsId(l.item)}</span>
+                                                                                    <span style={{ color: theme.inkSoft }}>needs {l.needed}{l.fractional ? ` (bom ${l.qBom}/build)` : ''}</span>
+                                                                                    <span style={{ color: theme.inkSoft }}>{l.onHand ? `${l.onHand} on hand in the bin it picked` : 'no stock resolved'}</span>
+                                                                                    {l.assigned !== null && <span style={{ color: theme.inkSoft }}>assigned {l.assigned}</span>}
+                                                                                    {isTail && <span style={{ color: '#d9534f', fontWeight: 600 }}>LAST LINE — still open at save</span>}
+                                                                                    {l.error && <span style={{ color: '#d9534f' }}>{l.error}</span>}
+                                                                                </div>
+                                                                            );
+                                                                        })}
+                                                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', lineHeight: 1.5, marginTop: '8px', color: dg.ok ? '#3f8b45' : theme.inkSoft }}>{dg.advice}</div>
+                                                                    </div>
+                                                                )}
+                                                                {/* The raw reply, so a failure can be sent on verbatim instead of retyped. */}
+                                                                <details style={{ marginTop: '10px' }}>
+                                                                    <summary style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Raw reply</summary>
+                                                                    <button onClick={() => { try { navigator.clipboard.writeText(JSON.stringify(cartDiag.res, null, 2)); } catch (e) { /* clipboard blocked — the text is on screen */ } }} style={{ margin: '8px 0', padding: '6px 10px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer' }}>Copy</button>
+                                                                    <pre style={{ margin: 0, maxHeight: '220px', overflow: 'auto', background: theme.paper, padding: '10px', fontFamily: theme.mono, fontSize: '10px', color: theme.ink }}>{JSON.stringify(cartDiag.res, null, 2)}</pre>
+                                                                </details>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                )}
+                                            </React.Fragment>
                                             );
                                         })}
                                         {(convBatch.lines || []).length === 0 && <tr><td colSpan="6" style={{ padding: '14px 12px', color: theme.inkSoft, fontStyle: 'italic' }}>Cart is empty — add raw items below.</td></tr>}
@@ -3563,7 +3649,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div style={{ fontFamily: theme.sans, fontSize: '13px', color: theme.inkSoft }}>{packTarget.itemName || ''}</div>
                                         <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '4px' }}>{packSize}-pack · on hand {ohOf(packTarget)} · home bin {binOf(packTarget)}</div>
                                     </div>
-                                    <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); setPackDiagNames({}); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
+                                    <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); setDiagNames({}); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
                                 </div>
 
                                 {/* BUILD or BREAK — the reversal shares the pack picker above. */}
@@ -3732,7 +3818,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             <div key={i} style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
                                                                 <span style={{ color: ok ? '#3f8b45' : '#d9534f', fontWeight: 700 }}>{ok ? '✓' : '✗'}</span>
                                                                 <span style={{ fontWeight: 600 }}>line {(d.line ?? i) + 1}</span>
-                                                                <span title={(packDiagNames[String(d.item)] || {}).name || ''}>{codeForNsId(d.item)}</span>
+                                                                <span title={(diagNames[String(d.item)] || {}).name || ''}>{codeForNsId(d.item)}</span>
                                                                 <span style={{ color: theme.inkSoft }}>needs {d.qtyUsed ?? '?'}</span>
                                                                 <span style={{ color: theme.inkSoft }}>{d.srcOnhand ? `${d.srcOnhand} on hand in the bin it picked` : 'NO STOCK — nothing to consume'}</span>
                                                                 {d.error ? <span style={{ color: '#d9534f' }}>{d.error}</span> : null}
