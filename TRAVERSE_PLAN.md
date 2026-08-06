@@ -172,6 +172,40 @@ has that track too, but nothing reads it: the base track is what the picker offe
    is why the pricing breakdown lists answers the customer never gave. Item 2 makes this survivable
    rather than wrong, but gating the seed on the steps that gate it is the honest fix.
 
+### 🔜 NEXT — Vision Hardware (`VisionHardware.js`), scoped 2026-08-05
+
+Stuart: "on vision, when this flow is selected, ends should react like others and turn into miter
+return graphic, in the lower boxes Client Details & Ordering and Shop Floor BOM & Raw Cuts is where
+the lengths details should hit. the Pole O2O is the same it is the outside edges of the miter return,
+the C2C can be replaced with track length."
+
+**Most of this already exists.** The flow-mirror at `VisionHardware.js:578` already reads each End
+Treatment step's selection and sets `endStyle` / `endStyleRight` through `endStyleOf()` (`:423`),
+which maps `MITER_RETURN → RETURN_MITER` and draws the miter. The panels read `poleO2O`, `pole2`,
+`rawCenter` from `computeBayMath` (`Shared/bayMath.js`).
+
+1. **The end graphic needs a signal, not new drawing code.** The traverse return arms
+   (`H1-2TRVSRA` / `ERA` / `6RA` / `RAD`) are tagged **FINIAL** in 1.6, so `endStyleOf` returns
+   FINIAL and draws a finial — which is why the screenshot says `End Style: FINIAL`. Physically they
+   return to the wall like a miter. Two ways, **decide before building**:
+   - Tag the arms `MITER RETURN` in 1.6. Simplest, but it makes them RETURNS to CPQ too:
+     `isReturnOption` excludes returns from being a step's DEFAULT (`seedable`), so the End
+     Treatment step would seed nothing, and `hasOwnReturn` / bracket-hiding change behaviour.
+   - Add the `end-arm` (`isReturnArm`) flag to those pins and have `endStyleOf` read it — there is
+     already precedent at `:233`, where an is-return BRACKET maps to `RETURN_MITER`. **Preferred:**
+     it changes the drawing only and leaves CPQ's return semantics alone. Check whether the 1.6
+     FINIAL grid exposes the `end-arm` chip (today it is visible on BRACKET rows).
+2. **C2C → track length.** Replace the `Main Wall C2C` row (`:1716`, currently `pole2`) with the
+   TRACK cut when the flow is a traverse: `traverseCutLength({ fasciaInches, role: 'TRACK', drive })`
+   — fascia −0.5" manual, −2" motorised. The drive comes from the `TRV_DRIVE` step's selection.
+3. **Raw cuts panel.** `traverseCutList()` returns fascia / track / F-clip in one call and is
+   already tested. It has never had a caller; this is its destination.
+4. **Pole O2O is unchanged** — Stuart confirms it is the outside edges of the miter return, which is
+   what the existing math already produces once the ends read as returns (item 1).
+
+`traverseCutLength` / `traverseCutList` are in `Shared/traverseTags.js`, tested against his numbers.
+Both inputs now exist: the drive is answered once for the order, and the fascia footage is live.
+
 ### D. Not in this pass
 
 - **THE CUT LIST — the point of the drive question.** `traverseCutLength()` is written and tested and
