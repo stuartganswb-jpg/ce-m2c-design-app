@@ -158,14 +158,14 @@ export function buildTraverseFlow({
             styleOptions: fascia, geometryMap: geom(fascia),
         });
         add({
-            title: 'Fascia Length', type: 'DIMENSIONS', partHandling: 'Custom',
+            title: 'Fascia Length', type: 'DIMENSIONS', partHandling: 'Custom', stepRole: 'TRV_LENGTH',
             calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true,
             useClientPricing: true, geometryMap: {}, targetNodes: fasciaNodes,
             ...(riderInc ? { includedParts: riderInc } : {}),
         });
     } else if (fascia.length === 1) {
         add({
-            title: 'Fascia Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes',
+            title: 'Fascia Length & Finish', type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', stepRole: 'TRV_LENGTH',
             partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper,
             required: true, useClientPricing: true, geometryMap: {}, targetNodes: fasciaNodes,
             ...(fascia[0]?.partId ? { linkedItemId: fascia[0].partId } : {}),
@@ -219,6 +219,9 @@ export function buildTraverseFlow({
         ...frontRail.map((o, i) => ({
             ...o, optId: `OPT-FRONT-RING-${i}`, partName: 'Front as ring on pole',
             trvSetup: 'DOUBLE', hidesStepRole: 'TRACK',
+            // Rings are COUNTED. Everything else on this step is per-foot or implied, so the ring
+            // carries its own quantity rather than inheriting the step's (Stuart 2026-08-05).
+            needsQty: true, qtyHelperText: 'Number of rings',
         })),
     ] : [];
     if (hasSetupStep) add({

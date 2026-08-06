@@ -1919,6 +1919,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           if (subSel && Array.isArray(step.subOptions)) {
               const subOpt = step.subOptions.find(o => (o.optId || o.partId) === subSel);
               if (subOpt) {
+                  // A SUB-CHOICE MAY BE COUNTED SEPARATELY FROM ITS STEP (Stuart 2026-08-05: the
+                  // front-rail ring needs "a qty field to attach for pricing and bom"). Sub-lines
+                  // inherited the step's quantity, which cannot serve both here: the DOUBLE answer
+                  // bills a track per foot while the ring beside it is billed by the piece. Stored
+                  // under `<stepId>__sub`, which the ERP push already reads as its own line.
+                  const rawSubQty = stepQuantities[`${step.id}__sub`];
+                  const subQty = subOpt.needsQty
+                      ? ((rawSubQty === undefined || rawSubQty === '') ? 1 : (parseInt(rawSubQty) || 0))
+                      : qty;
                   // Same identity chain as main lines: base → size → finish. At 1"/1-3/8" the return
                   // plates (RBP/RCP) resolve to the STANDARD plates — geometry unchanged, item swapped.
                   const subBase0 = findLibPart(subOpt.partId) || findLibPart(subOpt.partName);
@@ -1965,7 +1974,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   }
                   breakdown.push({
                       name: `${step.subLabel || 'Backplate'} (${subPart ? lineNameFor(subPart, subOpt) : subOpt.partName})${plateNote ? ` — ${plateNote}` : ''}`,
-                      qty: qty, price: subPrice, total: subPrice * qty,
+                      qty: subQty, price: subPrice, total: subPrice * subQty,
                       // Backplates are tagged Small Parts in the library — that tag now routes them,
                       // instead of inheriting the bracket step's 'Custom' stamp.
                       partHandling: ovrHandling || subPart?.manufacturingSpecs?.partHandling || subBase?.manufacturingSpecs?.partHandling || step.partHandling || '',
@@ -1973,7 +1982,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       partId: subPart?.itemId || subPart?.id || subOpt.partId,
                       legacyErpId: subPart?.legacyErpId || subPart?.itemId || null
                   });
-                  total += subPrice * qty;
+                  total += subPrice * subQty;
                   // 🔩 Paired wall mount for the backplate sub-line (chain: finished → sized base → raw base —
                   // pairing lives on base docs; enter it per-size when a size needs a different mount).
                   const subWm = subPart?.manufacturingSpecs?.wallMount || subBase?.manufacturingSpecs?.wallMount || subBase0?.manufacturingSpecs?.wallMount;
@@ -2774,6 +2783,40 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       return Math.abs(f - flowProjSel) < 0.01;
   };
 
+  // ── TRACK QUANTITY IS DERIVED, NEVER TYPED (Stuart 2026-08-05) ─────────────────────────────────
+  // "the track length can be taken from the fascia quantity... with double it is 2x and with double
+  // with front no track but rings it is track per ft plus qty of rings."
+  //
+  // The 2x is not a special case and is deliberately not written as one. A traverse system bills ONE
+  // track per rail it actually has: the Track step bills the front, and the DOUBLE answer bills the
+  // rear. Give each of them the fascia footage and every configuration falls out on its own —
+  //
+  //   single                 Track = ft                        → 1 x ft
+  //   double                 Track = ft, Double answer = ft     → 2 x ft
+  //   double + front as ring Track DISABLED, Double answer = ft → 1 x ft, plus the ring by the piece
+  //
+  // Written into stepQuantities rather than computed at price time so the on-screen breakdown and
+  // the NetSuite push read the SAME number — two copies of this rule would eventually disagree, and
+  // the one that reaches the customer is the invoice.
+  useEffect(() => {
+      if (!isTraverseFlow || !activeFlow) return;
+      const steps = activeFlow.steps || [];
+      const lenStep = steps.find(s => s.stepRole === 'TRV_LENGTH');
+      if (!lenStep) return;
+      const trackStep = steps.find(s => s.stepRole === 'TRACK');
+      const setupStep = steps.find(s => s.stepRole === 'TRV_SETUP');
+      setStepQuantities(prev => {
+          const ft = parseInt(prev[lenStep.id]) || 0;
+          const next = { ...prev }; let changed = false;
+          const put = (id, v) => { if (id && next[id] !== v) { next[id] = v; changed = true; } };
+          put(trackStep?.id, ft);
+          // The setup step only bills a track on DOUBLE; on SINGLE its answer carries no part, so a
+          // footage quantity there would just be a confusing number on a $0 line.
+          if (setupStep) put(setupStep.id, trvSelection.setup === 'DOUBLE' ? ft : 1);
+          return changed ? next : prev;
+      });
+  }, [isTraverseFlow, activeFlow, trvSelection.setup, stepQuantities, setStepQuantities]);
+
   // The single predicate a step's option list is judged by — the same one getOptionsForStep uses
   // for the dropdown. Keeping the reconcile below in step with the dropdown is the whole point: a
   // selection the customer cannot see in the list must not survive on the quote.
@@ -3313,6 +3356,29 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                           <option key={o.optId} value={o.optId}>{d.name}{d.desc ? ` — ${d.desc}` : ''}</option>
                                       ); })}
                                   </select>
+                                  {(() => {
+                                      // A COUNTED SUB-CHOICE gets its own quantity box. The front-rail
+                                      // ring is billed by the piece while everything else on its step is
+                                      // per-foot, so it cannot share the step's number.
+                                      const selSub = subs.find(o => o.optId === dynamicConfigParams[`${currentStep.id}__sub`]);
+                                      if (!selSub?.needsQty) return null;
+                                      const key = `${currentStep.id}__sub`;
+                                      const val = stepQuantities[key] !== undefined ? stepQuantities[key] : 1;
+                                      const bump = (d) => setStepQuantities(prev => ({ ...prev, [key]: Math.max(0, (parseInt(prev[key] ?? 1) || 0) + d) }));
+                                      const btn = { padding: '10px 16px', border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '14px', lineHeight: 1 };
+                                      return (
+                                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '12px' }}>
+                                              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{selSub.qtyHelperText || 'Quantity'}</span>
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                  <button type="button" onClick={() => bump(-1)} style={btn}>-</button>
+                                                  <input type="number" min="0" value={val}
+                                                      onChange={(e) => setStepQuantities(prev => ({ ...prev, [key]: e.target.value }))}
+                                                      style={{ width: '72px', padding: '10px', border: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none' }} />
+                                                  <button type="button" onClick={() => bump(1)} style={btn}>+</button>
+                                              </div>
+                                          </div>
+                                      );
+                                  })()}
                               </div>
                               );
                           })()}

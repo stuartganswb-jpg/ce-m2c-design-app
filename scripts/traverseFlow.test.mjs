@@ -335,6 +335,18 @@ test('the front track\'s ends ride WITH the front track, the rear\'s do not', ()
     assert.ok(drive.styleOptions.find(o => o.driveType === 'MANUAL').targetNode.includes('N-PLUG-L'));
 });
 
+test('the ring is counted, the track is measured', () => {
+    const { steps } = run();
+    const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
+    const ring = setup.subOptions.find(o => o.hidesStepRole);
+    assert.equal(ring.needsQty, true);
+    assert.equal(ring.qtyHelperText, 'Number of rings');
+    // "front as track" is not counted — it is the absence of a ring, not a quantity of one
+    assert.equal(setup.subOptions.find(o => o.optId === 'OPT-FRONT-TRACK').needsQty, undefined);
+    // and the length step is labelled so the track can take its footage from it
+    assert.ok(steps.find(s => s.stepRole === 'TRV_LENGTH'));
+});
+
 test('no ring pinned → no Front Rail picker at all', () => {
     const { steps } = run({ rings: [] });
     assert.equal(steps.find(s => s.stepRole === 'TRV_SETUP').subOptions, undefined);
