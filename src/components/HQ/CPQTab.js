@@ -797,16 +797,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setDynamicConfigParams(prev => {
           const next = { ...prev };
           let changed = false;
-          steps.forEach((step, idx) => {
-              // SEED ON ARRIVAL, NOT ALL AT ONCE (Stuart 2026-08-05: "can we fix the seeding all at
-              // once... ideally pricing starts at $0.00"). This used to answer EVERY step the moment
-              // a flow opened, so step 1 already showed three priced lines for questions the customer
-              // had not reached — a quote that had made decisions on their behalf.
-              //
-              // A step is now defaulted when the customer arrives at it, so the model builds up as
-              // they advance instead of appearing whole. Steps already answered are untouched, so
-              // going BACK never re-seeds and never loses a pick.
-              if (idx > currentStepIndex) return;
+          // ⛔ REVERTED 2026-08-05. Seeding only the steps the customer had REACHED made the price
+          // start at $0.00, which is what he asked for — but it broke the render, and he was right
+          // to call it immediately. Hidden-until-chosen hides every mesh a STYLE_SWAP step could
+          // control until that step has a selection, so an unreached step hides its geometry: at
+          // step 3 the Track step (step 6) had no answer yet, so the front track and its ends were
+          // invisible and single-vs-double appeared to do nothing.
+          //
+          // The two goals are in direct conflict under that rule, and the render wins — a quote you
+          // cannot see is worse than a quote that pre-answers. Doing both needs the visibility model
+          // to separate "not chosen yet" from "chosen as nothing", which is a real change, not a
+          // gate on this loop.
+          steps.forEach(step => {
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
                   // trvOkFor here is the fix for "selected but not in the list": the sub-seed below
                   // and the dropdown itself both filter by it, and only this line did not.
@@ -832,7 +834,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           });
           return changed ? next : prev;
       });
-  }, [activeFlow, activeAssembly, activeDraftId, currentStepIndex]);
+  }, [activeFlow, activeAssembly, activeDraftId]);
 
   const currentStep = activeFlow?.steps?.[currentStepIndex];
   // True if any step AFTER the current one is still enabled — drives whether we show "Next Step" or
@@ -2835,7 +2837,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   useEffect(() => {
       setDynamicConfigParams(prev => {
           const next = { ...prev }; let changed = false;
-          (activeFlow?.steps || []).forEach((st, idx) => {
+          (activeFlow?.steps || []).forEach(st => {
               // A DISABLED step is meant to be empty — the effect below clears it deliberately
               // (an option flagged hidesStepRole, e.g. Front-as-ring removing the front track).
               // Healing it here would fight that and put the step straight back.
@@ -2855,7 +2857,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
                   if (repl) next[st.id] = repl; else delete next[st.id];
                   changed = true;
-              } else if (!isSelector && !next[st.id] && idx <= currentStepIndex && st.required && st.type === 'STYLE_SWAP' && pool.length) {
+              } else if (!isSelector && !next[st.id] && st.required && st.type === 'STYLE_SWAP' && pool.length) {
                   // AND HEAL WHAT AN EARLIER ANSWER EMPTIED. Clearing runs on an INVALID selection;
                   // it has nothing to say about a step already sitting empty. So a step whose pool
                   // emptied under one answer stayed unselected forever once the pool came back —
@@ -2883,7 +2885,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           return changed ? next : prev;
       });
       // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trvSelection.setup, trvSelection.drive, flowProjSel, engineFlags.disabledSteps, currentStepIndex, activeFlow]);
+  }, [trvSelection.setup, trvSelection.drive, flowProjSel, engineFlags.disabledSteps, activeFlow]);
 
   const visibilityOverrides = useMemo(() => {
       if (!activeFlow) return {};
