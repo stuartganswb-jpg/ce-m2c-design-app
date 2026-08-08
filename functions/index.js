@@ -998,24 +998,14 @@ const buildSkuLookup = async (db, customerId, crm, codes) => {
 // customer saw their own submitted quote as an empty card (Stuart 2026-08-02: "they need to be able
 // to see the quotes after submittal"). Rebuild what they CHOSE from the flow: each step's title and
 // the option they picked, resolved through the flow doc so the words match the configurator.
-const requestLines = (job, flowDoc) => {
-    const req = job.portalRequest || {};
-    const params = (req.selections && req.selections.params) || {};
-    const qtys = (req.selections && req.selections.quantities) || {};
-    const steps = (flowDoc && flowDoc.steps) || [];
-    const out = [];
-    steps.forEach((st) => {
-        const sel = params[st.id];
-        if (!sel || typeof sel !== 'string') return;
-        const opt = (st.styleOptions || []).find((o) => (o.optId || o.partId) === sel)
-            || (st.allowedOptions || []).find((o) => (o.id || o.optId) === sel);
-        const label = (opt && (opt.partName || opt.name || opt.label)) || sel;
-        const q = qtys[st.id];
-        out.push({ name: `${st.title || 'Option'}: ${label}`, qty: Number(q) || 0, price: null, total: null, sku: '' });
-    });
-    if (req.note) out.push({ name: `Note: ${String(req.note).slice(0, 300)}`, qty: 0, price: null, total: null, sku: '' });
-    return out;
-};
+// 2026-08-07: extracted to portalRequestLines.js — finish ids printed raw (FIN-1779248570692-e6246)
+// and compound `__finish` / backplate `__sub` picks were skipped entirely. The CRM DOCS view renders
+// through the src/ mirror of the same module, so the customer's card and the team's document say
+// the same words. price/total/sku stay null-shaped here for the card renderer.
+const { portalRequestLines } = require('./portalRequestLines');
+const requestLines = (job, flowDoc, finishes, custNames) =>
+    portalRequestLines(job, flowDoc, finishes, { custNames })
+        .map((l) => ({ ...l, price: null, total: null, sku: '' }));
 
 // Customer-friendly stage from the floor-doc join (mirrors RTG Dispatch's rollup precedence:
 // finishing/shop presence wins, else the SO's own status).
@@ -1084,15 +1074,34 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     ];
     const skuOf = await buildSkuLookup(db, customerId, crm, allCodes);
 
-    // Flow docs behind any un-priced portal requests, so their selections read in words.
+    // Flow docs behind any un-priced portal requests, so their selections read in words — and the
+    // finish lists, because a finish pick is a FIN-… id that lives in NEITHER the flow's
+    // styleOptions nor its allowedOptions (it printed raw on the card until 2026-08-07). Loaded
+    // once per page, only when a request is actually on it. custNames drives clientMapping so a
+    // Fabricut login reads Fabricut's own finish names, same as the configurator.
     const reqFlowIds = [...new Set(liveJobs
         .filter((j) => j.status === 'PORTAL_REQUEST' && j.portalRequest && j.portalRequest.flowId)
         .map((j) => String(j.portalRequest.flowId)))];
     const flowById = {};
-    await Promise.all(reqFlowIds.map(async (fid) => {
-        const fs = await db.collection('cpq_flows').doc(fid).get();
-        if (fs.exists) flowById[fid] = fs.data();
-    }));
+    let reqFinishes = [];
+    await Promise.all([
+        ...reqFlowIds.map(async (fid) => {
+            const fs = await db.collection('cpq_flows').doc(fid).get();
+            if (fs.exists) flowById[fid] = fs.data();
+        }),
+        (async () => {
+            if (!reqFlowIds.length) return;
+            const [mf, outS] = await Promise.all([
+                db.collection('system').doc('master_finishes').get(),
+                db.collection('hq_outsource_finishes').get(),
+            ]);
+            reqFinishes = [
+                ...((mf.exists && mf.data().finishes) || []),
+                ...outS.docs.map((d) => ({ id: d.id, ...d.data() })),
+            ];
+        })(),
+    ]);
+    const reqCustNames = new Set([crm.name, crm.companyName].filter(Boolean).map((s) => String(s).trim().toUpperCase()));
 
     return {
         quotes: liveJobs
@@ -1113,7 +1122,7 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
                     // or has become an order it is a commitment, and withdrawing it is a
                     // conversation with their rep, not a button.
                     canDelete: ['PORTAL_REQUEST', 'CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(String(j.status || 'CONFIGURED')),
-                    lines: priced.length ? priced : (isRequest ? requestLines(j, flowById[String(j.portalRequest.flowId)]) : []),
+                    lines: priced.length ? priced : (isRequest ? requestLines(j, flowById[String(j.portalRequest.flowId)], reqFinishes, reqCustNames) : []),
                     awaitingPricing: isRequest && !priced.length,
                 };
             }),

@@ -28,22 +28,33 @@ const SAMPLE_SHIP = ['Master Suite Reno', '88 Lakeshore Dr', 'Aspen, CO 81611'];
 const money = (n) => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, footer, terms, docNumber = 'SO10293', data }) => {
+  // SAMPLE DATA ONLY WHEN THERE IS NO DATA AT ALL (Stuart 2026-08-07). The fallbacks used to fire
+  // per-field — a REAL document with zero lines (an unpriced portal request has none by design)
+  // silently rendered the SAMPLE_LINES demo under a real quote number and barcode, one Print PDF
+  // away from reaching a customer as a fabricated $1,195.50 quotation. Omitting `data` entirely is
+  // the ONLY sample switch now (the Admin Form Templates preview); a passed `data` renders exactly
+  // what it carries, including honestly empty.
+  const isSample = !data;
   const d = data || {};
   const title = (TITLES[type] || type.replace(/_/g, ' ')).toUpperCase();
   const company = d.company || BRAND_NAMES[brand] || (brand ? brand.toUpperCase() : 'Company');
   const isPacking = type === 'PACKING_SLIP';
-  const showMoney = !isPacking && type !== 'WORK_ORDER' && type !== 'FACTORY_ROUTER';
+  // `unpriced` = a request awaiting pricing: line quantities are real, money is not invented —
+  // no Unit/Amount columns, no totals block, a banner says why (matches the portal's own
+  // "SENT — AWAITING PRICING" card for the same quote).
+  const showMoney = !isPacking && type !== 'WORK_ORDER' && type !== 'FACTORY_ROUTER' && !d.unpriced;
 
-  const billTo = (d.billTo && d.billTo.length) ? d.billTo : SAMPLE_BILL;
-  const shipTo = (d.shipTo && d.shipTo.length) ? d.shipTo : SAMPLE_SHIP;
-  const lines = (d.lines && d.lines.length) ? d.lines : SAMPLE_LINES;
-  const date = d.date || '06/27/2026';
-  const po = d.po || 'CUST-10239';
-  const termsLabel = d.termsLabel || 'Net 30';
+  const billTo = (d.billTo && d.billTo.length) ? d.billTo : (isSample ? SAMPLE_BILL : ['—']);
+  const shipTo = (d.shipTo && d.shipTo.length) ? d.shipTo : (isSample ? SAMPLE_SHIP : ['—']);
+  const lines = (d.lines && d.lines.length) ? d.lines : (isSample ? SAMPLE_LINES : []);
+  const date = d.date || (isSample ? '06/27/2026' : '—');
+  const po = d.po || (isSample ? 'CUST-10239' : '—');
+  const termsLabel = d.termsLabel || (isSample ? 'Net 30' : '—');
 
   const lineAmount = (l) => (l.amount != null ? Number(l.amount) || 0 : (Number(l.qty) || 0) * (Number(l.price) || 0));
   const subtotal = lines.reduce((s, l) => s + lineAmount(l), 0);
-  const tax = (d.tax != null) ? d.tax : (showMoney ? subtotal * 0.0875 : 0);
+  // The invented 8.75% demo tax stays on the SAMPLE only — real data with no tax field means 0.
+  const tax = (d.tax != null) ? d.tax : (isSample && showMoney ? subtotal * 0.0875 : 0);
   const total = (d.total != null) ? d.total : subtotal + tax;
 
   const label = { fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' };
@@ -102,6 +113,9 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
           </tr>
         </thead>
         <tbody>
+          {lines.length === 0 && (
+            <tr><td colSpan={showMoney ? 5 : 3} style={{ ...cell, color: 'var(--ink-soft)', fontStyle: 'italic', textAlign: 'center', padding: '18px 12px' }}>No line items.</td></tr>
+          )}
           {lines.map((l, i) => (
             <tr key={i} style={{ borderBottom: '1px solid var(--line)' }}>
               <td style={{ ...cell, fontFamily: 'var(--mono)', fontSize: '11px' }}>{l.item}</td>
@@ -118,6 +132,14 @@ const FormPreview = ({ type = 'SALES_ORDER', brand = 'ce', logoUrl, header, foot
           ))}
         </tbody>
       </table>
+
+      {/* Awaiting pricing — where the totals would sit, so nobody hunts for a number that
+          deliberately is not on the page. */}
+      {d.unpriced && !isPacking && (
+        <div style={{ marginTop: '16px', border: '1px solid var(--line)', background: 'var(--paper-2)', padding: '12px 16px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>
+          Awaiting pricing — the customer's selections are listed; no prices have been set yet.
+        </div>
+      )}
 
       {/* Totals */}
       {showMoney && (

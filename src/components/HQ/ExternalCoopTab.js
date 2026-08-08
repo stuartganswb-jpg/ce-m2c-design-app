@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, onSnapshot, query, where, doc, getDoc, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
+import { portalRequestLines } from '../Shared/portalRequestLines';
 import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { quoteDisplayNo } from '../Shared/quoteDisplay';
@@ -479,7 +480,37 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [liveAssemblies, setLiveAssemblies] = useState([]);
   
   const [activeDocJob, setActiveDocJob] = useState(null);
-  const [activeDocType, setActiveDocType] = useState('FULL_PACKET'); 
+  const [activeDocType, setActiveDocType] = useState('FULL_PACKET');
+  // Flow + finish lists behind an OPEN portal-request doc, fetched on demand — an unpriced
+  // PORTAL_REQUEST has no cpqData.breakdown, so its document lines come from
+  // portalRequest.selections resolved through the flow (Shared/portalRequestLines, the same logic
+  // the portal card renders through). null until loaded; the doc shows "No line items." for a beat.
+  const [docRequestCtx, setDocRequestCtx] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const j = activeDocJob;
+    const needsCtx = j && j.status === 'PORTAL_REQUEST' && !(j.cpqData?.breakdown || []).length;
+    if (!needsCtx) { setDocRequestCtx(null); return; }
+    (async () => {
+      try {
+        const flowId = String(j.portalRequest?.flowId || '');
+        const [fs, mf, os] = await Promise.all([
+          flowId ? getDoc(doc(db, 'cpq_flows', flowId)) : Promise.resolve(null),
+          getDoc(doc(db, 'system', 'master_finishes')),
+          getDocs(collection(db, 'hq_outsource_finishes')),
+        ]);
+        if (!alive) return;
+        setDocRequestCtx({
+          flow: fs && fs.exists() ? fs.data() : null,
+          finishes: [
+            ...((mf.exists() && mf.data().finishes) || []),
+            ...os.docs.map(d => ({ id: d.id, ...d.data() })),
+          ],
+        });
+      } catch (e) { console.warn('portal request doc context load failed', e); if (alive) setDocRequestCtx({ flow: null, finishes: [] }); }
+    })();
+    return () => { alive = false; };
+  }, [activeDocJob]);
   const [formTemplates, setFormTemplates] = useState({});
   const [brandLogos, setBrandLogos] = useState({});
   const [draftDrawings, setDraftDrawings] = useState([]); 
@@ -832,26 +863,38 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
           : fmtAddr(savedAddr);
       const billLines = String(jobCrm?.billingAddress || '').split('\n').map(x => x.trim()).filter(Boolean);
       const shippingAmt = parseFloat(activeDocJob.shippingAmount) || 0;
-      const quoteLines = (activeDocJob.cpqData?.breakdown || []).map(b => ({
-          item: b.isHeader ? '▶' : '',
-          desc: b.name,
-          qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
-          price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
-          amount: b.total,
-          cut: b.cutLength || null,
-          bold: !!b.isNetLine || !!b.isHeader,
-      }));
-      if (shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt });
+      // An unpriced PORTAL_REQUEST has no breakdown BY DESIGN (staff price it in CPQ). Its document
+      // lines are the customer's selections resolved through the flow — the same words the portal
+      // card shows — flagged `unpriced` so FormPreview hides money instead of totalling to $0.00.
+      // (Before 2026-08-07 the empty breakdown made FormPreview fall back to its SAMPLE demo lines:
+      // a fabricated $1,195.50 quotation under a real quote number.)
+      const isUnpricedRequest = activeDocJob.status === 'PORTAL_REQUEST' && !(activeDocJob.cpqData?.breakdown || []).length;
+      const quoteLines = isUnpricedRequest
+          ? portalRequestLines(activeDocJob, docRequestCtx?.flow, docRequestCtx?.finishes || [])
+              .map(l => ({ item: '', desc: l.name, qty: l.qty || '', price: null, amount: null }))
+          : (activeDocJob.cpqData?.breakdown || []).map(b => ({
+              item: b.isHeader ? '▶' : '',
+              desc: b.name,
+              qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
+              price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
+              amount: b.total,
+              cut: b.cutLength || null,
+              bold: !!b.isNetLine || !!b.isHeader,
+          }));
+      if (!isUnpricedRequest && shippingAmt > 0) quoteLines.push({ item: '', desc: 'Shipping', qty: '', price: null, amount: shippingAmt });
+      // dateSaved is an ISO stamp — the doc was printing it verbatim ("2026-08-05T20:00:58.578Z").
+      const docDate = (() => { const v = activeDocJob.dateSaved; if (!v) return new Date().toLocaleDateString(); const dt = new Date(v); return isNaN(dt.getTime()) ? String(v) : dt.toLocaleDateString(); })();
       const quoteFormData = {
           billTo: [activeDocJob.customer?.name || activeDocJob.clientName || 'N/A',
                    ...(billLines.length ? billLines : fmtAddr(savedAddr))],
           shipTo: (shipLines.length ? shipLines : [activeDocJob.customer?.name || activeDocJob.clientName || 'Per project']),
           lines: quoteLines,
-          date: activeDocJob.dateSaved || new Date().toLocaleDateString(),
+          date: docDate,
           po: activeDocJob.sidemark || activeDocJob.jobId || '—',
           termsLabel: activeCrmRecord?.terms || 'Per agreement',
-          tax: 0,
-          total: (activeDocJob.cpqData?.totalPrice || 0) + shippingAmt,
+          tax: isUnpricedRequest ? undefined : 0,
+          total: isUnpricedRequest ? undefined : (activeDocJob.cpqData?.totalPrice || 0) + shippingAmt,
+          unpriced: isUnpricedRequest,
       };
 
       let mathSection = '';

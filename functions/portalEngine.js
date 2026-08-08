@@ -208,7 +208,19 @@ function computePricing(ctx) {
   const isFeePart = (p, opt) => !!((opt && opt.isFee) || (p && p.partClass === 'Fee') || String((p && p.manufacturingSpecs && p.manufacturingSpecs.productType) || '').toUpperCase() === 'FEE');
   const lineNameFor = (p, opt) => {
     const desc = (p && (p.itemName || p.name)) || (opt && opt.partName) || '';
-    if (isFeePart(p, opt)) return desc;
+    if (isFeePart(p, opt)) {
+      // A fee that is a REAL part — the backplate→cover-plate upgrade bills through the plate
+      // ITEM (H1-1CP-H/P) — shows its part # at the Fabricut levels like every sibling line
+      // (Stuart 2026-08-07: "the upgrade from backplate to coverplate is shown with out part#
+      // rather than part# from the fee"). A pure CHARGE (CE-FEE-*) keeps its description:
+      // "French Return Fee" reads; its internal code does not. custItemNo already holds the
+      // customer-facing precedence (Fabricut code → their SKU → our code), so use it.
+      if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') {
+        const code = custItemNo(p);
+        if (code && !/^CE-FEE/i.test(code)) return code;
+      }
+      return desc;
+    }
     if (priceLevel === 'FAB_WHOLESALE' || priceLevel === 'FAB_RETAIL') return fabricutCodeOf(p, findByCode) || desc;
     return desc;
   };
