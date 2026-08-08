@@ -66,6 +66,19 @@ Two runtimes can't import each other (CRA only reads `src/`, Functions deploy on
 2. `firebase deploy --only functions:portalMyOrders,functions:portalResolve` @ `c007153` — portal
    card finish names + checkout fee part#. Portal shows raw FIN-ids until this runs.
 
+## 2026-08-08 weekend sprint — cross-territory changes, Stuart-authorized
+
+Sessions B and C were idle; Stuart had Session A implement the H1 playbook
+(`H1_COLLECTION_LOAD_PLAYBOOK.md`) across territories. **If you are Session B or C, read your
+brief's addendum before touching these areas** — the following changed under you:
+
+| Commit | Change | Territory touched |
+|---|---|---|
+| `dcd2d63` | ONE clientPricing matcher everywhere (ERP push / RTG pick / onboarding export now use `Shared/clientPricing.js` like CPQ; ERP push inherits the price-0-falls-to-base rule) | B (RTG), shared |
+| `7e26cc6` | Spec sheets: geometry-vs-cell warnings (`SpecSheet/specCellCheck.js`), cell coverage chips, `fabCodeFor` unified with `priceLevels.fabricutCodeOf`, registry pins load by doc id AND itemId | spec module |
+| `c36db6f` | Collection Readiness Board (`Shared/collectionReadiness.js` + `HQ/CollectionReadinessBoard.js`, 🧭 button in BOM Engine) — read-only | BOM Engine |
+| `6715b03` | 1.6 hardening: Fusion match-rate gate, export flavor seeds from slot, fork guard on new build, `pinIdFor` on the build path, duplicate-slot warning on Extend — gates and seeds only, no write shapes changed | **C (1.6)** |
+
 ## Git — multi-session safety (live, not theoretical)
 
 - **NEVER `git checkout <branch>`** in the shared checkout. Fix-forward on main; use a

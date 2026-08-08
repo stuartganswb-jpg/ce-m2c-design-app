@@ -117,6 +117,13 @@ quote: portal request → CRM doc → reopen in CPQ → price → SO push, check
 
 ## 4. Proposals — in order of value per effort
 
+> **STATUS 2026-08-08 (weekend sprint):** 4.1 ✅ `c36db6f` (🧭 Readiness in BOM Engine) ·
+> 4.2 ✅ `7e26cc6` (warn-only, in the 📐 modal) · 4.3 ✅ `7e26cc6` (chips beside the pickers) ·
+> 4.4 ✅ `dcd2d63` · 4.5 ✅ `6715b03` (all five gates) · 4.6 partly ✅ `7e26cc6` (fabCode
+> precedence + registry pins by both ids; the portal-engine P25 mirror remains OPEN — Session A's
+> next engine pass). 4.7 unchanged: not doing it. Remaining §2 work is DATA, not code: author and
+> load the collection through the steps, watching the board.
+
 ### 4.1 H1 Readiness Board (the one big build; do before the mass load)
 One read-only screen that scores EVERY H1 item and cell across the layers, so holes show before
 an operator hits them. In-app (App Check forbids scripts), pure scoring module + node tests.
