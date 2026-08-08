@@ -14,6 +14,7 @@ import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 // the drawing engine only loads when opened.
 const SpecSheetModal = React.lazy(() => import('../SpecSheet/SpecSheetModal'));
 const SopViewer = React.lazy(() => import('../Shared/SopViewer'));
+const CollectionReadinessBoard = React.lazy(() => import('./CollectionReadinessBoard'));
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -27,6 +28,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
   const [selectedAssemblyId, setSelectedAssemblyId] = useState("");
   const [capturingThumb, setCapturingThumb] = useState(false);
   const [showSpecSheet, setShowSpecSheet] = useState(false);
+  const [showReadiness, setShowReadiness] = useState(false); // Collection Readiness Board (playbook 4.1)
   const [uploadingDrawing, setUploadingDrawing] = useState(false); // static shop-drawing PDF attach
   const [showSops, setShowSops] = useState(false); // read-only viewer of the Tab .6 SOP pages
   const [bulkThumb, setBulkThumb] = useState({ running: false, done: 0, total: 0 });
@@ -1088,6 +1090,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
                   ＋ New Library Item
               </button>
 
+              <button onClick={() => setShowReadiness(true)} title="Collection Readiness Board — score every family item across sizeKey / siblings / price / NetSuite / type / Fabricut / customer row / pins, plus spec-cell coverage. Read-only." style={{ padding: '10px 14px', border: '1px solid var(--ink)', background: '#fff', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                  🧭 Readiness
+              </button>
+
               <button onClick={handleBulkThumbnails} disabled={bulkThumb.running} title="Render + save a thumbnail from the .glb for every filtered assembly that's missing an image (works after clusters are assigned)" style={{ padding: '10px 14px', border: '1px solid var(--ink)', background: bulkThumb.running ? 'var(--ink-soft)' : 'var(--ink)', color: '#fff', cursor: bulkThumb.running ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                   {bulkThumb.running ? `⚙ ${bulkThumb.done}/${bulkThumb.total}…` : '🖼 Generate Missing Thumbnails'}
               </button>
@@ -1990,6 +1996,11 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       {showSpecSheet && selectedAssemblyData && (
         <React.Suspense fallback={null}>
           <SpecSheetModal assembly={selectedAssemblyData} pins={bomPins} libraryParts={libraryParts} onClose={() => setShowSpecSheet(false)} />
+        </React.Suspense>
+      )}
+      {showReadiness && (
+        <React.Suspense fallback={null}>
+          <CollectionReadinessBoard libraryParts={libraryParts} customersData={customersData} assemblies={assemblies} activeBrand={activeBrand} onClose={() => setShowReadiness(false)} />
         </React.Suspense>
       )}
       {showSops && selectedAssemblyData && (
