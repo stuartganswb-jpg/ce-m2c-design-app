@@ -355,3 +355,16 @@ signal, not drawing code:
 **The lesson under all of these: a render symptom has too many possible causes to diagnose from
 alone.** Two meshes vs one, and a step losing its selection, look identical on screen. Regenerate and
 count steps; read the tags; run the node tests. The render is the last thing to trust.
+
+## ADDENDUM 2026-08-08 (Session A, Stuart-authorized while this session was idle)
+
+`6715b03` touched YOUR AssemblyBuilderTab (1.6) — five gates for the H1 mass load, no write
+shapes changed: (a) Fusion convert now confirms when kept non-hardware components matched no
+library code; (b) the Production/Spec export flavor seeds from the destination slot and confirms
+a mismatch on Convert & Load; (c) building a NEW assembly whose name already exists warns and
+points at Extend (fork guard); (d) the BUILD path now writes `pinIdFor` node-hash pin ids — the
+same formula your assign path has used since 2026-08-04, ending the several-choices-one-code
+collision on fresh builds; (e) Extend preflight flags a slot whose cluster already exists on the
+target (append-only duplicate warning). Also `7e26cc6`/`c36db6f`: spec-sheet geometry-vs-cell
+warnings + coverage chips + a read-only Readiness Board off BOM Engine — they READ sizeMatrix
+and assembly_pins, they change nothing you own. Full map: CROSS_SESSION_CONTRACT.md §2026-08-08.
