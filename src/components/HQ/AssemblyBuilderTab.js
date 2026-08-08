@@ -336,7 +336,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // Fusion .fbx dropped on a slot → analyze + open the conversion checklist instead of the
     // normal .glb path. Convert & Load then feeds the produced .glb through onUpload as usual.
     const openFusionImport = async (slot, file) => {
-        setFusionJob({ slot, fileName: file.name, buffer: null, analysis: null, rows: [], unitId: 'cm', mode: 'PRODUCTION', busy: true, err: '' });
+        // Export flavor SEEDS from the destination slot (playbook 4.5b): the 📐 spec slot wants
+        // TRUE METERS (the sheet generator's math is metric), everything that merges wants inches.
+        // The toggle stays overridable — downloading a registry-cell spec GLB from any slot is
+        // legitimate — but the default now matches where the file was dropped, and Convert & Load
+        // confirms a mismatch instead of silently merging metre-scale geometry at 1/39 size.
+        setFusionJob({ slot, fileName: file.name, buffer: null, analysis: null, rows: [], unitId: 'cm', mode: slot?.id === 'spec' ? 'SPEC' : 'PRODUCTION', busy: true, err: '' });
         try {
             const buffer = await file.arrayBuffer();
             const analysis = await analyzeFusionFbx(buffer);
@@ -357,6 +362,28 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const runFusionConvert = async (download) => {
         const job = fusionJob;
         if (!job || !job.analysis) return;
+        // MATCH-RATE GATE (playbook 4.5a). An unmatched kept component was SILENT: it merges under
+        // its cleaned Fusion name, indistinguishable from deliberate shared hardware, and the spec
+        // path skips non-code nodes without a word. Genuine hardware sails through un-named; the
+        // gate names everything else so a typo'd Fusion component can't slide by as "hardware".
+        const kept = job.rows.filter(r => r.keep);
+        const unmatched = kept.filter(r => !r.matched && !HARDWARE_RE.test(r.finalName || r.origName));
+        if (unmatched.length) {
+            const list = unmatched.slice(0, 8).map(r => `• ${r.finalName || r.origName}`).join('\n');
+            const more = unmatched.length > 8 ? `\n…and ${unmatched.length - 8} more` : '';
+            const consequence = download
+                ? 'In a spec GLB, a node that is not an EXACT library code is silently skipped by the 📐 generator.'
+                : 'They merge as shared geometry under their Fusion names — no item pin, no BOM line.';
+            if (!window.confirm(`${kept.length - unmatched.length} of ${kept.length} kept component(s) matched a Master Library code. These did NOT:\n\n${list}${more}\n\n${consequence}\n\nIf any of these IS a real part, fix its name (or the library) before converting.\n\nConvert anyway?`)) return;
+        }
+        // Flavor ↔ destination mismatch (Convert & Load only — Download goes wherever the user
+        // intends): metre-scale geometry in a merge slot lands at 1/39 size with no later warning;
+        // inch geometry in the 📐 slot makes the sheet lean on its two-state unit guess.
+        if (!download) {
+            const specSlot = job.slot?.id === 'spec';
+            if (specSlot && job.mode !== 'SPEC' && !window.confirm('This file is loading into the 📐 SPEC slot but the export flavor is Production (inches). The sheet generator expects TRUE METERS here.\n\nConvert as inches anyway?')) return;
+            if (!specSlot && job.mode === 'SPEC' && !window.confirm(`This file is loading into the ${job.slot?.label || 'merge'} slot but the export flavor is Spec (true m). Merged geometry is expected in INCHES — metre-scale merges ~39× too small.\n\nConvert as meters anyway?`)) return;
+        }
         setFusionJob(j => ({ ...j, busy: true, err: '' }));
         try {
             const buf = await buildGlbFromAnalysis(job.analysis, job.rows, { mode: job.mode, unitId: job.unitId });
@@ -527,6 +554,17 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const build = async () => {
         const extendTarget = extendId ? repairList.find(a => a.id === extendId) : null;
         if (!extendTarget && !assemblyName.trim()) return alert('Name the assembly first.');
+        // FORK GUARD (playbook 4.5c). A new build mints <BRAND>-ASM-<now> with no uniqueness
+        // check — typing the name of an assembly that already exists silently creates a SECOND
+        // document with its own clusters and pins, both valid-looking, while every flow/BOM/spec
+        // link stays on the first. The doc id is the linkage; Extend is how an existing assembly
+        // grows. This can't auto-switch to Extend (the operator may genuinely want a variant), so
+        // it names the collision and makes the fork an informed choice.
+        if (!extendTarget) {
+            const nameNorm = assemblyName.trim().toUpperCase();
+            const clash = repairList.find(a => String(a.itemName || '').trim().toUpperCase() === nameNorm);
+            if (clash && !window.confirm(`⚠ An assembly named "${clash.itemName}" already exists (${clash.itemId || clash.id}).\n\nBuilding NEW creates a SECOND document — flows, BOM and spec links stay on the existing one. To grow the existing assembly, Cancel and pick it under EXTEND instead.\n\nReally create a second "${nameNorm}"?`)) return;
+        }
         // The SOP + SPEC slots never merge into the sellable model — each exports as its own .glb.
         const sopLayer = layers['sop'];
         const specLayer = layers['spec'];
@@ -571,6 +609,17 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             if (!slot.category || slot.category === 'OTHER') warnings.push(`• ${slot.label}: category is OTHER — the flow generator will misfile this cluster. Tag it.`);
             if (/RETURN/i.test(slot.label) && /PLATE/i.test(slot.label) && slot.category !== 'BACKPLATE') warnings.push(`• ${slot.label}: labeled a return backplate but category is ${slot.category || '—'} — should be BACKPLATE.`);
         });
+        // DUPLICATE-SLOT WARNING on Extend (playbook 4.5e). Extend is append-only: re-uploading a
+        // slot that already built a cluster ADDS a second cluster and a second copy of its
+        // geometry — it never replaces (and 1.5's cluster delete removes the record, not the
+        // mesh). Nothing dedupes, so at minimum the duplicate must be a CHOICE, not a surprise.
+        if (extendTarget) {
+            const existingNames = new Set((extendTarget.nodeClusters || []).map(c => String(c.name || '').toUpperCase()));
+            mergeSlots.forEach(slot => {
+                const pretty = `${slot.label.toUpperCase().replace(/\s+/g, '-')}`;
+                if (existingNames.has(pretty)) warnings.push(`• ${slot.label}: this assembly ALREADY has a "${pretty}" cluster — extending ADDS A SECOND copy of its geometry (it never replaces). Fix choices via Load Choices instead, unless a second copy is intended.`);
+            });
+        }
         const summary = mergeSlots.map(s => {
             const ch = layers[s.id].choices || [];
             const pinned = ch.filter(c => (c.itemNo && c.itemNo.trim()) || c.isFee || c.isHidden).length;
@@ -740,8 +789,14 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             }
             // Stored id MUST equal the real doc id — Visual Assembly addresses pins by pin.id for
             // reassign/qty/delete, and a mismatched stored id makes those writes hit a nonexistent path.
+            // pinIdFor (node-name hash) — the SAME id the assign path uses (playbook 4.5d). The old
+            // PIN-<asm>-<cluster>-<part> formula collided whenever several choices in one slot
+            // legitimately share a code (the three-miter-fee case: last write wins, the rest vanish
+            // and reload blank). The assign path was fixed on 2026-08-04; the build path kept the
+            // old formula. New clusters get collision-free ids; existing pins keep theirs (Extend
+            // never rewrites them, and the assign path self-heals per node on the next save).
             for (const p of pins) {
-                const pid = `PIN-${asmId}-${p.clusterId}-${p.partId}`.replace(/[^A-Za-z0-9-]/g, '_');
+                const pid = pinIdFor(asmId, p.clusterId, p.partId, p.choiceNode);
                 await setDoc(doc(db, 'assembly_pins', pid), { id: pid, ...p });
             }
 
