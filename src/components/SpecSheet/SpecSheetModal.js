@@ -10,6 +10,8 @@ import { doc, getDoc, setDoc, updateDoc, getDocs, query, collection, where, dele
 import { db, storage } from '../../firebase';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { SIZE_FAMILIES, buildSizeIndex, sizeVariantOf, projAllowedAtDia } from '../Shared/sizeMatrix';
+import { fabricutCodeOf } from '../Shared/priceLevels';
+import { specCellWarnings, specWarningLine } from './specCellCheck';
 import { loadGLBScene } from '../Shared/componentExport';
 import { Box3 } from 'three';
 import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
@@ -145,7 +147,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         ]);
         if (dead) return;
         if (!aSnap.exists()) { setSrcState({ assembly: null, pins: null, loading: false, missing: true }); return; }
-        setSrcState({ assembly: { id: aSnap.id, ...aSnap.data() }, pins: pSnap.docs.map(d => ({ id: d.id, ...d.data() })), loading: false, missing: false });
+        // Pins are keyed by ITEM ID, the registry stores the DOC id — they coincide for
+        // builder-made docs (id === itemId) but not always. A mapped source whose ids differ used
+        // to resolve with zero pins silently and fall through to scene derivation (playbook 4.6).
+        let pinDocs = pSnap.docs;
+        const srcItemId = aSnap.data().itemId;
+        if (!pinDocs.length && srcItemId && srcItemId !== entry.assemblyId) {
+          const p2 = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', srcItemId)));
+          if (dead) return;
+          pinDocs = p2.docs;
+        }
+        setSrcState({ assembly: { id: aSnap.id, ...aSnap.data() }, pins: pinDocs.map(d => ({ id: d.id, ...d.data() })), loading: false, missing: false });
       } catch (e) {
         console.error('Spec source load failed', e);
         if (!dead) setSrcState({ assembly: null, pins: null, loading: false, missing: true });
@@ -244,6 +256,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const [pages, setPages] = useState([]); // [{ key, title, bracketPin }]
   const [pageData, setPageData] = useState(null); // { svg, viewMaps }
   const sceneRef = useRef(null);
+  const unitScaledRef = useRef(false); // the >10-units inches→meters guess fired on this scene
+  const [cellWarnings, setCellWarnings] = useState([]); // geometry-vs-cell mismatches (warn-only)
   const sceneChoicesRef = useRef(null); // spec-GLB sources: choices derived from scene node names
   const rowCacheRef = useRef({}); // pageKey -> built rows
   const wallMountsRef = useRef(null); // unique wall-mount styles for the 1:1 reference page
@@ -303,13 +317,20 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return deduped.sort((a, b) => rank(a) - rank(b) || String(a.partName).localeCompare(String(b.partName)));
   }, [clusters]);
 
-  // Fabricut customer code for a part (stamped by the CrossReference import).
+  // Fabricut customer code for a part — THE SAME resolver the quote line uses
+  // (Shared/priceLevels.fabricutCodeOf: Painted → Base → Premium, tier by finish suffix, variant
+  // docs hop to their base doc). This sheet used to carry its own precedence (Painted → Premium →
+  // exact_*), so a part could print one pattern # on the quote and another on the spec sheet
+  // (playbook 4.6). exact_* stays as this sheet's LAST resort only — no other reader has it.
   const fabCodeFor = useCallback((partName) => {
     const part = (libraryParts || []).find(p => p.legacyErpId === partName || p.itemId === partName || p.id === partName);
-    const fab = part?.manufacturingSpecs?.fabricut;
+    if (!part) return null;
+    const findByCode = (c) => (libraryParts || []).find(p =>
+      String(p.legacyErpId || '').toUpperCase() === c || String(p.itemId || '').toUpperCase() === c) || null;
+    const shared = fabricutCodeOf(part, findByCode);
+    if (shared) return shared;
+    const fab = part.manufacturingSpecs?.fabricut;
     if (!fab) return null;
-    if (fab.fabCodePainted) return fab.fabCodePainted;
-    if (fab.fabCodePremium) return fab.fabCodePremium;
     const exact = Object.keys(fab).find(k => k.startsWith('exact_') && fab[k]?.fabCode);
     return exact ? fab[exact].fabCode : null;
   }, [libraryParts]);
@@ -343,10 +364,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // then draws ~39× off-window, leaving a title block on an empty page. A rod set in true
         // meters measures well under 10 units; anything larger is inches → scale to meters.
         // True-m spec layouts and registry GLBs stay untouched (extent < 10).
+        unitScaledRef.current = false;
         try {
           const bb = new Box3().setFromObject(scene);
           const ext = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
-          if (Number.isFinite(ext) && ext > 10) { scene.scale.setScalar(0.0254); scene.updateMatrixWorld(true); }
+          if (Number.isFinite(ext) && ext > 10) { scene.scale.setScalar(0.0254); scene.updateMatrixWorld(true); unitScaledRef.current = true; }
         } catch (unitErr) { /* keep original units */ }
         sceneRef.current = scene;
         setError(''); // a fresh source is loading — clear any stale banner from the previous one
@@ -357,6 +379,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         wallMountsRef.current = null;
         finialsRef.current = null;
         setPageData(null); // never leave the previous source's drawing on screen during a swap
+        setCellWarnings([]); // stale mismatch warnings die with the source they measured
         if (cfgSnap?.exists()) { setWallCfg(cfgSnap.data()?.wallPlates || {}); setSizeSources(cfgSnap.data()?.sizeSources || {}); }
         // DIRECT SPEC GLB sources have no pins/clusters at all — derive every choice from the
         // scene's top-level code-named nodes, categorized by the LIBRARY (part.productType).
@@ -661,6 +684,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const ringF = rowRing.length ? viewBbox(rowRing, views.front) : null;
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ringF]);
       const dims = { front: [], profile: [], detail: [] };
+      let measProjIn = null; // captured for the geometry-vs-cell check (IM has no projection)
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       if (ringF) dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 18, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
       if (opts.isIM) {
@@ -688,10 +712,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         const wallU = projPoint(views.profile, wallPt)[0];
         const poleU = projPoint(views.profile, axes.poleCenter)[0];
         const profTopV = viewBbox(meshes, views.profile).maxV;
-        dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
+        measProjIn = Math.abs(poleU - wallU) * M2IN;
+        dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: measProjIn });
       }
-      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, hasAsMounted: false }], axes, ringItems };
+      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, hasAsMounted: false }], axes, ringItems, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
     }
+    let measured = null; // first row's pole Ø + projection, for the geometry-vs-cell check
     const rows = plateChoices.map((platePin) => {
       const plateAll0 = extractWorldMeshes(scene, [platePin.choiceNode]).filter(m => !isStrayRing(m));
       if (!plateAll0.length) return { rowKey: platePin.partName, code: platePin.partName, missing: true };
@@ -754,6 +780,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const wallU = projPoint(views.profile, wallPt)[0];
       const poleU = projPoint(views.profile, polePt)[0];
       const profTopV = viewBbox(meshes, views.profile).maxV;
+      if (!measured) measured = { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: Math.abs(poleU - wallU) * M2IN };
       dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
       // plate height: line + label in the empty space LEFT of the plate (wall side), off the artwork
       dims.profile.push({ t: 'v', u: coverP.minU, v0: coverP.maxV, v1: coverP.minV, off: -12, side: -1, in: (coverP.maxV - coverP.minV) * M2IN, dia: isRound });
@@ -763,7 +790,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
-    return { rows, axes, ringItems };
+    return { rows, axes, ringItems, measured };
   }, [nodesFor, wallCfg, choicesFor, legacyChoicesFor, libraryParts]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
@@ -845,13 +872,22 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     setStatus('Rendering…');
     const t = setTimeout(() => {
       try {
-        if (page.key === '__WM__') { setPageData(composeWallMountsPage()); setStatus(''); return; }
-        if (page.key === '__FINIALS__') { setPageData(composeFinialsPage()); setStatus(''); return; }
+        if (page.key === '__WM__') { setPageData(composeWallMountsPage()); setCellWarnings([]); setStatus(''); return; }
+        if (page.key === '__FINIALS__') { setPageData(composeFinialsPage()); setCellWarnings([]); setStatus(''); return; }
         let built = rowCacheRef.current[page.key];
         if (!built) {
           built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM });
           rowCacheRef.current[page.key] = built;
         }
+        // GEOMETRY vs CELL (playbook 4.2, warn-only): the measured pole Ø / projection must agree
+        // with what the selected dia×proj cell CLAIMS (sizeMatrix inches). The sheet still renders
+        // — borrowing geometry is sometimes deliberate — but it stops doing so silently. This was
+        // the most likely silent failure of the H1 mass load (a ¾" file registered under 1-3/8").
+        setCellWarnings(specCellWarnings({
+          fam: sizeFam, sel: sizeSel,
+          poleDiaIn: built.measured?.poleDiaIn, projIn: built.measured?.projIn,
+          unitAutoScaled: unitScaledRef.current,
+        }));
         const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
         const anyAsMounted = rows.some(r => r.hasAsMounted);
         const bSized = sizedCode(page.bracketPin.partName);
@@ -883,7 +919,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage, composeFinialsPage, sizedCode, baseAssembly, cellLabel]);
+  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage, composeFinialsPage, sizedCode, baseAssembly, cellLabel, sizeFam, sizeSel]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
@@ -1005,6 +1041,33 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
               <select value={sizeSel.proj} onChange={e => { setSizeSel(s => ({ ...s, proj: e.target.value })); setPageIndex(0); }} style={{ padding: '5px', fontSize: '0.8rem' }}>
                 {sizeFam.proj.options.filter(o => projAllowedAtDia(sizeFamilyKey, o, sizeSel?.dia)).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
+              {/* COVERAGE STRIP (playbook 4.3): every dia×proj cell of the family as a chip —
+                  green = direct spec GLB, amber = assembly-mapped, red = nothing registered,
+                  black = the base cell (draws the opened assembly). Before this, coverage was
+                  discovered by clicking every cell one at a time. Chips also navigate. */}
+              <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', maxWidth: '360px' }}>
+                {sizeFam.dia.options.flatMap(d =>
+                  sizeFam.proj.options.filter(p => projAllowedAtDia(sizeFamilyKey, p, d.value)).map(p => {
+                    const key = `${d.value}|${p.value}`;
+                    const isBase = d.value === (openedDia || sizeFam.baseDia) && p.value === (openedProj || sizeFam.baseProj);
+                    const entry = sizeSources?.[sizeFamilyKey]?.[key];
+                    const kind = isBase ? 'base' : (entry?.glbUrl && !entry.assemblyId) ? 'glb' : entry?.assemblyId ? 'asm' : 'missing';
+                    const cols = { base: '#1c2025', glb: '#2e7d4f', asm: '#8a6d1a', missing: '#b00020' };
+                    const saved = entry?.savedAt ? ` · saved ${new Date(entry.savedAt).toLocaleDateString()}` : '';
+                    const tip = kind === 'base' ? 'Base cell — draws the opened assembly'
+                      : kind === 'glb' ? `Direct spec GLB · ${entry.name || ''}${saved}`
+                      : kind === 'asm' ? `Mapped assembly · ${entry.name || ''}${saved}`
+                      : 'No spec geometry registered yet';
+                    const on = sizeSel.dia === d.value && sizeSel.proj === p.value;
+                    return (
+                      <button key={key} title={tip}
+                        onClick={() => { setSizeSel({ dia: d.value, proj: p.value }); setPageIndex(0); }}
+                        style={{ padding: '2px 5px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '3px', border: `1px solid ${cols[kind]}`, background: on ? cols[kind] : '#fff', color: on ? '#fff' : cols[kind] }}>
+                        {d.value}|{p.value}
+                      </button>
+                    );
+                  }))}
+              </div>
               {!isBaseCell && srcState.assembly && (
                 <span style={{ fontSize: '0.72rem', color: '#2e7d4f', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Geometry source: ${srcState.assembly.itemName || srcState.assembly.id}`}>
                   ⛓ {srcState.assembly.itemName || srcState.assembly.id}
@@ -1096,6 +1159,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           {error ? <span style={{ color: '#b00020' }}>⚠ {error}</span>
             : status ? status
             : dimTool ? 'Manual dim: click two points on a drawing, then enter the value.'
+            : cellWarnings.length ? <span style={{ color: '#b00020' }}>⚠ Geometry doesn't match {cellLabel || 'this cell'}: {specWarningLine(cellWarnings)}. The sheet still renders, but its dimensions describe the LOADED geometry — check the registered source before printing.</span>
             : (assembly && !assembly.manufacturingSpecs?.specCadUrl) ? <span style={{ color: '#8a6d1a' }}>📐 Drawing from the merged sales model — pages can misdraw or come up empty (that's why H1 got dedicated spec layouts). For clean sheets: upload this assembly's "Spec Sheet Layout (📐)" in 1.6 (the Spec · true m export), or register a per-size spec GLB via the size pickers above.</span>
             : ''}
         </div>
