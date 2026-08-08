@@ -3,6 +3,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
+import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
@@ -469,10 +470,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         return map;
     };
 
-    // Build the §6 small-parts pick list from the small lines.
-    const buildPartsList = (smallLines, partCache, assetMap, customerId) => smallLines.map(line => {
+    // Build the §6 small-parts pick list from the small lines. `custKeys` is the shared
+    // clientPricing matcher set (id ∪ name ∪ companyName) — the strict-id match here missed
+    // name-keyed rows, so the pick ticket dropped the customer's SKU that the quote showed.
+    const buildPartsList = (smallLines, partCache, assetMap, custKeys) => smallLines.map(line => {
         const part = line.partId ? partCache.get(line.partId) : null;
-        const cp = part?.clientPricing?.find(c => c.customerId === customerId);
+        const cp = findClientPriceRow(part?.clientPricing, custKeys);
         return {
             partId: line.partId || null,
             // NetSuite item # for the pick ticket — prefer the id baked on the CPQ line, then the
@@ -544,6 +547,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             const orderKey = so.soId || so.id || so.hqJobId;
             const customerId = job.customer?.id || null;
             const customerName = job.customer?.name || so.customer || "Unknown";
+            // Same matcher CPQ prices with — resolve the CRM record so name/companyName-keyed
+            // clientPricing rows still surface their clientSku on the pick list.
+            let custRec = null;
+            if (customerId) {
+                try { const cs = await getDoc(doc(db, 'crm_records', customerId)); custRec = cs.exists() ? cs.data() : null; }
+                catch (e) { /* fall back to the job's own name */ }
+            }
+            const custKeys = customerKeys(customerId, custRec || { name: customerName });
 
             const partCache = await loadPartsForLines(lines);
 
@@ -598,7 +609,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             // --- Finishing (small parts) ---
             if (hasSmall) {
                 const assetMap = await loadAssetMap();
-                const partsList = buildPartsList(smallLines, partCache, assetMap, customerId);
+                const partsList = buildPartsList(smallLines, partCache, assetMap, custKeys);
                 const cpqSpecs = {};
                 smallLines.forEach(l => { cpqSpecs[cleanLineName(l.name)] = `Qty: ${l.qty}`; });
                 const totalParts = smallLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || smallLines.length;

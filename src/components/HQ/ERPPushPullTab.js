@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, getDocs, query, where } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
 import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from '../Shared/sizeMatrix';
 import { reopenQuoteInCpq } from '../Shared/reopenQuote';
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -376,6 +377,21 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           let physicalItemsTotal = 0;
           const unmappedNames = [];
 
+          // THE SAME MATCHER CPQ PRICED WITH (2026-08-08). This push matched clientPricing rows by
+          // strict `customerId === job.customer.id` while CPQ matches id ∪ name ∪ companyName
+          // (Shared/clientPricing.js — rows are hand-entered and sometimes keyed by the typed
+          // NAME). A name-keyed row therefore priced the QUOTE correctly and silently missed HERE:
+          // the pushed line rate fell to basePrice and the rollup absorbed the difference, so the
+          // total looked right while every per-line rate was wrong. Resolve the CRM record once so
+          // both surfaces answer from the same evidence; if the read fails, id + display name
+          // still cover the common cases.
+          let custRec = null;
+          if (job.customer?.id) {
+              try { const cs = await getDoc(doc(db, 'crm_records', job.customer.id)); custRec = cs.exists() ? cs.data() : null; }
+              catch (e) { /* offline/rules — fall back to the job's own fields */ }
+          }
+          const custKeys = customerKeys(job.customer?.id, custRec || { name: job.customer?.name || job.clientName });
+
           for (const line of linesToPush) {
               if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
                   // Rate = the customer's negotiated price for this part if one exists,
@@ -383,10 +399,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   // total, so the line rates + rollup line always sum to the quoted total.
                   // A part with neither lands at 0 and its value rolls into the rollup.
                   let itemRate = parseFloat(line.masterPart.manufacturingSpecs?.basePrice || 0) || 0;
-                  const cp = line.masterPart.clientPricing?.find(c => c.customerId === job.customer?.id);
-                  if (cp && cp.price !== undefined && cp.price !== '' && !isNaN(parseFloat(cp.price))) {
-                      itemRate = parseFloat(cp.price);
-                  }
+                  const cpPrice = clientPriceFor(line.masterPart.clientPricing, custKeys);
+                  if (cpPrice != null) itemRate = cpPrice;
                   const lineTotal = itemRate * line.qty;
                   physicalItemsTotal += lineTotal;
 

@@ -8,6 +8,7 @@ import { generateOnboardingXlsx } from '../Shared/onboardingXlsx';
 import { validateAssemblyAlignment } from '../Shared/assemblyTags';
 import { SOURCING, sourcingOf, sourcingPatch } from '../Shared/sourcing';
 import { SIZE_FAMILIES, buildSizeIndex } from '../Shared/sizeMatrix';
+import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 
 // Fabricut-style spec-sheet generator (hidden-line drawings from the working GLB) — lazy so
 // the drawing engine only loads when opened.
@@ -402,6 +403,10 @@ const BOMTab = ({ currentUser, activeBrand }) => {
       try {
           const asm = selectedAssemblyData;
           const clusterById = {}; (asm.nodeClusters || []).forEach(c => { clusterById[c.id] = c; });
+          // Shared clientPricing matcher (id ∪ name ∪ companyName) — the strict-id match here
+          // dropped name-keyed rows from the export's SKU/price columns while CPQ honoured them.
+          const onboardCust = onboardCustomerId ? customersData.find(c => c.id === onboardCustomerId) : null;
+          const onboardKeys = customerKeys(onboardCustomerId, onboardCust);
           const classify = (raw) => { const t = String(raw || '').toUpperCase(); if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE'; if (t.includes('BRACKET')) return 'BRACKET'; if (t.includes('FINIAL')) return 'FINIAL'; if (t.includes('RING')) return 'RING'; if (t.includes('POLE') || t.includes('ROD')) return 'POLE'; if (t.includes('END')) return 'END'; return 'OTHER'; };
           // One row per unique item (a part repeated across positions lists once); skip hidden + retired.
           const byPart = {};
@@ -412,7 +417,7 @@ const BOMTab = ({ currentUser, activeBrand }) => {
               if (!part || part.manufacturingSpecs?.isRetired) return;
               const key = part.id || part.legacyErpId || pin.partId;
               if (byPart[key]) return;
-              const cp = (part.clientPricing || []).find(x => x.customerId === onboardCustomerId);
+              const cp = findClientPriceRow(part.clientPricing, onboardKeys);
               byPart[key] = {
                   cat: classify(cl?.category || part.manufacturingSpecs?.productType || part.productType),
                   thumbnailUrl: part.finalImageUrl || part.componentImageUrl || part.manufacturingSpecs?.finalImageUrl || '',
