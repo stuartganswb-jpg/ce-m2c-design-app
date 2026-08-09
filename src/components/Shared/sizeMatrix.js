@@ -64,6 +64,20 @@ export const SIZE_FAMILIES = {
         label: 'Fabricut H1 Round',
         baseDia: '75',
         baseProj: 'E',
+        // H2-METHOD PIVOT (Stuart 2026-08-08: "we will rebuild the H1 assemblies just like we did
+        // the H2… the generator create the combined flow just like H2 where the first selection is
+        // the diameter"). The codeRx is what unlocks the union + review-gate machinery for H1 —
+        // AdminTab's sibling discovery and the generate-time review both key on its presence.
+        // Dia tokens longest-first so H1-138… never parses as dia '1'.
+        codeRx: /^H1-(138|75|1)([A-Z].*)$/,
+        // ⚠ H1 KEYS ARE STAMPED-ONLY. H1 codes carry the PROJECTION LETTER in the tail
+        // (H1-75BE = style B + proj E) and only the importer can split them (it reads the proj
+        // from the DESCRIPTION — fabricutImport.js). A codeRx parse would mint style 'BE',
+        // projLetter '' — a different shape from the stamped 'B'/'E' keys on every sibling, and
+        // the size index would never match them up. So virtualSkOf must NOT back-fill this
+        // family, and H1-RND must never join AdminTab's SIZE_STAMP_RULES (the 🧬 stamper writes
+        // projLetter '' — running it would corrupt every importer key it touches).
+        stampedOnly: true,
         dia: {
             id: 'SIZE-DIA', title: 'Rod Diameter',
             options: [
@@ -101,9 +115,12 @@ const virtualSkOf = (p) => {
     const code = codeOf(p);
     if (!code || code.includes('/')) return null;
     for (const famKey of Object.keys(SIZE_FAMILIES)) {
-        const rx = SIZE_FAMILIES[famKey].codeRx;
-        if (!rx) continue;
-        const m = code.match(rx);
+        const fam = SIZE_FAMILIES[famKey];
+        // stampedOnly (H1-RND): the code tail holds style AND projection fused (BE = B + proj E)
+        // and only the importer can split them — a virtual 'BE'/'' key would never match the
+        // stamped 'B'/'E' siblings in the index. No key is better than a wrong-shape key.
+        if (!fam.codeRx || fam.stampedOnly) continue;
+        const m = code.match(fam.codeRx);
         if (m) return { family: famKey, dia: m[1], style: m[2], projLetter: '' };
     }
     return null;
@@ -338,13 +355,18 @@ export function partAllowedAtSize(part, sel, sizeIndex) {
 // authored and validated in 1.6). appliedScale = selectedScale / masterScale.
 // Master dia resolution, most to least authoritative:
 //   1. the rendered assembly doc's stamped sizeKey (family must match);
-//   2. that doc's code under the family codeRx, else a bare mainline code ('H2-138' has no
-//      style letter, so codeRx can't see it) matched by dia token at the end, longest-first;
-//   3. no assembly doc (the portal's whitelisted payload has no codes): the MODAL dia parsed
+//   2. that doc's code — OR ITS NAME (2026-08-08: master assemblies carry CE-ASM-… ids with the
+//      family code living in itemName, 'H2-75' / 'H1-138'; before this, masters resolved only
+//      through strategy 3's option counting, which is a majority vote, not an identity) — under
+//      the family codeRx, else a bare mainline code matched by dia token at the end,
+//      longest-first, with an alnum boundary guard so a CE-ASM-… timestamp id can never
+//      accidentally end-match a dia token;
+//   3. no identity resolved (the portal's whitelisted payload has no codes): the MODAL dia parsed
 //      via codeRx from the flow's own option codes — a generated flow's options carry the
 //      master assembly's pin codes;
-//   4. unresolved → the family base (masterScale 1) = exactly today's behavior, so base-native
-//      families are provably unchanged: H1-RND has no codeRx, every strategy falls through.
+//   4. unresolved → the family base (masterScale 1). ⚠ The LEGACY H1 combined flow depends on
+//      landing here or on a '75' majority in strategy 3 (its master GLB is ¾"-native): its
+//      master doc has no sizeKey, a CE-ASM id, and a prose name no rx matches — pinned by test.
 export function masterSizeScaleOf(familyKey, assemblyDoc, flow) {
     const fam = SIZE_FAMILIES[familyKey];
     if (!fam) return 1;
@@ -352,8 +374,12 @@ export function masterSizeScaleOf(familyKey, assemblyDoc, flow) {
     const sk = assemblyDoc?.manufacturingSpecs?.customData?.sizeKey;
     if (sk && sk.family === familyKey) { const s = scaleOf(sk.dia); if (s) return s; }
     if (assemblyDoc && fam.codeRx) {
-        const code = codeOf(assemblyDoc);
-        if (code && !code.includes('/')) {
+        const bareRx = new RegExp(fam.codeRx.source.replace('([A-Z].*)$', '$'));
+        for (const raw of [codeOf(assemblyDoc), String(assemblyDoc.itemName || '').trim().toUpperCase()]) {
+            const code = raw;
+            if (!code || code.includes('/')) continue;
+            const bm = code.match(bareRx);
+            if (bm) { const s = scaleOf(bm[1]); if (s) return s; }
             const m = code.match(fam.codeRx);
             if (m) { const s = scaleOf(m[1]); if (s) return s; }
             const dias = fam.dia.options.map(o => o.value).sort((a, b) => b.length - a.length);
