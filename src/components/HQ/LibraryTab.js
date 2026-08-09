@@ -1567,6 +1567,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                                  <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Customer Alias &amp; Pricing</h4>
                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.08em' }}>{fab.source || 'CrossReference'}{fab.importedAt ? ` · ${String(fab.importedAt).slice(0, 10)}` : ''} · drives the CPQ price levels</span>
                              </div>
+                             {/* Pivot 2026-08-08: 4.6 is the control surface for this data (per customer, per
+                                 collection, with the same dual-write). This drawer stays functional for one-off
+                                 item edits, but day-to-day pricing/alias work happens THERE — one place, one team habit. */}
+                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', marginBottom: '14px', letterSpacing: '.04em' }}>
+                                 ⚙ Day-to-day control lives in <b>4.6 Customer Collections</b> (per customer · per collection · same fields, plus row seeding and aliases). This drawer edits the same data for one-off fixes.
+                             </div>
 
                              {resolvedCode && <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', marginBottom: '14px' }}>Resolved pattern #: <b>{resolvedCode}</b>{codeUp.includes('/') ? <span style={{ color: 'var(--ink-soft)' }}> (codes live on the base item)</span> : null}</div>}
 

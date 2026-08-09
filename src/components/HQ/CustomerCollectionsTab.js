@@ -431,18 +431,40 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         { key: 'fabCodePremium', label: 'Their part # — premium / plated' },
         { key: 'fabCodeBase', label: 'Their part # — base' },
     ];
+    // The three tier groups and the null-vs-blank contract (pivot phase B, Stuart 2026-08-08 —
+    // "we need to be sure tab 4.6 has everything it needs to control pricing and alias information
+    // by customer per collection"): BLANK = no data at that tier → the CPQ level falls back to
+    // standard; EXPLICIT NULL = the "$0 · w/ arm" grouping decision → the level quotes $0
+    // (priceLevels.fabricutPriceOf: undefined→standard, null→0). The old save wrote blank AS null,
+    // so clearing a price here silently turned "no data" into "quote $0" — fixed: blank now
+    // DELETES the field, and null is written only by the toggles.
+    const TIER_GROUPS = [
+        { key: 'painted', label: 'Painted tier (/P)', f: { cost: 'paintedCost', wholesale: 'paintedWholesale', retail: 'paintedRetail' } },
+        { key: 'plated', label: 'Plated / premium tier (/EP, /P25)', f: { cost: 'platedCost', wholesale: 'platedWholesale', retail: 'platedRetail' } },
+        { key: 'direct', label: 'This item’s own price (variants, single-finish)', f: { cost: 'cost', wholesale: 'wholesale', retail: 'retail' } },
+    ];
     const openTiers = (p) => {
         const fab = p.manufacturingSpecs?.fabricut || {};
-        const seed = {};
+        const seed = { pricedWith: fab.pricedWith || '' };
         [...TIER_FIELDS, ...CODE_FIELDS].forEach(f => { seed[f.key] = fab[f.key] === undefined || fab[f.key] === null ? '' : fab[f.key]; });
+        // The explicit-null grouping flags, per tier group ("$0 · w/ arm").
+        TIER_GROUPS.forEach(g => { seed[`incl_${g.key}`] = fab[g.f.cost] === null && fab[g.f.retail] === null; });
         setTierEdit(seed); setTierRow(p.id);
     };
     const saveTiers = async () => {
         const p = inventory.find(x => x.id === tierRow);
         if (!p) return;
         const patch = {};
-        TIER_FIELDS.forEach(f => { const v = tierEdit[f.key]; patch[`manufacturingSpecs.fabricut.${f.key}`] = v === '' ? null : money(v); });
-        CODE_FIELDS.forEach(f => { patch[`manufacturingSpecs.fabricut.${f.key}`] = String(tierEdit[f.key] || '').trim(); });
+        TIER_GROUPS.forEach(g => {
+            const incl = !!tierEdit[`incl_${g.key}`];
+            Object.values(g.f).forEach(key => {
+                const v = tierEdit[key];
+                patch[`manufacturingSpecs.fabricut.${key}`] = incl ? null : (v === '' ? deleteField() : money(v));
+            });
+        });
+        CODE_FIELDS.forEach(f => { const v = String(tierEdit[f.key] || '').trim(); patch[`manufacturingSpecs.fabricut.${f.key}`] = v === '' ? deleteField() : v; });
+        const pw = String(tierEdit.pricedWith || '').trim();
+        patch['manufacturingSpecs.fabricut.pricedWith'] = pw === '' ? deleteField() : pw;
         patch['manufacturingSpecs.fabricut.source'] = 'COLLECTION_PAGE';
         patch['manufacturingSpecs.fabricut.updatedAt'] = Date.now();
         try {
@@ -450,6 +472,56 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             await updateDoc(doc(db, 'Approved_Designs', p.id), patch);
             setTierRow(null); setTierEdit({});
         } catch (e) { console.error(e); alert('Save failed:\n\n' + (e.message || e)); }
+    };
+    // Seed/refresh THIS customer's clientPricing row from the tiers just saved — the per-item
+    // version of ↺ Adopt, for the SELECTED customer (not just a /fabricut/-named one). SKU =
+    // resolved pattern #, price = cost, sales = wholesale, retail = MSRP; keyed by CRM doc id.
+    const seedRowFromTiers = async (p) => {
+        if (!customer) return alert('Pick a customer first.');
+        const byCode = new Map(); inventory.forEach(x => { [x.legacyErpId, x.itemId].forEach(c => { const k = upper(c); if (k && k !== 'PENDING' && !byCode.has(k)) byCode.set(k, x); }); });
+        const sug = fabricutSuggestion(p, (c) => byCode.get(upper(c)) || null, outsourceFinishes);
+        if (!sug) return alert('No sellable tier price on this item (a group-priced $0 plate stays out of Client Pricing — its rule shows in "Priced in conjunction with").');
+        const rows = (p.clientPricing || []).filter(r => upper(r.customerId) !== upper(customer.id) && upper(r.customerId) !== upper(customer.name));
+        rows.push({ customerId: customer.id, customerName: customer.name || '', clientSku: sug.clientSku, price: sug.price, clientSalesPrice: sug.clientSalesPrice, clientRetailPrice: sug.clientRetailPrice, source: 'TIER_SEED', updatedAt: Date.now(), updatedBy: String(currentUser || '') });
+        try { await setDoc(doc(db, 'Approved_Designs', p.id), { clientPricing: rows }, { merge: true }); alert(`✅ ${customer.name} row seeded from the tiers (${sug.clientSku || 'no SKU'} · $${sug.price}).`); }
+        catch (e) { alert('Seed failed:\n\n' + (e.message || e)); }
+    };
+    // ---- ALIAS control (pivot phase B): the customer-facing identity, per collection ----------
+    // An alias is a full Approved_Designs record pointing home via manufacturingSpecs.aliasOf
+    // (the REAL item's bare ERP code — the shape aliasIdentity.buildAliasIndex keys on). It
+    // carries the customer's collection so customerFaceOf can pick it, and it must NEVER get a
+    // netSuiteInternalId (the sync excludes aliases; a mapped alias would push as itself).
+    const aliasesOf = (p) => {
+        const base = upper((p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId) || '').split('/')[0];
+        if (!base) return [];
+        return inventory.filter(x => {
+            const t = upper(x.aliasOf || x.manufacturingSpecs?.aliasOf || '');
+            return t && (t === base || t.split('/')[0] === base);
+        });
+    };
+    const createAlias = async (p) => {
+        const base = upper((p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId) || '').split('/')[0];
+        if (!base) return alert('This item has no code to alias.');
+        const code = upper(window.prompt(`Customer-facing item # for ${base} (the code ${customer?.name || 'the customer'} sees on quotes and the portal):`) || '').trim();
+        if (!code) return;
+        if (inventory.some(x => upper(x.legacyErpId) === code || upper(x.itemId) === code)) return alert(`${code} already exists in this brand.`);
+        const name = String(window.prompt('Customer-facing display name:', p.itemName || '') || '').trim() || p.itemName || code;
+        const id = code;
+        try {
+            await setDoc(doc(db, 'Approved_Designs', id), {
+                id, itemId: code, legacyErpId: code, itemName: name,
+                brandId: p.brandId, sharedBrands: p.sharedBrands || [],
+                partClass: p.partClass || 'Inventory',
+                clientPricing: [],
+                manufacturingSpecs: {
+                    aliasOf: base,
+                    productType: p.manufacturingSpecs?.productType || '',
+                    collections: coll ? [coll] : [],
+                },
+                createdAt: new Date().toISOString(), author: String(currentUser || ''),
+            }, { merge: false });
+            alert(`✅ Alias ${code} → ${base} created${coll ? ` in ${coll}` : ''}. It carries NO NetSuite id by design — quotes show ${code}, the floor and NetSuite see ${base}.`);
+        } catch (e) { alert('Alias create failed:\n\n' + (e.message || e)); }
     };
 
     // ---- CREATE A FEE (Stuart 2026-07-30) ------------------------------------------------------
@@ -928,17 +1000,35 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 <span style={{ fontFamily: theme.serif, fontSize: '1.15rem', color: theme.ink }}>Customer Alias &amp; Pricing — {r.code}</span>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>drives the CPQ price levels · blank = no price at that tier</span>
                                             </div>
-                                            {['Painted tier (/P)', 'Plated / premium tier (/EP, /P25)', 'This item’s own price (variants, single-finish)'].map(group => (
-                                                <div key={group} style={{ display: 'flex', alignItems: 'flex-end', gap: '14px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                                                    <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>{group}</span>
-                                                    {TIER_FIELDS.filter(f => f.group === group).map(f => (
+                                            {(() => {
+                                                // Resolved pattern # — the code Fabricut actually sees, through the SAME
+                                                // resolver quotes and spec sheets use.
+                                                const byCode = new Map(); inventory.forEach(x => { [x.legacyErpId, x.itemId].forEach(c => { const k = upper(c); if (k && k !== 'PENDING' && !byCode.has(k)) byCode.set(k, x); }); });
+                                                const preview = { ...r.p, manufacturingSpecs: { ...(r.p.manufacturingSpecs || {}), fabricut: { ...(r.p.manufacturingSpecs?.fabricut || {}), fabCodePainted: tierEdit.fabCodePainted || undefined, fabCodePremium: tierEdit.fabCodePremium || undefined, fabCodeBase: tierEdit.fabCodeBase || undefined } } };
+                                                const resolved = fabricutCodeOf(preview, (c) => byCode.get(upper(c)) || null, outsourceFinishes);
+                                                return resolved ? <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, marginBottom: '12px' }}>Resolved pattern #: <b>{resolved}</b>{r.code.includes('/') ? <span style={{ color: theme.inkSoft }}> (codes live on the base item)</span> : null}</div> : null;
+                                            })()}
+                                            {TIER_GROUPS.map(g => {
+                                                const incl = !!tierEdit[`incl_${g.key}`];
+                                                return (
+                                                <div key={g.label} style={{ display: 'flex', alignItems: 'flex-end', gap: '14px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                                                    <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>{g.label}</span>
+                                                    {TIER_FIELDS.filter(f => f.group === g.label).map(f => (
                                                         <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                                             <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft }}>{f.label}</span>
-                                                            <input value={tierEdit[f.key] ?? ''} onChange={e => setTierEdit(prev => ({ ...prev, [f.key]: e.target.value }))} placeholder="—" style={{ width: '96px', padding: '6px 7px', textAlign: 'right', fontFamily: theme.mono, fontSize: '12px', fontWeight: 600, border: `1px solid ${theme.line}`, outline: 'none' }} />
+                                                            <input value={tierEdit[f.key] ?? ''} disabled={incl} onChange={e => setTierEdit(prev => ({ ...prev, [f.key]: e.target.value }))} placeholder="—" style={{ width: '96px', padding: '6px 7px', textAlign: 'right', fontFamily: theme.mono, fontSize: '12px', fontWeight: 600, border: `1px solid ${theme.line}`, outline: 'none', opacity: incl ? 0.4 : 1 }} />
                                                         </label>
                                                     ))}
+                                                    <label title="Explicit $0 — this tier is priced in conjunction with the arm (the arm price covers it). Different from BLANK, which means no price at this tier (falls back to standard)." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: incl ? theme.brass : theme.inkSoft, cursor: 'pointer', paddingBottom: '10px', whiteSpace: 'nowrap' }}>
+                                                        <input type="checkbox" checked={incl} onChange={e => setTierEdit(prev => ({ ...prev, [`incl_${g.key}`]: e.target.checked }))} /> $0 · w/ arm
+                                                    </label>
                                                 </div>
-                                            ))}
+                                                );
+                                            })}
+                                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '14px', marginTop: '4px', flexWrap: 'wrap' }}>
+                                                <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>Priced in conjunction with…</span>
+                                                <input value={tierEdit.pricedWith ?? ''} onChange={e => setTierEdit(prev => ({ ...prev, pricedWith: e.target.value }))} placeholder="e.g. Priced in conjunction with H1 bracket arms" style={{ flex: 1, minWidth: '320px', padding: '6px 8px', fontFamily: theme.sans, fontSize: '0.85rem', border: `1px solid ${theme.line}`, outline: 'none' }} />
+                                            </div>
                                             <div style={{ display: 'flex', alignItems: 'flex-end', gap: '14px', marginTop: '14px', paddingTop: '14px', borderTop: `1px solid ${theme.line}`, flexWrap: 'wrap' }}>
                                                 <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>Their part #s</span>
                                                 {CODE_FIELDS.map(f => (
@@ -952,8 +1042,25 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                     <button onClick={saveTiers} style={btn(true, { background: theme.green, borderColor: theme.green })}>Save tiers</button>
                                                 </span>
                                             </div>
+                                            {/* Seed the row + alias control — the two actions that used to live only in the
+                                                Master Library drawer (pivot phase B: 4.6 is the control surface). */}
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '14px', paddingTop: '12px', borderTop: `1px dashed ${theme.line}`, flexWrap: 'wrap' }}>
+                                                <button onClick={() => seedRowFromTiers(r.p)} style={btn(true)} title={`Write/refresh ${customer?.name || 'the customer'}'s clientPricing row from these tiers — SKU = pattern #, price = cost, sales = wholesale. Keyed by the CRM doc id.`}>↑ Seed {customer?.name || 'customer'} row from tiers</button>
+                                                {(() => {
+                                                    const al = aliasesOf(r.p);
+                                                    return (
+                                                        <span style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', color: theme.inkSoft }}>Alias{al.length !== 1 ? 'es' : ''}:</span>
+                                                            {al.length
+                                                                ? al.map(a => <span key={a.id} title={`${a.itemName || ''}${(a.manufacturingSpecs?.collections || []).length ? ` · ${(a.manufacturingSpecs.collections || []).join(', ')}` : ''}${a.netSuiteInternalId ? ' · ⚠ HAS A NETSUITE ID — an alias must not; it would push as itself' : ''}`} style={{ fontFamily: theme.mono, fontSize: '11px', padding: '3px 8px', border: `1px solid ${a.netSuiteInternalId ? '#b00020' : theme.line}`, color: a.netSuiteInternalId ? '#b00020' : theme.ink }}>{a.legacyErpId || a.itemId}</span>)
+                                                                : <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>none — quotes show the CE code</span>}
+                                                            <button onClick={() => createAlias(r.p)} style={btn(false)} title={`Create the customer-facing item # for this part${coll ? ` in ${coll}` : ''} — quotes and the portal show it; the floor and NetSuite keep the real code. Never gets a NetSuite id.`}>＋ Alias</button>
+                                                        </span>
+                                                    );
+                                                })()}
+                                            </div>
                                             <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '12px', lineHeight: 1.6 }}>
-                                                A BASE (mill) item carries the painted and plated tiers — its variants inherit them. A VARIANT or single-finish item carries its own price on the third row. Pattern #s live on the base item; a variant resolves to the premium code when its finish is outsourced (/EP* and /P25).
+                                                A BASE (mill) item carries the painted and plated tiers — its variants inherit them. A VARIANT or single-finish item carries its own price on the third row. Pattern #s live on the base item; a variant resolves to the premium code when its finish is outsourced (/EP* and /P25). BLANK = no price at that tier (standard pricing) · $0 · w/ arm = explicit $0, the arm carries the value.
                                             </div>
                                         </td>
                                     </tr>
