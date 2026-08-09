@@ -60,11 +60,14 @@ Two runtimes can't import each other (CRA only reads `src/`, Functions deploy on
 | Cloud Functions | **manual** — Cloud Shell only | `cd ~/ce-m2c-design-app && git pull origin main && firebase deploy --only functions:<names> --project ce-m2c-design-collab` — read the pull output |
 | NetSuite RESTlet | **manual** — File Cabinet → SuiteScripts, replace the file | no deploy ships it |
 
-**⚠ PENDING MANUAL DEPLOYS (as of 2026-08-07):**
+**⚠ PENDING MANUAL DEPLOYS (as of 2026-08-09):**
 1. `netsuite/ce_convert_build_restlet.js` @ `26dd4e5` — the cancelLine fix. WMS phosphate convert
    still fails on Phosphating-last BOMs until Stuart replaces the file in NetSuite.
-2. `firebase deploy --only functions:portalMyOrders,functions:portalResolve` @ `c007153` — portal
-   card finish names + checkout fee part#. Portal shows raw FIN-ids until this runs.
+2. `firebase deploy --only functions:portalMyOrders,functions:portalResolve,functions:portalQuoteRequest,functions:portalVisionDraft,functions:portalStockQuoteRequest`
+   — ONE deploy covers both pending changesets: `c007153` (portal card finish names + checkout fee
+   part#; raw FIN-ids until it runs) AND the 2026-08-09 quote-author stamp (`createdBy`/`author` on
+   portal-created jobs docs; `by` in the portalMyOrders quote payload — "Requested by" on portal
+   cards stays blank on new requests until deployed; CRM falls back to `portalRequest.byEmail`).
 
 ## 2026-08-08 weekend sprint — cross-territory changes, Stuart-authorized
 

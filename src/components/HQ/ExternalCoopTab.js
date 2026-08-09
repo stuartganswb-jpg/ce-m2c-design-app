@@ -5,7 +5,7 @@ import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, 
 import { portalRequestLines } from '../Shared/portalRequestLines';
 import { ref, deleteObject, uploadBytes, getDownloadURL } from "firebase/storage";
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
-import { quoteDisplayNo } from '../Shared/quoteDisplay';
+import { quoteDisplayNo, quoteAuthorLine } from '../Shared/quoteDisplay';
 import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
 import FormPreview from '../Shared/FormPreview';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
@@ -1368,6 +1368,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                           </div>
                                                       )}
                                                       <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                      {quoteAuthorLine(job) && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.03em' }}>{quoteAuthorLine(job)}</div>}
                                                       {job.cpqData?.totalPrice && <div style={{ fontSize: '0.9rem', fontWeight: 500, marginTop: '8px', color: 'var(--ink)' }}>Est: ${job.cpqData.totalPrice.toFixed(2)}</div>}
                                                       
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
@@ -1433,6 +1434,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{job.status.replace(/_/g, ' ')}</span>
                                                       </div>
                                                       <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '6px' }}>{job.sidemark || job.note || 'No description'}</div>
+                                                      {quoteAuthorLine(job) && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.03em' }}>{quoteAuthorLine(job)}</div>}
                                                       <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '8px' }}>Saved: {new Date(job.createdAt?.seconds * 1000).toLocaleDateString()}</div>
                                                       
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>

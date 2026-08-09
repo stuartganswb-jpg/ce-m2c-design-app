@@ -1113,6 +1113,9 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
                     id: j.quoteNo || j.jobId || j.id,
                     docId: j.id,
                     name: j.jobName || 'Quote',
+                    // Which of THEIR portal logins generated the request. Portal-originated identity
+                    // only — staff names stay internal (whitelist rule).
+                    by: (j.createdBy && j.createdBy.via === 'PORTAL' && j.createdBy.name) || (j.portalRequest && j.portalRequest.byEmail) || null,
                     sidemark: j.sidemark || '',
                     status: j.status || 'CONFIGURED',
                     date: j.dateSaved || null,
@@ -1640,6 +1643,11 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
         status: 'PORTAL_REQUEST',
         source: 'PORTAL',
         customer: { id: customerId, name: crm.name || '' },
+        // WHO generated this quote — first-class on the doc so CRM and the portal both show it.
+        // createdBy is stamped once at creation and never overwritten (CPQ finalize merges around
+        // it); `author` may later become the staff member who priced it.
+        author: submitterName,
+        createdBy: { name: submitterName, email, via: 'PORTAL' },
         jobName: `${flowName || 'Portal request'} — ${crm.name || ''}`.trim(),
         portalRequest: {
             flowId: String(flowId || ''),
@@ -1740,6 +1748,8 @@ exports.portalVisionDraft = onCall({ cors: true }, async (request) => {
         jobId: quoteNo, quoteNo, brandId,
         status: 'PORTAL_REQUEST', source: 'PORTAL',
         customer: { id: customerId, name: crm.name || '' },
+        author: submitterName,
+        createdBy: { name: submitterName, email, via: 'PORTAL' },
         jobName,
         portalRequest: { kind: 'VISION_MEASURE', flowId: String(flowId || ''), flowName: String(flowName || flow.name || ''), note: cleanNote, byEmail: email, draftId },
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1997,6 +2007,8 @@ exports.portalStockQuoteRequest = onCall({ cors: true }, async (request) => {
         jobId: quoteNo, quoteNo, brandId: ctx.brand,
         status: 'PORTAL_REQUEST', source: 'PORTAL',
         customer: { id: customerId, name: crm.name || '' },
+        author: submitterName,
+        createdBy: { name: submitterName, email, via: 'PORTAL' },
         jobName: cleanJobName,
         portalRequest: {
             kind: 'QUICKSHIP', collection: scope, lines, total,

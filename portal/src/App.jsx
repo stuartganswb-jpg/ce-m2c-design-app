@@ -77,6 +77,9 @@ const OrderCard = ({ o, badge, badgeClass, onDelete }) => {
         <div className="card-title">
           <div className="name">{o.name}{o.id ? <span className="date" style={{ marginLeft: 10 }}>#{o.id}</span> : null}</div>
           {o.sidemark ? <div className="side">{o.sidemark}</div> : null}
+          {/* Which of the account's logins sent this request — matters once a customer has
+              several portal users. Server-whitelisted: only portal-originated identity arrives. */}
+          {o.by ? <div className="side">Requested by {o.by}</div> : null}
         </div>
         <span className="date">{fmtDate(o.date)}</span>
         {o.total !== null && o.total !== undefined ? <span className="total">{fmtMoney(o.total)}</span> : null}

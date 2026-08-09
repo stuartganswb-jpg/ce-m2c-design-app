@@ -23,6 +23,22 @@ export const quoteDisplayNo = (job) => {
     return String(job.jobId || job.id || '');
 };
 
+// WHO generated the quote — one rule, one place (Stuart 2026-08-09: "the user whom generates each
+// quote should be attached to the document, so we can easily see it in both places").
+//   createdBy   the immutable creation stamp: the portal submitter, or the staff member who first
+//               finalized in CPQ. Written once, never overwritten.
+//   author      re-stamped by every CPQ finalize — when it differs from the creator, it names who
+//               last priced the quote, and the line says so.
+// Older docs predate createdBy: fall back to portalRequest.byEmail, then author.
+export const quoteAuthorLine = (job) => {
+    if (!job) return '';
+    const created = (job.createdBy && job.createdBy.name) || (job.portalRequest && job.portalRequest.byEmail) || job.author || '';
+    if (!created) return '';
+    const viaPortal = (job.createdBy && job.createdBy.via === 'PORTAL') || (!job.createdBy && !!job.portalRequest);
+    const pricedBy = job.author && job.author !== created ? job.author : '';
+    return `By ${created}${viaPortal ? ' (portal)' : ''}${pricedBy ? ` · priced by ${pricedBy}` : ''}`;
+};
+
 // True when what we're showing is the raw internal id — nothing better exists yet. Screens can use
 // this to style it quietly rather than presenting an epoch stamp as if it were a quote number.
 export const isInternalId = (job) => quoteDisplayNo(job) === String((job && (job.jobId || job.id)) || '')

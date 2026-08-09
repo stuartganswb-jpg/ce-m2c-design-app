@@ -2325,6 +2325,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const payload = {
           jobId: targetJobId, brandId: activeBrand, status: 'CONFIGURED',
           ...(mintedQuoteNo ? { quoteNo: mintedQuoteNo } : {}),
+          // WHO generated the quote — stamped once at creation, then left alone (merge preserves
+          // it), so a portal-originated createdBy survives staff re-pricing. `author` below keeps
+          // recording who last finalized.
+          ...(isNewQuote ? { createdBy: { name: currentUser, via: 'CPQ' } } : {}),
           // Quote-display level this job was priced at (cart items each carry theirs too). The
           // push still rates physical lines at standard pricing; the rollup absorbs the balance.
           priceLevel: cart[0]?.priceLevel || priceLevel,
