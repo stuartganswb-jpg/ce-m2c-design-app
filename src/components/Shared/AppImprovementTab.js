@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
 import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy, limit, serverTimestamp } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
@@ -26,6 +26,170 @@ const entriesCol = () => collection(db, 'system', 'app_feedback', 'entries');
 const labelStyle = { display: 'block', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: theme.inkSoft, marginBottom: '6px' };
 const inputStyle = { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: `1px solid ${theme.line}`, borderRadius: '2px', fontFamily: theme.sans, fontSize: '0.9rem', color: theme.ink, background: '#fff', outline: 'none' };
 
+// ---------------------------------------------------------------------------
+// FLOW SKETCH — a tiny Figma-style box-and-arrow chart for new-feature asks.
+// Boxes are draggable, double-click to type inside; Connect mode draws arrows
+// box→box. Stored as plain JSON ({boxes, arrows}) on the feedback doc and
+// re-rendered read-only (FlowView) in the report list. SVG only, no libs.
+// ---------------------------------------------------------------------------
+const FLOW_W = 880, FLOW_H = 380, BOX_W = 150, BOX_H = 60;
+const EMPTY_FLOW = { boxes: [], arrows: [] };
+
+// Point on the boundary of `from` where the line toward `to`'s center exits —
+// so arrows start/end at box edges, not buried under the rectangles.
+const edgePoint = (from, to) => {
+    const cx = from.x + BOX_W / 2, cy = from.y + BOX_H / 2;
+    const dx = (to.x + BOX_W / 2) - cx, dy = (to.y + BOX_H / 2) - cy;
+    if (!dx && !dy) return { x: cx, y: cy };
+    const s = Math.min((BOX_W / 2) / Math.abs(dx || 1e-6), (BOX_H / 2) / Math.abs(dy || 1e-6));
+    return { x: cx + dx * s, y: cy + dy * s };
+};
+
+const arrowLines = (flow) => (flow.arrows || []).map((a, i) => {
+    const from = (flow.boxes || []).find(b => b.id === a.from);
+    const to = (flow.boxes || []).find(b => b.id === a.to);
+    if (!from || !to) return null;
+    const p1 = edgePoint(from, to), p2 = edgePoint(to, from);
+    return <line key={i} x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke={theme.inkSoft} strokeWidth="1.5" markerEnd="url(#aiArrowHead)" />;
+});
+
+const flowDefs = (
+    <defs>
+        <marker id="aiArrowHead" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+            <polygon points="0 0, 9 3.5, 0 7" fill={theme.inkSoft} />
+        </marker>
+    </defs>
+);
+
+const boxText = (b, extra) => (
+    <foreignObject x={b.x} y={b.y} width={BOX_W} height={BOX_H} style={{ pointerEvents: 'none' }}>
+        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', padding: '4px 8px', fontFamily: theme.sans, fontSize: '11px', color: theme.ink, textAlign: 'center', whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflow: 'hidden', ...extra }}>
+            {b.text || ''}
+        </div>
+    </foreignObject>
+);
+
+const FlowSketch = ({ flow, setFlow }) => {
+    const [selected, setSelected] = useState(null);
+    const [editing, setEditing] = useState(null);
+    const [mode, setMode] = useState('MOVE');       // MOVE | CONNECT
+    const [connectFrom, setConnectFrom] = useState(null);
+    const dragRef = useRef(null);                    // { id, dx, dy }
+    const svgRef = useRef(null);
+
+    const boxes = flow.boxes || [], arrows = flow.arrows || [];
+    const upd = (patch) => setFlow({ boxes, arrows, ...patch });
+
+    const svgPoint = (e) => {
+        const r = svgRef.current.getBoundingClientRect();
+        return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
+
+    const addBox = () => {
+        const id = 'b' + Date.now() + '_' + boxes.length;
+        const i = boxes.length;
+        upd({ boxes: [...boxes, { id, x: 30 + (i % 4) * (BOX_W + 55), y: 30 + Math.floor(i / 4) * (BOX_H + 55), text: '' }] });
+        setSelected(id); setEditing(id);
+    };
+
+    const boxDown = (e, b) => {
+        e.stopPropagation();
+        if (editing && editing !== b.id) setEditing(null);
+        if (mode === 'CONNECT') {
+            if (!connectFrom) { setConnectFrom(b.id); setSelected(b.id); return; }
+            if (connectFrom !== b.id && !arrows.some(a => a.from === connectFrom && a.to === b.id)) {
+                upd({ arrows: [...arrows, { from: connectFrom, to: b.id }] });
+            }
+            setConnectFrom(null); setSelected(null);
+            return;
+        }
+        setSelected(b.id);
+        const p = svgPoint(e);
+        dragRef.current = { id: b.id, dx: p.x - b.x, dy: p.y - b.y };
+    };
+
+    const move = (e) => {
+        if (!dragRef.current) return;
+        const p = svgPoint(e);
+        const x = Math.max(0, Math.min(FLOW_W - BOX_W, p.x - dragRef.current.dx));
+        const y = Math.max(0, Math.min(FLOW_H - BOX_H, p.y - dragRef.current.dy));
+        upd({ boxes: boxes.map(b => b.id === dragRef.current.id ? { ...b, x, y } : b) });
+    };
+
+    const setText = (id, text) => upd({ boxes: boxes.map(b => b.id === id ? { ...b, text } : b) });
+    const deleteSelected = () => {
+        if (!selected) return;
+        upd({ boxes: boxes.filter(b => b.id !== selected), arrows: arrows.filter(a => a.from !== selected && a.to !== selected) });
+        setSelected(null); setEditing(null); setConnectFrom(null);
+    };
+
+    const toolBtn = (active) => ({ padding: '6px 12px', cursor: 'pointer', borderRadius: '2px', border: `1px solid ${active ? theme.brass : theme.line}`, background: active ? theme.brass : '#fff', color: active ? '#fff' : theme.inkSoft, fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' });
+
+    return (
+        <div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' }}>
+                <button type="button" onClick={addBox} style={toolBtn(false)}>+ Add Box</button>
+                <button type="button" onClick={() => { setMode(m => m === 'CONNECT' ? 'MOVE' : 'CONNECT'); setConnectFrom(null); }} style={toolBtn(mode === 'CONNECT')}>{mode === 'CONNECT' ? (connectFrom ? 'Now click the target box…' : 'Connect: click first box…') : '→ Connect Boxes'}</button>
+                <button type="button" onClick={deleteSelected} disabled={!selected} style={{ ...toolBtn(false), opacity: selected ? 1 : 0.4, cursor: selected ? 'pointer' : 'default' }}>Delete Selected</button>
+                <button type="button" onClick={() => { setFlow(EMPTY_FLOW); setSelected(null); setEditing(null); setConnectFrom(null); }} disabled={!boxes.length} style={{ ...toolBtn(false), opacity: boxes.length ? 1 : 0.4 }}>Clear</button>
+                <span style={{ fontSize: '0.75rem', color: theme.inkSoft, fontStyle: 'italic' }}>Drag boxes to move · double-click a box to type inside it</span>
+            </div>
+            <div style={{ border: `1px solid ${theme.line}`, borderRadius: '2px', background: theme.paper, overflowX: 'auto' }}>
+                <svg ref={svgRef} width={FLOW_W} height={FLOW_H} style={{ display: 'block', touchAction: 'none' }}
+                    onPointerMove={move} onPointerUp={() => { dragRef.current = null; }} onPointerLeave={() => { dragRef.current = null; }}
+                    onPointerDown={() => { setSelected(null); setEditing(null); if (mode === 'CONNECT') setConnectFrom(null); }}>
+                    {flowDefs}
+                    {arrowLines(flow)}
+                    {boxes.map(b => (
+                        <g key={b.id} onPointerDown={(e) => boxDown(e, b)} onDoubleClick={(e) => { e.stopPropagation(); setEditing(b.id); setSelected(b.id); }} style={{ cursor: mode === 'CONNECT' ? 'crosshair' : 'move' }}>
+                            <rect x={b.x} y={b.y} width={BOX_W} height={BOX_H} rx="6" fill="#fff"
+                                stroke={connectFrom === b.id ? theme.brass : (selected === b.id ? theme.brass : theme.ink)}
+                                strokeWidth={selected === b.id || connectFrom === b.id ? 2 : 1} />
+                            {editing === b.id ? (
+                                <foreignObject x={b.x} y={b.y} width={BOX_W} height={BOX_H}>
+                                    <textarea autoFocus value={b.text} placeholder="type here…"
+                                        onChange={e => setText(b.id, e.target.value)}
+                                        onBlur={() => setEditing(null)}
+                                        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); setEditing(null); } }}
+                                        onPointerDown={e => e.stopPropagation()}
+                                        style={{ width: '100%', height: '100%', boxSizing: 'border-box', border: 'none', outline: 'none', resize: 'none', background: 'transparent', fontFamily: theme.sans, fontSize: '11px', color: theme.ink, textAlign: 'center', padding: '4px 8px' }} />
+                                </foreignObject>
+                            ) : boxText(b)}
+                        </g>
+                    ))}
+                    {boxes.length === 0 && (
+                        <text x={FLOW_W / 2} y={FLOW_H / 2} textAnchor="middle" fill={theme.inkSoft} fontFamily={theme.sans} fontSize="13" fontStyle="italic">
+                            Optional: sketch the flow — “+ Add Box” for each step, then “→ Connect Boxes”.
+                        </text>
+                    )}
+                </svg>
+            </div>
+        </div>
+    );
+};
+
+// Read-only rendering of a saved sketch, scaled down for the report list.
+const FlowView = ({ flow }) => {
+    const boxes = flow?.boxes || [];
+    if (!boxes.length) return null;
+    const maxX = Math.max(...boxes.map(b => b.x)) + BOX_W + 20;
+    const maxY = Math.max(...boxes.map(b => b.y)) + BOX_H + 20;
+    return (
+        <div style={{ marginTop: '10px', border: `1px solid ${theme.line}`, borderRadius: '2px', background: theme.paper, overflowX: 'auto', maxWidth: '100%' }}>
+            <svg viewBox={`0 0 ${maxX} ${maxY}`} width={Math.min(maxX, 560)} style={{ display: 'block' }}>
+                {flowDefs}
+                {arrowLines(flow)}
+                {boxes.map(b => (
+                    <g key={b.id}>
+                        <rect x={b.x} y={b.y} width={BOX_W} height={BOX_H} rx="6" fill="#fff" stroke={theme.ink} strokeWidth="1" />
+                        {boxText(b)}
+                    </g>
+                ))}
+            </svg>
+        </div>
+    );
+};
+
 const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
     const [tabScope, setTabScope] = useState('EXISTING');       // EXISTING | NEW
     const [section, setSection] = useState(SECTIONS.includes(currentApp) ? currentApp : 'OTHER');
@@ -33,6 +197,8 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
     const [issueType, setIssueType] = useState('APP_ERROR');
     const [comments, setComments] = useState('');
     const [nsFields, setNsFields] = useState('');
+    const [steps, setSteps] = useState('');          // new-feature: step-by-step behavior
+    const [flow, setFlow] = useState(EMPTY_FLOW);    // new-feature: box/arrow sketch
     const [shots, setShots] = useState([]);                     // [{ file, preview }]
     const [submitting, setSubmitting] = useState(false);
     const [flash, setFlash] = useState('');
@@ -88,10 +254,12 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
                 issueType,
                 comments: comments.trim(),
                 nsFields: nsFields.trim(),                      // NetSuite fields & IDs (new-feature asks)
+                steps: issueType === 'NEW_FEATURE' ? steps.trim() : '',
+                flow: issueType === 'NEW_FEATURE' && (flow.boxes || []).length ? flow : null,
                 screenshots,
                 status: 'NEW',
             });
-            setTabRef(''); setComments(''); setNsFields(''); setShots([]); setTabScope('EXISTING'); setIssueType('APP_ERROR');
+            setTabRef(''); setComments(''); setNsFields(''); setSteps(''); setFlow(EMPTY_FLOW); setShots([]); setTabScope('EXISTING'); setIssueType('APP_ERROR');
             setFlash('Thank you — your report was submitted.');
             setTimeout(() => setFlash(''), 5000);
         } catch (e) {
@@ -160,7 +328,15 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
                                 <strong>New feature:</strong> if this touches NetSuite, please reference the fields involved and their field IDs (e.g. <code style={{ fontFamily: theme.mono }}>custitem27</code>, <code style={{ fontFamily: theme.mono }}>custbody_xyz</code>) in the box below.
                             </div>
                             <label style={labelStyle}>NetSuite fields &amp; field IDs affected (if any)</label>
-                            <textarea value={nsFields} onChange={e => setNsFields(e.target.value)} rows={2} placeholder='e.g. Item record → "Sync to CPQ" checkbox (custitem_sync_to_cpq)' style={{ ...inputStyle, resize: 'vertical' }} />
+                            <textarea value={nsFields} onChange={e => setNsFields(e.target.value)} rows={2} placeholder='e.g. Item record → "Sync to CPQ" checkbox (custitem_sync_to_cpq)' style={{ ...inputStyle, resize: 'vertical', marginBottom: '14px' }} />
+
+                            <label style={labelStyle}>Step by step — how should the new page work?</label>
+                            <textarea value={steps} onChange={e => setSteps(e.target.value)} rows={5}
+                                placeholder={'Walk through it one action at a time, e.g.\n1. Operator opens the tab and scans the work order\n2. The app shows…\n3. Operator clicks…\n4. NetSuite gets…'}
+                                style={{ ...inputStyle, resize: 'vertical', marginBottom: '14px' }} />
+
+                            <label style={labelStyle}>Sketch the flow (optional) — boxes &amp; arrows, type notes inside each box</label>
+                            <FlowSketch flow={flow} setFlow={setFlow} />
                         </div>
                     )}
                 </div>
@@ -220,6 +396,13 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
                         </div>
                         <div style={{ fontSize: '0.88rem', color: theme.ink, whiteSpace: 'pre-wrap' }}>{en.comments}</div>
                         {en.nsFields && <div style={{ fontSize: '0.8rem', color: theme.inkSoft, marginTop: '6px' }}><span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase' }}>NS fields:</span> {en.nsFields}</div>}
+                        {en.steps && (
+                            <div style={{ marginTop: '8px', padding: '10px 12px', background: theme.paper2, borderRadius: '2px' }}>
+                                <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft, display: 'block', marginBottom: '4px' }}>Step by step</span>
+                                <div style={{ fontSize: '0.83rem', color: theme.ink, whiteSpace: 'pre-wrap' }}>{en.steps}</div>
+                            </div>
+                        )}
+                        {(en.flow?.boxes || []).length > 0 && <FlowView flow={en.flow} />}
                         {(en.screenshots || []).length > 0 && (
                             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
                                 {en.screenshots.map((s, i) => (
