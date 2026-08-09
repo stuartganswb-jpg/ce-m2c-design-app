@@ -8,7 +8,7 @@
 //
 // KEYS ARE PERMISSION IDENTITY. pick_config/permissions stores each role's allowed tabs BY KEY, so
 // renaming one silently revokes that tab for every role. Rename the LABEL below instead.
-export const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'ROD CUTS', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING'];
+export const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'ROD CUTS', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING', 'APP IMP'];
 
 // Display name for a tab key — used by the WMS nav and by the permission matrix, so an admin
 // ticking a row sees exactly the words the operator sees on the floor.

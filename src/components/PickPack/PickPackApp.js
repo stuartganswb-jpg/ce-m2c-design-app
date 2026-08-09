@@ -11,6 +11,7 @@ import { httpsCallable } from 'firebase/functions';
 import { CATEGORY_NAME_RX } from '../Shared/itemCodeMatch';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
+import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveByExactKey, normalizeKey, stagingScanMatches } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
@@ -2642,7 +2643,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    {TABS.filter(t => myTabs.includes(t)).map(tab => (
+                    {/* 'APP IMP' is force-included — feedback stays reachable by every role. */}
+                    {TABS.filter(t => myTabs.includes(t) || t === 'APP IMP').map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
                             {pickTabLabel(tab)}
                         </button>
@@ -4810,6 +4812,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {activeTab === 'MESSAGING' && (
                     <div style={{ background: '#fff', border: `1px solid ${theme.line}`, height: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                         <SharedMessaging currentUser={operator?.name || 'Unknown'} currentApp="PICK_PACK" writeLog={writeLog} />
+                    </div>
+                )}
+
+                {/* 🛠️ TAB: APP IMP — bug reports & improvement requests */}
+                {activeTab === 'APP IMP' && (
+                    <div style={{ background: '#fff', border: `1px solid ${theme.line}`, minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                        <AppImprovementTab currentUser={operator?.name || 'Unknown'} currentApp="WMS" canManage={['admin', 'superadmin'].includes(safeUserRole)} />
                     </div>
                 )}
 

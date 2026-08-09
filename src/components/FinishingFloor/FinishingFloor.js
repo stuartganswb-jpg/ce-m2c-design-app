@@ -17,10 +17,11 @@ import { MixModal, QcModal } from './Modals';
 // 🚀 SHARED APPS
 import FloorAssetViewer from './FloorAssetViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
+import AppImprovementTab from '../Shared/AppImprovementTab';
 
 // REMOVED 'MANAGEMENT' FROM THIS ARRAY (user/permission admin now lives in the HQ Admin tab).
 // PRODUCTION TIMES is the focused finishing-config tab: production timers + the time matrix.
-const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
+const TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY', 'APP IMP'];
 
 const FinishingFloor = () => {
   const navigate = useNavigate();
@@ -175,7 +176,8 @@ const FinishingFloor = () => {
         </div>
       </header>
       <nav style={{ display: 'flex', backgroundColor: 'var(--paper)', borderBottom: '1px solid var(--line)', overflowX: 'auto', padding: '0 20px' }}>
-        {TABS.filter(t => myTabs.includes(t)).map((tab) => (
+        {/* 'APP IMP' is force-included — feedback stays reachable by every role. */}
+        {TABS.filter(t => myTabs.includes(t) || t === 'APP IMP').map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)} style={{ whiteSpace: 'nowrap', padding: '16px 20px', cursor: 'pointer', border: 'none', borderBottom: activeTab === tab ? `2px solid var(--brass)` : '2px solid transparent', background: 'transparent', color: activeTab === tab ? 'var(--ink)' : 'var(--ink-soft)', fontWeight: 400, fontFamily: 'var(--mono)', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '.1em', transition: 'all 0.2s', opacity: activeTab === tab ? 1 : 0.7 }}>
             {tab}
           </button>
@@ -199,6 +201,7 @@ const FinishingFloor = () => {
           {/* 🚀 SHARED APPS */}
           {activeTab === 'ASSET GALLERY' && <FloorAssetViewer activeBrand={null} />}
           {activeTab === 'OS COMMS' && <SharedMessaging currentUser={user.name} currentApp="FINISHING" writeLog={writeLog} />}
+          {activeTab === 'APP IMP' && <AppImprovementTab currentUser={user.name} currentApp="FINISHING" canManage={isSuperAdmin} />}
         </div>
       </main>
       

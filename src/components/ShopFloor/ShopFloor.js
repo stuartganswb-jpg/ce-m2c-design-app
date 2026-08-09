@@ -14,6 +14,7 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
+import AppImprovementTab from '../Shared/AppImprovementTab';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack } from '../Shared/workOrderContract';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { qtyText } from '../Shared/configQty';
@@ -21,7 +22,7 @@ import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
 
-const TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'admin'];
+const TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'app imp', 'admin'];
 const ENG_TABS = ['routings', 'programs', 'tooling', 'admin'];
 
 const ShopFloor = () => {
@@ -1385,7 +1386,8 @@ const ShopFloor = () => {
             </header>
 
             <nav style={{ display: 'flex', backgroundColor: 'var(--paper)', borderBottom: '1px solid var(--line)', overflowX: 'auto', padding: '0 20px' }}>
-                {TABS.filter(t => myTabs.includes(t)).map(tab => (
+                {/* 'app imp' is force-included — feedback stays reachable by every role. */}
+                {TABS.filter(t => myTabs.includes(t) || t === 'app imp').map(tab => (
                     <button key={tab} onClick={() => setActiveTab(tab)} style={{ whiteSpace: 'nowrap', padding: '16px 20px', cursor: 'pointer', border: 'none', borderBottom: activeTab === tab ? `2px solid var(--brass)` : '2px solid transparent', background: 'transparent', color: activeTab === tab ? 'var(--ink)' : 'var(--ink-soft)', fontWeight: 400, fontFamily: 'var(--mono)', textTransform: 'uppercase', fontSize: '11px', letterSpacing: '.1em', transition: 'all 0.2s', opacity: activeTab === tab ? 1 : 0.7 }}>
                         {tab === 'admin' ? 'MACHINE CONFIG' : tab}
                     </button>
@@ -1415,6 +1417,7 @@ const ShopFloor = () => {
                             {/* 🚀 SHARED APPS */}
                             {activeTab === 'assets' && <AssetGalleryTab currentUser={user.name} activeBrand={null} />}
                             {activeTab === 'messaging' && <SharedMessaging currentUser={user.name} currentApp="SHOP" writeLog={writeLog} />}
+                            {activeTab === 'app imp' && <AppImprovementTab currentUser={user.name} currentApp="SHOP" canManage={safeUserRole === 'admin'} />}
                         </>
                     )}
                 </div>
