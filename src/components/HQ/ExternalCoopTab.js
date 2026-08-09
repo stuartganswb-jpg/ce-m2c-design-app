@@ -219,6 +219,87 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
     } finally { setBusy(false); }
   };
 
+  // ---- DEPARTMENTS & TEAM ACCESS (Stuart 2026-08-09: per-user portal visibility) --------------
+  // The access matrix lives on crm_records (staff-editable here, like every other portal
+  // entitlement); the BFF will enforce it server-side in the next phase:
+  //   LEAD      sees every quote in their department; invites their own members from the portal
+  //   MEMBER    sees only quotes they generated (matched by createdBy.email)
+  //   REGIONAL  sees every quote in each department assigned to them
+  // A portal login with NO team entry keeps today's account-wide visibility, so turning this on
+  // never darkens an existing customer's portal.
+  const PORTAL_ROLES = [
+    { id: 'LEAD', label: 'Team Lead' },
+    { id: 'MEMBER', label: 'Team Member' },
+    { id: 'REGIONAL', label: 'Regional Manager' },
+  ];
+  const [portalDepts, setPortalDepts] = useState([]);
+  const [portalTeam, setPortalTeam] = useState([]);
+  const [newDept, setNewDept] = useState('');
+  const [teamForm, setTeamForm] = useState({ name: '', email: '', role: 'LEAD', department: '', departments: [] });
+  useEffect(() => {
+    setPortalDepts(customer?.portalDepartments || []);
+    setPortalTeam(customer?.portalTeam || []);
+    setTeamForm({ name: '', email: '', role: 'LEAD', department: '', departments: [] });
+  }, [customerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveTeam = async (patch, revert) => {
+    try { await updateDoc(doc(db, 'crm_records', customerId), patch); }
+    catch (e) { revert(); alert('Could not save team access: ' + (e.message || e)); }
+  };
+  const addDept = () => {
+    const d = newDept.trim().toUpperCase();
+    if (!d) return;
+    if (portalDepts.includes(d)) return alert(`Department "${d}" already exists.`);
+    const prior = portalDepts, next = [...portalDepts, d];
+    setPortalDepts(next); setNewDept('');
+    saveTeam({ portalDepartments: next }, () => setPortalDepts(prior));
+  };
+  const removeDept = (d) => {
+    if (portalTeam.some(t => t.department === d || (t.departments || []).includes(d)))
+      return alert(`"${d}" is still assigned to people in the team list — reassign them first.`);
+    const prior = portalDepts, next = portalDepts.filter(x => x !== d);
+    setPortalDepts(next);
+    saveTeam({ portalDepartments: next }, () => setPortalDepts(prior));
+  };
+  const writeTeamList = (next, prior) => {
+    setPortalTeam(next);
+    saveTeam({ portalTeam: next }, () => setPortalTeam(prior));
+  };
+  const addTeamEntry = () => {
+    const email = teamForm.email.trim().toLowerCase();
+    if (!email || !/.+@.+\..+/.test(email)) return alert('A valid email is required — it is how quotes are matched to the person.');
+    if (portalTeam.some(t => t.email === email)) return alert('That email is already in the team list.');
+    if (teamForm.role === 'REGIONAL' && !teamForm.departments.length) return alert('Pick at least one department for a regional manager.');
+    if (teamForm.role !== 'REGIONAL' && !teamForm.department) return alert('Pick a department (add one above if the list is empty).');
+    const entry = {
+      email, name: teamForm.name.trim(),
+      role: teamForm.role,
+      department: teamForm.role === 'REGIONAL' ? '' : teamForm.department,
+      departments: teamForm.role === 'REGIONAL' ? teamForm.departments : [],
+      addedBy: 'CRM', addedAt: new Date().toISOString(),
+    };
+    writeTeamList([...portalTeam, entry], portalTeam);
+    setTeamForm({ name: '', email: '', role: teamForm.role, department: teamForm.department, departments: [] });
+  };
+  const updateTeamEntry = (idx, patch) => {
+    const next = portalTeam.map((t, i) => {
+      if (i !== idx) return t;
+      const merged = { ...t, ...patch };
+      // Role flips keep the department fields in the shape the role expects.
+      if (merged.role === 'REGIONAL') { merged.departments = merged.departments?.length ? merged.departments : (merged.department ? [merged.department] : []); merged.department = ''; }
+      else { merged.department = merged.department || (merged.departments || [])[0] || ''; merged.departments = []; }
+      return merged;
+    });
+    writeTeamList(next, portalTeam);
+  };
+  const removeTeamEntry = (idx) => {
+    const t = portalTeam[idx];
+    if (!window.confirm(`Remove ${t.email} from the team list? Their portal login (if any) stays — they fall back to account-wide visibility until the per-user gate is enforced.`)) return;
+    writeTeamList(portalTeam.filter((_, i) => i !== idx), portalTeam);
+  };
+  const teamRoleOf = (email) => portalTeam.find(t => t.email === String(email || '').trim().toLowerCase());
+  const roleLabelOf = (t) => `${(PORTAL_ROLES.find(r => r.id === t.role) || { label: t.role }).label} · ${t.role === 'REGIONAL' ? (t.departments || []).join(', ') : (t.department || '—')}`;
+
   const handleAdd = async () => {
     if (!form.email) return alert('Email is required.');
     const data = await call('createPortalUser', { customerId, email: form.email, name: form.name });
@@ -260,6 +341,9 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink)' }}>{u.name || u.email}</span>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{u.email}</span>
+                    {(() => { const t = teamRoleOf(u.email); return t
+                      ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginLeft: '10px', textTransform: 'uppercase', letterSpacing: '.08em', border: '1px solid var(--brass)', padding: '2px 6px' }}>{roleLabelOf(t)}</span>
+                      : <span title="No team role assigned below — this login sees the whole account (today's behavior)" style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginLeft: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>account-wide</span>; })()}
                     {!u.active && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginLeft: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Disabled</span>}
                   </div>
                   <button disabled={busy} onClick={() => handleReinvite(u)} title="Generate a fresh set-password link (re-invite / forgot password)" style={{ padding: '6px 10px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Setup Link</button>
@@ -284,6 +368,93 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
             <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Name" style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
             <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="email@company.com" type="email" style={{ flex: 1.4, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
             <button disabled={busy || !form.email} onClick={handleAdd} style={{ padding: '10px 18px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: !form.email ? 0.5 : 1 }}>{busy ? 'Working…' : '+ Add Login'}</button>
+          </div>
+
+          {/* DEPARTMENTS & TEAM ACCESS — who sees which quotes once per-user visibility is
+              enforced in the portal. Staff load the team LEADS here; leads will invite their own
+              members from the portal (next phase). */}
+          <div style={{ marginTop: '22px', paddingTop: '16px', borderTop: '1px solid var(--line)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: 'var(--ink-soft)' }}>Departments &amp; Team Access</span>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: portalTeam.length ? 'var(--brass)' : 'var(--ink-soft)' }}>{portalTeam.length ? `${portalTeam.length} in team` : 'not configured — everyone sees the whole account'}</span>
+            </div>
+            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginBottom: '12px' }}>
+              <strong>Team Leads</strong> see every quote in their department and will invite their own team members from the portal. <strong>Team Members</strong> see only quotes they created. <strong>Regional Managers</strong> see all the departments assigned to them. Logins with no role keep full-account visibility.
+            </div>
+
+            {/* The department list — the unit everything above scopes to. */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginBottom: '14px' }}>
+              {portalDepts.map(d => (
+                <span key={d} style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: 'var(--ink)', border: '1px solid var(--line)', background: 'var(--paper)', padding: '5px 9px' }}>
+                  {d}
+                  <button onClick={() => removeDept(d)} title={`Remove department ${d}`} style={{ background: 'transparent', border: 'none', color: '#d9534f', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: 0 }}>×</button>
+                </span>
+              ))}
+              <input value={newDept} onChange={e => setNewDept(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addDept(); }} placeholder="Add department…" style={{ padding: '6px 9px', border: '1px dashed var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.82rem', width: '150px' }} />
+              <button onClick={addDept} disabled={!newDept.trim()} style={{ padding: '6px 12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: newDept.trim() ? 1 : 0.5, whiteSpace: 'nowrap' }}>+ Dept</button>
+            </div>
+
+            {/* The team roster. Role + department are edited in place; the row is the record. */}
+            {portalTeam.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
+                {portalTeam.map((t, idx) => (
+                  <div key={t.email} style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', border: '1px solid var(--line)', background: 'var(--paper)', padding: '8px 12px' }}>
+                    <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                      <span style={{ fontFamily: 'var(--sans)', fontSize: '0.88rem', color: 'var(--ink)' }}>{t.name || t.email}</span>
+                      {t.name && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginLeft: '8px' }}>{t.email}</span>}
+                      {!users?.some(u => String(u.email || '').trim().toLowerCase() === t.email) && <span title="No portal login exists for this email yet — add one above, or (leads) they can be invited later" style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: '#a05a2c', marginLeft: '8px', textTransform: 'uppercase', letterSpacing: '.08em' }}>no login yet</span>}
+                    </div>
+                    <select value={t.role} onChange={e => updateTeamEntry(idx, { role: e.target.value })} style={{ padding: '6px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.8rem', background: '#fff', outline: 'none' }}>
+                      {PORTAL_ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                    </select>
+                    {t.role === 'REGIONAL' ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                        {portalDepts.map(d => (
+                          <label key={d} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.05em', color: 'var(--ink)', border: '1px solid var(--line)', background: (t.departments || []).includes(d) ? '#fff' : 'transparent', padding: '4px 7px', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={(t.departments || []).includes(d)} onChange={() => updateTeamEntry(idx, { departments: (t.departments || []).includes(d) ? (t.departments || []).filter(x => x !== d) : [...(t.departments || []), d] })} style={{ accentColor: 'var(--brass)' }} />
+                            {d}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <select value={t.department || ''} onChange={e => updateTeamEntry(idx, { department: e.target.value })} style={{ padding: '6px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.8rem', background: '#fff', outline: 'none' }}>
+                        <option value="">— department —</option>
+                        {portalDepts.map(d => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    )}
+                    <button onClick={() => removeTeamEntry(idx)} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f' }}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add-to-team row. Load the LEADS here; members normally arrive via their lead's
+                portal invite, but nothing stops staff adding them directly too. */}
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input value={teamForm.name} onChange={e => setTeamForm({ ...teamForm, name: e.target.value })} placeholder="Name" style={{ flex: '1 1 130px', minWidth: 0, boxSizing: 'border-box', padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+              <input value={teamForm.email} onChange={e => setTeamForm({ ...teamForm, email: e.target.value })} placeholder="email@company.com" type="email" style={{ flex: '1.4 1 180px', minWidth: 0, boxSizing: 'border-box', padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+              <select value={teamForm.role} onChange={e => setTeamForm({ ...teamForm, role: e.target.value, departments: [] })} style={{ padding: '9px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', background: '#fff', outline: 'none' }}>
+                {PORTAL_ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select>
+              {teamForm.role === 'REGIONAL' ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                  {portalDepts.length === 0 && <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>add departments first</span>}
+                  {portalDepts.map(d => (
+                    <label key={d} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.05em', color: 'var(--ink)', border: '1px solid var(--line)', background: teamForm.departments.includes(d) ? 'var(--paper)' : 'transparent', padding: '4px 7px', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={teamForm.departments.includes(d)} onChange={() => setTeamForm({ ...teamForm, departments: teamForm.departments.includes(d) ? teamForm.departments.filter(x => x !== d) : [...teamForm.departments, d] })} style={{ accentColor: 'var(--brass)' }} />
+                      {d}
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <select value={teamForm.department} onChange={e => setTeamForm({ ...teamForm, department: e.target.value })} style={{ padding: '9px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', background: '#fff', outline: 'none' }}>
+                  <option value="">— department —</option>
+                  {portalDepts.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              )}
+              <button onClick={addTeamEntry} disabled={!teamForm.email} style={{ padding: '9px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', opacity: teamForm.email ? 1 : 0.5, whiteSpace: 'nowrap' }}>+ Add to Team</button>
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', marginTop: '8px', letterSpacing: '.04em' }}>Saved on the CRM record and matched to quotes by email (createdBy). Portal-side enforcement + the lead's invite flow ship next — until then every login still sees the whole account.</div>
           </div>
 
           {/* Which CPQ flows this customer's portal may use. A flow's assembly + BOM defines
@@ -1222,7 +1393,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                   ) : (
                                                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
                                                           {(activeCrmRecord.contacts || []).map((c, idx) => (
-                                                              <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr auto', gap: '10px', alignItems: 'center', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '10px 12px' }}>
+                                                              <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr) auto', gap: '10px', alignItems: 'center', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '10px 12px' }}>
                                                                   <span style={{ fontWeight: 500, fontSize: '0.9rem', color: 'var(--ink)' }}>{c.name || '—'}</span>
                                                                   <a href={`mailto:${c.email}`} style={{ fontSize: '0.85rem', color: 'var(--brass)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.email || '—'}</a>
                                                                   <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>{c.department || '—'}</span>
@@ -1231,11 +1402,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                           ))}
                                                       </div>
                                                   )}
-                                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr 1fr auto', gap: '10px', alignItems: 'center' }}>
-                                                      <input value={newContactInput.name} onChange={e => setNewContactInput({ ...newContactInput, name: e.target.value })} placeholder="Contact name" style={{ padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
-                                                      <input value={newContactInput.email} onChange={e => setNewContactInput({ ...newContactInput, email: e.target.value })} placeholder="Email" onKeyDown={e => { if (e.key === 'Enter') addCrmContact(); }} style={{ padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
-                                                      <input value={newContactInput.department} onChange={e => setNewContactInput({ ...newContactInput, department: e.target.value })} placeholder="Department" onKeyDown={e => { if (e.key === 'Enter') addCrmContact(); }} style={{ padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
-                                                      <button onClick={addCrmContact} style={{ padding: '9px 18px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Add</button>
+                                                  {/* minWidth: 0 on every grid input — a grid child's implicit min-width is
+                                                      min-content, so on a narrow panel the inputs refused to shrink and shoved
+                                                      the Add button out over the container edge (Stuart 2026-08-09). */}
+                                                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr) auto', gap: '10px', alignItems: 'center' }}>
+                                                      <input value={newContactInput.name} onChange={e => setNewContactInput({ ...newContactInput, name: e.target.value })} placeholder="Contact name" style={{ minWidth: 0, boxSizing: 'border-box', width: '100%', padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                                                      <input value={newContactInput.email} onChange={e => setNewContactInput({ ...newContactInput, email: e.target.value })} placeholder="Email" onKeyDown={e => { if (e.key === 'Enter') addCrmContact(); }} style={{ minWidth: 0, boxSizing: 'border-box', width: '100%', padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                                                      <input value={newContactInput.department} onChange={e => setNewContactInput({ ...newContactInput, department: e.target.value })} placeholder="Department" onKeyDown={e => { if (e.key === 'Enter') addCrmContact(); }} style={{ minWidth: 0, boxSizing: 'border-box', width: '100%', padding: '9px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                                                      <button onClick={addCrmContact} style={{ padding: '9px 18px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Add</button>
                                                   </div>
                                               </div>
 
@@ -1350,10 +1524,16 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{expandedSections.active ? '▼ HIDE' : '▶ SHOW'}</span>
                                       </div>
                                       
-                                      {expandedSections.active && (
-                                          <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
-                                              {getCrmActivePipeline(activeCrmRecord.id).length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No active configurations pending.</div>}
-                                              {getCrmActivePipeline(activeCrmRecord.id).map(job => (
+                                      {expandedSections.active && (() => {
+                                          const act = getCrmActivePipeline(activeCrmRecord.id);
+                                          // QUOTES ON TOP, SALES ORDERS BELOW (Stuart 2026-08-09): a job crosses into the
+                                          // order group at APPROVED — the same threshold the dashboard's "active" counter
+                                          // uses. Archived states never reach here (getCrmActivePipeline excludes them).
+                                          const isOrder = (j) => ['APPROVED', 'IN_PRODUCTION'].includes(j.status);
+                                          const groupHead = (label, n) => (
+                                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px dashed var(--line)', paddingBottom: '6px', marginTop: label === 'Sales Orders' ? '10px' : 0 }}>{label} ({n})</div>
+                                          );
+                                          const pipelineCard = (job) => (
                                                   <div key={job.id} style={{ border: `1px solid ${job.portalDeleted ? '#e2b8b8' : 'var(--line)'}`, borderLeft: job.portalDeleted ? '4px solid #d9534f' : undefined, padding: '16px', background: job.portalDeleted ? '#fdf3f3' : 'var(--paper)' }}>
                                                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                           <span title={job.jobId || job.id} style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', textDecoration: job.portalDeleted ? 'line-through' : 'none', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{quoteDisplayNo(job)}</span>
@@ -1384,9 +1564,21 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                           <button onClick={() => handleDeleteJob(job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
                                                   </div>
-                                              ))}
-                                          </div>
-                                      )}
+                                          );
+                                          const qJobs = act.filter(j => !isOrder(j));
+                                          const oJobs = act.filter(isOrder);
+                                          return (
+                                              <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
+                                                  {act.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No active configurations pending.</div>}
+                                                  {act.length > 0 && groupHead('Quotes', qJobs.length)}
+                                                  {act.length > 0 && qJobs.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.85rem', padding: '4px 10px' }}>No open quotes.</div>}
+                                                  {qJobs.map(pipelineCard)}
+                                                  {act.length > 0 && groupHead('Sales Orders', oJobs.length)}
+                                                  {act.length > 0 && oJobs.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.85rem', padding: '4px 10px' }}>No approved orders yet.</div>}
+                                                  {oJobs.map(pipelineCard)}
+                                              </div>
+                                          );
+                                      })()}
 
                                       {/* --- ARCHIVE PIPELINE COLLAPSIBLE --- */}
                                       {/* QUICK SHIP INVOICES (2026-07-17): stocked-program orders for this customer.
