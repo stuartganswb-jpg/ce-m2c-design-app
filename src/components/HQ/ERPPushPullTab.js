@@ -490,7 +490,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               };
           }
 
-          const memoText = [job.jobName, job.sidemark].filter(Boolean).join(' - ').trim();
+          // De-duped: legacy jobs stamp sidemark = jobName, which used to read "X - X" in the memo.
+          const memoText = [...new Set([job.jobName, job.sidemark].filter(Boolean))].join(' - ').trim();
 
           // Quote's shipping charge → estimate HEADER shipping cost (never a line item):
           // lines + rollup still sum to cpqData.totalPrice; NetSuite adds shipping on top.

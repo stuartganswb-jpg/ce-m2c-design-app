@@ -43,6 +43,9 @@ export const reopenQuoteInCpq = (job) => {
                 jobId,
                 customerId: job.customer?.id || '',
                 jobName: job.jobName || '',
+                // orderSidemark = the raw typed header sidemark (job.sidemark carries fallbacks —
+                // jobName / 'Multi-Room Project' — that must not reappear as typed text on reopen).
+                sidemark: job.orderSidemark || '',
                 shippingMethod: job.shippingMethod || 'SAVED',
                 shippingAddressId: job.shippingAddressId || '',
                 shippingAmount: (parseFloat(job.shippingAmount) || 0) > 0 ? String(job.shippingAmount) : '',
