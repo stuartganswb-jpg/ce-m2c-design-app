@@ -430,7 +430,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const m = index ? matchItemByName(nm, index, normalizeCategory(slot.category) || slot.category) : null;
                 if (m) hit++;
                 const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, thumb: '' };
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, note: '', thumb: '' };
             });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
@@ -507,7 +507,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const m = index ? matchItemByName(nm, index, normalizeCategory(slotDef?.category) || slotDef?.category) : null;
                     const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, thumb: '' };
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, note: '', thumb: '' };
                 }))
             }
         } : prev);
@@ -699,7 +699,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         if (!looksRealPart(ch.label)) return;
                         const slugP = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
                         const nodeP = topMap[ch.nodeName] || ch.nodeName;
-                        pins.push({ assemblyId: asmId, clusterId, partId: `HIDDEN-${slugP}`, partName: ch.label || `HIDDEN-${slugP}`, defaultQty: 1, choiceNode: nodeP, targetNode: nodeP, choiceSort: idx, isHiddenPart: true, parked: true });
+                        pins.push({ assemblyId: asmId, clusterId, partId: `HIDDEN-${slugP}`, partName: ch.label || `HIDDEN-${slugP}`, defaultQty: 1, choiceNode: nodeP, targetNode: nodeP, choiceSort: idx, isHiddenPart: true, parked: true, ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}) });
                         return;
                     }
                     const slug = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
@@ -730,6 +730,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // became the synthetic FEE-<slug> the code was unrecoverable. This field is written
                     // by nothing else and read back first, so the code survives a bad round-trip.
                     ...(ch.isFee && String(ch.itemNo || '').trim() ? { feeItemNo: String(ch.itemNo).trim().toUpperCase() } : {}),
+                        // DESIGNER NOTE (Stuart 2026-08-10, for the H1-138 uploads): typed at upload,
+                        // shown in Load Choices — "which bracket is this and where does it sit" travels
+                        // with the pin instead of living in someone's memory. Display-only downstream.
+                        ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}),
                         ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {})
                     });
                 });
@@ -992,7 +996,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // here automatically; saving stamps it onto the pins so both stay in sync.
                     // A PARKED pin reloads as a plain blank choice (⏸ hint shows) — NOT as HIDE-checked,
                     // otherwise assigning its item # later would save it as a hidden BOM part.
-                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), isCollar: !!pin?.isCollar, requiresCollar: pin?.requiresCollar || '', projInches: pin?.projInches || '', mountType: pin?.mountType || '', catOverride: pin?.catOverride || '', custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], traverseRole: pin?.traverseRole || '', driveType: pin?.driveType || '', trvSetup: pin?.trvSetup || suggestSetupFromName(label, itemNo, nm), alwaysShown: !!pin?.alwaysShown, thumb: '' };
+                    return { nodeName: nm, label, itemNo, endTreatment: et, isFee: !!pin?.isFee, isHidden: !!pin?.isHiddenPart && !pin?.parked, parked: !!pin?.parked, isBasic: !!pin?.isBasic, usesReturnPlates: !!(pin?.usesReturnPlates || cl.usesReturnPlates), isReturnArm: !!(pin?.isReturnArm || cl.isReturnArm), returnOnly: !!(pin?.returnOnly || cl.returnOnly), inlineOnly: !!(pin?.inlineOnly || cl.inlineOnly), isCollar: !!pin?.isCollar, requiresCollar: pin?.requiresCollar || '', projInches: pin?.projInches || '', mountType: pin?.mountType || '', catOverride: pin?.catOverride || '', custIds: pin?.customerIds || [], custNames: pin?.customerNames || [], traverseRole: pin?.traverseRole || '', driveType: pin?.driveType || '', trvSetup: pin?.trvSetup || suggestSetupFromName(label, itemNo, nm), alwaysShown: !!pin?.alwaysShown, note: pin?.designerNote || '', thumb: '' };
                 });
                 // Restore the saved arrow order (unsaved rows keep file order after the sorted ones).
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
@@ -1112,7 +1116,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const label = choiceLabel(nm);
                     const m = index ? matchItemByName(label, index) : null;
                     const et = normalizeCategory(r.category) === 'FINIAL' ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, thumb: '' };
+                    return { nodeName: nm, label, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, note: '', thumb: '' };
                 }))
             })
         } : prev);
@@ -1162,7 +1166,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             const partIdP = `HIDDEN-${slugP}`;
                             const pidP = pinIdFor(assignData.asmId, r.clusterId, partIdP, ch.nodeName);
                             for (const old of existing) { if (old.docId !== pidP) { await deleteDoc(old.ref); removed++; } }
-                            await setDoc(doc(db, 'assembly_pins', pidP), { id: pidP, assemblyId: assignData.asmId, clusterId: r.clusterId, partId: partIdP, partName: ch.label || partIdP, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, isHiddenPart: true, parked: true });
+                            await setDoc(doc(db, 'assembly_pins', pidP), { id: pidP, assemblyId: assignData.asmId, clusterId: r.clusterId, partId: partIdP, partName: ch.label || partIdP, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, isHiddenPart: true, parked: true, ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}) });
                             parked++;
                             continue;
                         }
@@ -1184,7 +1188,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // carrying it, and partId is rewritten by anything that re-saves a choice — once it
                     // became the synthetic FEE-<slug> the code was unrecoverable. This field is written
                     // by nothing else and read back first, so the code survives a bad round-trip.
-                    ...(ch.isFee && String(ch.itemNo || '').trim() ? { feeItemNo: String(ch.itemNo).trim().toUpperCase() } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
+                    ...(ch.isFee && String(ch.itemNo || '').trim() ? { feeItemNo: String(ch.itemNo).trim().toUpperCase() } : {}), ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -1438,9 +1442,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
                                                     <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>
                                                 </span>
-                                                {(() => { const willPark = !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && looksRealPart(c.label); return (
+                                                {(() => { const willPark = !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && looksRealPart(c.label); return (<>
                                                 <input value={c.itemNo} list="ab-item-codes" onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} title={willPark ? 'No item # yet — on save this choice PARKS: the node hides from the model AND the flow until you assign the # (Load Choices keeps listing it). Perfect for parts IT hasn\'t set up yet.' : undefined} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds it to the BOM)' : (willPark ? '⏸ parks on save — no item # yet' : 'item # — type to search (blank = hardware)'))} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : (willPark ? 'var(--brass)' : 'var(--line)')), borderStyle: willPark ? 'dashed' : 'solid', opacity: c.isFee ? 0.5 : 1 }} />
-                                                ); })()}
+                                                <input value={c.note || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { note: e.target.value })} placeholder="designer note — what is it / where does it sit" maxLength={120} title="Typed at upload (or here) — saved on the pin, shown every time Load Choices lists this part." style={{ ...inp, padding: '4px 8px', fontSize: '0.74rem', fontStyle: 'italic', marginTop: '3px', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.9 }} />
+                                                </>); })()}
                                                 {normalizeCategory(r.category) === 'FINIAL' && (normalizeCategory(c.catOverride || r.category) !== 'FINIAL' ? (
                                                     <span title="Re-homed by the cat: override — end treatment only applies to finial-slot choices; this row now carries its new category's flags instead." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', textTransform: 'uppercase', letterSpacing: '.05em' }}>→ {String(c.catOverride).toLowerCase()}</span>
                                                 ) : (
@@ -1632,6 +1637,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <button onClick={() => splitSlotChoice(slot.id, c.nodeName)} title="Several parts merged under one wrapper node? Split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '2px', flexShrink: 0 }}>⤢</button>
                                                     </span>
                                                     <input value={c.itemNo} list="ab-item-codes" onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds to BOM)' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
+                                                    {/* DESIGNER NOTE (Stuart 2026-08-10): typed here at upload, shown in Load
+                                                        Choices — 'what is this and where does it sit' for the H1-138 pass. */}
+                                                    <input value={c.note || ''} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { note: e.target.value })} placeholder="note — e.g. 'double-rod rear bracket, wall side'" maxLength={120} style={{ ...inp, padding: '4px 7px', fontSize: '0.72rem', fontStyle: 'italic', marginTop: '3px', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.9 }} />
                                                     {normalizeCategory(slot.category) === 'FINIAL' && (normalizeCategory(c.catOverride || slot.category) !== 'FINIAL' ? (
                                                         <span title="Re-homed by the cat: override — end treatment only applies to finial-slot choices; this row now carries its new category's flags instead." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', textTransform: 'uppercase', letterSpacing: '.05em' }}>→ {String(c.catOverride).toLowerCase()}</span>
                                                     ) : (
