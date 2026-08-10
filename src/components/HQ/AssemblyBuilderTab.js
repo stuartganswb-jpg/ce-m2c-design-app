@@ -1027,7 +1027,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const nodeMissing = (nm) => {
         const scene = assignSceneRef.current;
         if (!scene || !nm) return false;
-        let hit = false; scene.traverse(nd => { if (!hit && nd.name === nm) hit = true; });
+        // Mesh-aware, matching Save's reconciliation: a named husk with no geometry inside
+        // counts as MISSING (it can never render), so the ✗ chip and the strip agree.
+        let hit = false;
+        scene.traverse(nd => { if (!hit && nd.isMesh) { let a = nd; while (a && !hit) { if (a.name === nm) hit = true; a = a.parent; } } });
         return !hit;
     };
     const rebindCandidates = () => {
@@ -1253,10 +1256,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const scene = assignSceneRef.current;
             let renamed = 0, droppedStale = []; let reconStatus = 'ran';
             if (scene) {
-                const inScene = new Set(); scene.traverse(nd => { if (nd.name) inScene.add(nd.name); });
+                // MESH-AWARE (Brimar 2026-08-10, the 0/0-vs-25-missing paradox): the merged file
+                // carries EMPTY named nodes — husks like body1 with no geometry inside — so a
+                // name-presence check said 'all fine' while CPQ (which only counts nodes that
+                // actually contain meshes) said 'not found'. A recorded name now exists only if
+                // its subtree holds at least one mesh; husks reconcile away like any stale name.
+                const inScene = new Set();
+                scene.traverse(nd => { if (nd.isMesh) { let a = nd; while (a) { if (a.name) inScene.add(a.name); a = a.parent; } } });
                 const leafNorm = (s) => choiceLabel(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
                 const byLeaf = new Map();
-                scene.traverse(nd => { if (!nd.name) return; const k = leafNorm(nd.name); if (k && !byLeaf.has(k)) byLeaf.set(k, nd.name); });
+                inScene.forEach(nm => { const k = leafNorm(nm); if (k && !byLeaf.has(k)) byLeaf.set(k, nm); });
                 const fix = (name) => { if (!name) return null; if (inScene.has(name)) return name; return byLeaf.get(leafNorm(name)) || null; };
                 // Rows first — pins below are written from these names.
                 assignData.rows.forEach(rr => rr.choices.forEach(ch => {
