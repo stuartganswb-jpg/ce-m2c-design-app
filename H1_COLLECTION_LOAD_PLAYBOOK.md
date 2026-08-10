@@ -187,3 +187,29 @@ Every H1 item green on the readiness board; every dia×proj cell mapped to a tru
 whose measured pole Ø matches its cell; one Fabricut proof quote priced at each level with
 per-line SO rates matching the rows; spec sheets printed for one item per cell and dimension-
 checked by hand once. Then the collection is loaded, not just present.
+
+---
+
+## 6. HARD NOTE — the regression protocol for generator changes (Stuart 2026-08-09)
+
+> "i really need to make sure these fixes stick, we have done this so many times and each time i
+> add a new cpq flow we wreck what already worked."
+
+Recorded as standing law for THIS session and every session after it:
+
+1. **Fix order is SINGLE-assembly first, then combined/family, then the rest.** A change is not
+   done until the single-flow case (Brimar) is proven, because it is the simplest and the one the
+   team demos with.
+2. **Every generator change names its blast radius before it ships.** The generator serves FOUR
+   flow shapes — single-assembly, combined size-family (H2/new-H1), the traverse fork
+   (`Shared/traverseFlow.js`), and the legacy H1 flow. A commit that touches step emission,
+   geometry maps, or plate gating must state which of the four it can affect and how the other
+   three were verified untouched (guard flag, test, or `git diff -w` scope proof — the
+   contract's "extend by adding" rule).
+3. **Vision Hardware is a co-consumer of the same flows.** Any change to CPQ render gating
+   (geometryMap, end-treatment, backplate pools) gets checked against Vision's read of the same
+   fields before shipping (see memory `cpq-bay-fab-linkage`).
+4. **Regression pins accumulate.** Every incident becomes a permanent node test with the real
+   shape in it (the Brimar poisoning, the legacy-H1 render scale, the stamped-only keys). The
+   suite in the scratchpad runs before every generator commit; incidents never get re-litigated
+   from memory.
