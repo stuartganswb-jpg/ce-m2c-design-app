@@ -1141,6 +1141,60 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
       return `PIN-${asmId}-${clusterId}-${partId}-${Math.abs(h).toString(36).slice(0, 6)}`.replace(/[^A-Za-z0-9-]/g, '_');
   };
 
+  // ⇄ SIDE SWAP (Brimar 2026-08-10: the beveled end cap rendered on the RIGHT when picked on the
+  // LEFT — its L/R clusters carry each other's nodes, v4001↔v4, the inverse of every working twin).
+  // Swaps the geometry records between a LEFT/RIGHT pair: cluster node lists, their pins, and the
+  // on-screen rows. Self-contained — regenerate the flow afterwards.
+  const twinOf = (r) => {
+      const pos = String(r.position || '').toUpperCase();
+      if (pos !== 'LEFT' && pos !== 'RIGHT') return null;
+      const want = pos === 'LEFT' ? 'RIGHT' : 'LEFT';
+      const base = (nm) => String(nm || '').toUpperCase().replace(/\b(LEFT|RIGHT)\b/g, '').replace(/\s+/g, ' ').trim();
+      return (assignData?.rows || []).find(x => x.clusterId !== r.clusterId
+          && String(x.position || '').toUpperCase() === want && base(x.clusterName) === base(r.clusterName)) || null;
+  };
+  const swapSides = async (r) => {
+      const twin = twinOf(r);
+      if (!twin) return;
+      if (r.choices.length !== twin.choices.length) return alert(`Can't auto-swap: "${r.clusterName}" has ${r.choices.length} node(s) and "${twin.clusterName}" has ${twin.choices.length} — pair them up manually (⤢ split can help) first.`);
+      if (!window.confirm(`⇄ Swap the geometry between "${r.clusterName}" and "${twin.clusterName}"?\n\nUse when LEFT and RIGHT render on each other's ends (the clusters carry each other's nodes). Swaps the cluster records and their pins, then REGENERATE the flow.`)) return;
+      setAssignBusy(true);
+      try {
+          const snap = await getDoc(doc(db, 'Approved_Designs', assignId));
+          const data = snap.data() || {};
+          const nodesOfId = (id) => (data.nodeClusters || []).find(c => c.id === id)?.nodes || null;
+          const rNodes = nodesOfId(r.clusterId), tNodes = nodesOfId(twin.clusterId);
+          if (rNodes && tNodes) {
+              await updateDoc(doc(db, 'Approved_Designs', assignId), {
+                  nodeClusters: (data.nodeClusters || []).map(cl =>
+                      cl.id === r.clusterId ? { ...cl, nodes: tNodes }
+                      : cl.id === twin.clusterId ? { ...cl, nodes: rNodes } : cl),
+                  updatedAt: Date.now(),
+              });
+          }
+          // Pins: rewrite each side's pins onto the counterpart node (id embeds the node hash —
+          // delete + recreate, same true-sync rule as Save).
+          const pairs = new Map();
+          r.choices.forEach((c, i) => { pairs.set(c.nodeName, twin.choices[i].nodeName); pairs.set(twin.choices[i].nodeName, c.nodeName); });
+          const pinSnap2 = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', assignData.asmId)));
+          for (const d of pinSnap2.docs) {
+              const p = d.data();
+              if ((p.clusterId === r.clusterId || p.clusterId === twin.clusterId) && pairs.has(p.choiceNode)) {
+                  const newNode = pairs.get(p.choiceNode);
+                  const pid = pinIdFor(assignData.asmId, p.clusterId, p.partId, newNode);
+                  await deleteDoc(d.ref);
+                  await setDoc(doc(db, 'assembly_pins', pid), { ...p, id: pid, choiceNode: newNode, targetNode: newNode });
+              }
+          }
+          setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(x =>
+              x.clusterId === r.clusterId ? { ...x, choices: x.choices.map((c, i) => ({ ...c, nodeName: twin.choices[i].nodeName })) }
+              : x.clusterId === twin.clusterId ? { ...x, choices: x.choices.map((c, i) => ({ ...c, nodeName: r.choices[i].nodeName })) } : x) } : prev);
+          addLog(`⇄ Swapped geometry: "${r.clusterName}" ↔ "${twin.clusterName}".`, 'success');
+          alert(`⇄ Swapped. Now REGENERATE the flow (System Admin → Regenerate Steps from Tags) — the sides render where they're picked.`);
+      } catch (e) { console.error(e); alert('Swap failed:\n\n' + (e.message || e)); }
+      setAssignBusy(false);
+  };
+
   const handleSaveItemNumbers = async () => {
         if (!assignData) return;
         setAssignBusy(true);
@@ -1150,6 +1204,49 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // and the next Load Choices). Fetch what exists, delete anything superseded or cleared.
             const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', assignData.asmId)));
             const byNode = {}; pinSnap.docs.forEach(d => { const p = d.data(); if (p.choiceNode) (byNode[p.choiceNode] = byNode[p.choiceNode] || []).push({ ref: d.ref, docId: d.id }); });
+            // ── RECONCILE NODE RECORDS AGAINST THE LIVE MODEL (Brimar 2026-08-10: 25 stale
+            // 'body…' names survived Load Choices → Save → Regenerate, and the new elbow never
+            // rendered). Load Choices fixed PINS; the stale names live in the CLUSTER node lists,
+            // which nothing rewrote — and the single-choice generator path emits cl.nodes, so they
+            // re-entered every regenerate. The assign pass already holds the loaded scene: correct
+            // every recorded name against it — exact match kept, else matched by LEAF label (the
+            // re-export renamed S<n>-…__i_<leaf> wrappers), else DROPPED from the record and named
+            // in the save alert. After this save, the flow can only reference real geometry.
+            const scene = assignSceneRef.current;
+            let renamed = 0, droppedStale = [];
+            if (scene) {
+                const inScene = new Set(); scene.traverse(nd => { if (nd.name) inScene.add(nd.name); });
+                const leafNorm = (s) => choiceLabel(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+                const byLeaf = new Map();
+                scene.traverse(nd => { if (!nd.name) return; const k = leafNorm(nd.name); if (k && !byLeaf.has(k)) byLeaf.set(k, nd.name); });
+                const fix = (name) => { if (!name) return null; if (inScene.has(name)) return name; return byLeaf.get(leafNorm(name)) || null; };
+                // Rows first — pins below are written from these names.
+                assignData.rows.forEach(rr => rr.choices.forEach(ch => {
+                    const fixed = fix(ch.nodeName);
+                    if (fixed && fixed !== ch.nodeName) {
+                        // Old-name pins must be swept by the true-sync delete under the NEW name.
+                        (byNode[fixed] = byNode[fixed] || []).push(...(byNode[ch.nodeName] || []));
+                        delete byNode[ch.nodeName];
+                        ch.nodeName = fixed; renamed++;
+                    }
+                }));
+                // Then the cluster RECORDS on the assembly doc.
+                try {
+                    const asnap = await getDoc(doc(db, 'Approved_Designs', assignId));
+                    const adata = asnap.data() || {};
+                    let patched = false;
+                    const nextClusters = (adata.nodeClusters || []).map(cl => {
+                        const fixedNodes = [];
+                        (cl.nodes || []).forEach(nm => {
+                            const f = fix(nm);
+                            if (f) { if (!fixedNodes.includes(f)) fixedNodes.push(f); if (f !== nm) patched = true; }
+                            else { droppedStale.push(nm); patched = true; }
+                        });
+                        return fixedNodes.length !== (cl.nodes || []).length || patched ? { ...cl, nodes: fixedNodes } : cl;
+                    });
+                    if (patched) await updateDoc(doc(db, 'Approved_Designs', assignId), { nodeClusters: nextClusters, updatedAt: Date.now() });
+                } catch (reconErr) { console.warn('cluster reconciliation skipped', reconErr); }
+            }
             let n = 0, fees = 0, hides = 0, removed = 0, parked = 0;
             for (const r of assignData.rows) {
                 for (let idx = 0; idx < r.choices.length; idx++) {
@@ -1192,8 +1289,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
-            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee, ${hides} hidden${parked ? `, ${parked} ⏸ parked` : ''}${removed ? `, ${removed} stale removed` : ''}).`, 'success');
-            alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}${parked ? `\n\n⏸ ${parked} choice(s) PARKED (no item # yet) — hidden from the model and the flow. When the item # lands in the library, come back, LOAD CHOICES, type it in, save, and regenerate — the part appears on the CPQ.` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Hardware left blank stays as always-on shared geometry.`);
+            addLog(`✅ Saved ${n} choice pin(s) (${fees} fee, ${hides} hidden${parked ? `, ${parked} ⏸ parked` : ''}${removed ? `, ${removed} stale removed` : ''}${renamed ? `, ${renamed} node name(s) reconciled to the live model` : ''}${droppedStale.length ? `, ${droppedStale.length} stale node record(s) dropped` : ''}).`, 'success');
+            alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}${parked ? `\n\n⏸ ${parked} choice(s) PARKED (no item # yet) — hidden from the model and the flow. When the item # lands in the library, come back, LOAD CHOICES, type it in, save, and regenerate — the part appears on the CPQ.` : ''}.${renamed || droppedStale.length ? `\n\n🔧 Node records reconciled to the live model: ${renamed} renamed${droppedStale.length ? `, ${droppedStale.length} stale name(s) DROPPED (${droppedStale.slice(0, 6).join(', ')}${droppedStale.length > 6 ? '…' : ''}) — these matched nothing in the .glb and were feeding the red 'not found' strip on CPQ` : ''}.` : ''}\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Hardware left blank stays as always-on shared geometry.`);
         } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
     };
@@ -1430,7 +1527,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             return (
                                 <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
-                                        {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>
+                                        {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>{twinOf(r) && <button onClick={() => swapSides(r)} disabled={assignBusy} title="LEFT and RIGHT render on each other's ends? The clusters carry each other's nodes — this swaps the geometry records (clusters + pins) with the twin, then Regenerate." style={{ marginLeft: '10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>⇄ sides</button>}
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(r.category) === 'FINIAL' ? '48px minmax(150px,230px) 220px 122px minmax(300px,1fr) 72px' : '48px minmax(150px,230px) 220px minmax(300px,1fr) 72px', gap: '6px 12px', alignItems: 'center' }}>
                                         {r.choices.map((c) => (
