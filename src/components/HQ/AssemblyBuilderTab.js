@@ -1017,6 +1017,26 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     };
     // Patch one choice by (clusterId, nodeName) — name-keyed so rows stay correct after a split
     // reshuffles indices.
+    // Scene membership + rebind candidates for the ✗ not-in-model picker. Candidates = named
+    // top-level scene nodes (and their direct children) not already claimed by any row's choice.
+    const nodeMissing = (nm) => {
+        const scene = assignSceneRef.current;
+        if (!scene || !nm) return false;
+        let hit = false; scene.traverse(nd => { if (!hit && nd.name === nm) hit = true; });
+        return !hit;
+    };
+    const rebindCandidates = () => {
+        const scene = assignSceneRef.current;
+        if (!scene) return [];
+        const claimed = new Set();
+        (assignData?.rows || []).forEach(rr => rr.choices.forEach(ch => claimed.add(ch.nodeName)));
+        const out = [];
+        (scene.children || []).forEach(top => {
+            if (top.name && !claimed.has(top.name)) out.push(top.name);
+            (top.children || []).forEach(kid => { if (kid.name && !claimed.has(kid.name)) out.push(kid.name); });
+        });
+        return out.sort();
+    };
     const setChoicePatch = (clusterId, nodeName, patch) => setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.map(c => c.nodeName === nodeName ? { ...c, ...patch } : c) }) } : prev);
 
     // Reorder a choice within its cluster (▲▼). The order is saved as choiceSort and drives the
@@ -1235,6 +1255,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     const asnap = await getDoc(doc(db, 'Approved_Designs', assignId));
                     const adata = asnap.data() || {};
                     let patched = false;
+                    const rowNodesByCluster = {};
+                    assignData.rows.forEach(rr => rr.choices.forEach(ch => { (rowNodesByCluster[rr.clusterId] = rowNodesByCluster[rr.clusterId] || []).push(ch.nodeName); }));
                     const nextClusters = (adata.nodeClusters || []).map(cl => {
                         const fixedNodes = [];
                         (cl.nodes || []).forEach(nm => {
@@ -1242,6 +1264,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             if (f) { if (!fixedNodes.includes(f)) fixedNodes.push(f); if (f !== nm) patched = true; }
                             else { droppedStale.push(nm); patched = true; }
                         });
+                        // Rows are authoritative: a rebound choice's node joins its cluster record here.
+                        (rowNodesByCluster[cl.id] || []).forEach(nm => { if (nm && inScene.has(nm) && !fixedNodes.includes(nm)) { fixedNodes.push(nm); patched = true; } });
                         return fixedNodes.length !== (cl.nodes || []).length || patched ? { ...cl, nodes: fixedNodes } : cl;
                     });
                     if (patched) await updateDoc(doc(db, 'Approved_Designs', assignId), { nodeClusters: nextClusters, updatedAt: Date.now() });
@@ -1539,10 +1563,24 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
                                                     <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>
                                                 </span>
-                                                {(() => { const willPark = !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && looksRealPart(c.label); return (<>
+                                                {(() => { const willPark = !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && looksRealPart(c.label); const missing = nodeMissing(c.nodeName); return (
+                                                <span style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
                                                 <input value={c.itemNo} list="ab-item-codes" onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} title={willPark ? 'No item # yet — on save this choice PARKS: the node hides from the model AND the flow until you assign the # (Load Choices keeps listing it). Perfect for parts IT hasn\'t set up yet.' : undefined} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds it to the BOM)' : (willPark ? '⏸ parks on save — no item # yet' : 'item # — type to search (blank = hardware)'))} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : (willPark ? 'var(--brass)' : 'var(--line)')), borderStyle: willPark ? 'dashed' : 'solid', opacity: c.isFee ? 0.5 : 1 }} />
-                                                <input value={c.note || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { note: e.target.value })} placeholder="designer note — what is it / where does it sit" maxLength={120} title="Typed at upload (or here) — saved on the pin, shown every time Load Choices lists this part." style={{ ...inp, padding: '4px 8px', fontSize: '0.74rem', fontStyle: 'italic', marginTop: '3px', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.9 }} />
-                                                </>); })()}
+                                                <input value={c.note || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { note: e.target.value })} placeholder="designer note — what is it / where does it sit" maxLength={120} title="Typed at upload (or here) — saved on the pin, shown every time Load Choices lists this part." style={{ ...inp, padding: '3px 8px', fontSize: '0.72rem', fontStyle: 'italic', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.85 }} />
+                                                {/* ✗ REBIND (Brimar elbow, 2026-08-10): this row's recorded node matches NOTHING
+                                                    in the loaded model — even by leaf name — so it can never render. Pick the
+                                                    real scene node; Save writes it through pins AND the cluster record. */}
+                                                {missing && (
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: '#b00020', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>✗ not in model</span>
+                                                        <select value="" onChange={e => { if (e.target.value) setChoicePatch(r.clusterId, c.nodeName, { nodeName: e.target.value }); }} title="Re-bind this choice to a node that actually exists in the .glb — candidates are top-level scene nodes not already claimed by another row." style={{ ...inp, padding: '2px 4px', fontSize: '8px', fontFamily: 'var(--mono)', flex: 1, minWidth: 0, borderColor: '#b00020' }}>
+                                                            <option value="">rebind to real node…</option>
+                                                            {rebindCandidates().map(nm => <option key={nm} value={nm}>{choiceLabel(nm)} ({nm.length > 34 ? nm.slice(0, 34) + '…' : nm})</option>)}
+                                                        </select>
+                                                    </span>
+                                                )}
+                                                </span>
+                                                ); })()}
                                                 {normalizeCategory(r.category) === 'FINIAL' && (normalizeCategory(c.catOverride || r.category) !== 'FINIAL' ? (
                                                     <span title="Re-homed by the cat: override — end treatment only applies to finial-slot choices; this row now carries its new category's flags instead." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', textTransform: 'uppercase', letterSpacing: '.05em' }}>→ {String(c.catOverride).toLowerCase()}</span>
                                                 ) : (
@@ -1733,10 +1771,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
                                                         <button onClick={() => splitSlotChoice(slot.id, c.nodeName)} title="Several parts merged under one wrapper node? Split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '2px', flexShrink: 0 }}>⤢</button>
                                                     </span>
-                                                    <input value={c.itemNo} list="ab-item-codes" onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds to BOM)' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
-                                                    {/* DESIGNER NOTE (Stuart 2026-08-10): typed here at upload, shown in Load
-                                                        Choices — 'what is this and where does it sit' for the H1-138 pass. */}
-                                                    <input value={c.note || ''} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { note: e.target.value })} placeholder="note — e.g. 'double-rod rear bracket, wall side'" maxLength={120} style={{ ...inp, padding: '4px 7px', fontSize: '0.72rem', fontStyle: 'italic', marginTop: '3px', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.9 }} />
+                                                    <span style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
+                                                        <input value={c.itemNo} list="ab-item-codes" onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds to BOM)' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
+                                                        {/* DESIGNER NOTE — same grid CELL as the item # (a sibling input became its
+                                                            own grid cell and wrecked the row layout, Stuart 2026-08-10). */}
+                                                        <input value={c.note || ''} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { note: e.target.value })} placeholder="note — what is it / where does it sit" maxLength={120} style={{ ...inp, padding: '3px 7px', fontSize: '0.7rem', fontStyle: 'italic', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.85 }} />
+                                                    </span>
                                                     {normalizeCategory(slot.category) === 'FINIAL' && (normalizeCategory(c.catOverride || slot.category) !== 'FINIAL' ? (
                                                         <span title="Re-homed by the cat: override — end treatment only applies to finial-slot choices; this row now carries its new category's flags instead." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', textTransform: 'uppercase', letterSpacing: '.05em' }}>→ {String(c.catOverride).toLowerCase()}</span>
                                                     ) : (
