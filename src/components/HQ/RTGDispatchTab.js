@@ -1092,6 +1092,68 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     const cardStyle = { border: '1px solid var(--line)', padding: '20px', marginBottom: '16px', borderRadius: '2px', background: '#fff', transition: 'box-shadow 0.2s' };
     const btnStyle = { padding: '10px 16px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', background: 'var(--paper-2)', border: '1px solid var(--line)', cursor: 'pointer', transition: 'all 0.2s ease', whiteSpace: 'nowrap' };
 
+    // ── CLOSE EVERYWHERE (Stuart 2026-08-10: "no clear path to closing — each screen has
+    // different availability of actions") ───────────────────────────────────────────────────
+    // ONE button that closes an order on every surface at once: the RTG ledger, every linked
+    // finishing-floor job (leaves the Setup Queue, Active Floor and the WMS pick), every linked
+    // shop-floor job, and — when a real NetSuite work order exists that hasn't completed — a
+    // CLOSE queued in NetSuite so the component commitment releases. Docs are kept for history;
+    // nothing is deleted. Linked docs are found by every identity the order may be keyed under
+    // (doc id, woId, soId, orderKey, hqJobId → fin id / orderKey / SHOP-<key>).
+    const closeOrderEverywhere = async (order, kind) => {
+        const isSales = kind === 'sales';
+        const hqColl = isSales ? 'hq_sales_orders' : 'hq_work_orders';
+        const ref = isSales ? `SO ${order.soId || order.id}` : `WO ${order.nsWoTran || order.woId || order.id}`;
+        const keys = [...new Set([order.id, order.woId, order.soId, order.orderKey, order.hqJobId].filter(Boolean).map(String))];
+        const finDocs = new Map(), shopDocs = new Map();
+        try {
+            await Promise.all(keys.map(async (k) => {
+                const [f, s] = await Promise.all([getDoc(doc(db, 'fin_workorders', k)), getDoc(doc(db, 'shop_custom_orders', `SHOP-${k}`))]);
+                if (f.exists()) finDocs.set(f.id, f.data());
+                if (s.exists()) shopDocs.set(s.id, s.data());
+            }));
+            const [fq, sq] = await Promise.all([
+                getDocs(query(collection(db, 'fin_workorders'), where('orderKey', 'in', keys.slice(0, 10)))),
+                getDocs(query(collection(db, 'shop_custom_orders'), where('orderKey', 'in', keys.slice(0, 10)))),
+            ]);
+            fq.forEach(d => finDocs.set(d.id, d.data()));
+            sq.forEach(d => shopDocs.set(d.id, d.data()));
+        } catch (e) { return alert('Could not look up the linked floor documents: ' + (e.message || e)); }
+
+        const finList = [...finDocs.entries()];
+        const finNs = finList.find(([, d]) => d.nsWoId && !d.nsWoClosed && !d.nsWoCompletionPosted);
+        const ns = finNs
+            ? { docId: finNs[0], coll: 'fin_workorders', nsWoId: finNs[1].nsWoId, tran: finNs[1].nsWoTran }
+            : (order.nsWoId && !order.nsWoClosed ? { docId: order.id, coll: hqColl, nsWoId: order.nsWoId, tran: order.nsWoTran } : null);
+
+        const nsLine = ns ? `\n• NetSuite WO ${ns.tran || ns.nsWoId} → CLOSE queued (releases the component commitment)` : '';
+        if (!window.confirm(`✕ CLOSE ${ref} EVERYWHERE?\n\n• RTG record → Closed (leaves this board)\n• ${finDocs.size} finishing floor job(s) → Closed (leave the Setup Queue, Active Floor & WMS pick)\n• ${shopDocs.size} shop floor job(s) → closed out of the shop queues${nsLine}\n\nDocuments are kept for history — nothing is deleted.`)) return;
+        try {
+            const stamp = { closedAt: Date.now(), closedBy: currentUser || '', closedFrom: 'RTG' };
+            for (const [id] of finList) {
+                await updateDoc(doc(db, 'fin_workorders', id), { currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', ...stamp });
+            }
+            for (const [id] of shopDocs) {
+                // The shop queues exit on 'Completed'; `closed: true` records it was closed, not built.
+                await updateDoc(doc(db, 'shop_custom_orders', id), { status: 'Completed', closed: true, ...stamp });
+            }
+            await updateDoc(doc(db, hqColl, order.id), { status: 'Closed', ...stamp });
+            if (ns) {
+                await enqueueNsWrite({
+                    kind: 'workorderclose', label: `Close NS WO ${ns.tran || ns.nsWoId} — ${ref}`,
+                    sourceApp: 'RTG', createdBy: currentUser || '',
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${ns.nsWoId}/!transform/workorderclose`,
+                    method: 'POST', payload: { memo: `Closed from RTG (${ref})` },
+                    writeBack: { collection: ns.coll, docId: ns.docId, patch: { nsWoClosed: true } }
+                });
+            }
+            addLog(`✕ ${ref} closed everywhere — ${finDocs.size} finishing, ${shopDocs.size} shop${ns ? ', NetSuite close queued' : ''}.`, 'success');
+            loadRTGOrders();
+        } catch (e) {
+            alert('Close failed partway: ' + (e.message || e) + '\n\nRe-run Close — docs already closed are unaffected.');
+        }
+    };
+
     // ── DISPATCHED STRIP ────────────────────────────────────────────────────────────────────
     // A dispatched order is DONE from this board's point of view but must still be VISIBLE with
     // its status (Stuart 2026-07-28). It renders as one condensed row — no action buttons except
@@ -1114,6 +1176,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 <button title="Re-run the split with the current routing rules — the floor docs use fixed ids (WO-… / SHOP-…), so this overwrites rather than duplicating."
                     style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => autoSplitSalesOrder(o)}>↻ Re-dispatch</button>
             )}
+            <button title="Close this order EVERYWHERE — RTG, finishing floor, shop floor, and the NetSuite work order if one exists. Docs kept for history."
+                style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }} onClick={() => closeOrderEverywhere(o, kind)}>✕ Close</button>
         </div>
     );
 
