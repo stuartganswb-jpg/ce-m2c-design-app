@@ -3759,7 +3759,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               to go on — now it names itself. */}
                           {!debugShowAll && visAudit.length > 0 && (
                               <div style={{ marginTop: '8px', padding: '10px 14px', border: '1px solid #b00020', background: 'rgba(176,0,32,0.05)', fontFamily: 'var(--mono)', fontSize: '10px', color: '#b00020', lineHeight: 1.6 }}>
-                                  ⚠ {visAudit.length} mapped node name{visAudit.length === 1 ? '' : 's'} not found in this model: {visAudit.slice(0, 5).map(t => visTokenOwners[t] ? `${t} ← ${visTokenOwners[t]}` : t).join(' · ')}{visAudit.length > 5 ? ` · +${visAudit.length - 5} more` : ''}.
+                                  ⚠ {visAudit.length} mapped node name{visAudit.length === 1 ? '' : 's'} not found in this model — by owner: {(() => { const g = {}; visAudit.forEach(t => { const o = visTokenOwners[t] || 'unattributed'; (g[o] = g[o] || []).push(t); }); return Object.entries(g).map(([o, ts]) => `${o} (${ts.length}: ${ts.slice(0, 2).join(', ')}${ts.length > 2 ? '…' : ''})`).join(' · '); })()}.
                                   The option(s) naming them will select and price but render nothing. Usual cause: the assembly was re-imported/renamed after the flow was generated — in 1.6 run Load Choices → Save on this assembly, then Regenerate the flow.
                               </div>
                           )}

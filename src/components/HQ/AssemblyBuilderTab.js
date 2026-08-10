@@ -1075,6 +1075,19 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const victims = snap.docs.filter(d => d.data().choiceNode === nodeName);
             for (const v of victims) await deleteDoc(v.ref);
             const ids = [...new Set(victims.map(v => v.data().partId).filter(Boolean))].join(', ');
+            // KILL THE RESURRECTION LOOP (Stuart 2026-08-10: 'the delete tool for the parked
+            // CPQBrimar row comes back every time'). Deleting pins alone left the CLUSTER record —
+            // Load Choices re-listed it as a blank row, and Save re-parked it, forever. When this
+            // was the row's LAST choice, remove the cluster record itself (the geometry stays in
+            // the .glb, unreferenced by any option or hide list).
+            const row = assignData.rows.find(r => r.clusterId === clusterId);
+            const lastChoice = row && row.choices.length === 1 && row.choices[0].nodeName === nodeName;
+            if (lastChoice && window.confirm(`Also remove the cluster record "${row.clusterName}"?\n\nWithout this, Load Choices lists the node again as a blank row (and Save re-parks it). The geometry stays in the .glb — it just stops being a choice anywhere.`)) {
+                const asnap = await getDoc(doc(db, 'Approved_Designs', assignId));
+                const adata = asnap.data() || {};
+                await updateDoc(doc(db, 'Approved_Designs', assignId), { nodeClusters: (adata.nodeClusters || []).filter(cl => cl.id !== clusterId), updatedAt: Date.now() });
+                addLog(`🗑 Cluster record "${row.clusterName}" removed — the node stops being a choice.`, 'success');
+            }
             setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.filter(c => c.nodeName !== nodeName) }) } : prev);
             addLog(`🗑 Deleted ${victims.length} pin doc(s) for node "${nodeName}"${ids ? ` (partId: ${ids})` : ''}.`, 'success');
             alert(victims.length
@@ -1233,7 +1246,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // re-export renamed S<n>-…__i_<leaf> wrappers), else DROPPED from the record and named
             // in the save alert. After this save, the flow can only reference real geometry.
             const scene = assignSceneRef.current;
-            let renamed = 0, droppedStale = [];
+            let renamed = 0, droppedStale = []; let reconStatus = 'ran';
             if (scene) {
                 const inScene = new Set(); scene.traverse(nd => { if (nd.name) inScene.add(nd.name); });
                 const leafNorm = (s) => choiceLabel(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -1269,8 +1282,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         return fixedNodes.length !== (cl.nodes || []).length || patched ? { ...cl, nodes: fixedNodes } : cl;
                     });
                     if (patched) await updateDoc(doc(db, 'Approved_Designs', assignId), { nodeClusters: nextClusters, updatedAt: Date.now() });
-                } catch (reconErr) { console.warn('cluster reconciliation skipped', reconErr); }
+                } catch (reconErr) {
+                    console.error('cluster reconciliation FAILED', reconErr);
+                    addLog(`⚠ Node reconciliation FAILED: ${reconErr.message || reconErr} — the cluster records were NOT corrected; the flow will keep referencing stale names.`, 'error');
+                    reconStatus = `FAILED — ${reconErr.message || reconErr}`;
+                }
             }
+            if (!scene) { addLog('⚠ Node reconciliation skipped — no loaded scene (run Load Choices first in this session).', 'error'); reconStatus = 'SKIPPED — no loaded scene'; }
             let n = 0, fees = 0, hides = 0, removed = 0, parked = 0;
             for (const r of assignData.rows) {
                 for (let idx = 0; idx < r.choices.length; idx++) {
@@ -1314,7 +1332,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 }
             }
             addLog(`✅ Saved ${n} choice pin(s) (${fees} fee, ${hides} hidden${parked ? `, ${parked} ⏸ parked` : ''}${removed ? `, ${removed} stale removed` : ''}${renamed ? `, ${renamed} node name(s) reconciled to the live model` : ''}${droppedStale.length ? `, ${droppedStale.length} stale node record(s) dropped` : ''}).`, 'success');
-            alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}${parked ? `\n\n⏸ ${parked} choice(s) PARKED (no item # yet) — hidden from the model and the flow. When the item # lands in the library, come back, LOAD CHOICES, type it in, save, and regenerate — the part appears on the CPQ.` : ''}.${renamed || droppedStale.length ? `\n\n🔧 Node records reconciled to the live model: ${renamed} renamed${droppedStale.length ? `, ${droppedStale.length} stale name(s) DROPPED (${droppedStale.slice(0, 6).join(', ')}${droppedStale.length > 6 ? '…' : ''}) — these matched nothing in the .glb and were feeding the red 'not found' strip on CPQ` : ''}.` : ''}\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Hardware left blank stays as always-on shared geometry.`);
+            alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}${parked ? `\n\n⏸ ${parked} choice(s) PARKED (no item # yet) — hidden from the model and the flow. When the item # lands in the library, come back, LOAD CHOICES, type it in, save, and regenerate — the part appears on the CPQ.` : ''}.${reconStatus !== 'ran' ? `\n\n⚠ NODE RECONCILIATION ${reconStatus} — stale names were NOT cleaned; fix this before regenerating.` : `\n\n🔧 Node reconciliation ran: ${renamed} renamed, ${droppedStale.length} stale name(s) dropped${droppedStale.length ? ` (${droppedStale.slice(0, 6).join(', ')}${droppedStale.length > 6 ? '…' : ''})` : ''}.`}\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Hardware left blank stays as always-on shared geometry.`);
         } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
     };
