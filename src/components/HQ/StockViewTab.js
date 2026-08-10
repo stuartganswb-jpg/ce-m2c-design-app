@@ -8,6 +8,7 @@ import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -1034,6 +1035,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             for (const { r, info, qty } of toMake) {
                 const finish = finishOf(r.itemid);
                 const woId = `WO-STK-${r.internalId}-${Date.now()}`;
+                // FINISHED-GOODS awareness (Stuart 2026-08-10, same planner as the Master Library
+                // tool): an ASSEMBLY row's own code never holds pullable stock — explode its BOM
+                // into the real component pull lines so the WMS picks those, not a synthesized
+                // raw pull of the assembly code. Single parts keep the exact behavior they had.
+                let bomLines = [];
+                if (isAssemblyPart(info.part)) {
+                    try {
+                        const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', info.part.itemId)));
+                        const pins = pinsSnap.docs.map(d => d.data());
+                        if (pins.length) bomLines = planFinishedRun({ part: info.part, qty, pins, inventory: hqParts }).lines;
+                    } catch (e) { console.warn('BOM explode failed for', r.itemid, e); }
+                }
                 // Source numbers only (Stuart 2026-07-17): no invented short WO # — screens show the
                 // app id until the real NetSuite WO posts (~1 min after RTG release), then nsWoTran.
                 // Poles are racked (8/rack), not sled-packed → no paintSizes; carry poles.qty so the planner
@@ -1057,10 +1070,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     stockErpId: r.itemid, stockInternalId: r.internalId,
                     paintSize: info.isPole ? null : (info.size || null), productType: info.ptype || null, paintSizes,
                     ...(info.isPole ? { poles: { qty, type: info.ptype || 'POLE' }, totalPoles: qty } : {}),
-                    note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}${info.isPole ? ' · POLE (rack of 8)' : ''}${sug ? ` · ⇄ SUGGEST: convert ${sug.qty} × ${sug.from} → raw ${sugBase}` : ''}`,
+                    note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}${info.isPole ? ' · POLE (rack of 8)' : ''}${sug ? ` · ⇄ SUGGEST: convert ${sug.qty} × ${sug.from} → raw ${sugBase}` : ''}${bomLines.length ? ` · BOM pull: ${bomLines.map(l => `${l.quantity}×${l.legacyErpId}`).join(', ')}` : ''}`,
                     cpqSpecs: {}, imageUrl: info.part?.finalImageUrl || null,
                     dimensions: { length: 0, width: 0, height: 0 },
-                    partsList: [],
+                    partsList: bomLines,
+                    ...(bomLines.length ? { bomExploded: true } : {}),
                     currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
                     tasks: makeFullTasks(),
                     machineAssigned: null, redlineAlert: false,

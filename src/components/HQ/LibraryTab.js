@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { buildStockFinPayload } from '../Shared/stockRun';
+import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
@@ -1000,7 +1001,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // a dispatcher had pressed the button), then the fin_workorders job the floor actually runs. If
   // the second write fails the first is rolled back — a ledger entry marked dispatched with no job
   // on any floor is the one outcome nobody could diagnose from either screen.
-  const releaseRunToFloor = async ({ woId, part, qty, finishLabel, note, hqExtra = {}, finExtra = {} }) => {
+  // `recipe` is the MACHINE code the floor groups and matches on (fin_recipes / finish code, e.g.
+  // 'RF1'); `finishLabel` is the human string ('RF1 - Satin Nickel'). They were one field before,
+  // and the label never matched a recipe — every library run grouped as an unknown recipe.
+  const releaseRunToFloor = async ({ woId, part, qty, finishLabel, recipe, note, hqExtra = {}, finExtra = {} }) => {
       const now = Date.now();
       const reqDate = new Date(now + 6048e5).toISOString().split('T')[0];
       await setDoc(doc(db, "hq_work_orders", woId), {
@@ -1009,7 +1013,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           rootItem: String(part.legacyErpId || part.itemId || '').toUpperCase(),
           brand: activeBrand, customer: "Internal Stock",
           hqJobId: part.id, totalParts: Math.max(1, Math.floor(Number(qty) || 1)),
-          reqDate, type: "Stock Build", recipe: finishLabel || 'PENDING-RECIPE',
+          reqDate, type: "Stock Build", recipe: recipe || finishLabel || 'PENDING-RECIPE',
+          finishLabel: finishLabel || '',
           memo: note || '', createdAt: now,
           // Released from the library, not the board — but the board still holds the record.
           status: "Dispatched", pushedToFinishing: true,
@@ -1018,9 +1023,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       });
       try {
           await setDoc(doc(db, "fin_workorders", woId), buildStockFinPayload({
-              woId, part, qty, finishLabel, brand: activeBrand,
+              woId, part, qty, finishLabel: recipe || finishLabel, brand: activeBrand,
               createdBy: (currentUser && (currentUser.name || currentUser.email)) || '', reqDate, note,
-              tasks: makeFullTasks(), extra: finExtra, now,
+              tasks: makeFullTasks(), extra: { finishLabel: finishLabel || '', ...finExtra }, now,
           }));
       } catch (err) {
           try { await deleteDoc(doc(db, "hq_work_orders", woId)); } catch (e) { /* leave the ledger entry; it is visible in RTG */ }
@@ -1028,8 +1033,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
   };
 
-  // An ordinary library part, straight to the floor. Everything a stock build needs is already
-  // stated here — the part, the finish, the quantity — so there is nothing for a dispatcher to add.
+  // A FINISHED-GOODS run, straight to the floor (Stuart 2026-08-10 rework). This tool creates
+  // FINISHED items, so before anything is written it (1) explodes the assembly BOM into the real
+  // pull lines — an assembly's own code never holds stock, its components do — and (2) checks the
+  // live stock situation of every one of them. The pull for an in-house paint run is the /P
+  // PHOSPHATED core of each component; partsList rides on the fin doc so the WMS picks exactly
+  // these lines instead of the Setup Queue synthesizing a raw pull of the assembly code.
   const pushPartRunToFloor = async () => {
       if (!activePart || activePart.legacyErpId === 'PENDING') return alert('Save the part with an ERP Legacy ID before generating a work order.');
       const qty = Number(woTargetQty) || 0;
@@ -1037,13 +1046,39 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       const fin = inHouseFinishes.find(f => String(f.id) === String(runFinishId));
       if (!fin) return alert('Choose the in-house finish — it sets the recipe the floor will run.');
       const finishLabel = fin.code ? `${fin.code} - ${fin.name}` : fin.name;
+      const recipeCode = fin.code || finishLabel;
       const erp = String(activePart.legacyErpId).toUpperCase();
-      if (!window.confirm(`Push ${qty} × ${erp} to the finishing floor in ${finishLabel}?\n\nIt lands in the Setup Queue now. RTG records it as dispatched — you just don't have to go there to release it.`)) return;
+
+      const plan = planFinishedRun({ part: activePart, qty, pins: activeBomPins, inventory });
       setRunBusy(true);
+
+      // Live component stock check — NetSuite being unreachable warns instead of blocking, but
+      // the person releasing sees exactly which of the two situations they are in.
+      let check = null, checkNote = '';
+      try {
+          const avail = await fetchAvailability(plan.lines.map(l => l.legacyErpId), BRAND_NS_LOCATION[activeBrand] || '17');
+          check = stockCheckReport(plan.lines, avail);
+      } catch (err) {
+          console.warn('Component stock check failed:', err);
+          checkNote = '⚠ Could not reach NetSuite to check component stock — verify availability manually before releasing.';
+      }
+
+      const pullText = plan.lines.map(l => `• ${l.quantity} × ${l.legacyErpId}`).join('\n');
+      const header = plan.exploded
+          ? `${qty} × ${erp} · ${finishLabel}\n\nBOM explodes to ${plan.lines.length} pull line${plan.lines.length === 1 ? '' : 's'} (phosphated cores):`
+          : `${qty} × ${erp} · ${finishLabel}\n\nPull:`;
+      const body = check ? `${check.text}` : `${pullText}\n\n${checkNote}`;
+      if (!window.confirm(`Push this run to the finishing floor?\n\n${header}\n${body}\n\nWMS picks exactly these lines. It lands in the Setup Queue now; RTG records it as dispatched.`)) { setRunBusy(false); return; }
+      if (check && !check.ok && !window.confirm(`⚠ ${check.shortRows.length} pull line${check.shortRows.length === 1 ? ' is' : 's are'} SHORT:\n\n${check.shortRows.map(r => `• ${r.code} — need ${r.need}, available ${r.have}`).join('\n')}\n\nRelease anyway? The pick will come up short on those lines — raise stock builds for them first if that's not intended.`)) { setRunBusy(false); return; }
+
       try {
           const woId = `WO-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now().toString().slice(-6)}`;
-          await releaseRunToFloor({ woId, part: activePart, qty, finishLabel, note: `${erp} · ${finishLabel} · ×${qty}` });
-          alert(`✅ ${woId} is on the finishing floor.\n\n${qty} × ${erp} · ${finishLabel}\n\nIt's in the Setup Queue now and recorded in RTG.`);
+          await releaseRunToFloor({
+              woId, part: activePart, qty, finishLabel, recipe: recipeCode,
+              note: `${erp} · ${finishLabel} · ×${qty}${plan.exploded ? ` · BOM pull: ${plan.lines.map(l => `${l.quantity}×${l.legacyErpId}`).join(', ')}` : ''}`,
+              finExtra: { partsList: plan.lines, finishCode: recipeCode, bomExploded: plan.exploded },
+          });
+          alert(`✅ ${woId} is on the finishing floor.\n\n${qty} × ${erp} · ${finishLabel}\nPull lines:\n${pullText}\n\nIt's in the Setup Queue now and recorded in RTG.`);
           setRunFinishId('');
           setWoTargetQty(1);
       } catch (err) {
@@ -1100,7 +1135,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           };
           await releaseRunToFloor({
               woId: newWoId, part: { ...activePart, legacyErpId: code, itemName: nsItem.displayname || code },
-              qty, finishLabel, note: desc,
+              qty, finishLabel, recipe: (fin && fin.code) || finishLabel, note: desc,
               hqExtra: { ...jfpFields, type: 'Just For Paint' },
               finExtra: { ...jfpFields, type: nsItem.displayname || code },
           });
@@ -1128,44 +1163,53 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       const outFinish = suffix ? outsourceFinishes.find(f => finishCodeOf(f) === suffix) : null;
 
       if (outFinish) {
-          // Route via the base: base in stock → PickPack Plating; base short → shop-floor WO to make the base first.
-          const baseErp = erp.slice(0, slash);
-          const basePart = inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === baseErp.toUpperCase());
-          if (!basePart) return alert(`Can't route ${erp}: its base component ${baseErp} isn't in the library. Add/sync ${baseErp} first.`);
-          if (!window.confirm(`Generate plating demand for ${qty}x ${erp}?\n\nWe'll check stock of the base ${baseErp}:\n• in stock → PickPack Plating (pull + plate)\n• short → a shop-floor WO to build ${baseErp} first.`)) return;
+          // OUTSOURCED FINISHED-GOODS run (Stuart 2026-08-10 rework): the plater receives MILL
+          // cores. An assembly explodes to the mill core of EVERY BOM component — its own code
+          // never holds stock — and each core is checked and routed independently:
+          // in stock → PickPack Plating (pull + plate); short → shop-floor WO to build it first.
+          const plan = planFinishedRun({ part: activePart, qty, pins: activeBomPins, inventory });
+          const partOfCode = (code) => inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === code);
+          const missing = plan.lines.filter(l => !partOfCode(l.legacyErpId));
+          if (missing.length) return alert(`Can't route ${erp}: base component(s) not in the library: ${missing.map(m => m.legacyErpId).join(', ')}. Add/sync them first.`);
+          if (!window.confirm(`Generate plating demand for ${qty}x ${erp}?\n\nMill core${plan.lines.length === 1 ? '' : 's'} to check & pull:\n${plan.lines.map(l => `• ${l.quantity} × ${l.legacyErpId}`).join('\n')}\n\nPer core: in stock → PickPack Plating (pull + plate); short → a shop-floor WO to build it first.`)) return;
 
-          // Live NetSuite on-hand for the base at this brand's location.
-          let onHand;
+          // Live NetSuite availability for every core at this brand's location.
+          let check;
           try {
-              const locationId = BRAND_NS_LOCATION[activeBrand] || "17";
-              const q = `SELECT SUM(AggregateItemLocation.quantityonhand) AS onhand FROM Item LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id WHERE UPPER(Item.itemid) = '${baseErp.toUpperCase().replace(/'/g, "''")}' AND AggregateItemLocation.location = ${locationId} GROUP BY Item.itemid`;
-              const resp = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
-              const data = await resp.json().catch(() => ({}));
-              if (!resp.ok) throw new Error(JSON.stringify(data));
-              onHand = (data.items && data.items[0]) ? (parseInt(data.items[0].onhand) || 0) : 0;
+              const avail = await fetchAvailability(plan.lines.map(l => l.legacyErpId), BRAND_NS_LOCATION[activeBrand] || "17");
+              check = stockCheckReport(plan.lines, avail);
           } catch (err) {
               console.error("Base stock check failed:", err);
-              return alert(`Couldn't check NetSuite stock for ${baseErp} — nothing was created. Try again.`);
+              return alert(`Couldn't check NetSuite stock — nothing was created. Try again.`);
           }
 
           try {
-              if (onHand >= qty) {
-                  // Base in stock → plating to-do for PickPack (operator pulls + plates from there).
-                  // Generate a plating WO# so the job/label has a reference for the plating company.
-                  const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}`;
-                  const woNum = `PLW-${activeBrand.toUpperCase()}-${Date.now().toString().slice(-6)}`;
-                  await setDoc(doc(db, "plating_demand", demandId), {
-                      id: demandId, brandId: activeBrand, status: 'open', woNum,
-                      baseItemId: basePart.id, baseErpId: baseErp.toUpperCase(), targetErpId: erp.toUpperCase(),
-                      finishCode: suffix, finishName: outFinish.name || '',
-                      qty, source: 'library-wo', createdBy: currentUser?.name || 'Unknown', createdAt: Date.now()
-                  });
-                  alert(`✅ ${baseErp} in stock (${onHand} on hand). Sent ${qty}x → PickPack Plating ("Needs Plating", WO ${woNum}) to pull + plate into ${erp}.`);
-              } else {
-                  // Base short → shop-floor WO to build the base; plate it after.
-                  const woId = await createStockBuildWO(basePart, qty);
-                  alert(`⚠️ ${baseErp} short (${onHand} on hand, need ${qty}). Generated shop-floor WO ${woId} to build ${baseErp}; plate it into ${erp} after it's made.`);
+              const plated = [], made = [];
+              for (let i = 0; i < plan.lines.length; i++) {
+                  const l = plan.lines[i];
+                  const row = check.rows.find(r => r.code === l.legacyErpId);
+                  const basePart = partOfCode(l.legacyErpId);
+                  // The plated target this core becomes: the BOM's stated code when it carries the
+                  // suffix, else core + this run's finish.
+                  const target = String(l.sourceComponent || '').includes('/') ? String(l.sourceComponent).toUpperCase() : `${l.legacyErpId}/${suffix}`;
+                  if (row && row.have >= l.quantity) {
+                      const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
+                      const woNum = `PLW-${activeBrand.toUpperCase()}-${Date.now().toString().slice(-6)}-${i}`;
+                      await setDoc(doc(db, "plating_demand", demandId), {
+                          id: demandId, brandId: activeBrand, status: 'open', woNum,
+                          baseItemId: basePart.id, baseErpId: l.legacyErpId, targetErpId: target,
+                          finishCode: suffix, finishName: outFinish.name || '',
+                          qty: l.quantity, source: 'library-wo', createdBy: currentUser?.name || 'Unknown', createdAt: Date.now(),
+                          ...(plan.exploded ? { parentAssemblyErp: erp, parentAssemblyQty: qty } : {}),
+                      });
+                      plated.push(`${l.quantity} × ${l.legacyErpId} → ${target} (WO ${woNum})`);
+                  } else {
+                      // Core short → shop-floor WO to build the raw stock first; plate it after.
+                      const woId = await createStockBuildWO(basePart, l.quantity);
+                      made.push(`${l.quantity} × ${l.legacyErpId} — have ${row ? row.have : 0}, shop WO ${woId}`);
+                  }
               }
+              alert(`${made.length ? '⚠️' : '✅'} ${erp} ×${qty} routed:${plated.length ? `\n\nTO PLATING (cores in stock):\n${plated.join('\n')}` : ''}${made.length ? `\n\nSHORT — shop-floor WOs raised to build the cores first (plate after):\n${made.join('\n')}` : ''}`);
               setWoTargetQty(1);
           } catch (err) {
               console.error("Plating demand routing error:", err);
