@@ -130,7 +130,7 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
     );
 };
 
-export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -160,6 +160,16 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
         const texMap = {}; 
 
         const applyAllOverrides = () => {
+            // RENDER-MAP AUDIT (Brimar 2026-08-09: "the new finials we just added do not render
+            // while some of the older ones do"). A geometry-map node name that matches NOTHING in
+            // the scene fails silently: the option selects, prices and BOMs — and controls no
+            // geometry. Collect every visibility token that matched no mesh/ancestor during this
+            // pass and report it (onVisAudit → the amber strip under the 3D pane), so a stale map
+            // after a re-import/rename names itself instead of reading as "the part won't render".
+            const visTokens = new Set();
+            const hitTokens = new Set();
+            Object.keys(visibilityOverrides || {}).forEach(k =>
+                k.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).forEach(t => visTokens.add(t)));
             // Fasteners (screws/bolts/washers/nuts) are BOM-only — never rendered, here or as clones.
             // Match on the mesh OR any ancestor group name. \bnut\b is used so WALNUT isn't caught.
             const FASTENER_RX = /screw|bolt|washer|fastener|rivet|\bnut\b/i;
@@ -187,7 +197,9 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                         let anyShow = false, anyHide = false;
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
                             const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-                            if (targets.some(hitTarget)) {
+                            let anyTok = false;
+                            for (const t of targets) { if (hitTarget(t)) { anyTok = true; hitTokens.add(t); } }
+                            if (anyTok) {
                                 if (isVisibleFlag) anyShow = true; else anyHide = true;
                             }
                         }
@@ -260,6 +272,11 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                     }
                 }
             });
+
+            // Report the audit: tokens the whole traversal never matched. Empty array = clean.
+            if (typeof onVisAudit === 'function') {
+                onVisAudit([...visTokens].filter(t => !hitTokens.has(t)).sort());
+            }
 
             // --- Center-bracket cloning ---------------------------------------------------------
             // One source bracket sits at the middle of the pole; clone it N times (count from the
@@ -602,6 +619,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // TEMP (Stage 1 debug): when on, bypass hidden-until-chosen so the full glb renders.
   // Used to tell a glb-load problem apart from a visibility problem. Remove before merge.
   const [debugShowAll, setDebugShowAll] = useState(false);
+  // Geometry-map tokens the render matched to NOTHING in the loaded model (see DynamicModel's
+  // render-map audit). Content-compared so the per-frame reports don't re-render in a loop.
+  const [visAudit, setVisAudit] = useState([]);
+  const handleVisAudit = useCallback((arr) => {
+      setVisAudit(prev => (prev.length === arr.length && prev.every((v, i) => v === arr[i])) ? prev : arr);
+  }, []);
   // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
   const [debugHighlight, setDebugHighlight] = useState(false);
   // Production packet — captured Front/Back images of the configured model. captureFnRef is filled by
@@ -2872,7 +2895,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   const repl = defaultOptionFor(pool, st.geometryMap, st.defaultOptId);
                   if (repl) { next[st.id] = repl; changed = true; }
               }
-              const subPool = (st.subOptions || []).filter(optCustomerOk).filter(stepOptOk(st, { isSub: true }));
+              let subPool = (st.subOptions || []).filter(optCustomerOk).filter(stepOptOk(st, { isSub: true }));
+              // POOL-SCOPED HEALING (Brimar 2026-08-09: backplates rendered whether or not the
+              // french return was selected). The clearing effect above correctly empties an
+              // out-of-pool plate pick — but this heal re-seeded it from a pool with NO
+              // return/inline scoping, so the mesh came straight back: picker blank, plate on.
+              // Apply the SAME three-pool predicate the picker (~3347) and the clearer (~1482)
+              // use, so all three surfaces agree about which plates exist right now. When the
+              // live pool is empty (no plate belongs in this state), the step stays empty —
+              // an empty backplate is a legitimate answer, not a hole to heal.
+              if ((st.subOptions || []).some(o => o.returnOnly || o.inlineOnly)) {
+                  const selMain = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
+                  const returnChosen = isReturnChosenForPos(st.position) || !!selMain?.isReturnArm;
+                  const inlineBracket = !!selMain?.usesReturnPlates;
+                  const hasInl = (st.subOptions || []).some(o => o.inlineOnly);
+                  const retPoolLive = subPool.some(o => o.returnOnly);
+                  subPool = subPool.filter(o => returnChosen ? (retPoolLive ? o.returnOnly : (!o.returnOnly && !o.inlineOnly))
+                      : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
+                      : (!o.returnOnly && !o.inlineOnly));
+              }
               const sub = (st.subOptions || []).find(x => (x.optId || x.partId) === next[`${st.id}__sub`]);
               if (sub && !stepOptOk(st, { isSub: true })(sub)) {
                   const repl = defaultOptionFor(subPool, st.subGeometryMap, st.defaultSubOptId);
@@ -3638,10 +3679,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                                           visibilityOverrides={debugShowAll ? {} : visibilityOverrides}
                                           cloneSpecs={cloneSpecs}
                                           highlightOverrides={highlightOverrides}
+                                          onVisAudit={handleVisAudit}
                                       />
                                   </group>
                               </Bounds>
                           </Canvas>
+                          {/* RENDER-MAP AUDIT (HQ-only surface — the portal renders its own mirror).
+                              An option can select, price and BOM while controlling no geometry: its
+                              map names nodes the model doesn't have (stale after a re-import/rename/
+                              re-namespace). That used to read as "the part won't render" with nothing
+                              to go on — now it names itself. */}
+                          {!debugShowAll && visAudit.length > 0 && (
+                              <div style={{ marginTop: '8px', padding: '10px 14px', border: '1px solid #b00020', background: 'rgba(176,0,32,0.05)', fontFamily: 'var(--mono)', fontSize: '10px', color: '#b00020', lineHeight: 1.6 }}>
+                                  ⚠ {visAudit.length} mapped node name{visAudit.length === 1 ? '' : 's'} not found in this model: {visAudit.slice(0, 5).join(' · ')}{visAudit.length > 5 ? ` · +${visAudit.length - 5} more` : ''}.
+                                  The option(s) naming them will select and price but render nothing. Usual cause: the assembly was re-imported/renamed after the flow was generated — in 1.6 run Load Choices → Save on this assembly, then Regenerate the flow.
+                              </div>
+                          )}
                           {capturedViews && (
                               <div style={{ position: 'absolute', bottom: '12px', right: '12px', display: 'flex', gap: '8px', background: 'rgba(255,255,255,0.92)', border: '1px solid var(--line)', borderRadius: '2px', padding: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)', zIndex: 50 }}>
                                   {['front', 'back'].map(k => (

@@ -975,8 +975,13 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   const inlineish = !!(p.inlineOnly || cl.inlineOnly);
                   const explicitRtn = p.returnOnly === true || !!cl.returnOnly;
                   const nameRtn = RETURNISH.test(String(cl.name || '')) || RETURNISH.test(String(p.partName || '')) || RETURNISH.test(String(feePart?.itemName || ''));
+                  // EXPLICIT beats EXPLICIT'S SHADOW (Brimar 2026-08-09): inline suppresses only the
+                  // NAME-derived return-ness (the Fabricut inline RBP/RCP copies whose library name
+                  // says "for Returns"). A pin the author EXPLICITLY ticked rtn-only is return-scoped
+                  // even if inl-only is also ticked — the old order silently dropped the return flag,
+                  // the return pool came up empty, and the plate escaped every gate (rendered always).
                   const returnish = et ? (et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT')
-                      : (inlineish ? false : (explicitRtn || nameRtn));
+                      : (explicitRtn ? true : (inlineish ? false : nameRtn));
                   const feeish = p.isFee || feePart?.partClass === 'Fee' || String(feePart?.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE';
                   // END RETURN ARM (Flat Iron pattern): a BRACKET choice that IS the end treatment — the
                   // arm mimics the miter. Selecting it greys that side's End Treatment step in CPQ/Vision.
@@ -1025,7 +1030,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       // partId is a Fee-class entity like CE-FEE-4594); ERP push never BOMs it.
                       if (feeish) { e.isFee = true; e.partName = `${p.partName || 'Charge'} (fee)`; }
                       if (returnArm) e.isReturnArm = true;
-                      if (inlineish) e.inlineOnly = true;
+                      // The pools are mutually exclusive: a return-scoped option never ALSO joins the
+                      // inline pool (both-flags pins resolve to return above — flagsFor).
+                      if (inlineish && !returnish) e.inlineOnly = true;
                       if (p.isBasic) e.isBasic = true;
                       if (p.usesReturnPlates || cl.usesReturnPlates) e.usesReturnPlates = true;
                       // CUSTOMER-ONLY choice (1.6 cust gate): the option carries the restriction —
@@ -1050,7 +1057,16 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // WALL·LEFT) — a part+position key MERGED them into one option that unioned their flags
               // AND geometry, so picking either lit both plates and return scoping couldn't separate
               // them. Keyed per cluster, each copy is its own option with its own flags/nodes.
-              const pin = pinByCluster[cl.id];
+              // FIRST NON-HIDDEN PIN, NEVER A PARKED ONE (Brimar 2026-08-09). pinByCluster is
+              // last-write-wins over EVERY pin including parked/hidden ones, and this path put the
+              // parked "no item # yet" pin's cluster on a step as a phantom option whose geometry was
+              // the cluster's ENTIRE node list — on Brimar that was the assembly ROOT, so every other
+              // end-treatment selection AND-ed the whole model toward hidden. A cluster whose only
+              // pins are parked/hidden emits NO option (its nodes are already force-hidden below);
+              // clusters with no pins at all keep the legacy 1.5-toggle path unchanged.
+              const clusterPins = pinsByCluster[cl.id] || [];
+              const pin = clusterPins.find(p => !p.isHiddenPart) || null;
+              if (!pin && clusterPins.length) return;
               const pid = pin?.partId || cl.name;
               const cshortL = String(cl.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6);
               const keyL = [cl.id, pid, position, location].join('|');
@@ -1062,8 +1078,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   const { et, returnish, feeish, returnArm, inlineish } = flagsFor(pin);
                   if (et) e.endTreatment = et;
                   if (returnArm) e.isReturnArm = true;
-                  if (inlineish) e.inlineOnly = true;
+                  // Same exclusivity as the fan-out path: return-scoped never also inline.
                   if (returnish) e.returnOnly = true;
+                  else if (inlineish) e.inlineOnly = true;
                   if (feeish) { e.isFee = true; e.partName = `${pin.partName || 'Charge'} (fee)`; }
                   if (pin.isBasic) e.isBasic = true;
                   if (pin.usesReturnPlates || cl.usesReturnPlates) e.usesReturnPlates = true;
