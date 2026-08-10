@@ -2736,7 +2736,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       || (step.styleOptions || []).find(o => (o.optId || o.partId) === selMain)?.targetNode
                       || step.finishTargetNodes;
                   const subNode = (step.subGeometryMap && selSub) ? step.subGeometryMap[selSub] : '';
-                  [mainNode, subNode].filter(Boolean).forEach(node => { overrides[exactNode(node)] = fData.textureUrl; });
+                  // These are LIST strings (geometry-map values), not single node names — the
+                  // texture loop splits them (dual-format). Wrapping a LIST in the '=' exact
+                  // escape turned it into one unmatchable literal and killed finish rendering
+                  // (Stuart 2026-08-10: "color is not rendering at all") — keys stay raw here.
+                  [mainNode, subNode].filter(Boolean).forEach(node => { overrides[node] = fData.textureUrl; });
               }
           }
       });
