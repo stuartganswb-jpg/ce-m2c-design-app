@@ -2169,7 +2169,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                         style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', background: '#fff' }}
                                     >
                                         <option value="">-- UNLINKED (STANDALONE FLOW) --</option>
-                                        {masterAssemblies.map(a => <option key={a.id} value={a.id}>{a.itemName} {a.legacyErpId && `[${a.legacyErpId}]`}</option>)}
+                                        {/* doc id + model file in the label (Brimar fork, 2026-08-10): two records can share
+                                            one NAME, and a name-only list made the wrong link invisible. Match the doc id to
+                                            1.6's 'EDITING · doc …' line. */}
+                                        {masterAssemblies.map(a => <option key={a.id} value={a.id}>{a.itemName} {a.legacyErpId ? `[${a.legacyErpId}]` : ''} · {a.id} · {String(a.manufacturingSpecs?.cadUrl || '').split('/').pop().split('?')[0] || 'no model'}</option>)}
                                     </select>
                                 </div>
 
