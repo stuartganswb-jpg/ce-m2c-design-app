@@ -660,12 +660,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         platingOnOrderByTarget[tgt].lines.push(l);
     });
 
-    // On-Order popup: pull the open PO lines for an item live from NetSuite (authoritative PO data).
+    // On-Order popup: BOTH inbound streams, live from NetSuite — open PO lines (vendor buys) AND
+    // open work orders (production builds, e.g. the parent-assembly WOs the library tool queues).
+    // The On Ord column counts both, so the drill-down must show both (Stuart 2026-08-10: a WO-only
+    // item read "no open purchase orders" while On Ord said 91).
     const openPoModal = async (item) => {
         const erp = (item.legacyErpId || item.itemId || '').toUpperCase();
         setPoModal({ erpId: erp, itemName: item.itemName || erp, loading: true, lines: [], error: null });
+        const esc = erp.replace(/'/g, "''");
+        const runQ = async (q) => {
+            const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
+            const b = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
+            return b.items || [];
+        };
         try {
-            const q = `
+            const poRows = await runQ(`
                 SELECT t.tranid AS po_number, t.id AS po_id, TO_CHAR(t.trandate, 'YYYY-MM-DD') AS trandate,
                        BUILTIN.DF(t.entity) AS vendor, tl.quantity AS qty,
                        tl.quantityshiprecv AS received, tl.rate AS rate
@@ -673,14 +683,33 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 JOIN transactionline tl ON tl.transaction = t.id
                 JOIN item i ON i.id = tl.item
                 WHERE t.type = 'PurchOrd'
-                  AND UPPER(i.itemid) = '${erp.replace(/'/g, "''")}'
+                  AND UPPER(i.itemid) = '${esc}'
                   AND NVL(tl.quantity, 0) <> NVL(tl.quantityshiprecv, 0)
                 ORDER BY t.trandate DESC
+            `);
+            // Same open-WO shape as the On Ord aggregate: mainline carries the assembly being
+            // built, quantityshiprecv = qty already built, enddate may not be queryable → fall back.
+            const woQ = (extra) => `
+                SELECT t.tranid AS po_number, t.id AS po_id, TO_CHAR(t.trandate, 'YYYY-MM-DD') AS trandate${extra},
+                       BUILTIN.DF(t.status) AS statusname, ABS(NVL(tl.quantity, 0)) AS qty,
+                       NVL(tl.quantityshiprecv, 0) AS received
+                FROM transaction t
+                JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
+                JOIN item i ON i.id = tl.item
+                WHERE t.type = 'WorkOrd'
+                  AND UPPER(i.itemid) = '${esc}'
+                  AND BUILTIN.DF(t.status) NOT LIKE '%Closed%'
+                  AND BUILTIN.DF(t.status) NOT LIKE '%Built%'
+                ORDER BY t.trandate DESC
             `;
-            const r = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql`, method: 'POST', payload: { q } });
-            const b = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
-            setPoModal(m => (m && m.erpId === erp) ? { ...m, loading: false, lines: b.items || [] } : m);
+            let woRows;
+            try { woRows = await runQ(woQ(", TO_CHAR(t.enddate, 'YYYY-MM-DD') AS expected")); }
+            catch (weErr) { woRows = await runQ(woQ('')); }
+            const lines = [
+                ...poRows.map(l => ({ ...l, kind: 'PO' })),
+                ...woRows.map(l => ({ ...l, kind: 'WO', vendor: `Production${l.statusname ? ` · ${l.statusname}` : ''}`, rate: null })),
+            ];
+            setPoModal(m => (m && m.erpId === erp) ? { ...m, loading: false, lines } : m);
         } catch (e) {
             setPoModal(m => (m && m.erpId === erp) ? { ...m, loading: false, error: e.message || String(e) } : m);
         }
@@ -2553,18 +2582,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 <div onClick={() => setPoModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '720px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
-                            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Open Purchase Orders</h2>
+                            <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Open Purchase &amp; Work Orders</h2>
                             <button onClick={() => setPoModal(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
                         </div>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>{poModal.itemName} · {poModal.erpId}</div>
                         {poModal.loading && <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic' }}>Loading purchase orders from NetSuite…</div>}
                         {poModal.error && <div style={{ padding: '16px', background: '#fdf2f2', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px', whiteSpace: 'pre-wrap' }}>{poModal.error}</div>}
-                        {!poModal.loading && !poModal.error && poModal.lines.length === 0 && <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No open purchase orders found for this item.</div>}
+                        {!poModal.loading && !poModal.error && poModal.lines.length === 0 && <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic' }}>No open purchase orders or work orders found for this item.</div>}
                         {!poModal.loading && !poModal.error && poModal.lines.length > 0 && (
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead style={{ borderBottom: '2px solid var(--ink)' }}>
                                     <tr>
-                                        {['PO #', 'Vendor', 'Ordered', 'Received', 'Open', 'Rate', 'Date'].map((h, i) => <th key={h} style={{ padding: '10px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', textAlign: i >= 2 && i <= 5 ? 'center' : 'left' }}>{h}</th>)}
+                                        {['Type', 'Order #', 'Vendor / Source', 'Ordered', 'Recv / Built', 'Open', 'Rate', 'Date'].map((h, i) => <th key={h} style={{ padding: '10px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', textAlign: i >= 3 && i <= 6 ? 'center' : 'left' }}>{h}</th>)}
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -2573,13 +2602,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         const received = parseFloat(l.received) || 0;
                                         return (
                                             <tr key={(l.po_id || idx) + '-' + idx} style={{ borderBottom: '1px solid var(--line)' }}>
+                                                <td style={{ padding: '12px 8px' }}>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', padding: '3px 7px', border: `1px solid ${l.kind === 'WO' ? 'var(--brass)' : 'var(--line)'}`, color: l.kind === 'WO' ? 'var(--brass)' : 'var(--ink-soft)' }}>{l.kind || 'PO'}</span>
+                                                </td>
                                                 <td style={{ padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '0.85rem', color: 'var(--brass)' }}>{l.po_number || l.po_id || '—'}</td>
                                                 <td style={{ padding: '12px 8px', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>{l.vendor || '—'}</td>
                                                 <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)' }}>{ordered}</td>
                                                 <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', color: 'var(--ink-soft)' }}>{received}</td>
                                                 <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontWeight: 600 }}>{ordered - received}</td>
                                                 <td style={{ padding: '12px 8px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>{l.rate != null && l.rate !== '' ? `$${parseFloat(l.rate).toFixed(2)}` : '—'}</td>
-                                                <td style={{ padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{l.trandate || '—'}</td>
+                                                <td style={{ padding: '12px 8px', fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{l.trandate || '—'}{l.kind === 'WO' && l.expected ? ` · exp ${l.expected}` : ''}</td>
                                             </tr>
                                         );
                                     })}
