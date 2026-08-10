@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { buildStockFinPayload } from '../Shared/stockRun';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
+import { isOutsourcedFinishCode } from '../Shared/finishRouting';
+import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
@@ -29,6 +31,14 @@ const AVAILABLE_BRANDS = [
 const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
 // Brand → NetSuite location id (for the base-stock check when routing outsourced finished assemblies).
 const BRAND_NS_LOCATION = { m2c: "19", uniquity: "22", ce: "17", leyla: "18" };
+// Canonical brand → NetSuite subsidiary/location map (same values as PickPackApp / NetSuiteSync /
+// ERPPushPull / AdminTab — keep every copy in sync). Used to queue the parent-assembly work order.
+const BRAND_NETSUITE_MAP = {
+    'm2c': { subsidiary: "3", location: "19" },
+    'uniquity': { subsidiary: "6", location: "20" },
+    'ce': { subsidiary: "2", location: "17" },
+    'leyla': { subsidiary: "5", location: "18" }
+};
 
 // 🔤 Mojibake repair lives in Shared/textRepair (also runs on Mass Update CSV imports).
 const MOJI_ITEM_FIELDS = ['itemName', 'description', 'itemDescription'];
@@ -1078,7 +1088,50 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               note: `${erp} · ${finishLabel} · ×${qty}${plan.exploded ? ` · BOM pull: ${plan.lines.map(l => `${l.quantity}×${l.legacyErpId}`).join(', ')}` : ''}`,
               finExtra: { partsList: plan.lines, finishCode: recipeCode, bomExploded: plan.exploded },
           });
-          alert(`✅ ${woId} is on the finishing floor.\n\n${qty} × ${erp} · ${finishLabel}\nPull lines:\n${pullText}\n\nIt's in the Setup Queue now and recorded in RTG.`);
+
+          // ROUTE A, same as RTG's release (Stuart 2026-08-10: "did not create a work order for the
+          // actual parent item we ordered, which would have committed the bom components"): queue
+          // the REAL NetSuite work order for the PARENT assembly. NetSuite explodes its own BOM and
+          // COMMITS the component stock — that commitment is the whole point. Outbox = serial,
+          // retried, idempotent; the floor's bake-complete trigger posts the WO completion against
+          // the nsWoId the write-back stamps on the fin doc.
+          let nsNote = '';
+          try {
+              const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
+              const nsAsmId = String(activePart.netSuiteInternalId || '');
+              if (nsAsmId && nsConfig.location) {
+                  await enqueueNsWrite({
+                      kind: 'workorder',
+                      label: `NS WO — build ${erp} ×${qty}`,
+                      sourceApp: 'MASTER_LIBRARY', createdBy: (currentUser && (currentUser.name || currentUser.email)) || '',
+                      targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',
+                      method: 'POST',
+                      payload: {
+                          // NetSuite's workorder record names the assembly field `assemblyItem`
+                          // (plain `item` is rejected with FIELD_PARAM_REQD).
+                          assemblyItem: { id: nsAsmId },
+                          quantity: qty,
+                          location: { id: nsConfig.location },
+                          subsidiary: { id: nsConfig.subsidiary },
+                          endDate: new Date(Date.now() + 6048e5).toISOString().split('T')[0],
+                          memo: `Finished-goods run ${woId} · ${finishLabel} (Master Library)`
+                      },
+                      writeBack: [
+                          { collection: 'fin_workorders', docId: woId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' },
+                          { collection: 'hq_work_orders', docId: woId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }
+                      ]
+                  });
+                  await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
+                  nsNote = `\n\n📤 NetSuite work order queued for the parent ${erp} ×${qty} — NetSuite commits the BOM components when it posts (watch 11.1 → Sync Queue).`;
+              } else {
+                  nsNote = `\n\n⚠ NO NetSuite work order queued — ${!nsAsmId ? `${erp} has no NetSuite internal id on its library record` : 'no NetSuite location mapping for this brand'}. Components are NOT committed in NetSuite; create the WO there manually.`;
+              }
+          } catch (obErr) {
+              console.error('NS WO queue failed:', obErr);
+              nsNote = `\n\n⚠ NetSuite work order could NOT be queued (${obErr.message || obErr}) — the floor release stands; queue it via 11.1 or create it in NetSuite manually.`;
+          }
+
+          alert(`✅ ${woId} is on the finishing floor.\n\n${qty} × ${erp} · ${finishLabel}\nPull lines:\n${pullText}\n\nIt's in the Setup Queue now and recorded in RTG.${nsNote}`);
           setRunFinishId('');
           setWoTargetQty(1);
       } catch (err) {
@@ -1158,9 +1211,22 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
       const erp = String(activePart.legacyErpId);
       // Outsourced finished assembly? code = base/CODE where CODE is an outsourced finish (e.g. H1-138BF/EP1).
+      // Gated by the CANONICAL outsourced vocabulary (EPn/MEP*/P25, Shared/finishRouting) — a
+      // stray hq_outsource_finishes record coded 'P' must never route an in-house painted /P item
+      // to the plater (phosphating is the CONVERT stage, not this).
       const slash = erp.lastIndexOf('/');
       const suffix = slash > -1 ? erp.slice(slash + 1).toUpperCase() : '';
-      const outFinish = suffix ? outsourceFinishes.find(f => finishCodeOf(f) === suffix) : null;
+      const outFinish = suffix && isOutsourcedFinishCode(suffix)
+          ? (outsourceFinishes.find(f => finishCodeOf(f) === suffix) || { name: suffix })
+          : null;
+
+      // An IN-HOUSE finished item (…/P etc.) with no finish chosen is a wrong turn, not a stock
+      // build: the finishing run is the path that explodes the BOM, checks component stock, and
+      // queues the NetSuite parent WO that commits the components. Say so instead of parking a
+      // blind "Stock Build" in RTG with no recipe and no floor job (Stuart 2026-08-10).
+      if (!outFinish && suffix) {
+          return alert(`${erp} is an IN-HOUSE finished item (…/${suffix}).\n\nChoose the In-House Finish above and use "Create & Push to Finishing Floor" — that creates the finishing run (BOM component pull + live stock check), lands it on the floor, and queues the NetSuite parent work order that commits the BOM components.\n\n"Push to RTG Dispatch" is for RAW components with no finish suffix.`);
+      }
 
       if (outFinish) {
           // OUTSOURCED FINISHED-GOODS run (Stuart 2026-08-10 rework): the plater receives MILL

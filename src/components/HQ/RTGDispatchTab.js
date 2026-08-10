@@ -408,11 +408,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         }
         if (order.hqJobId) {
             const { originalJob, finishRecipe, svgUri } = await fetchEnrichedJobData(order.hqJobId, orderType);
+            // The order's OWN stamped recipe wins over an unresolved CPQ lookup — library/stock
+            // releases stamp `recipe` (code) + `finishLabel` on the WO doc, and showing
+            // PENDING-RECIPE over a stated RF1 read as "finish never attached" (2026-08-10).
+            const ownRecipe = String(order.finishLabel || order.recipe || '').trim();
+            const shownRecipe = (finishRecipe === 'PENDING-RECIPE' && ownRecipe && !/^PENDING/i.test(ownRecipe)) ? ownRecipe : finishRecipe;
             if (originalJob) {
-                setActiveJobDetails({ ...originalJob, finishRecipe, svgUri });
+                setActiveJobDetails({ ...originalJob, finishRecipe: shownRecipe, svgUri });
             } else {
                 addLog(`Warning: Original Document [${order.hqJobId}] not found in database.`, 'warn');
-                setActiveJobDetails({ finishRecipe, svgUri });
+                setActiveJobDetails({ finishRecipe: shownRecipe, svgUri });
             }
         } else {
             // No linked CPQ job at all (legacy grid/library stock builds) — show the order
