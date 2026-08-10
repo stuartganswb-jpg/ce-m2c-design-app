@@ -145,6 +145,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // analysis, rows:[{key,keep,finalName,origName,bodies,tris,size}], unitId, mode, busy, err }
     const [fusionJob, setFusionJob] = useState(null);
     const assignSceneRef = useRef(null);                 // loaded scene kept for split/thumbnails
+    const [assignModelInfo, setAssignModelInfo] = useState(null); // { docId, itemId, cadFile } — the fork check
     const [syncId, setSyncId] = useState('');            // assembly whose pins we're linking to the library
     const [syncBusy, setSyncBusy] = useState(false);
     const [starterBusy, setStarterBusy] = useState(false); // Item Starter Kit upload in flight
@@ -1007,6 +1008,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 };
             });
             assignSceneRef.current = scene;
+            // Identity line for the fork check (Brimar 2026-08-10): WHICH doc + WHICH .glb this
+            // pass is editing — compared against CPQ's strip, a mismatch = the flow links another
+            // record entirely, and no amount of Load Choices here can affect what CPQ renders.
+            setAssignModelInfo({ docId: assignId, itemId: data.itemId || assignId, cadFile: String(cadUrl).split('/').pop().split('?')[0] });
             setAssignData({ asmId: data.itemId || assignId, asmName: data.itemName || assignId, rows });
             const missing = rows.filter(r => !r.found).length;
             addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}" — ${matched} item #(s) auto-matched from node names.${missing ? ` ⚠ ${missing} cluster(s) had no group match.` : ''}`, missing ? 'error' : 'success');
@@ -1563,6 +1568,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     </button>
                 </div>
 
+                {assignData && assignModelInfo && (
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.04em', margin: '8px 0 2px' }}>
+                        EDITING · doc {assignModelInfo.docId} · itemId {assignModelInfo.itemId} · model {assignModelInfo.cadFile} — CPQ's red strip names ITS model; if they differ, the flow links another record.
+                    </div>
+                )}
                 {assignData && (
                     <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '10px', maxHeight: '46vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         {assignData.rows.filter(r => r.choices.length > 0).map((r) => {
