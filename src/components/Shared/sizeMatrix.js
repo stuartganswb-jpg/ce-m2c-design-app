@@ -132,12 +132,27 @@ export const sizeKeyOf = skOf;
 
 // First size family found among the given parts (array). Used by the generator to decide whether a
 // flow gets the SIZE steps at all.
+// DOMINANCE, NOT FIRST MATCH (Stuart 2026-08-08 — the Brimar incident): collections borrow items
+// across families (Brimar pins H1's 1" end cap and H2's metal ball), and the first-match version
+// let ONE stray stamped pin classify a 29-option single-assembly flow as "Fabricut H1 Round" —
+// injecting Rod Diameter steps into a collection with exactly one diameter. A flow belongs to a
+// size family only when that family's items dominate its BOM: the winning family needs at least
+// MIN_FAMILY_PINS keyed parts AND a MIN_FAMILY_SHARE of all keyed parts. Real family masters pass
+// with room to spare (their pins are nearly all family-stamped); a handful of borrowed parts on a
+// foreign flow no longer counts as an identity.
+const MIN_FAMILY_PINS = 5;
+const MIN_FAMILY_SHARE = 0.6;
 export function sizeFamilyOfParts(parts) {
+    const counts = {};
+    let keyed = 0;
     for (const p of parts || []) {
         const sk = skOf(p);
-        if (sk && SIZE_FAMILIES[sk.family]) return sk.family;
+        if (sk && SIZE_FAMILIES[sk.family]) { counts[sk.family] = (counts[sk.family] || 0) + 1; keyed++; }
     }
-    return null;
+    const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+    if (!top) return null;
+    if (counts[top] < MIN_FAMILY_PINS || counts[top] / keyed < MIN_FAMILY_SHARE) return null;
+    return top;
 }
 
 // The two flow steps, with FIXED ids (SIZE-DIA / SIZE-PROJ) so selections and saved quotes survive

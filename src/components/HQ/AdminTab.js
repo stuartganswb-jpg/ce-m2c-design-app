@@ -2314,6 +2314,34 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                 </div>
                                 {flowSettings.linkedAssemblyId && (
                                     <div style={{ marginTop: '12px' }}>
+                                        {/* FLOW MODE — THE CLEAR SWITCH (Stuart 2026-08-08, the Brimar incident: "we need
+                                            to put in place a clear system on the generator of whether this is single
+                                            assembly flow or a combined… apparently it looks like it is being ignored").
+                                            Regenerate reads the flow's stored singleAssembly flag — which was invisible
+                                            and unset on flows that predate it, so a checkbox in the OTHER panel changed
+                                            nothing and stray cross-collection pins (H1's 1" end cap on Brimar) dragged a
+                                            one-diameter collection into Rod Diameter steps. This control shows the flag
+                                            where Regenerate lives and persists it immediately — the generator's authority,
+                                            on both paths. */}
+                                        {(() => {
+                                            const af = cpqFlows.find(f => f.id === activeFlowId);
+                                            const isSingle = !!af?.singleAssembly;
+                                            const setMode = async (single) => {
+                                                try {
+                                                    await updateDoc(doc(db, 'cpq_flows', activeFlowId), single
+                                                        ? { singleAssembly: true, sizeFamily: null }
+                                                        : { singleAssembly: false });
+                                                } catch (e) { alert('Mode save failed: ' + (e.message || e)); }
+                                            };
+                                            return (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', padding: '10px 12px', border: `1px solid ${isSingle ? 'var(--brass)' : 'var(--line)'}`, background: 'var(--paper)' }}>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Flow mode</span>
+                                                    <button onClick={() => setMode(true)} style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer', border: `1px solid ${isSingle ? 'var(--brass)' : 'var(--line)'}`, background: isSingle ? 'var(--brass)' : 'transparent', color: isSingle ? '#fff' : 'var(--ink-soft)' }} title="This assembly's tags only — no family union, no review gate, no Rod Diameter / Projection steps. Regenerate strips any size steps the flow picked up.">Single assembly</button>
+                                                    <button onClick={() => setMode(false)} style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer', border: `1px solid ${!isSingle ? 'var(--brass)' : 'var(--line)'}`, background: !isSingle ? 'var(--brass)' : 'transparent', color: !isSingle ? '#fff' : 'var(--ink-soft)' }} title="Size-family flow: the family union, the review gate, and the Rod Diameter / Projection steps apply — for combined collections like H1/H2, where the family's items dominate the BOM.">Combined size family</button>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginLeft: 'auto' }}>{isSingle ? 'union/review/size steps OFF' : (af?.sizeFamily ? `family ${af.sizeFamily}` : 'family inferred at generate (needs dominance)')}</span>
+                                                </div>
+                                            );
+                                        })()}
                                         <button onClick={() => { if (window.confirm("Regenerate this flow's steps from the linked assembly's current tags + the latest generator logic?\n\nPrices are kept for options that still exist. All flow settings (name, IDs, fab shape/projection, rollup) stay. New or changed steps may need prices set. Nothing is deleted — the flow keeps its id, so BOM/CPQ links are preserved.")) handleGenerateHardwareFlow({ inPlaceFlowId: activeFlowId }); }} style={{ width: '100%', padding: '12px 24px', background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>↻ Regenerate Steps from Tags (keep prices)</button>
                                         <span style={{ display: 'block', marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>Rebuilds steps in place from the assembly's tags + latest generator logic — no delete, prices &amp; settings kept. Use this after retagging or a generator update instead of delete + regenerate.</span>
                                     </div>
