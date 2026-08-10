@@ -9,6 +9,7 @@ import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
 import { DynamicModel, StudioRig, buildPbrRegistry } from './cpqRender.jsx';
 import { sizeSelectionsOf, isReturnOption, returnsAllowedFor, projAllowedAtDia, renderScaleOf } from './shared/sizeMatrix';
+import { splitNodes, splitNodesLower, exactNode } from './shared/nodeList';
 
 const SIZE_TYPE = 'SIZE_SELECT';
 const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -100,7 +101,7 @@ function buildVisibilityOverrides(steps, params, assembly, hiddenClusters, hidde
         const inScope = !step.mountPosition || String(cl.position || '') === String(step.mountPosition);
         if (!inScope) return;
         const allowed = String(cl.location || '') === String(selectedLoc || '');
-        (cl.nodes || []).forEach((n) => merge(String(n).toLowerCase(), allowed));
+        (cl.nodes || []).forEach((n) => merge(exactNode(String(n).toLowerCase()), allowed));
       });
     }
     // geometryMap / subGeometryMap: nodes controlled by an option only show when it's selected.
@@ -109,12 +110,12 @@ function buildVisibilityOverrides(steps, params, assembly, hiddenClusters, hidde
       const controlled = new Set();
       const inSelected = new Set();
       Object.entries(map).forEach(([optId, csv]) => {
-        String(csv).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).forEach((n) => {
+        splitNodesLower(csv).forEach((n) => {
           controlled.add(n);
           if (optId === sel) inSelected.add(n);
         });
       });
-      controlled.forEach((n) => merge(n, inSelected.has(n)));
+      controlled.forEach((n) => merge(exactNode(n), inSelected.has(n)));
     };
     applyMap(step.geometryMap, params[step.id]);
     applyMap(step.subGeometryMap, params[`${step.id}__sub`]);
@@ -123,9 +124,9 @@ function buildVisibilityOverrides(steps, params, assembly, hiddenClusters, hidde
   // Flow-level force-hide always wins.
   (hiddenClusters || []).forEach((cid) => {
     const cl = clusters.find((c) => c.id === cid);
-    (cl ? (cl.nodes || []) : []).forEach((n) => { overrides[String(n).toLowerCase()] = false; });
+    (cl ? (cl.nodes || []) : []).forEach((n) => { overrides[exactNode(String(n).toLowerCase())] = false; });
   });
-  (hiddenNodes || []).forEach((n) => { overrides[String(n).toLowerCase()] = false; });
+  (hiddenNodes || []).forEach((n) => { overrides[exactNode(String(n).toLowerCase())] = false; });
   return overrides;
 }
 
@@ -137,7 +138,7 @@ function buildCloneSpecs(steps, params, quantities) {
     const selSub = params[`${step.id}__sub`];
     const main = (step.geometryMap && step.geometryMap[selId]) || '';
     const sub = (step.subGeometryMap && selSub) ? step.subGeometryMap[selSub] : '';
-    const meshNames = [main, sub].filter(Boolean).join(',').split(',').map((s) => s.trim()).filter(Boolean);
+    const meshNames = [main, sub].flatMap(splitNodes);
     if (!meshNames.length) continue;
     let count = parseInt(quantities[step.id]);
     if (!Number.isFinite(count)) count = 1;
@@ -145,9 +146,9 @@ function buildCloneSpecs(steps, params, quantities) {
     // Rail = a pole/rod style step's geometry, else the model box (handled in the renderer).
     const railStep = steps.find((s) => /pole|rod/i.test(s.title || '') && (s.geometryMap || s.targetNodes));
     const railNames = railStep
-      ? String((railStep.geometryMap && railStep.geometryMap[params[railStep.id]]) || railStep.targetNodes || '').split(',').map((s) => s.trim()).filter(Boolean)
+      ? splitNodes((railStep.geometryMap && railStep.geometryMap[params[railStep.id]]) || railStep.targetNodes || '')
       : [];
-    specs.push({ stepId: step.id, meshNames, anchorNames: String(main).split(',').map((s) => s.trim()).filter(Boolean), railNames, count });
+    specs.push({ stepId: step.id, meshNames, anchorNames: splitNodes(main), railNames, count });
   }
   return specs;
 }
@@ -167,7 +168,7 @@ function isReturnChosenForPos(pos, allSteps, params) {
     const et = String((o && o.endTreatment) || '').toUpperCase();
     if (et) return et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || et === 'INSIDE_MOUNT';
     if (/^OPT-(BEND|MITER)/i.test(sel)) return true;
-    const leaves = String((o && o.targetNode) || '').split(',').map((s2) => { const seg = String(s2).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
+    const leaves = splitNodes((o && o.targetNode) || '').map((s2) => { const seg = String(s2).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
     return !!(o && RETURN_PICK_RE.test(`${(o.partName) || ''} ${(o.optId) || ''} ${leaves}`));
   });
 }

@@ -368,3 +368,15 @@ collision on fresh builds; (e) Extend preflight flags a slot whose cluster alrea
 target (append-only duplicate warning). Also `7e26cc6`/`c36db6f`: spec-sheet geometry-vs-cell
 warnings + coverage chips + a read-only Readiness Board off BOM Engine — they READ sizeMatrix
 and assembly_pins, they change nothing you own. Full map: CROSS_SESSION_CONTRACT.md §2026-08-08.
+
+## ADDENDUM 2026-08-09 (Session A) — AdminTab/CPQTab edits, traverse-neutral by construction
+
+Brimar render fixes shipped in `7910534` touched AdminTab (flagsFor precedence: explicit rtn-only
+beats inl-only; pool-exclusive flag emission; parked/hidden pins no longer emit single-choice
+options) and CPQTab (pool-scoped __sub healing; render-map audit strip under the 3D pane). None of
+the shared helpers traverse calls (addEndTreatment / addPerPosition) were modified; flagsFor changes
+bite only pins carrying BOTH rtn-only and inl-only explicitly (traverse pins carry neither), and the
+parked-pin guard only suppresses clusters whose every pin is parked/hidden. Also in `c321d90`: the
+flow-settings panel now carries a visible "Flow mode: Single assembly / Combined size family" switch
+(persisted `singleAssembly`), and `sizeFamilyOfParts` requires DOMINANCE (≥5 keyed parts, ≥60%) —
+one stray family-stamped pin can no longer family-ize a foreign flow. Regenerate honors the switch.

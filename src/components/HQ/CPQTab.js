@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
 import { setupAllows, driveAllows } from '../Shared/traverseTags';
 import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
 import { cutText } from '../Shared/configQty';
@@ -169,7 +170,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
             const visTokens = new Set();
             const hitTokens = new Set();
             Object.keys(visibilityOverrides || {}).forEach(k =>
-                k.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).forEach(t => visTokens.add(t)));
+                splitNodesLower(k).forEach(t => visTokens.add(t)));
             // Fasteners (screws/bolts/washers/nuts) are BOM-only — never rendered, here or as clones.
             // Match on the mesh OR any ancestor group name. \bnut\b is used so WALNUT isn't caught.
             const FASTENER_RX = /screw|bolt|washer|fastener|rivet|\bnut\b/i;
@@ -196,7 +197,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         let anyShow = false, anyHide = false;
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
-                            const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+                            const targets = splitNodesLower(targetStr);
                             let anyTok = false;
                             for (const t of targets) { if (hitTarget(t)) { anyTok = true; hitTokens.add(t); } }
                             if (anyTok) {
@@ -215,7 +216,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                     let matchedTexUrl = null;
                     if (textureOverrides && Object.keys(textureOverrides).length > 0) {
                         for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
-                            const targets = targetStr.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+                            const targets = splitNodesLower(targetStr);
                             if (targets.some(hitTarget)) {
                                 matchedTexUrl = texUrl;
                             }
@@ -569,7 +570,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // 📏 Size-group landing (Stuart 2026-07-24 pivot): sibling per-assembly flows collapse into
   // one picker entry; Rod Diameter is asked FIRST, then that assembly's own flow loads.
   const [pendingGroup, setPendingGroup] = useState("");
-  const launchFlow = (id) => { setActiveFlowId(id); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); setAssemblyQty(1); };
+  const launchFlow = (id) => { setActiveFlowId(id); setCurrentStepIndex(0); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setProductType(''); setActiveAssemblyId(''); setActiveDraftId(null); setActiveDraftSvg(null); setAssemblyQty(1); setLineTag(''); };
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   
   const [dynamicConfigParams, setDynamicConfigParams] = useState({});
@@ -597,6 +598,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   const [jobData, setJobData] = useState({
       customerId: '',
       jobName: '',
+      // ORDER SIDEMARK (Stuart 2026-08-10): header-level order tag ("Smith Residence") — prints on
+      // the quote/SO/packing-slip HEADER (job.sidemark + the NetSuite estimate memo). Distinct from
+      // the per-LINE tag (lineTag below) that names each configuration ("Living Room").
+      sidemark: '',
       shippingMethod: 'SAVED',
       shippingAddressId: '',
       shippingAmount: '',
@@ -604,6 +609,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   });
   
   const [assemblyQty, setAssemblyQty] = useState(1);
+  // PER-LINE TAG (Stuart 2026-08-10): entered at the start of each configuration ("Living Room",
+  // "Primary Bedroom") — lands on the cart item's existing `sidemark` field, which every document
+  // already renders (▶ Assembly [tag] on quotes/BOM/RTG/viewer). Vision drafts pre-fill it.
+  const [lineTag, setLineTag] = useState('');
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
   const [showCartSuccessModal, setShowCartSuccessModal] = useState(false);
@@ -647,6 +656,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       ...prev,
                       customerId: reopen.customerId || '',
                       jobName: reopen.jobName || '',
+                      sidemark: reopen.sidemark || '',
                       shippingMethod: reopen.shippingMethod || 'SAVED',
                       shippingAddressId: reopen.shippingAddressId || '',
                       shippingAmount: reopen.shippingAmount || '',
@@ -1171,6 +1181,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setActiveFlowId(targetFlow.id);
       setActiveDraftId(draft.id);
       if (draft.masterQuoteId) setActiveMasterQuoteId(draft.masterQuoteId);
+      setLineTag(draft.sidemark || '');
       setActiveDraftSvg(draft.specs?.engineeringNotes?.svgString || null);
       setJobData(prev => ({
           ...prev,
@@ -1198,6 +1209,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setDynamicConfigParams({ ...(item.dynamicConfigParams || {}) });
       setStepQuantities({ ...(item.stepQuantities || {}) });
       setDimensionInputs({ ...(item.dimensionInputs || {}) });
+      setLineTag(!item.sidemark || item.sidemark === 'No Sidemark' ? '' : item.sidemark);
       setAssemblyQty(parseInt(item.qty) || 1);
       setActiveDraftSvg(item.draftSvg || null);
       setCurrentStepIndex(0);
@@ -1406,7 +1418,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // Geometry check uses only each node's LEAF label (after the "S5-<CLUSTER>__n_" prefix):
           // the prefix carries the cluster name, and "…RETURNS" in "LEFT-END—FINIALS-+-RETURNS" made
           // EVERY option — finials included — read as a return (greyed brackets, broken renders).
-          const leaves = String(o?.targetNode || '').split(',').map(s => { const seg = String(s).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
+          const leaves = splitNodes(o?.targetNode).map(s => { const seg = String(s).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
           return !!(o && RETURN_PICK_RE.test(`${o.partName || ''} ${o.optId || ''} ${leaves}`));
       });
   };
@@ -2162,7 +2174,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           masterQuoteId: activeMasterQuoteId,
           assemblyId: activeAssemblyId,
           assemblyName: activeAssembly?.itemName || activeFlow?.name || 'Configured Item',
-          sidemark: activeDraft?.sidemark || 'No Sidemark', 
+          sidemark: (lineTag || '').trim() || activeDraft?.sidemark || 'No Sidemark',
           flowId: activeFlowId,
           qty: assemblyQty,
           priceLevel,
@@ -2233,6 +2245,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       setActiveDraftId(null);
       setActiveDraftSvg(null);
       setAssemblyQty(1);
+      setLineTag('');
 
       setShowCartSuccessModal(true);
   };
@@ -2356,8 +2369,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           // push still rates physical lines at standard pricing; the rollup absorbs the balance.
           priceLevel: cart[0]?.priceLevel || priceLevel,
           customer: { id: jobData.customerId, name: customerName },
-          jobName: jobData.jobName, 
-          sidemark: jobData.jobName || 'Multi-Room Project',
+          jobName: jobData.jobName,
+          // Header-level order tag. `orderSidemark` = exactly what was typed (reopen restores it);
+          // `sidemark` keeps its historical fallback chain because CRM cards, RTG notes and the
+          // ERP push memo all read it.
+          orderSidemark: (jobData.sidemark || '').trim() || null,
+          sidemark: (jobData.sidemark || '').trim() || jobData.jobName || 'Multi-Room Project',
           flowId: cart[0].flowId || null, 
           linkedAssemblyId: cart[0].assemblyId || null,
           isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, 
@@ -2430,7 +2447,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           localStorage.removeItem('hq_global_cart');
           localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote');
           setShowCheckoutModal(false);
-          setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+          setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
           setActiveMasterQuoteId(null);
 
       } catch (err) { 
@@ -2525,6 +2542,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   <div><span class="label">Quote ID</span><span class="val">${job.quoteNo || job.jobId}</span></div>
                   <div><span class="label">Prepared For</span><span class="val">${job.customer?.name}</span></div>
                   <div><span class="label">Date</span><span class="val">${job.dateSaved}</span></div>
+                  ${job.orderSidemark ? `<div><span class="label">Sidemark</span><span class="val">${job.orderSidemark}</span></div>` : ''}
                 </div>
 
                 <div class="split-layout">
@@ -2569,6 +2587,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 <div class="meta-grid">
                   <div><span class="label">Project</span><span class="val">${job.jobName || 'Multi-Room Order'}</span></div>
                   <div><span class="label">Work Order ID</span><span class="val">${job.jobId}</span></div>
+                  ${job.orderSidemark ? `<div><span class="label">Sidemark</span><span class="val">${job.orderSidemark}</span></div>` : ''}
                 </div>
 
                 <div class="split-layout">
@@ -2717,7 +2736,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       || (step.styleOptions || []).find(o => (o.optId || o.partId) === selMain)?.targetNode
                       || step.finishTargetNodes;
                   const subNode = (step.subGeometryMap && selSub) ? step.subGeometryMap[selSub] : '';
-                  [mainNode, subNode].filter(Boolean).forEach(node => { overrides[node] = fData.textureUrl; });
+                  [mainNode, subNode].filter(Boolean).forEach(node => { overrides[exactNode(node)] = fData.textureUrl; });
               }
           }
       });
@@ -2951,7 +2970,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   if (!cl.location || (pos && cl.position !== pos)) return;
                   (cl.nodes || cl.meshes || []).forEach(n => { if (!n) return; controlled.add(n); if (cl.location === selectedLoc) inSelected.add(n); });
               });
-              controlled.forEach(n => { const allowed = inSelected.has(n); overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed; });
+              controlled.forEach(n0 => { const n = exactNode(n0); const allowed = inSelected.has(n0); overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed; });
               return;
           }
           const applyMap = (gmap, sel) => {
@@ -2960,13 +2979,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
               const inSelected = new Set();
               Object.entries(gmap).forEach(([optId, csv]) => {
                   if (!csv) return;
-                  String(csv).split(',').map(s => s.trim()).filter(Boolean).forEach(n => {
+                  splitNodes(csv).forEach(n => {
                       controlled.add(n);
                       if (optId === sel) inSelected.add(n);
                   });
               });
-              controlled.forEach(n => {
-                  const allowed = inSelected.has(n);
+              controlled.forEach(n0 => {
+                  // EXACT single-name keys (nodeList): a node name containing a comma must reach the
+                  // matcher whole — the render/audit split honours the '=' escape.
+                  const n = exactNode(n0);
+                  const allowed = inSelected.has(n0);
                   overrides[n] = (n in overrides) ? (overrides[n] && allowed) : allowed;
               });
           };
@@ -2980,10 +3002,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // Flow-level hidden geometry: force-hide whole clusters this config never shows.
       (activeFlow.hiddenClusters || []).forEach(cid => {
           const cl = (activeAssembly?.nodeClusters || []).find(c => c.id === cid);
-          (cl?.nodes || cl?.meshes || []).forEach(n => { if (n) overrides[n] = false; });
+          (cl?.nodes || cl?.meshes || []).forEach(n => { if (n) overrides[exactNode(n)] = false; });
       });
       // Per-node force-hides (choices marked "hide" in the Assembly Builder assign tool).
-      (activeFlow.hiddenNodes || []).forEach(n => { if (n) overrides[String(n).trim()] = false; });
+      (activeFlow.hiddenNodes || []).forEach(n => { if (n) overrides[exactNode(n)] = false; });
 
       return overrides;
   }, [dynamicConfigParams, activeFlow, activeAssembly]);
@@ -2997,19 +3019,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // even when it's modeled as many small segments — the longest single mesh would be one rib.
       const poleStep = steps.find(s => s.type === 'STYLE_SWAP' && /pole|rod/i.test(s.title || '') && s.geometryMap && Object.keys(s.geometryMap).length);
       const poleSel = poleStep && dynamicConfigParams[poleStep.id];
-      let railNames = String((poleStep && poleSel && poleStep.geometryMap[poleSel]) || '').split(',').map(m => m.trim()).filter(Boolean);
+      let railNames = splitNodes((poleStep && poleSel && poleStep.geometryMap[poleSel]) || '');
       // Single-material poles are combined into the VISUAL_DIMENSIONS "Pole Length & Finish" step (no
       // STYLE_SWAP pole chooser), so the pole geometry lives in that step's targetNodes — read it there.
       if (!railNames.length) {
           const poleDim = steps.find(s => /pole|rod/i.test(s.title || '') && s.targetNodes);
-          railNames = String((poleDim && poleDim.targetNodes) || '').split(',').map(m => m.trim()).filter(Boolean);
+          railNames = splitNodes((poleDim && poleDim.targetNodes) || '');
       }
       // Last resort: any non-bracket STYLE_SWAP geometry. NEVER a center-clone (bracket) step — that
       // would collapse the spacing span onto the bracket itself and stack the clones.
       if (!railNames.length) {
           const anyGeo = steps.find(s => s.type === 'STYLE_SWAP' && !s.isCenterClone && s.geometryMap && Object.keys(s.geometryMap).length);
           const anySel = anyGeo && dynamicConfigParams[anyGeo.id];
-          railNames = String((anyGeo && anySel && anyGeo.geometryMap[anySel]) || '').split(',').map(m => m.trim()).filter(Boolean);
+          railNames = splitNodes((anyGeo && anySel && anyGeo.geometryMap[anySel]) || '');
       }
       const out = [];
       steps.forEach(step => {
@@ -3022,10 +3044,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           const subStr = (selSub && step.subGeometryMap) ? (step.subGeometryMap[selSub] || '') : '';
           const meshStr = [mainStr, subStr].filter(Boolean).join(',');
           if (!meshStr) return;
-          const meshNames = String(meshStr).split(',').map(m => m.trim()).filter(Boolean);
+          const meshNames = splitNodes(meshStr);
           // The bracket arm (main geometry) is the placement ANCHOR: spacing is computed from it
           // alone, so a backplate/extras cloned alongside can't shift where the bracket lands.
-          const anchorNames = String(mainStr).split(',').map(m => m.trim()).filter(Boolean);
+          const anchorNames = splitNodes(mainStr);
           const rawQty = stepQuantities[step.id];
           let count = (rawQty !== undefined && rawQty !== '') ? (parseInt(rawQty) || 0) : 1;
           // Selection-only steps (hideQty): a stored 0 is a Vision-resume artifact, not "none" —
@@ -3047,7 +3069,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       const sub = (currentStep.subGeometryMap && selSub) ? (currentStep.subGeometryMap[selSub] || '') : '';
       // Glow the step's selected MAIN geometry plus its selected sub (e.g. arm + chosen backplate),
       // so the backplate's match precision can be eyeballed the same way as the arm's.
-      return [main, sub].filter(Boolean).join(',').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      return [main, sub].flatMap(splitNodesLower);
   }, [debugHighlight, currentStep, dynamicConfigParams]);
 
   return (
@@ -3067,7 +3089,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setLineTag(''); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 
@@ -3117,6 +3139,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           ) : (
               !jobData.customerId && <span style={{ fontSize: '0.85rem', color: 'var(--brass)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Base MSRP will be shown until customer is selected.</span>
           )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>Sidemark</span>
+              <input type="text" value={jobData.sidemark} onChange={e => setJobData({ ...jobData, sidemark: e.target.value })}
+                  placeholder="e.g. Smith Residence"
+                  title="Order sidemark / tag — prints at the header of the quote, sales order and packing slip (NetSuite estimate memo). Each configured line gets its own tag in the configurator."
+                  style={{ width: '190px', padding: '10px 12px', fontSize: '0.9rem', border: `1px solid ${jobData.sidemark ? 'var(--brass)' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--sans)', background: '#fff' }} />
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: 'auto' }}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>Price Level</span>
               <select value={priceLevel} onChange={e => setPriceLevel(e.target.value)}
@@ -3226,7 +3255,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               </span>
                           )}
                       </div>
-                      
+
+                      {/* PER-LINE TAG — names THIS configuration on every document (▶ Assembly [tag]).
+                          Lives above the steps so it's the first thing asked on a new line. */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 24px', background: lineTag ? '#fdfaf4' : 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>Line Tag / Room</span>
+                          <input type="text" value={lineTag} onChange={e => setLineTag(e.target.value)}
+                              placeholder='e.g. "Living Room", "Primary Bedroom"'
+                              title="Tags this configuration on the quote, factory router and floor screens. The order-level sidemark (header) is set next to the customer picker."
+                              style={{ flex: 1, padding: '8px 12px', fontSize: '0.9rem', border: `1px solid ${lineTag ? 'var(--brass)' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--sans)', background: '#fff' }} />
+                      </div>
+
                       <div style={{ padding: '24px', flex: 1, overflowY: 'auto', maxHeight: '400px' }}>
 
                           {/* ⚙ CUSTOM WORK ON THIS STEP (Stuart 2026-07-28) — APP ONLY, never in the
@@ -3945,9 +3984,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                         </div>
                     )}
 
-                    <div>
-                        <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Project / Job Name (Optional)</label>
-                        <input type="text" placeholder="e.g. Master Suite Reno" disabled={!!activeMasterQuoteId} value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'text' }} />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Project / Job Name (Optional)</label>
+                            <input type="text" placeholder="e.g. Master Suite Reno" disabled={!!activeMasterQuoteId} value={jobData.jobName} onChange={e => setJobData({...jobData, jobName: e.target.value})} style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: activeMasterQuoteId ? 'transparent' : '#fff', cursor: activeMasterQuoteId ? 'not-allowed' : 'text' }} />
+                        </div>
+                        <div>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Order Sidemark (Optional)</label>
+                            <input type="text" placeholder="e.g. Smith Residence" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})}
+                                title="Prints at the header of the quote, sales order and packing slip (NetSuite estimate memo)."
+                                style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
+                        </div>
                     </div>
 
                     {/* ADD-ONS — the last step before committing. Fees that nobody wants to model as

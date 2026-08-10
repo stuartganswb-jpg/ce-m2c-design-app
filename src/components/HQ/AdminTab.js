@@ -11,6 +11,7 @@ import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printForm } from '../Shared/printForm';
 import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES, sizeKeyOf } from '../Shared/sizeMatrix';
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { joinNodes, splitNodes } from '../Shared/nodeList';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -1099,7 +1100,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           });
           return Object.values(map).map(e => {
               const tags = tagsByStyle[styleKeyFor(e.partId, e.partName, e.position, cat)];
-              return { optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: [...e.nodes].join(', '), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}), ...(tags && Object.keys(tags.projByDia).length ? { projByDia: tags.projByDia } : {}), ...(tags && Object.keys(tags.mountByDia).length ? { mountByDia: tags.mountByDia } : {}), ...(e._srcName ? { _srcName: e._srcName } : {}), // ⛔ THE OPTION IS REBUILT FROM A WHITELIST. Adding the traverse tags to the map entry was
+              return { optId: e.optId, partId: e.partId, partName: e.partName, position: e.position, location: e.location, targetNode: joinNodes([...e.nodes]), price: 0, ...(e.endTreatment ? { endTreatment: e.endTreatment } : {}), ...(e.isFee ? { isFee: true } : {}), ...(e.returnOnly ? { returnOnly: true } : {}), ...(e.inlineOnly ? { inlineOnly: true } : {}), ...(e.isReturnArm ? { isReturnArm: true } : {}), ...(e.isBasic ? { isBasic: true } : {}), ...(e.usesReturnPlates ? { usesReturnPlates: true } : {}), ...(e.customerIds ? { customerIds: e.customerIds, customerNames: e.customerNames || [] } : {}), ...(e.isCollar ? { isCollar: true } : {}), ...(e.requiresCollar ? { requiresCollar: e.requiresCollar } : {}), ...(e.projInches ? { projInches: e.projInches } : {}), ...(e.projLetter ? { projLetter: e.projLetter } : {}), ...(e.mountType ? { mountType: e.mountType } : {}), ...(tags && Object.keys(tags.projByDia).length ? { projByDia: tags.projByDia } : {}), ...(tags && Object.keys(tags.mountByDia).length ? { mountByDia: tags.mountByDia } : {}), ...(e._srcName ? { _srcName: e._srcName } : {}), // ⛔ THE OPTION IS REBUILT FROM A WHITELIST. Adding the traverse tags to the map entry was
                   // not enough — this return decides what actually leaves groupPlacements, and it
                   // silently dropped them, so the generator saw a traverse assembly as an ordinary
                   // pole one and emitted the pole steps unchanged (Stuart 2026-08-04: "i loaded
@@ -1201,7 +1202,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               } else if (collarPool.length === 1 && /ACRYLIC/i.test(optTxt(o))) {
                   mates = collarPool.filter(c => (c.position || '') === (o.position || ''));
               }
-              const extra = mates.map(c => c.targetNode).filter(Boolean).join(', ');
+              const extra = joinNodes(mates.flatMap(c => splitNodes(c.targetNode)));
               if (!extra) return;
               o.acrylicTopNodes = o.targetNode || '';
               o.targetNode = o.targetNode ? `${o.targetNode}, ${extra}` : extra;
@@ -1325,8 +1326,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       const isEndPos = (o) => ['LEFT', 'RIGHT'].includes((o.position || '').toUpperCase());
       const centerPole = pole.filter(o => !isEndPos(o));
       const endPole = pole.filter(o => isEndPos(o));
-      const poleNodes = centerPole.map(o => o.targetNode).filter(Boolean).join(', ');
-      const ringNodes = rings.map(o => o.targetNode).filter(Boolean).join(', ');
+      const poleNodes = joinNodes(centerPole.flatMap(o => splitNodes(o.targetNode)));
+      const ringNodes = joinNodes(rings.flatMap(o => splitNodes(o.targetNode)));
 
       // Backplates ride as a SECOND chooser on their position's bracket step, so you pick the
       // correct plate among the several at that position (not auto-merged). Any backplate whose
@@ -1392,10 +1393,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           (ordered.length ? ordered : ['']).forEach(pos => {
               const group = opts.filter(o => (o.position || '') === pos);
               const ends = endPoleOpts.filter(o => (o.position || '') === pos);
-              const bendNodes = ends.filter(o => BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`))
-                  .map(o => o.targetNode).filter(Boolean).join(', ');
-              const straightNodes = ends.filter(o => !BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`))
-                  .map(o => o.targetNode).filter(Boolean).join(', ');
+              const bendNodes = joinNodes(ends.filter(o => BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`))
+                  .flatMap(o => splitNodes(o.targetNode)));
+              const straightNodes = joinNodes(ends.filter(o => !BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`))
+                  .flatMap(o => splitNodes(o.targetNode)));
               const label = POS_LABEL[pos] !== undefined ? POS_LABEL[pos] : pos;
               const sfx = pos || 'X';
               const inc = takeIncluded(pos);
@@ -1423,7 +1424,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                       const leaves = String(o.targetNode || '').split(',').map(s => { const seg = String(s).trim().split('__').pop() || ''; return seg.replace(/^\d+_?/, ''); }).join(' ');
                       isReturn = BEND_RE.test(`${o.partName || ''} ${o.optId || ''} ${leaves}`);
                   }
-                  const nodes = [o.targetNode, isReturn ? '' : straightNodes].filter(Boolean).join(', ');
+                  const nodes = joinNodes([o.targetNode, isReturn ? '' : straightNodes].flatMap(splitNodes));
                   if (nodes) gmap[o.optId] = nodes;
               });
               if (bendNodes) { gmap[`OPT-MITER-${sfx}`] = bendNodes; gmap[`OPT-BEND-${sfx}`] = bendNodes; }

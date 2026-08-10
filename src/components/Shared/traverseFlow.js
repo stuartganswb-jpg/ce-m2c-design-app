@@ -36,6 +36,7 @@ import {
     offeredChoices, dedupeByPart, traverseRoleOf, traverseEnds, driveTypeOf, setupOf,
     needsSetupStep, setupsOffered, isRider,
 } from './traverseTags';
+import { joinNodes, splitNodes } from './nodeList';
 
 /** Does this assembly's option pool carry any traverse tag at all? */
 export const isTraverseAssembly = (opts) => (opts || []).some(o => traverseRoleOf(o));
@@ -145,7 +146,7 @@ export function buildTraverseFlow({
     // with SEVERAL materials the material step owns the finish (each option carries its own scoped
     // finish list) and the length step is dimensions only; with ONE there is nothing to choose, so
     // finish and length combine.
-    const fasciaNodes = fascia.map(o => o.targetNode).filter(Boolean).join(', ');
+    const fasciaNodes = joinNodes(fascia.flatMap(o => splitNodes(o.targetNode)));
     if (fascia.length > 1) {
         add({
             title: 'Fascia Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true,
@@ -197,7 +198,7 @@ export function buildTraverseFlow({
     const doubleOnly = allOpts.filter(o => setupOf(o) === 'DOUBLE'
         && ['TRACK', 'TRV_END'].includes(traverseRoleOf(o)));
     const sharedNodes = new Set(nodesOf(allOpts.filter(o => setupOf(o) !== 'DOUBLE')));
-    const secondTrackNodes = [...new Set(nodesOf(doubleOnly))].filter(n => !sharedNodes.has(n)).join(', ');
+    const secondTrackNodes = joinNodes([...new Set(nodesOf(doubleOnly))].filter(n => !sharedNodes.has(n)));
     // ── FRONT RAIL — a double may carry a decorative pole instead of a front track ───────────────
     // Stuart 2026-08-05: "make this its own option that when selected the front track disappears and
     // the rear track stays... it should be chosen as an extra drop down selection on step 3, if
@@ -301,10 +302,10 @@ export function buildTraverseFlow({
     // track and its ends go with it; change the drive and they still follow. The REAR track's ends
     // are deliberately not here — they answer to the setup step instead, so a ring on the front
     // leaves the rear rail fully dressed.
-    const frontEndNodes = [...new Set(nodesOf(ends.filter(e => setupOf(e) !== 'DOUBLE')))].join(', ');
+    const frontEndNodes = joinNodes([...new Set(nodesOf(ends.filter(e => setupOf(e) !== 'DOUBLE')))]);
     const trackGeom = {};
     track.forEach(o => {
-        const n = [o.targetNode, frontEndNodes].filter(Boolean).join(', ');
+        const n = joinNodes([o.targetNode, frontEndNodes].flatMap(splitNodes));
         if (n) trackGeom[o.optId] = n;
     });
     if (track.length) add({

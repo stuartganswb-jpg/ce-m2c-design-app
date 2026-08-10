@@ -6,6 +6,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { useThree } from '@react-three/fiber';
 import { useGLTF, Environment, ContactShadows, Lightformer } from '@react-three/drei';
 import * as THREE from 'three';
+import { splitNodesLower } from './shared/nodeList';
 
 const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/';
 
@@ -272,7 +273,7 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
         if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
           let anyShow = false, anyHide = false;
           for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
-            const targets = targetStr.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+            const targets = splitNodesLower(targetStr);
             if (targets.some(hitTarget)) { if (isVisibleFlag) anyShow = true; else anyHide = true; }
           }
           if (anyShow) isVis = true; else if (anyHide) isVis = false;
@@ -282,7 +283,7 @@ export function DynamicModel({ url, textureOverrides, visibilityOverrides, clone
         let matchedTexUrl = null;
         if (textureOverrides && Object.keys(textureOverrides).length > 0) {
           for (const [targetStr, texUrl] of Object.entries(textureOverrides)) {
-            const targets = targetStr.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+            const targets = splitNodesLower(targetStr);
             if (targets.some(hitTarget)) matchedTexUrl = texUrl;
           }
         }
