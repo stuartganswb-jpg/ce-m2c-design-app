@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import { orderStatusOf } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
@@ -689,6 +690,25 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return out.map(l => ({ ...l, cat: packCatOf(l) }));
     };
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : (j.nsWoTran || j.displayId || j.woNum || j.id);
+
+    // PRODUCTION WINS (Stuart 2026-08-10: "one status in one place"): a pick still Pending while
+    // the finishing floor is already painting/baking (or done) has been OVERTAKEN — the queue must
+    // say so instead of presenting it as ordinary waiting work. Derived from the SAME canonical
+    // status module the chips use, so the two can never disagree.
+    const isOvertakenPick = (job) => {
+        if (job.currentPhase === 'Complete') return true;
+        const st = orderStatusOf(job);
+        return st.streams.some(s => s.key !== 'CUSTOM' && (['PAINTING', 'OVEN'].includes(s.stage) || s.stage === 'FINISHED'));
+    };
+    // The deliberate resolution: the floor evidently has (or no longer needs) the parts, so the
+    // pick leaves the queue CLEARED — stamped and logged, never silently.
+    const clearOvertakenPick = async (job) => {
+        if (!window.confirm(`Clear the pick for ${packRef(job)}?\n\nThe finishing floor already has this order in production. Clearing records that the pull was handled outside the pick app — it leaves this queue (logged); nothing else changes.`)) return;
+        try {
+            await updateDoc(doc(db, 'fin_workorders', job.id), { pickStatus: 'Cleared_Overtaken', sentToPickPack: false, pickClearedAt: Date.now(), pickClearedBy: operator?.name || 'WMS' });
+            writeLog(`⚠ Pick CLEARED as overtaken on ${packRef(job)} — order already in production on the finishing floor.`, 'wms');
+        } catch (e) { alert('Could not clear the pick: ' + (e.message || e)); }
+    };
     const packQueue = [
         ...quickShipOrders.filter(o => o.status === 'Picked' && o.packStatus !== 'Packed'),
         // Custom orders AND stock builds (Stuart 2026-07-20): a finished stock build lands here
@@ -2664,7 +2684,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>Awaiting Pick (Small Parts)</div>
                             <div style={{ padding: '20px', overflowY: 'auto' }}>
-                                {jobs.filter(j => j.pickStatus === 'Pending').map(job => {
+                                {jobs.filter(j => j.pickStatus === 'Pending').sort((a, b) => Number(isOvertakenPick(a)) - Number(isOvertakenPick(b))).map(job => {
+                                    const overtaken = isOvertakenPick(job);
                                     const so = soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null;
                                     const customer = job.customerName || job.clientName || so?.customer || '';
                                     const sidemark = so?.memo || job.note || '';
@@ -2678,7 +2699,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const pickable = groupPickLines(rawPickable, { binOf: lineBin });
                                     const grouping = groupingSummary(rawPickable, pickable);
                                     return (
-                                    <div key={job.id} style={{ border: `1px solid ${theme.line}`, marginBottom: '15px' }}>
+                                    <div key={job.id} style={{ border: `1px solid ${overtaken ? '#d9a648' : theme.line}`, borderLeft: overtaken ? '4px solid #d9a648' : `1px solid ${theme.line}`, marginBottom: '15px' }}>
                                         {/* Header row toggles the BOM detail; START PICKING stops propagation. */}
                                         <div onClick={() => { const opening = expandedJob !== job.id; setExpandedJob(opening ? job.id : null); if (opening) fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', cursor: 'pointer' }}>
                                             <div style={{ minWidth: 0 }}>
@@ -2698,6 +2719,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 START PICKING
                                             </button>
                                         </div>
+                                        {/* One status in one place — production wins. The pick stays actionable
+                                            (the floor may genuinely still need the pull), but it is never presented
+                                            as ordinary waiting work once the floor has moved past setup. */}
+                                        {overtaken && (
+                                            <div style={{ margin: '0 20px 16px', padding: '10px 14px', background: '#fdf6ec', border: '1px solid #d9a648', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                                <span style={{ fontFamily: theme.sans, fontSize: '0.85rem', color: '#8a6d3b' }}>⚠ Already <strong>in production</strong> on the finishing floor — this pick was overtaken. Pull the parts now if the floor still needs them, or clear it.</span>
+                                                <button onClick={(e) => { e.stopPropagation(); clearOvertakenPick(job); }} style={{ padding: '8px 14px', background: 'transparent', color: '#8a6d3b', border: '1px solid #d9a648', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>✕ Clear Pick — parts on the floor</button>
+                                            </div>
+                                        )}
                                         {expandedJob === job.id && (
                                             <div style={{ borderTop: `1px solid ${theme.line}`, background: theme.paper, padding: '8px 20px 16px' }}>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft, display: 'flex', gap: '12px', alignItems: 'center', padding: '10px 0 6px', borderBottom: `1px solid ${theme.line}` }}>
