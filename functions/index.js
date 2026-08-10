@@ -1579,7 +1579,7 @@ exports.reserveQuoteNo = onCall({ enforceAppCheck: true }, async (request) => {
 // 'PORTAL_REQUEST' for the team to price and confirm in CPQ — nothing is priced or pushed here.
 exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
-    const { flowId, flowName, selections, note, viewedLevel } = request.data || {};
+    const { flowId, flowName, selections, note, viewedLevel, sidemark, lineTag } = request.data || {};
     const db = admin.firestore();
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
     const crm = crmSnap.exists ? crmSnap.data() : {};
@@ -1618,12 +1618,19 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
         const asmSnap = await db.collection('Approved_Designs').doc(asmId).get();
         if (asmSnap.exists) assemblyName = asmSnap.data().itemName || assemblyName;
     }
+    // ORDER TAGGING (2026-08-10, mirrors HQ CPQ): cleanSidemark = the order-level header tag
+    // ("Smith Residence") → job.orderSidemark (raw; staff reopen-in-CPQ restores from it) +
+    // job.sidemark (the display field CRM/RTG/push memo read). cleanLineTag = this
+    // configuration's tag ("Living Room") → the cart line's sidemark, so documents render
+    // "▶ Assembly [Living Room]" and staff reopen lands with the tag pre-filled.
+    const cleanSidemark = String(sidemark || '').slice(0, 120).trim();
+    const cleanLineTag = String(lineTag || '').slice(0, 120).trim();
     const cartItem = {
         id: `PORTAL-${quoteNo}`,
         masterQuoteId: quoteNo,
         assemblyId: asmId,
         assemblyName: assemblyName || 'Configured Item',
-        sidemark: 'Portal request',
+        sidemark: cleanLineTag || 'Portal request',
         flowId: String(flowId || ''),
         qty: 1,
         priceLevel: String(crm.portalPriceLevel || 'STANDARD'),
@@ -1649,11 +1656,17 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
         author: submitterName,
         createdBy: { name: submitterName, email, via: 'PORTAL' },
         jobName: `${flowName || 'Portal request'} — ${crm.name || ''}`.trim(),
+        // orderSidemark always stamped (raw, nullable); sidemark only when given — the CRM card
+        // falls back to job.note when sidemark is absent, and that behavior must survive.
+        orderSidemark: cleanSidemark || null,
+        ...(cleanSidemark ? { sidemark: cleanSidemark } : {}),
         portalRequest: {
             flowId: String(flowId || ''),
             flowName: flowName || '',
             selections: selections || {},
             note: String(note || '').slice(0, 2000),
+            sidemark: cleanSidemark,
+            lineTag: cleanLineTag,
             byEmail: email,
             // Which of their price-ladder levels the customer was VIEWING when they sent this —
             // context for staff; the staff quote itself still prices at the assigned level.

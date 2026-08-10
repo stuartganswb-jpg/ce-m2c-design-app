@@ -457,6 +457,13 @@ export default function Configurator({ flowId, flowName, onExit }) {
   const [submitted, setSubmitted] = useState(false);
   const [submittedNo, setSubmittedNo] = useState(null);
   const [note, setNote] = useState('');
+  // ORDER TAGGING (Stuart 2026-08-10, mirrors HQ CPQ): the order sidemark ("Smith Residence")
+  // prints at the HEADER of the quote/SO/packing slip; the line tag ("Living Room") names THIS
+  // configuration on the documents. Sidemark persists across configurations in the same visit
+  // (sessionStorage) — each portal request is one line, but they belong to one order.
+  const [sidemark, setSidemarkState] = useState(() => { try { return sessionStorage.getItem('portal_order_sidemark') || ''; } catch { return ''; } });
+  const setSidemark = (v) => { setSidemarkState(v); try { sessionStorage.setItem('portal_order_sidemark', v); } catch { /* private mode */ } };
+  const [lineTag, setLineTag] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -629,7 +636,7 @@ export default function Configurator({ flowId, flowName, onExit }) {
       // The entered dimensions ride the request as `${stepId}__dims` params — the pricing engine
       // ignores unknown keys, but the team sees the exact finished size the customer typed.
       const dimParams = Object.fromEntries(Object.entries(dims).map(([sid, v]) => [`${sid}__dims`, v]));
-      const res = await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params: { ...params, ...dimParams }, quantities }, note, viewedLevel: price?.level || '' });
+      const res = await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params: { ...params, ...dimParams }, quantities }, note, sidemark: sidemark.trim(), lineTag: lineTag.trim(), viewedLevel: price?.level || '' });
       setSubmitted(true);
       setSubmittedNo(res.data?.quoteNo || null);
     } catch (e) {
@@ -860,6 +867,22 @@ export default function Configurator({ flowId, flowName, onExit }) {
 
         <div className="cfg-panel">
           {steps.length === 0 && <div className="empty">This product has no options to configure.</div>}
+
+          {/* Order tagging — asked up front, editable until the request is sent. */}
+          {steps.length > 0 && !submitted && (
+            <div className="cfg-tags">
+              <label>
+                <span>Order sidemark</span>
+                <input value={sidemark} onChange={(e) => setSidemark(e.target.value)} placeholder="e.g. Smith Residence"
+                  title="Tags the whole order — prints at the header of your quote and order documents. Kept for your next configuration too." />
+              </label>
+              <label>
+                <span>Room / line tag</span>
+                <input value={lineTag} onChange={(e) => setLineTag(e.target.value)} placeholder={'e.g. Living Room'}
+                  title="Names this configuration on the quote (each room or line gets its own)." />
+              </label>
+            </div>
+          )}
 
           {steps.length > 0 && !onReview && (() => {
             const step = steps[safeIdx];
