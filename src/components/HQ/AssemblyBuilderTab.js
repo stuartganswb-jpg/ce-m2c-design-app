@@ -951,12 +951,30 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // pin itself or has no pinned descendants.
             const pinnedUnder = (node) => { let hit = false; node.traverse(d => { if (d !== node && pinByNode[d.name]) hit = true; }); return hit; };
             const leafNames = (node) => (pinByNode[node.name] || !pinnedUnder(node)) ? [node.name] : (node.children || []).filter(c => c.name).flatMap(leafNames);
+            const skippedHusks = [], skippedExcluded = [];
             const rows = clusters.map(cl => {
                 const grp = findGrp(cl);
                 let kids = grp ? (grp.children || []).filter(c => c.name).flatMap(leafNames) : [];
                 // Single-node cluster (1.5-created pole half / bend / bushing): the matched node IS the
                 // one choice — without this the row had zero choices and was hidden from the list.
                 if (grp && !kids.length && grp.name) kids = [grp.name];
+                // ⛔ THE ROWS COME FROM THE SCENE, NOT THE CLUSTER RECORD (Stuart 2026-08-10, the
+                // CPQBrimar husk that "comes back every time"): deleting pins or pruning the record
+                // never stopped a name that lives in the .glb from re-listing here. Filter at the
+                // actual source — the scene walk. Two rules, PINNED NAMES ALWAYS LIST (pins must
+                // stay visible/deletable; ✗ chip + rebind manage broken ones):
+                // (1) a name 🗑-excluded on the cluster record stays gone across every Load;
+                // (2) an unpinned name with NO mesh anywhere beneath it is an empty husk baked in
+                //     by a whole-assembly export — it can never render and never was a choice.
+                const excluded = new Set(cl.excludedNodes || []);
+                kids = kids.filter(nm => {
+                    if (pinByNode[nm]) return true;
+                    if (excluded.has(nm)) { skippedExcluded.push(nm); return false; }
+                    const nd = grp ? (grp.getObjectByName(nm) || scene.getObjectByName(nm)) : scene.getObjectByName(nm);
+                    let mesh = false; if (nd) nd.traverse(d => { if (d.isMesh) mesh = true; });
+                    if (nd && !mesh) { skippedHusks.push(nm); return false; }
+                    return true;
+                });
                 const isEndCluster = normalizeCategory(cl.category) === 'FINIAL';
                 const choices = kids.map(nm => {
                     const label = choiceLabel(nm);
@@ -1015,6 +1033,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             setAssignData({ asmId: data.itemId || assignId, asmName: data.itemName || assignId, rows });
             const missing = rows.filter(r => !r.found).length;
             addLog(`Loaded ${rows.length} cluster(s), ${rows.reduce((s, r) => s + r.choices.length, 0)} choice node(s) from "${data.itemName}" — ${matched} item #(s) auto-matched from node names.${missing ? ` ⚠ ${missing} cluster(s) had no group match.` : ''}`, missing ? 'error' : 'success');
+            if (skippedHusks.length) addLog(`⛔ ${skippedHusks.length} empty named husk(s) NOT listed — names in the .glb with no geometry inside (whole-assembly-export artifacts): ${skippedHusks.slice(0, 8).join(', ')}${skippedHusks.length > 8 ? ` +${skippedHusks.length - 8} more` : ''}. They can never render; they are not choices.`, 'error');
+            if (skippedExcluded.length) addLog(`🗑 ${skippedExcluded.length} previously deleted node(s) stayed deleted: ${skippedExcluded.slice(0, 8).join(', ')}${skippedExcluded.length > 8 ? ` +${skippedExcluded.length - 8} more` : ''}.`, 'info');
             genThumbs(rows.flatMap(r => r.choices.map(c => c.nodeName)), ++assignGenRef.current);
             if (missing) addLog(`Scene top nodes: ${(scene.children || []).flatMap(c => [c.name, ...(c.children || []).map(k => k.name)]).filter(Boolean).slice(0, 24).join(' | ')}`, 'info');
         } catch (e) { console.error(e); addLog(`Load choices failed: ${e.message || e}`, 'error'); alert('Load failed:\n\n' + (e.message || e)); }
@@ -1100,17 +1120,18 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             } else if (!lastChoice && row && !victims.length) {
                 // PINLESS choice in a MULTI-node cluster (Stuart 2026-08-10, the CPQBrimar husk):
                 // no pins to delete and the cluster survives (other choices), so the delete did
-                // NOTHING — the node stayed in the cluster's nodes list and resurrected on every
-                // Load. Offer to drop just THIS node from the cluster record (the last-choice
-                // branch's pattern, scoped to one node).
-                if (window.confirm(`No saved pins existed for "${label || nodeName}" — deleting pins alone changes nothing.\n\nAlso remove the NODE from cluster "${row.clusterName}"?\n\nWithout this, Load Choices lists it again as a blank row (and Save re-parks it), forever. The geometry stays in the .glb — it just stops being a choice.`)) {
+                // NOTHING. Load Choices lists rows FROM THE SCENE, so pruning the record's nodes
+                // list alone can't stop the re-listing (the first shipped fix proved that) — the
+                // name must go on the cluster's excludedNodes list, which the Load-time scene walk
+                // honors. Pruning nodes[] too keeps the generator's mapping clean.
+                if (window.confirm(`No saved pins existed for "${label || nodeName}" — deleting pins alone changes nothing.\n\nRemove the NODE as a choice of "${row.clusterName}"?\n\nIt goes on the cluster's exclusion list — Load Choices stops listing it, permanently. The geometry (if any) stays in the .glb.`)) {
                     const asnap = await getDoc(doc(db, 'Approved_Designs', assignId));
                     const adata = asnap.data() || {};
                     await updateDoc(doc(db, 'Approved_Designs', assignId), {
-                        nodeClusters: (adata.nodeClusters || []).map(cl => cl.id !== clusterId ? cl : { ...cl, nodes: (cl.nodes || []).filter(n => n !== nodeName) }),
+                        nodeClusters: (adata.nodeClusters || []).map(cl => cl.id !== clusterId ? cl : { ...cl, nodes: (cl.nodes || []).filter(n => n !== nodeName), excludedNodes: [...new Set([...(cl.excludedNodes || []), nodeName])] }),
                         updatedAt: Date.now()
                     });
-                    addLog(`🗑 Node "${nodeName}" removed from cluster "${row.clusterName}" — it stops being a choice.`, 'success');
+                    addLog(`🗑 Node "${nodeName}" excluded from cluster "${row.clusterName}" — Load Choices stops listing it.`, 'success');
                     nodeDropped = true;
                 }
             }
