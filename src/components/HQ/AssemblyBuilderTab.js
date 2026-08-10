@@ -1090,17 +1090,37 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // the .glb, unreferenced by any option or hide list).
             const row = assignData.rows.find(r => r.clusterId === clusterId);
             const lastChoice = row && row.choices.length === 1 && row.choices[0].nodeName === nodeName;
+            let nodeDropped = false;
             if (lastChoice && window.confirm(`Also remove the cluster record "${row.clusterName}"?\n\nWithout this, Load Choices lists the node again as a blank row (and Save re-parks it). The geometry stays in the .glb — it just stops being a choice anywhere.`)) {
                 const asnap = await getDoc(doc(db, 'Approved_Designs', assignId));
                 const adata = asnap.data() || {};
                 await updateDoc(doc(db, 'Approved_Designs', assignId), { nodeClusters: (adata.nodeClusters || []).filter(cl => cl.id !== clusterId), updatedAt: Date.now() });
                 addLog(`🗑 Cluster record "${row.clusterName}" removed — the node stops being a choice.`, 'success');
+                nodeDropped = true;
+            } else if (!lastChoice && row && !victims.length) {
+                // PINLESS choice in a MULTI-node cluster (Stuart 2026-08-10, the CPQBrimar husk):
+                // no pins to delete and the cluster survives (other choices), so the delete did
+                // NOTHING — the node stayed in the cluster's nodes list and resurrected on every
+                // Load. Offer to drop just THIS node from the cluster record (the last-choice
+                // branch's pattern, scoped to one node).
+                if (window.confirm(`No saved pins existed for "${label || nodeName}" — deleting pins alone changes nothing.\n\nAlso remove the NODE from cluster "${row.clusterName}"?\n\nWithout this, Load Choices lists it again as a blank row (and Save re-parks it), forever. The geometry stays in the .glb — it just stops being a choice.`)) {
+                    const asnap = await getDoc(doc(db, 'Approved_Designs', assignId));
+                    const adata = asnap.data() || {};
+                    await updateDoc(doc(db, 'Approved_Designs', assignId), {
+                        nodeClusters: (adata.nodeClusters || []).map(cl => cl.id !== clusterId ? cl : { ...cl, nodes: (cl.nodes || []).filter(n => n !== nodeName) }),
+                        updatedAt: Date.now()
+                    });
+                    addLog(`🗑 Node "${nodeName}" removed from cluster "${row.clusterName}" — it stops being a choice.`, 'success');
+                    nodeDropped = true;
+                }
             }
             setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.filter(c => c.nodeName !== nodeName) }) } : prev);
             addLog(`🗑 Deleted ${victims.length} pin doc(s) for node "${nodeName}"${ids ? ` (partId: ${ids})` : ''}.`, 'success');
             alert(victims.length
                 ? `🗑 Deleted ${victims.length} saved pin doc(s) for node "${nodeName}"${ids ? `\n(partId: ${ids})` : ''}.\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags") — this option disappears from the generated steps.`
-                : `No saved pin docs existed for node "${nodeName}" — nothing was in the database. The row is removed from this list; Load Choices will list it again while the geometry exists.`);
+                : nodeDropped
+                    ? `🗑 Node "${nodeName}" is no longer a choice — it was removed from the cluster record. Load Choices will NOT list it again.`
+                    : `No saved pin docs existed for node "${nodeName}" — nothing was in the database. The row is removed from this list; Load Choices will list it again while the geometry exists.`);
         } catch (e) { console.error(e); addLog(`Delete choice failed: ${e.message || e}`, 'error'); alert('Delete failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
     };
