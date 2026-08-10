@@ -99,6 +99,28 @@ function fulfilmentOf(wo) {
     return null;
 }
 
+// PRODUCTION GATE (Stuart 2026-08-10: "gate the finishing floor — all steps work only in
+// unison"). No finishing step may START while the order's parts pull is still open: released to
+// the WMS pick queue but not yet picked, or carrying pick lines that were never released at all.
+// Orders with nothing to pick (JFP paint-only runs, legacy docs with no partsList) pass — the
+// gate blocks open pulls, not history. A pick deliberately cleared in WMS (Cleared_Overtaken)
+// also passes: that button exists precisely to resolve the gate by hand, logged.
+// spinSetup is the caller's exemption: Start Setup is the step that RELEASES the pick, so gating
+// it would deadlock the flow.
+export function pickGateOf(wo) {
+    if (!wo) return { blocked: false };
+    const ps = String(wo.pickStatus || '');
+    if (['Picked_Awaiting_Staging', 'Staged_Ready_For_Finishing'].includes(ps) || ps.startsWith('Cleared')) return { blocked: false };
+    if (wo.sentToPickPack && ps === 'Pending') {
+        return { blocked: true, reason: 'the parts pick is still OPEN in the WMS pick queue — pick it there (or clear it) before this step starts' };
+    }
+    const pickable = Array.isArray(wo.partsList) && wo.partsList.some(l => l && !l.isFee && !l.lineIsFee && String(l.legacyErpId || l.partId || ''));
+    if (pickable && !wo.sentToPickPack) {
+        return { blocked: true, reason: 'the parts pull has not been released to the WMS pick queue yet — Start Setup releases it' };
+    }
+    return { blocked: false };
+}
+
 // THE ONE CALL. `recipeLen` is the coat count for this order's recipe — the caller resolves it
 // (the recipes live in different places on different screens) and passes it in.
 export function orderStatusOf(wo, { recipeLen = 0 } = {}) {

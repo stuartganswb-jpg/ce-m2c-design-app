@@ -5,6 +5,7 @@ import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveRecipe, recipeStepCount } from '../Shared/finishingTime';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import { pickGateOf } from '../Shared/orderStatus';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
 // Source numbers first: the REAL NetSuite WO # leads wherever it exists; long app id is the fallback.
@@ -427,6 +428,25 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const t = (wo.tasks || {})[taskKey] || {};
       // The gate. Checked at PIN time, because until they PIN we do not know who is asking.
       if (action === 'START') {
+          // PRODUCTION GATE (Stuart 2026-08-10: "all steps work only in unison") — no step starts
+          // while the parts pull is open. spinSetup is exempt: Start Setup RELEASES the pick.
+          // Canonical rule lives in Shared/orderStatus.pickGateOf — the same module the WMS pick
+          // queue and the status chips read, so no two surfaces can disagree about the gate.
+          if (taskKey !== 'spinSetup') {
+              const gate = pickGateOf(wo);
+              if (gate.blocked) {
+                  await logManual({
+                      u: actor, msg: `GATED START · ${taskKey} · ${woRef(wo)} — ${gate.reason}`,
+                      action: 'BLOCKED', station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '',
+                  });
+                  const override = window.confirm(`⛔ ${TASK_LABEL[taskKey] || taskKey} is GATED on ${woRef(wo)}:\n\nSteps run in unison — ${gate.reason}.\n\nPress Cancel to hold (normal).\nPress OK ONLY as a supervisor override — the start is logged as an override.`);
+                  if (!override) return;
+                  await logManual({
+                      u: actor, msg: `⚠ GATE OVERRIDE · ${taskKey} · ${woRef(wo)} — started despite: ${gate.reason}`,
+                      action: 'OVERRIDE', station: stationCtl || '', woId: wo.id, woRefNo: woRef(wo), task: taskKey, recipe: wo.recipe || '',
+                  });
+              }
+          }
           const open = openStepFor(actor, wo.id, taskKey);
           if (open) {
               const mins = open.task.startTime ? Math.floor((Date.now() - open.task.startTime) / 60000) : null;
@@ -1467,7 +1487,15 @@ const TaskCard = ({ titleOverride, wo, type, step, user, setQcModal, estTime, ac
             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '20px' }}>Est Time: {Math.ceil(estTime)} mins</div>
             
             {!isRunning ? (
-                <button disabled={disabledStart} onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() })} style={{ width: '100%', padding: '12px', background: disabledStart ? 'var(--paper-2)' : 'var(--ink)', color: disabledStart ? 'var(--ink-soft)' : '#fff', border: disabledStart ? '1px solid var(--line)' : 'none', cursor: disabledStart ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{btnText}</button>
+                <button disabled={disabledStart} onClick={() => {
+                    // Same production gate as Manual Control — a station card must not slip a
+                    // start past the pull (spinSetup exempt: Start Setup releases the pick).
+                    if (type !== 'spinSetup') {
+                        const gate = pickGateOf(wo);
+                        if (gate.blocked && !window.confirm(`⛔ This step is GATED on ${woRef(wo)}:\n\nSteps run in unison — ${gate.reason}.\n\nPress Cancel to hold (normal). Press OK ONLY as a supervisor override.`)) return;
+                    }
+                    updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Running', [`tasks.${type}.assignedTo`]: currentOp, [`tasks.${type}.startTime`]: Date.now() });
+                }} style={{ width: '100%', padding: '12px', background: disabledStart ? 'var(--paper-2)' : 'var(--ink)', color: disabledStart ? 'var(--ink-soft)' : '#fff', border: disabledStart ? '1px solid var(--line)' : 'none', cursor: disabledStart ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>{btnText}</button>
             ) : (
                 <button onClick={() => updateDoc(doc(db,"fin_workorders", wo.id), { [`tasks.${type}.status`]: 'Complete' })} style={{ width: '100%', padding: '12px', background: 'var(--paper)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'var(--paper-2)'} onMouseOut={e => e.currentTarget.style.background = 'var(--paper)'}>Complete Task</button>
             )}
