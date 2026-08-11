@@ -16,7 +16,6 @@ const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocal
 
 // The customer's own price ladder (Fabricut-leveled accounts): their cost / wholesale / retail.
 const LEVEL_LABELS = { FAB_COST: 'Your cost', FAB_WHOLESALE: 'Wholesale', FAB_RETAIL: 'Retail' };
-const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // Finish lookup by id across the palette (in-house + outsourced).
 const findFinish = (finishes, id) => finishes.find((f) => f.id === id) || null;
@@ -447,27 +446,24 @@ function ErpCopyBox({ lines }) {
   );
 }
 
-export default function Configurator({ flowId, flowName, onExit }) {
+// onAddLine(line, goCheckout) — the parent (Showroom) owns the order cart and the checkout
+// screen; the configurator just hands finished lines up. `line` carries everything checkout
+// and the quote request need: selections, the room tag, the viewed price snapshot, and the
+// presentation-matching metadata (computed HERE, where steps/params/finishes are at hand).
+export default function Configurator({ flowId, flowName, onExit, onAddLine }) {
   const [data, setData] = useState(null); // { flow, assembly, finishes }
   const [err, setErr] = useState(null);
   const [params, setParams] = useState({});
   const [quantities, setQuantities] = useState({});
   const [stepIdx, setStepIdx] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [submittedNo, setSubmittedNo] = useState(null);
-  const [note, setNote] = useState('');
-  // ORDER TAGGING (Stuart 2026-08-10, mirrors HQ CPQ): the order sidemark ("Smith Residence")
-  // prints at the HEADER of the quote/SO/packing slip; the line tag ("Living Room") names THIS
-  // configuration on the documents. Sidemark persists across configurations in the same visit
-  // (sessionStorage) — each portal request is one line, but they belong to one order.
-  const [sidemark, setSidemarkState] = useState(() => { try { return sessionStorage.getItem('portal_order_sidemark') || ''; } catch { return ''; } });
-  const setSidemark = (v) => { setSidemarkState(v); try { sessionStorage.setItem('portal_order_sidemark', v); } catch { /* private mode */ } };
+  // PER-LINE TAG (Stuart 2026-08-10, mirrors HQ CPQ): "Living Room", "Primary Bedroom" — names
+  // THIS configuration on every document. The ORDER sidemark ("Smith Residence") lives on the
+  // checkout screen, since it tags the whole order.
   const [lineTag, setLineTag] = useState('');
 
   useEffect(() => {
     let alive = true;
-    setData(null); setErr(null); setParams({}); setQuantities({}); setDims({}); setStepIdx(0); setSubmitted(false); setSubmittedNo(null);
+    setData(null); setErr(null); setParams({}); setQuantities({}); setDims({}); setStepIdx(0); setLineTag('');
     httpsCallable(functions, 'portalFlow')({ flowId })
       .then((res) => {
         if (!alive) return;
@@ -488,7 +484,6 @@ export default function Configurator({ flowId, flowName, onExit }) {
   // view between THEIR three levels — cost / wholesale / retail. '' = the assigned default.
   // The server validates the override (only FAB_ levels, only for FAB_-assigned customers).
   const [viewLevel, setViewLevel] = useState('');
-  const [presBusy, setPresBusy] = useState(false);
 
   const setParam = (k, v) => setParams((p) => ({ ...p, [k]: v }));
   const setQty = (k, v) => setQuantities((q) => ({ ...q, [k]: v }));
@@ -630,187 +625,41 @@ export default function Configurator({ flowId, flowName, onExit }) {
     return false;
   };
 
-  const submit = async () => {
-    setSubmitting(true);
-    try {
-      // The entered dimensions ride the request as `${stepId}__dims` params — the pricing engine
-      // ignores unknown keys, but the team sees the exact finished size the customer typed.
-      const dimParams = Object.fromEntries(Object.entries(dims).map(([sid, v]) => [`${sid}__dims`, v]));
-      const res = await httpsCallable(functions, 'portalQuoteRequest')({ flowId, flowName: data?.flow?.name || flowName, selections: { params: { ...params, ...dimParams }, quantities }, note, sidemark: sidemark.trim(), lineTag: lineTag.trim(), viewedLevel: price?.level || '' });
-      setSubmitted(true);
-      setSubmittedNo(res.data?.quoteNo || null);
-    } catch (e) {
-      alert('Could not send your request: ' + (e.message || e));
-    } finally { setSubmitting(false); }
-  };
-
-  // ---- Presentation (Stuart 2026-07-27: "take the quote and combine together with any images
-  // from the asset gallery that match what is on the quote… align them to the right hand side of
-  // a landscape page with the quote on the left") ---------------------------------------------
-  // Matching runs on the SAME entitled gallery feed the Gallery tab shows (portalAssets): a line's
-  // item # (Fabricut code at their levels, ours at standard) is looked up in each asset's server-
-  // built identity blob; assets depicting MORE of the quote (the arm+backplate combo shots carry
-  // both codes) rank higher, finish-matched images beat off-finish ones.
-  const generatePresentation = async () => {
-    if (presBusy) return;
-    setPresBusy(true);
-    try {
-      const res = await httpsCallable(functions, 'portalAssets')();
-      const assets = res.data?.assets || [];
-      const lines = (price?.lines || []).filter((l) => (l.total || 0) !== 0);
-      const domFin = (() => {
-        const counts = {};
-        Object.values(params).forEach((v) => {
-          const f = v && finishes.find((x) => x.id === v);
-          if (f && f.code) counts[f.code] = (counts[f.code] || 0) + 1;
-        });
-        return (Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [''])[0];
-      })();
-      const itemNos = [...new Set(lines.map((l) => String(l.itemNo || '').trim().toUpperCase()).filter(Boolean))];
-
-      // WHAT THIS CONFIGURATION ACTUALLY CHOSE, component by component (Stuart 2026-08-03: "it is
-      // just reading the bracket arm … this tool needs to read that meta data and only show the
-      // relevant arm/backplate combo that is selected rather than every image with the same
-      // bracket arm code").
-      //
-      // The quote LINES can't answer this: at their price levels an item # is a bare Fabricut
-      // pattern code, so an arm and its plate can share one number and a line cannot say which
-      // plate is in the photo. The SELECTIONS can — each step's main option is the arm and its
-      // `__sub` option is the plate, both carrying our part codes — and the batch processor tags
-      // every image with exactly those two codes (fab.pairedCode / fab.plateCode). So the filter
-      // is run selection-to-tag, in our codes, on both sides.
-      const codesOfOpt = (o) => [o?.partId, o?.partName, o?.label, o?.optId]
-        .map((x) => String(x || '').trim().toUpperCase()).filter(Boolean);
-      const chosenArms = new Set();
-      const chosenPlates = new Set();
-      steps.forEach((st) => {
-        const main = (st.styleOptions || []).find((o) => (o.optId || o.partId) === params[st.id]);
-        if (main) codesOfOpt(main).forEach((c) => chosenArms.add(c));
-        const sub = (st.subOptions || []).find((o) => (o.optId || o.partId) === params[`${st.id}__sub`]);
-        if (sub) codesOfOpt(sub).forEach((c) => chosenPlates.add(c));
+  // Hand the finished configuration up to the order cart. The presentation-matching metadata
+  // (dominant finish code, chosen arm/plate codes — see the combo-gate notes in Checkout.jsx)
+  // is computed here because only the configurator holds steps/params/finishes together.
+  const addLine = (goCheckout) => {
+    const dimParams = Object.fromEntries(Object.entries(dims).map(([sid, v]) => [`${sid}__dims`, v]));
+    const domFin = (() => {
+      const counts = {};
+      Object.values(params).forEach((v) => {
+        const f = v && finishes.find((x) => x.id === v);
+        if (f && f.code) counts[f.code] = (counts[f.code] || 0) + 1;
       });
-      // A tagged code counts as chosen when the selection names it — compared both ways so a
-      // partId that is a doc id, and an option whose name embeds the code, both resolve.
-      const wasChosen = (set, code) => {
-        const c = String(code || '').trim().toUpperCase();
-        if (!c) return false;
-        if (set.has(c)) return true;
-        for (const v of set) { if (v.includes(c) || c.includes(v)) return true; }
-        return false;
-      };
-
-      const scored = assets.map((a) => {
-        const blob = a.blob || '';
-        let hits = 0; let firstCode = '';
-        itemNos.forEach((no) => {
-          const [base, fin] = no.split('/');
-          if (!base || !blob.includes(base.toLowerCase())) return;
-          if (fin && !blob.includes(fin.toLowerCase())) return;
-          hits++; if (!firstCode) firstCode = base;
-        });
-        if (!hits) return null;
-
-        // THE COMBO GATE. An image tagged with a plate is a photo OF that arm-and-plate pairing —
-        // so if this configuration picked a different plate, the image is simply wrong, however
-        // well its arm code matches. Only applies when the tag exists AND this configuration
-        // actually chose a plate, so untagged images and plateless (basic) brackets are unaffected.
-        const plateTag = a.fab?.plateCode || '';
-        const armTag = a.fab?.pairedCode || '';
-        const plateWrong = plateTag && chosenPlates.size && !wasChosen(chosenPlates, plateTag);
-        const armWrong = armTag && chosenArms.size && !wasChosen(chosenArms, armTag);
-        const comboOk = !plateWrong && !armWrong;
-
-        let score = hits * 10;
-        // The exact pairing on this quote — both halves confirmed — outranks a lone-part shot.
-        if (plateTag && armTag && wasChosen(chosenPlates, plateTag) && wasChosen(chosenArms, armTag)) score += 6;
-        else if (plateTag && wasChosen(chosenPlates, plateTag)) score += 3;
-        return { a, score, code: firstCode, comboOk };
-      }).filter(Boolean).sort((x, y) => y.score - x.score);
-      // The gate REMOVES wrong pairings — but a gallery that has only combo shots of other
-      // pairings would otherwise leave the page blank, and a page with roughly-right images beats
-      // no page at all. Same shape as the finish fallback below it.
-      const gated = scored.filter((x) => x.comboOk);
-      const matched = gated.length ? gated : scored;
-      // The quote's finish is a HARD filter — at their price levels the line item #s are bare
-      // Fabricut codes (no finish suffix), and without this every finish variant of the same
-      // bracket matched (Stuart 2026-07-27: "it returned a lot of the same bracket… it should
-      // have just been in the one color from the quote"). Falls back to all matches only if the
-      // gallery has nothing in that finish.
-      const inFinish = domFin ? matched.filter(({ a }) => (a.blob || '').includes(String(domFin).toLowerCase())) : matched;
-      const pool = inFinish.length ? inFinish : matched;
-      // One image per item # first, so a single bracket can never fill the page; leftovers fill
-      // remaining slots after every code is represented.
-      const picks = [];
-      const seen = new Set();
-      const codeUsed = {};
-      for (const { a, code } of pool) {
-        if (seen.has(a.id) || codeUsed[code]) continue;
-        seen.add(a.id); codeUsed[code] = true; picks.push(a);
-        if (picks.length >= 8) break;
-      }
-      for (const { a } of pool) {
-        if (picks.length >= 8) break;
-        if (seen.has(a.id)) continue;
-        seen.add(a.id); picks.push(a);
-      }
-      openPresentation(lines, picks);
-    } catch (e) {
-      alert('Could not gather the gallery images right now — please try again shortly.');
-    } finally { setPresBusy(false); }
+      return (Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || [''])[0];
+    })();
+    const codesOfOpt = (o) => [o?.partId, o?.partName, o?.label, o?.optId]
+      .map((x) => String(x || '').trim().toUpperCase()).filter(Boolean);
+    const chosenArms = new Set();
+    const chosenPlates = new Set();
+    steps.forEach((st) => {
+      const main = (st.styleOptions || []).find((o) => (o.optId || o.partId) === params[st.id]);
+      if (main) codesOfOpt(main).forEach((c) => chosenArms.add(c));
+      const sub = (st.subOptions || []).find((o) => (o.optId || o.partId) === params[`${st.id}__sub`]);
+      if (sub) codesOfOpt(sub).forEach((c) => chosenPlates.add(c));
+    });
+    onAddLine && onAddLine({
+      flowId,
+      flowName: data?.flow?.name || flowName,
+      lineTag: lineTag.trim(),
+      selections: { params: { ...params, ...dimParams }, quantities },
+      viewedTotal: price?.total ?? null,
+      viewedLevel: price?.level || '',
+      priceLines: (price?.lines || []).filter((l) => (l.total || 0) !== 0),
+      presMeta: { domFin, chosenArms: [...chosenArms], chosenPlates: [...chosenPlates] },
+    }, goCheckout);
   };
 
-  const openPresentation = (lines, picks) => {
-    const w = window.open('', '_blank');
-    if (!w) return alert('Pop-up blocked — allow pop-ups for this site to generate the presentation.');
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    const levelLabel = LEVEL_LABELS[price?.level] || '';
-    const capOf = (a) => {
-      const fabNo = String(a.fabCode || '').trim();
-      const color = String(a.fab?.fabColorName || a.fab?.ourFinishName || '').trim();
-      return [fabNo, color].filter(Boolean).join(' · ') || String(a.name || '');
-    };
-    const rows = lines.map((l) => `<tr><td class="ln">${esc(l.name)}${l.qty > 1 ? ` <span class="q">×${l.qty}</span>` : ''}</td><td class="amt">${esc(fmtMoney(l.total))}</td></tr>`).join('');
-    const figs = picks.map((a) => `<figure><img src="${esc(a.fullUrl || a.url)}" alt=""><figcaption>${esc(capOf(a))}</figcaption></figure>`).join('');
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Presentation — Quote ${esc(submittedNo || '')}</title><style>
-      @page { size: letter landscape; margin: 0.4in; }
-      * { box-sizing: border-box; }
-      body { margin: 0; font-family: Georgia, 'Times New Roman', serif; color: #1c1a16; }
-      .wrap { display: flex; gap: 28px; align-items: flex-start; }
-      .left { flex: 0 0 44%; }
-      .brand { font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: .25em; color: #b08d57; }
-      h1 { font-size: 21px; font-weight: 500; margin: 6px 0 2px; }
-      .meta { font-family: 'Courier New', monospace; font-size: 10px; color: #524e46; margin-bottom: 14px; }
-      table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-      td { padding: 5px 4px; border-top: 1px solid rgba(28,26,22,.14); vertical-align: top; }
-      .amt { text-align: right; white-space: nowrap; }
-      .q { color: #524e46; }
-      .total td { border-top: 2px solid #1c1a16; font-weight: bold; font-size: 13px; }
-      .fine { font-size: 9px; color: #524e46; margin-top: 12px; line-height: 1.5; }
-      .right { flex: 1 1 56%; display: grid; grid-template-columns: repeat(${picks.length > 4 ? 3 : 2}, 1fr); gap: 12px; }
-      figure { margin: 0; break-inside: avoid; }
-      figure img { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #f4f1ea; border: 1px solid rgba(28,26,22,.14); }
-      figcaption { font-family: 'Courier New', monospace; font-size: 8.5px; color: #524e46; padding-top: 4px; text-align: center; letter-spacing: .04em; }
-    </style></head><body>
-      <div class="wrap">
-        <div class="left">
-          <div class="brand">CLASSICAL ELEMENTS</div>
-          <h1>${esc(data?.flow?.name || flowName || 'Configured product')}</h1>
-          <div class="meta">Quote ${esc(submittedNo || '')} · ${esc(today)}${levelLabel ? ` · Priced at: ${esc(levelLabel)}` : ''}</div>
-          <table>${rows}<tr class="total"><td>Total</td><td class="amt">${esc(fmtMoney(price?.total))}</td></tr></table>
-          <div class="fine">Pricing as configured on the Classical Elements client portal. Final pricing is confirmed on your Sales Order Acknowledgement.</div>
-        </div>
-        <div class="right">${figs || '<div style="font-family:monospace;font-size:10px;color:#524e46">No matching gallery images were found for this configuration.</div>'}</div>
-      </div>
-      <script>
-        (function(){ var imgs = [].slice.call(document.images); var n = 0;
-          function done(){ if (++n >= imgs.length) setTimeout(function(){ window.print(); }, 250); }
-          if (!imgs.length) setTimeout(function(){ window.print(); }, 350);
-          else imgs.forEach(function(i){ if (i.complete) done(); else { i.onload = done; i.onerror = done; } });
-        })();
-      <\/script>
-    </body></html>`);
-    w.document.close();
-  };
 
   if (err) return <div className="cfg"><button className="btn-ghost" onClick={onExit}>← Back</button><div className="empty" style={{ marginTop: 20 }}>{err}</div></div>;
   if (!data) return <div className="cfg"><button className="btn-ghost" onClick={onExit}>← Back</button><div className="empty" style={{ marginTop: 20 }}>Loading configurator…</div></div>;
@@ -868,14 +717,9 @@ export default function Configurator({ flowId, flowName, onExit }) {
         <div className="cfg-panel">
           {steps.length === 0 && <div className="empty">This product has no options to configure.</div>}
 
-          {/* Order tagging — asked up front, editable until the request is sent. */}
-          {steps.length > 0 && !submitted && (
+          {/* Room / line tag — asked up front; the ORDER sidemark lives on the checkout screen. */}
+          {steps.length > 0 && (
             <div className="cfg-tags">
-              <label>
-                <span>Order sidemark</span>
-                <input value={sidemark} onChange={(e) => setSidemark(e.target.value)} placeholder="e.g. Smith Residence"
-                  title="Tags the whole order — prints at the header of your quote and order documents. Kept for your next configuration too." />
-              </label>
               <label>
                 <span>Room / line tag</span>
                 <input value={lineTag} onChange={(e) => setLineTag(e.target.value)} placeholder={'e.g. Living Room'}
@@ -928,24 +772,14 @@ export default function Configurator({ flowId, flowName, onExit }) {
                   <div className="pl-row pl-total"><span>Total{pricing ? ' …' : ''}</span><span className="pl-amt">{fmtMoney(price.total)}</span></div>
                 </div>
               )}
-              {submitted ? (
-                <div className="msg ok" style={{ textAlign: 'left' }}>
-                  ✓ Request sent{submittedNo ? <> — <strong>Quote #{submittedNo}</strong></> : ''}. Your Classical Elements team will confirm pricing and follow up. You can see it under Orders &amp; Quotes.
-                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--line)' }}>
-                    <div style={{ marginBottom: 8 }}>Would you like to generate a presentation? It pairs this quote with the matching product images from your gallery on one landscape page — ready to print or save as PDF.</div>
-                    <button className="btn" disabled={presBusy} onClick={generatePresentation}>{presBusy ? 'Gathering images…' : 'Generate presentation'}</button>
-                  </div>
+              <div className="cfg-submit">
+                <div className="cfg-nav">
+                  <button className="btn-ghost" onClick={() => setStepIdx(steps.length - 1)}>← Back</button>
+                  <button className="btn-ghost" onClick={() => addLine(false)} title="Adds this configuration to your order and returns to the showroom to configure the next line.">+ Add &amp; configure another</button>
+                  <button className="btn" onClick={() => addLine(true)}>Add to order &amp; checkout →</button>
                 </div>
-              ) : (
-                <div className="cfg-submit">
-                  <textarea className="cfg-note" placeholder="Notes for your rep (quantity, project, timing…)" value={note} onChange={(e) => setNote(e.target.value)} />
-                  <div className="cfg-nav">
-                    <button className="btn-ghost" onClick={() => setStepIdx(steps.length - 1)}>← Back</button>
-                    <button className="btn" disabled={submitting} onClick={submit}>{submitting ? 'Sending…' : 'Request a quote'}</button>
-                  </div>
-                  <div className="cfg-fineprint">Final pricing is confirmed on your Sales Order Acknowledgement. Nothing is ordered automatically.</div>
-                </div>
-              )}
+                <div className="cfg-fineprint">Your order can carry several configurations — each with its own room tag. Add-ons, sidemark and notes come next, at checkout. Nothing is ordered automatically.</div>
+              </div>
             </div>
           )}
         </div>

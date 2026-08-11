@@ -1003,8 +1003,10 @@ const buildSkuLookup = async (db, customerId, crm, codes) => {
 // through the src/ mirror of the same module, so the customer's card and the team's document say
 // the same words. price/total/sku stay null-shaped here for the card renderer.
 const { portalRequestLines } = require('./portalRequestLines');
-const requestLines = (job, flowDoc, finishes, custNames) =>
-    portalRequestLines(job, flowDoc, finishes, { custNames })
+// flowById covers multi-line requests (portalRequest.lines[]); the single-doc second argument
+// keeps legacy single-flow requests resolving exactly as before.
+const requestLines = (job, flowById, finishes, custNames) =>
+    portalRequestLines(job, flowById[String((job.portalRequest && job.portalRequest.flowId) || '')] || null, finishes, { custNames, flowById })
         .map((l) => ({ ...l, price: null, total: null, sku: '' }));
 
 // Customer-friendly stage from the floor-doc join (mirrors RTG Dispatch's rollup precedence:
@@ -1080,8 +1082,12 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     // once per page, only when a request is actually on it. custNames drives clientMapping so a
     // Fabricut login reads Fabricut's own finish names, same as the configurator.
     const reqFlowIds = [...new Set(liveJobs
-        .filter((j) => j.status === 'PORTAL_REQUEST' && j.portalRequest && j.portalRequest.flowId)
-        .map((j) => String(j.portalRequest.flowId)))];
+        .filter((j) => j.status === 'PORTAL_REQUEST' && j.portalRequest)
+        .flatMap((j) => [
+            ...(j.portalRequest.flowId ? [String(j.portalRequest.flowId)] : []),
+            // Multi-line requests: every line's flow, so each renders through ITS OWN steps.
+            ...(Array.isArray(j.portalRequest.lines) ? j.portalRequest.lines.map((ln) => String((ln && ln.flowId) || '')).filter(Boolean) : []),
+        ]))];
     const flowById = {};
     let reqFinishes = [];
     await Promise.all([
@@ -1125,7 +1131,7 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
                     // or has become an order it is a commitment, and withdrawing it is a
                     // conversation with their rep, not a button.
                     canDelete: ['PORTAL_REQUEST', 'CONFIGURED', 'SENT_TO_CLIENT', 'REVISION_REQUESTED'].includes(String(j.status || 'CONFIGURED')),
-                    lines: priced.length ? priced : (isRequest ? requestLines(j, flowById[String(j.portalRequest.flowId)], reqFinishes, reqCustNames) : []),
+                    lines: priced.length ? priced : (isRequest ? requestLines(j, flowById, reqFinishes, reqCustNames) : []),
                     awaitingPricing: isRequest && !priced.length,
                 };
             }),
@@ -1575,72 +1581,173 @@ exports.reserveQuoteNo = onCall({ enforceAppCheck: true }, async (request) => {
     return { quoteNo };
 });
 
-// A customer submits a configured product as a QUOTE REQUEST. It lands as a jobs doc flagged
-// 'PORTAL_REQUEST' for the team to price and confirm in CPQ — nothing is priced or pushed here.
+// THE PORTAL CHECKOUT CATALOGUE (Stuart 2026-08-10): the items ticked in HQ 4.6 → Checkout
+// Items (manufacturingSpecs.checkoutSelectable) offered to the customer at checkout, priced for
+// THEM (their clientPricing row when present, else base price) — the same curation and the same
+// pricing chain the CPQ checkout screen uses. WHITELISTED payload: no partHandling, no routing,
+// no other customers' pricing. Deliberately NO fall-back-to-all-fees here (CPQ falls back until
+// something is ticked; a customer-facing screen shows nothing until curation happens).
+const { feeRuleOf, feeRuleSummary, isFeeItemRecord, isCheckoutSelectable } = require('./feeRulesPort');
+exports.portalCheckoutCatalog = onCall({ cors: true }, async (request) => {
+    const customerId = assertPortalCustomer(request);
+    const db = admin.firestore();
+    const crmSnap = await db.collection('crm_records').doc(customerId).get();
+    const crm = crmSnap.exists ? crmSnap.data() : {};
+    const keys = new Set([customerId, crm.name, crm.companyName]
+        .filter(Boolean).map((x) => String(x).trim().toUpperCase()));
+
+    const snap = await db.collection('Approved_Designs')
+        .where('manufacturingSpecs.checkoutSelectable', '==', true).get();
+    const items = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((p) => p.manufacturingSpecs?.isRetired !== true)
+        .filter((p) => !crm.brandId || p.brandId === crm.brandId || (Array.isArray(p.sharedBrands) && p.sharedBrands.includes(crm.brandId)))
+        .map((p) => {
+            const rule = feeRuleOf(p.manufacturingSpecs);
+            const row = (p.clientPricing || []).find((r) => r && keys.has(String(r.customerId || '').trim().toUpperCase()));
+            const rowPrice = row ? parseFloat(row.price) : NaN;
+            const unitPrice = Number.isFinite(rowPrice) && rowPrice > 0 ? rowPrice : (parseFloat(p.manufacturingSpecs?.basePrice) || 0);
+            return {
+                id: p.id,
+                code: String((row && row.clientSku) || p.legacyErpId || p.itemId || '').toUpperCase(),
+                name: p.itemName || '',
+                isFee: isFeeItemRecord(p),
+                rule: { mode: rule.mode, unit: rule.unit, percent: rule.percent, minAmount: rule.minAmount, maxAmount: rule.maxAmount },
+                unitPrice,
+                summary: feeRuleSummary(rule, unitPrice),
+            };
+        })
+        .sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+    return { items };
+});
+
+// A customer submits their configured product(s) as a QUOTE REQUEST. It lands as a jobs doc
+// flagged 'PORTAL_REQUEST' for the team to price and confirm in CPQ — nothing is priced or
+// pushed here.
+//
+// MULTI-LINE (Stuart 2026-08-10: "once the config is done there is no way to add another line"):
+// the payload carries `lines[]` — several configurations in one order, each with its own room
+// tag — plus checkout `addOns[]` picked from the 4.6-curated catalogue above. Every line is
+// entitlement-checked like a single request; every add-on is re-validated server-side against
+// the checkoutSelectable tick (the client can't inject arbitrary items). The legacy single-line
+// payload (flowId/selections at the top level) still works — older cached portal bundles keep
+// requesting quotes.
 exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
     const customerId = assertPortalCustomer(request);
-    const { flowId, flowName, selections, note, viewedLevel, sidemark, lineTag } = request.data || {};
+    const { flowId, flowName, selections, note, viewedLevel, sidemark, lineTag, lines, addOns } = request.data || {};
     const db = admin.firestore();
     const crmSnap = await db.collection('crm_records').doc(customerId).get();
     const crm = crmSnap.exists ? crmSnap.data() : {};
     const allowed = Array.isArray(crm.portalFlowIds) ? crm.portalFlowIds : [];
-    if (!allowed.includes(String(flowId || ''))) throw new HttpsError('permission-denied', 'Not enabled on your account.');
-    const flowSnap = await db.collection('cpq_flows').doc(String(flowId || '')).get();
-    const flowDoc = flowSnap.exists ? flowSnap.data() : {};
-    await assertCollectionAllowed(db, crm, flowSnap.exists ? flowDoc : null, flowId);
+
+    const rawLines = (Array.isArray(lines) && lines.length ? lines : [{ flowId, flowName, selections, lineTag }])
+        .filter((ln) => ln && ln.flowId).slice(0, 25);
+    if (!rawLines.length) throw new HttpsError('invalid-argument', 'No configuration to request.');
 
     const email = String((request.auth.token && request.auth.token.email) || '');
     const puSnap = await db.collection('portal_users').doc(request.auth.uid).get();
     const submitterName = (puSnap.exists && puSnap.data().name) || email;
+
+    // Entitlement + flow docs for EVERY line before anything is written.
+    const flowDocs = [];
+    for (const ln of rawLines) {
+        const fid = String(ln.flowId || '');
+        if (!allowed.includes(fid)) throw new HttpsError('permission-denied', 'Not enabled on your account.');
+        const flowSnap = await db.collection('cpq_flows').doc(fid).get();
+        const fd = flowSnap.exists ? flowSnap.data() : {};
+        await assertCollectionAllowed(db, crm, flowSnap.exists ? fd : null, fid);
+        flowDocs.push(fd);
+    }
+
+    // Checkout add-ons: only items genuinely ticked in 4.6 → Checkout Items survive; quantity
+    // clamped; percentage-mode items always ride as qty 1 (they are on/off).
+    const cleanAddOns = [];
+    for (const a of (Array.isArray(addOns) ? addOns : []).slice(0, 40)) {
+        const id = String((a && a.id) || '').trim();
+        if (!id) continue;
+        const pSnap = await db.collection('Approved_Designs').doc(id).get();
+        if (!pSnap.exists) continue;
+        const p = { id: pSnap.id, ...pSnap.data() };
+        if (!isCheckoutSelectable(p) || p.manufacturingSpecs?.isRetired === true) continue;
+        if (crm.brandId && p.brandId !== crm.brandId && !(Array.isArray(p.sharedBrands) && p.sharedBrands.includes(crm.brandId))) continue;
+        const rule = feeRuleOf(p.manufacturingSpecs);
+        const qty = rule.mode === 'PERCENT' ? 1 : Math.min(9999, Math.max(0, parseFloat(a.qty) || 0));
+        if (!(qty > 0)) continue;
+        cleanAddOns.push({
+            id: p.id,
+            code: String(p.legacyErpId || p.itemId || '').toUpperCase(),
+            name: p.itemName || '',
+            qty,
+            isFee: isFeeItemRecord(p),
+            mode: rule.mode,
+        });
+    }
+
     const quoteNo = await nextQuoteNo(db, `${initialsOf(submitterName, email)}${mmddyy()}`);
+
+    // ORDER TAGGING (2026-08-10, mirrors HQ CPQ): cleanSidemark = the order-level header tag
+    // ("Smith Residence") → job.orderSidemark (raw; staff reopen-in-CPQ restores from it) +
+    // job.sidemark (the display field CRM/RTG/push memo read). Each line's tag ("Living Room")
+    // → that cart line's sidemark, so documents render "▶ Assembly [Living Room]" and staff
+    // reopen lands with the tag pre-filled.
+    const cleanSidemark = String(sidemark || '').slice(0, 120).trim();
 
     // CPQ CART SNAPSHOT (Stuart 2026-07-28: "quote arrived in HQ at CRM but does not reopen in
     // CPQ"). Reopen-in-CPQ reads job.cpqData.cartItems and restores exactly five fields —
     // flowId, assemblyId, dynamicConfigParams, stepQuantities, dimensionInputs (see
-    // Shared/reopenQuote.js -> CPQTab.handleEditCartItem). A portal request carried only raw
-    // selections, so the guard rejected it. Build that same line here and staff reopen the
-    // customer's configuration with zero re-entry — no CRM or CPQ changes needed.
-    const rawParams = (selections && selections.params) || {};
-    const dynamicConfigParams = {};
-    const dimensionInputs = {};
-    Object.entries(rawParams).forEach(([k, v]) => {
-        const m = /^(.*)__dims$/.exec(k);          // the portal sends measurements as `${stepId}__dims`
-        if (m && v && typeof v === 'object') dimensionInputs[m[1]] = v;
-        else if (typeof v === 'string') dynamicConfigParams[k] = v;
-    });
-    const stepQuantities = {};
-    Object.entries((selections && selections.quantities) || {}).forEach(([k, v]) => {
-        if (typeof v === 'string' || typeof v === 'number') stepQuantities[k] = String(v);
-    });
-    let assemblyName = String(flowName || '');
-    const asmId = String(flowDoc.linkedAssemblyId || '');
-    if (asmId) {
-        const asmSnap = await db.collection('Approved_Designs').doc(asmId).get();
-        if (asmSnap.exists) assemblyName = asmSnap.data().itemName || assemblyName;
+    // Shared/reopenQuote.js -> CPQTab.handleEditCartItem). ONE cart line per configuration.
+    const cartItems = [];
+    const cleanLines = [];
+    for (let i = 0; i < rawLines.length; i++) {
+        const ln = rawLines[i];
+        const fd = flowDocs[i];
+        const sel = ln.selections || {};
+        const rawParams = sel.params || {};
+        const dynamicConfigParams = {};
+        const dimensionInputs = {};
+        Object.entries(rawParams).forEach(([k, v]) => {
+            const m = /^(.*)__dims$/.exec(k);          // the portal sends measurements as `${stepId}__dims`
+            if (m && v && typeof v === 'object') dimensionInputs[m[1]] = v;
+            else if (typeof v === 'string') dynamicConfigParams[k] = v;
+        });
+        const stepQuantities = {};
+        Object.entries(sel.quantities || {}).forEach(([k, v]) => {
+            if (typeof v === 'string' || typeof v === 'number') stepQuantities[k] = String(v);
+        });
+        let assemblyName = String(ln.flowName || '');
+        const asmId = String(fd.linkedAssemblyId || '');
+        if (asmId) {
+            const asmSnap = await db.collection('Approved_Designs').doc(asmId).get();
+            if (asmSnap.exists) assemblyName = asmSnap.data().itemName || assemblyName;
+        }
+        const cleanTag = String(ln.lineTag || '').slice(0, 120).trim();
+        cartItems.push({
+            id: `PORTAL-${quoteNo}-${i + 1}`,
+            masterQuoteId: quoteNo,
+            assemblyId: asmId,
+            assemblyName: assemblyName || 'Configured Item',
+            sidemark: cleanTag || 'Portal request',
+            flowId: String(ln.flowId || ''),
+            qty: 1,
+            priceLevel: String(crm.portalPriceLevel || 'STANDARD'),
+            pricing: {},
+            pricingBreakdown: [],
+            dynamicConfigParams,
+            stepQuantities,
+            dimensionInputs,
+            fromPortal: true,
+        });
+        cleanLines.push({
+            flowId: String(ln.flowId || ''),
+            flowName: String(ln.flowName || ''),
+            lineTag: cleanTag,
+            selections: sel,
+        });
     }
-    // ORDER TAGGING (2026-08-10, mirrors HQ CPQ): cleanSidemark = the order-level header tag
-    // ("Smith Residence") → job.orderSidemark (raw; staff reopen-in-CPQ restores from it) +
-    // job.sidemark (the display field CRM/RTG/push memo read). cleanLineTag = this
-    // configuration's tag ("Living Room") → the cart line's sidemark, so documents render
-    // "▶ Assembly [Living Room]" and staff reopen lands with the tag pre-filled.
-    const cleanSidemark = String(sidemark || '').slice(0, 120).trim();
-    const cleanLineTag = String(lineTag || '').slice(0, 120).trim();
-    const cartItem = {
-        id: `PORTAL-${quoteNo}`,
-        masterQuoteId: quoteNo,
-        assemblyId: asmId,
-        assemblyName: assemblyName || 'Configured Item',
-        sidemark: cleanLineTag || 'Portal request',
-        flowId: String(flowId || ''),
-        qty: 1,
-        priceLevel: String(crm.portalPriceLevel || 'STANDARD'),
-        pricing: {},
-        pricingBreakdown: [],
-        dynamicConfigParams,
-        stepQuantities,
-        dimensionInputs,
-        fromPortal: true,
-    };
+
+    const jobName = cleanLines.length === 1
+        ? `${cleanLines[0].flowName || 'Portal request'} — ${crm.name || ''}`.trim()
+        : `Portal order (${cleanLines.length} configurations) — ${crm.name || ''}`.trim();
 
     const ref = db.collection('jobs').doc(quoteNo);
     await ref.set({
@@ -1655,28 +1762,32 @@ exports.portalQuoteRequest = onCall({ cors: true }, async (request) => {
         // it); `author` may later become the staff member who priced it.
         author: submitterName,
         createdBy: { name: submitterName, email, via: 'PORTAL' },
-        jobName: `${flowName || 'Portal request'} — ${crm.name || ''}`.trim(),
+        jobName,
         // orderSidemark always stamped (raw, nullable); sidemark only when given — the CRM card
         // falls back to job.note when sidemark is absent, and that behavior must survive.
         orderSidemark: cleanSidemark || null,
         ...(cleanSidemark ? { sidemark: cleanSidemark } : {}),
         portalRequest: {
-            flowId: String(flowId || ''),
-            flowName: flowName || '',
-            selections: selections || {},
+            // Line[0] mirrored at the top level so readers deployed before lines[] existed
+            // (older portalMyOrders, CRM DOCS) still render the first configuration.
+            flowId: cleanLines[0].flowId,
+            flowName: cleanLines[0].flowName,
+            selections: cleanLines[0].selections,
+            lineTag: cleanLines[0].lineTag,
+            lines: cleanLines,
+            addOns: cleanAddOns,
             note: String(note || '').slice(0, 2000),
             sidemark: cleanSidemark,
-            lineTag: cleanLineTag,
             byEmail: email,
             // Which of their price-ladder levels the customer was VIEWING when they sent this —
             // context for staff; the staff quote itself still prices at the assigned level.
             viewedLevel: ['FAB_COST', 'FAB_WHOLESALE', 'FAB_RETAIL'].includes(String(viewedLevel || '')) ? String(viewedLevel) : '',
         },
-        cpqData: { cartItems: [cartItem] },
+        cpqData: { cartItems },
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         dateSaved: new Date().toISOString(),
     });
-    return { ok: true, id: quoteNo, quoteNo };
+    return { ok: true, id: quoteNo, quoteNo, lineCount: cleanLines.length };
 });
 
 // A customer submits MEASUREMENTS for a product (portal "Measure & Fit" page). Two writes:

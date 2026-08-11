@@ -662,6 +662,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       shippingAmount: reopen.shippingAmount || '',
                       customShippingAddress: reopen.customShippingAddress || prev.customShippingAddress
                   }));
+                  // Portal checkout add-ons ride the reopen session pre-ticked (see
+                  // Shared/reopenQuote.js) — staff adjust or keep them at checkout.
+                  if (reopen.addOnSel && Object.keys(reopen.addOnSel).length) setAddOnSel(reopen.addOnSel);
               }
           } catch (e) { /* corrupt reopen payload — ignore */ }
       }

@@ -4,8 +4,10 @@
 import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from './firebase';
+import { readCart, addLine as cartAddLine } from './orderCart';
 
 const Configurator = lazy(() => import('./Configurator.jsx'));
+const Checkout = lazy(() => import('./Checkout.jsx'));
 
 const fmtMoney = (v) => (v === null || v === undefined) ? '' : Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
@@ -14,6 +16,27 @@ export default function Showroom() {
   const [err, setErr] = useState(null);
   const [active, setActive] = useState(null); // { flowId, name }
   const [pickSizes, setPickSizes] = useState(null); // size-group landing: { name, sizes: [{flowId, choice}] }
+  // THE ORDER CART (Stuart 2026-08-10): several configurations → one quote request. The
+  // configurator hands finished lines up (onAddLine); checkout reviews them, offers the
+  // 4.6-curated add-ons, and sends everything as one request.
+  const [cart, setCart] = useState(readCart());
+  const [checkingOut, setCheckingOut] = useState(false);
+  const handleAddLine = (line, goCheckout) => {
+    setCart(cartAddLine(line));
+    setActive(null);
+    if (goCheckout) setCheckingOut(true);
+  };
+
+  if (checkingOut) {
+    return (
+      <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading checkout…</div>}>
+        <Checkout
+          onBack={() => { setCart(readCart()); setCheckingOut(false); }}
+          onDone={() => { setCart(readCart()); setCheckingOut(false); }}
+        />
+      </Suspense>
+    );
+  }
 
   useEffect(() => {
     let alive = true;
@@ -26,10 +49,19 @@ export default function Showroom() {
   if (active) {
     return (
       <Suspense fallback={<div className="empty" style={{ marginTop: 24 }}>Loading configurator…</div>}>
-        <Configurator flowId={active.flowId} flowName={active.name} onExit={() => setActive(null)} />
+        <Configurator flowId={active.flowId} flowName={active.name} onExit={() => setActive(null)} onAddLine={handleAddLine} />
       </Suspense>
     );
   }
+
+  // The cart bar rides above every showroom view (catalog + size landing) so an in-progress
+  // order is always one click from checkout.
+  const cartBar = (cart.lines || []).length > 0 && (
+    <div className="cart-bar">
+      <span>{cart.lines.length} configuration{cart.lines.length === 1 ? '' : 's'} in your order{cart.lines.some((l) => l.lineTag) ? ` — ${cart.lines.map((l) => l.lineTag).filter(Boolean).join(', ')}` : ''}</span>
+      <button className="btn" onClick={() => setCheckingOut(true)}>Checkout →</button>
+    </div>
+  );
 
   // Rod-diameter landing for a size-group product (the per-assembly model, e.g. Simple
   // Elegance): one showroom card, then "pick rod diameter first" — each card opens that
@@ -37,6 +69,7 @@ export default function Showroom() {
   if (pickSizes) {
     return (
       <div style={{ marginTop: 24 }}>
+        {cartBar}
         <button className="btn-ghost" onClick={() => setPickSizes(null)}>← All products</button>
         <h2 className="sec" style={{ marginTop: 14 }}>{pickSizes.name} — pick your rod diameter</h2>
         <div className="catalog">
@@ -73,6 +106,8 @@ export default function Showroom() {
   }
 
   return (
+    <>
+    {cartBar}
     <div className="catalog">
       {items.map((it) => (
         <button key={it.flowId || it.id} className="catalog-card" onClick={() => it.isGroup ? setPickSizes({ name: it.name, sizes: it.sizes || [] }) : setActive({ flowId: it.flowId, name: it.name })}>
@@ -85,5 +120,6 @@ export default function Showroom() {
         </button>
       ))}
     </div>
+    </>
   );
 }

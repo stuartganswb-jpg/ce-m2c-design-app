@@ -46,6 +46,14 @@ export const reopenQuoteInCpq = (job) => {
                 // orderSidemark = the raw typed header sidemark (job.sidemark carries fallbacks —
                 // jobName / 'Multi-Room Project' — that must not reappear as typed text on reopen).
                 sidemark: job.orderSidemark || '',
+                // Portal checkout add-ons → CPQ's AddOnPicker selections (keyed by part doc id,
+                // the same key addOnSel uses), so staff land at checkout with the customer's
+                // picks already ticked instead of re-reading them from the request panel.
+                addOnSel: Object.fromEntries(
+                    ((job.portalRequest && job.portalRequest.addOns) || [])
+                        .filter(a => a && a.id)
+                        .map(a => [a.id, a.mode === 'PERCENT' ? true : (parseFloat(a.qty) || 1)])
+                ),
                 shippingMethod: job.shippingMethod || 'SAVED',
                 shippingAddressId: job.shippingAddressId || '',
                 shippingAmount: (parseFloat(job.shippingAmount) || 0) > 0 ? String(job.shippingAmount) : '',

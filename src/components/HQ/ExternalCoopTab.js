@@ -664,21 +664,30 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
     if (!needsCtx) { setDocRequestCtx(null); return; }
     (async () => {
       try {
-        const flowId = String(j.portalRequest?.flowId || '');
-        const [fs, mf, os] = await Promise.all([
-          flowId ? getDoc(doc(db, 'cpq_flows', flowId)) : Promise.resolve(null),
+        // Multi-line portal orders (portalRequest.lines[], 2026-08-10): every line's flow, so the
+        // document renders each configuration through ITS OWN steps. Single-line requests fetch
+        // exactly the one flow they always did.
+        const flowIds = [...new Set([
+          String(j.portalRequest?.flowId || ''),
+          ...((Array.isArray(j.portalRequest?.lines) ? j.portalRequest.lines : []).map(ln => String(ln?.flowId || ''))),
+        ].filter(Boolean))];
+        const [mf, os, ...fss] = await Promise.all([
           getDoc(doc(db, 'system', 'master_finishes')),
           getDocs(collection(db, 'hq_outsource_finishes')),
+          ...flowIds.map(fid => getDoc(doc(db, 'cpq_flows', fid))),
         ]);
         if (!alive) return;
+        const flowById = {};
+        flowIds.forEach((fid, i) => { if (fss[i] && fss[i].exists()) flowById[fid] = fss[i].data(); });
         setDocRequestCtx({
-          flow: fs && fs.exists() ? fs.data() : null,
+          flow: flowById[String(j.portalRequest?.flowId || '')] || null,
+          flowById,
           finishes: [
             ...((mf.exists() && mf.data().finishes) || []),
             ...os.docs.map(d => ({ id: d.id, ...d.data() })),
           ],
         });
-      } catch (e) { console.warn('portal request doc context load failed', e); if (alive) setDocRequestCtx({ flow: null, finishes: [] }); }
+      } catch (e) { console.warn('portal request doc context load failed', e); if (alive) setDocRequestCtx({ flow: null, flowById: {}, finishes: [] }); }
     })();
     return () => { alive = false; };
   }, [activeDocJob]);
@@ -1041,7 +1050,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       // a fabricated $1,195.50 quotation under a real quote number.)
       const isUnpricedRequest = activeDocJob.status === 'PORTAL_REQUEST' && !(activeDocJob.cpqData?.breakdown || []).length;
       const quoteLines = isUnpricedRequest
-          ? portalRequestLines(activeDocJob, docRequestCtx?.flow, docRequestCtx?.finishes || [])
+          ? portalRequestLines(activeDocJob, docRequestCtx?.flow, docRequestCtx?.finishes || [], { flowById: docRequestCtx?.flowById })
               .map(l => ({ item: '', desc: l.name, qty: l.qty || '', price: null, amount: null }))
           : (activeDocJob.cpqData?.breakdown || []).map(b => ({
               item: b.isHeader ? '▶' : '',
