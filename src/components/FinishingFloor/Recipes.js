@@ -5,6 +5,7 @@ import { cardStyle, btnStyle, inputStyle, labelStyle, sectionHeaderStyle } from 
 
 const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
     const [rCode, setRCode] = useState("");
+    const [rName, setRName] = useState("");
     const [steps, setSteps] = useState([
         {step:1, color:'', app:'Sprayed'}, {step:2, color:'', app:'None'}, 
         {step:3, color:'', app:'None'}, {step:4, color:'', app:'None'}, {step:5, color:'', app:'None'}
@@ -18,23 +19,32 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
     const paintSupplies = supplies.filter(s => s.cat === "Paint/Chemical").map(s => s.name);
 
     const handleSaveRecipe = async () => {
-        if(!rCode) return alert("Recipe needs a PO Code");
-        const safeCode = rCode.toUpperCase().replace(/\//g, '-');
+        if(!rCode) return alert("Recipe needs a Finish ID");
+        const safeCode = rCode.trim().toUpperCase().replace(/\//g, '-');
+        // THE ID IS THE MATCHING KEY (Stuart 2026-08-11: "grace is putting in too much in the id
+        // field, which will cause this new rule to fail"). Work orders resolve their recipe — and
+        // the -S/-P stream variants — by this EXACT code, so it must stay a short machine code.
+        // Descriptions belong in the Name field, same split as HQ 4.5 In-House Master Finishes.
+        if (!/^[A-Z0-9][A-Z0-9-]{0,11}$/.test(safeCode)) {
+            return alert(`"${rCode}" won't work as a Finish ID.\n\nThe ID is the short MACHINE CODE work orders match on — letters/numbers/dashes only, 12 characters max, no spaces. Examples: CP · RF1 · CP-S · CP-P\n\nPut the description ("Champagne 587, poles, 4 coats…") in the Descriptive Name field next to it.`);
+        }
         const activeSteps = steps.filter(s => s.app !== "None" && s.color);
         if(activeSteps.length === 0) return alert("You must define at least one step and select a color.");
-        
+
         const cleanedSteps = activeSteps.map((s, idx) => ({ ...s, step: idx + 1 }));
-        
-        await setDoc(doc(db, "fin_recipes", safeCode), { code: safeCode, steps: cleanedSteps, instructions });
-        if (writeLog) writeLog(`Updated Recipe: ${safeCode}`, 'recipes');
-        setRCode(""); 
-        setInstructions(""); 
+
+        await setDoc(doc(db, "fin_recipes", safeCode), { code: safeCode, name: rName.trim(), steps: cleanedSteps, instructions });
+        if (writeLog) writeLog(`Updated Recipe: ${safeCode}${rName.trim() ? ` — ${rName.trim()}` : ''}`, 'recipes');
+        setRCode("");
+        setRName("");
+        setInstructions("");
         setSteps([{step:1, color:'', app:'Sprayed'}, {step:2, color:'', app:'None'}, {step:3, color:'', app:'None'}, {step:4, color:'', app:'None'}, {step:5, color:'', app:'None'}]);
     };
 
     const handleEditRecipe = (r) => {
         setRCode(r.code);
-        setInstructions(r.instructions || ""); 
+        setRName(r.name || "");
+        setInstructions(r.instructions || "");
         let loadedSteps = r.steps?.map(s => ({ ...s })) || [];
         while (loadedSteps.length < 5) loadedSteps.push({ step: loadedSteps.length + 1, color: '', app: 'None' });
         setSteps(loadedSteps);
@@ -97,7 +107,22 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
             <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '40px', marginBottom: '60px' }}>
                 <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '32px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <h3 style={sectionHeaderStyle}>Recipe Builder</h3>
-                    <input value={rCode} onChange={e => setRCode(e.target.value)} placeholder="Finish Code (e.g. AB)" style={{...inputStyle, fontSize: '1.1rem', marginBottom: '24px'}} />
+                    {/* ID + NAME, same split as HQ 4.5 In-House Master Finishes: the ID is the short
+                        machine code work orders (and the -S/-P stream variants) match on; the name
+                        carries the description that used to get crammed into the ID. */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: '16px', marginBottom: '8px' }}>
+                        <div>
+                            <label style={labelStyle}>Finish ID</label>
+                            <input value={rCode} onChange={e => setRCode(e.target.value.toUpperCase())} placeholder="e.g. CP-P" maxLength={12} style={{...inputStyle, fontSize: '1.1rem', fontFamily: 'var(--mono)', textTransform: 'uppercase'}} />
+                        </div>
+                        <div>
+                            <label style={labelStyle}>Descriptive Name</label>
+                            <input value={rName} onChange={e => setRName(e.target.value)} placeholder="e.g. Champagne 587 — POLES (4 coats, DTM-7, hand, 30 sheen)" style={{...inputStyle, fontSize: '1.1rem'}} />
+                        </div>
+                    </div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.04em', marginBottom: '24px' }}>
+                        The ID must exactly match the code on the work order (CP, RF1, N25…). Variants of the SAME color: <strong>-S</strong> = small parts · <strong>-P</strong> = poles (e.g. CP-S / CP-P) — the floor picks them automatically.
+                    </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         {steps.map((s, i) => (
                             <div key={i} style={{ display: 'grid', gridTemplateColumns: '40px 1fr 1fr', gap: '16px', alignItems: 'center' }}>
@@ -148,10 +173,15 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
                 <div>
                     <h3 style={sectionHeaderStyle}>Saved Recipe Dictionary</h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                       {Object.values(recipes).map(r => (
+                       {Object.values(recipes).sort((a, b) => String(a.code).localeCompare(String(b.code), undefined, { numeric: true })).map(r => (
                             <div key={r.code} style={cardStyle}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
-                                    <strong style={{ fontSize: '1.2rem', color: 'var(--ink)', fontFamily: 'var(--serif)' }}>{r.code}</strong>
+                                    <div style={{ minWidth: 0 }}>
+                                        <strong style={{ fontSize: '1.2rem', color: 'var(--ink)', fontFamily: 'var(--serif)' }}>{r.code}</strong>
+                                        {/^\S+-S$/.test(String(r.code)) && <span title="Small-parts stream variant" style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px', verticalAlign: 'middle' }}>SMALL PARTS</span>}
+                                        {/^\S+-P$/.test(String(r.code)) && <span title="Pole stream variant" style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px', verticalAlign: 'middle' }}>POLES</span>}
+                                        {r.name && <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', display: 'block', marginTop: '2px' }}>{r.name}</span>}
+                                    </div>
                                     {canEdit && (
                                         <div style={{ display: 'flex', gap: '8px' }}>
                                             <button onClick={() => handleEditRecipe(r)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Edit</button>
