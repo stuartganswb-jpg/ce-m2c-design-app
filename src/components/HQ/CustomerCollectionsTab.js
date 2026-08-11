@@ -215,8 +215,39 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         .filter(Boolean).map(s => upper(s))), [custId, customer]);
     const rowFor = (p) => (p.clientPricing || []).find(r => custKeys.has(upper(r?.customerId))) || null;
 
+    // ALIAS → MAIN linkage, computed once per library change. mainByAliasId folds an alias doc to
+    // the real item it points at; aliasCodesByMainId is the reverse (for search + display).
+    const aliasLinks = useMemo(() => {
+        const mainByAliasId = new Map(), aliasCodesByMainId = new Map();
+        const targetOf = (x) => upper(String(x.aliasOf || x.manufacturingSpecs?.aliasOf || ''));
+        inventory.forEach(x => {
+            const t = targetOf(x);
+            if (!t) return;
+            const base = t.split('/')[0];
+            const main = inventory.find(y => !targetOf(y) && (codeOf(y) === t || codeOf(y).split('/')[0] === base));
+            if (main) {
+                mainByAliasId.set(x.id, main);
+                aliasCodesByMainId.set(main.id, [...(aliasCodesByMainId.get(main.id) || []), codeOf(x)]);
+            }
+        });
+        return { mainByAliasId, aliasCodesByMainId };
+    }, [inventory]); // eslint-disable-line react-hooks/exhaustive-deps
+
     const members = useMemo(() => {
-        if (mode === 'FEES') return inventory.filter(isFeeItem);
+        // ALIASES FOLD INTO THEIR MAIN ITEM (Stuart 2026-08-11: "4.6 is not showing our main fee
+        // for French or Miter Return — the fabricut information is stored on the main fee, not the
+        // alias"). The H1 collection tags the ALIAS docs (H1-FRPF → CE-FEE-4594), so this screen
+        // listed the alias — but every field 4.6 edits (tiers, client rows, plate & fee rules,
+        // checkout) is read by the engine off the MAIN doc; the alias is customer-facing display
+        // identity only (Shared/aliasIdentity). Editing the alias here wrote data nothing reads.
+        // Each alias member resolves to its main doc (kept as-is if the target can't be found) and
+        // duplicates collapse; the ⚙ panel's Alias line still shows/creates the customer code.
+        const fold = (list) => {
+            const seen = new Set(); const out = [];
+            list.forEach(p => { const m = aliasLinks.mainByAliasId.get(p.id) || p; if (!seen.has(m.id)) { seen.add(m.id); out.push(m); } });
+            return out;
+        };
+        if (mode === 'FEES') return fold(inventory.filter(isFeeItem));
         // CHECKOUT ITEMS (Stuart 2026-07-31): what the CPQ checkout screen offers. By default the
         // list IS the curated set, so you see exactly what a customer sees. Type in the search box
         // and it searches the WHOLE library instead — that is how you find something new to tick.
@@ -228,23 +259,23 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         // brand-wide was defensible, but the screen still SHOWS a collection selector: a list that
         // quietly ignores it reads as a bug, and on a screen with an apply-to-all button that is
         // genuinely dangerous. Scope to the chosen collection; no collection = the whole brand.
-        if (mode === 'PLATES') return inventory.filter(p => /PLATE/i.test(String(p.manufacturingSpecs?.productType || ''))
+        if (mode === 'PLATES') return fold(inventory.filter(p => /PLATE/i.test(String(p.manufacturingSpecs?.productType || ''))
             && p.manufacturingSpecs?.isRetired !== true
-            && (!coll || collectionsOf(p.manufacturingSpecs).includes(upper(coll))));
+            && (!coll || collectionsOf(p.manufacturingSpecs).includes(upper(coll)))));
         // ARMS: everything that can CARRY a plate — bracket arms and the return fees that replace
         // them. This is where "which parts include a backplate" is answered.
-        if (mode === 'ARMS') return inventory.filter(p => {
+        if (mode === 'ARMS') return fold(inventory.filter(p => {
             if (p.manufacturingSpecs?.isRetired === true) return false;
             if (coll && !collectionsOf(p.manufacturingSpecs).includes(upper(coll)) && !isFeeItem(p)) return false;
             const pt = String(p.manufacturingSpecs?.productType || '').toUpperCase();
             return /BRACKET|ARM/.test(pt) || isFeeItem(p);
-        });
-        if (mode === 'CHECKOUT') return upper(search).trim()
+        }));
+        if (mode === 'CHECKOUT') return fold(upper(search).trim()
             ? inventory.filter(p => p?.manufacturingSpecs?.isRetired !== true)
-            : inventory.filter(isCheckoutSelectable);
+            : inventory.filter(isCheckoutSelectable));
         if (!coll) return [];
-        return inventory.filter(p => collectionsOf(p.manufacturingSpecs).includes(upper(coll)));
-    }, [inventory, coll, mode, search]);
+        return fold(inventory.filter(p => collectionsOf(p.manufacturingSpecs).includes(upper(coll))));
+    }, [inventory, coll, mode, search, aliasLinks]);
 
     // Legacy-struct suggestions for THIS customer, keyed by doc id. Built once per customer/library
     // change rather than per render — it resolves a base doc per variant to find the pattern code.
@@ -292,6 +323,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     isFeeRec: isFeeItem(p),
                     plated: isPlatedSuffix(codeOf(p).includes('/') ? codeOf(p).split('/')[1] : '', outsourceFinishes),
                     code: codeOf(p),
+                    aliasCodes: aliasLinks.aliasCodesByMainId.get(p.id) || [],
                     name: p.itemName || '',
                     basePrice: e.basePrice !== undefined ? e.basePrice : (p.manufacturingSpecs?.basePrice ?? ''),
                     clientSku: pick('clientSku'),
@@ -301,9 +333,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     dirty: !!edits[p.id],
                 };
             })
-            .filter(r => !term || r.code.includes(term) || upper(r.name).includes(term))
+            .filter(r => !term || r.code.includes(term) || upper(r.name).includes(term) || r.aliasCodes.some(c => c.includes(term)))
             .filter(r => onlyPriced === 'ALL' || (onlyPriced === 'PRICED' ? money(r.price) !== '' : money(r.price) === ''));
-    }, [members, edits, search, onlyPriced, custKeys, suggestions, outsourceFinishes]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [members, edits, search, onlyPriced, custKeys, suggestions, outsourceFinishes, aliasLinks]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const pricedCount = members.filter(p => money(rowFor(p)?.price) !== '').length;
     const dirtyCount = Object.keys(edits).length;
@@ -989,6 +1021,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                             </td>
                                         )}
                                         <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.code}
+                                            {r.aliasCodes.length > 0 && <span title={`Customer-facing alias code${r.aliasCodes.length > 1 ? 's' : ''} pointing at this item — quotes and the portal show the alias; the data you edit here lives on THIS main record (the one the engine reads).`} style={{ marginLeft: '8px', fontSize: '10px', color: theme.inkSoft, fontWeight: 600 }}>⤿ {r.aliasCodes.join(' · ')}</span>}
                                             {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '10px', color: theme.brassDark, fontWeight: 600 }}>SUGGESTED</span>}
                                             {r.plated && <span title="Outsourced (plated) finish — priced off the PREMIUM tier. /P25 counts as premium too, not just /EP*." style={{ marginLeft: '8px', fontSize: '10px', color: theme.blueDark, fontWeight: 600 }}>PREMIUM</span>}
                                         </td>
