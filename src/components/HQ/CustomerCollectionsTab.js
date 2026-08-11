@@ -368,6 +368,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 if (e.plateUpgradeOf !== undefined) patch['manufacturingSpecs.plateUpgradeOf'] = upper(e.plateUpgradeOf);
                 if (e.plateUpcharge !== undefined) patch['manufacturingSpecs.plateUpcharge'] = money(e.plateUpcharge);
                 if (e.plateUpchargePremium !== undefined) patch['manufacturingSpecs.plateUpchargePremium'] = money(e.plateUpchargePremium);
+                // "Priced in conjunction with" staged by the seed sweep (blank fields only). Lives in
+                // the Fabricut box like the tier editor's writes; dot-path update creates the map.
+                if (e.pricedWith !== undefined) patch['manufacturingSpecs.fabricut.pricedWith'] = String(e.pricedWith).trim() === '' ? deleteField() : String(e.pricedWith).trim();
                 // Keep the legacy box in step — Fabricut's price levels read it, not the rows.
                 if (legacySrc) Object.assign(patch, fabricutWriteBack(p, next, outsourceFinishes) || {});
                 batch.update(doc(db, 'Approved_Designs', id), patch);
@@ -778,6 +781,32 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                             rows.forEach(r => { if (String(r[field] ?? '') !== String(value ?? '')) next[r.p.id] = { ...(next[r.p.id] || {}), [field]: value }; });
                             return next;
                         });
+                        // ⚙ SEED (Stuart 2026-08-11): make the engine's implicit fallbacks EXPLICIT data —
+                        // BP-coded plates → INCLUDED, CP-coded → UPGRADE with the pairing written out
+                        // (the same grammar pairedBackplateCode uses), and a blank "Priced in conjunction
+                        // with" gets the rule sentence. Stages into the edit buffer; Save commits.
+                        const seedRules = () => {
+                            const stage = {}; let roles = 0, pairs = 0, texts = 0;
+                            rows.forEach(r => {
+                                const isCP = /(^|[^A-Z])CP(?=$|[^A-Z0-9])/.test(r.code);
+                                const isBP = !isCP && /(^|[^A-Z])BP(?=$|[^A-Z0-9])/.test(r.code);
+                                if (!isCP && !isBP) return;
+                                const e = {};
+                                const want = isCP ? 'UPGRADE' : 'INCLUDED';
+                                if ((r.plateRole || '') !== want) { e.plateRole = want; roles++; }
+                                if (isCP && !String(r.plateUpgradeOf || '').trim() && r.derivedPair) { e.plateUpgradeOf = r.derivedPair; pairs++; }
+                                if (!String(r.p.manufacturingSpecs?.fabricut?.pricedWith || '').trim() && edits[r.p.id]?.pricedWith === undefined) {
+                                    e.pricedWith = isCP
+                                        ? `Cover plate — upgrade over ${String(r.plateUpgradeOf || '').trim() || r.derivedPair || 'its backplate'}: bills the upcharge only, the arm/return still covers the plate; the BOM carries this cover plate instead of the backplate.`
+                                        : 'Backplate — included with the bracket arm or french/miter return ($0 on the quote). Bills at its own price only when nothing on the step includes it.';
+                                    texts++;
+                                }
+                                if (Object.keys(e).length) stage[r.p.id] = e;
+                            });
+                            if (!Object.keys(stage).length) return alert('Nothing to seed — every plate shown already carries its role, pairing and rule text.');
+                            setEdits(prev => { const next = { ...prev }; Object.entries(stage).forEach(([id, e]) => { next[id] = { ...(next[id] || {}), ...e }; }); return next; });
+                            alert(`Staged on ${Object.keys(stage).length} plate(s) — NOTHING SAVED YET:\n\n• ${roles} role(s): BP → INCLUDED, CP → UPGRADE\n• ${pairs} explicit CP→BP pairing(s) written from the code convention\n• ${texts} blank "Priced in conjunction with" field(s) filled with the rule sentence\n\nUpcharge $ fields are NOT seeded — blank keeps the live CP−BP difference; type a figure to freeze it. Review the rows, then press Save.`);
+                        };
                         const declared = members.filter(p => plateRoleOf(p)).length;
                         return (
                             <div style={{ background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
@@ -790,6 +819,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 </div>
                                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', borderTop: `1px solid ${theme.line}`, paddingTop: '12px' }}>
                                     <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Apply to all {rows.length} shown</span>
+                                    <button onClick={seedRules} disabled={!rows.length} style={btn(true, { background: theme.brass, borderColor: theme.brass })} title="BP-coded plates → INCLUDED · CP-coded → UPGRADE with the pairing written out explicitly · blank rule text composed. Staged for review; Save commits.">⚙ Seed rules from item codes</button>
+                                    <span style={{ width: '1px', height: '22px', background: theme.line }} />
                                     <button onClick={() => applyAll('plateRole', 'INCLUDED')} disabled={!rows.length} style={btn(false)}>Backplate — included</button>
                                     <button onClick={() => applyAll('plateRole', 'UPGRADE')} disabled={!rows.length} style={btn(false)}>Cover plate — upgrade</button>
                                     <button onClick={() => applyAll('plateRole', '')} disabled={!rows.length} style={btn(false)}>Clear role</button>
@@ -829,6 +860,19 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Apply to all {rows.length} shown</span>
                                     <button onClick={() => applyAll(true)} disabled={!rows.length} style={btn(false)}>✓ Includes its plate</button>
                                     <button onClick={() => applyAll(false)} disabled={!rows.length} style={btn(false)}>✕ Does not include</button>
+                                    <span style={{ width: '1px', height: '22px', background: theme.line }} />
+                                    <button disabled={!rows.length} style={btn(false)} title='Fills a BLANK "Priced in conjunction with" on every arm/return shown with its rule sentence (covers its plate / exception). Staged; Save commits.' onClick={() => {
+                                        const stage = {};
+                                        rows.forEach(r => {
+                                            if (String(r.p.manufacturingSpecs?.fabricut?.pricedWith || '').trim() || edits[r.p.id]?.pricedWith !== undefined) return;
+                                            stage[r.p.id] = { ...(edits[r.p.id] || {}), pricedWith: r.carriesPlate
+                                                ? `Covers its backplate — the plate rides at $0 with this ${r.isFeeRec ? 'return' : 'arm'}; a cover plate bills only its upcharge.`
+                                                : `EXCEPTION — this ${r.isFeeRec ? 'return' : 'arm'} does not cover its plate; the plate bills at its own price.` };
+                                        });
+                                        if (!Object.keys(stage).length) return alert('Nothing to seed — every arm/return shown already has rule text.');
+                                        setEdits(prev => ({ ...prev, ...stage }));
+                                        alert(`Staged rule text on ${Object.keys(stage).length} arm(s)/return(s) with a blank "Priced in conjunction with" — press Save to commit.`);
+                                    }}>⚙ Seed rule text (blank only)</button>
                                 </div>
                             </div>
                         );
@@ -1029,6 +1073,54 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>Priced in conjunction with…</span>
                                                 <input value={tierEdit.pricedWith ?? ''} onChange={e => setTierEdit(prev => ({ ...prev, pricedWith: e.target.value }))} placeholder="e.g. Priced in conjunction with H1 bracket arms" style={{ flex: 1, minWidth: '320px', padding: '6px 8px', fontFamily: theme.sans, fontSize: '0.85rem', border: `1px solid ${theme.line}`, outline: 'none' }} />
                                             </div>
+                                            {(() => {
+                                                // ⚙ THE EFFECTIVE RULE (Stuart 2026-08-11: "key parts are still hiding in
+                                                // coding rather than referring to the table in 4.6"). Composed from the SAME
+                                                // fields and helpers the CPQ engine runs (Shared/plateRules) — this line IS
+                                                // what the quote does for this item, including the code-derived fallbacks the
+                                                // engine uses when a field is blank. Roles/pairings/upcharges are edited in
+                                                // the Plate Rules and Arms & Returns modes above; "Use as rule text" copies
+                                                // the sentence into "Priced in conjunction with" so the record says it too.
+                                                const ms = r.p.manufacturingSpecs || {};
+                                                const pt = String(ms.productType || '').toUpperCase();
+                                                const isPlate = /PLATE/.test(pt);
+                                                const isCarrier = /BRACKET|ARM/.test(pt) || r.isFeeRec;
+                                                let text = '', warn = false;
+                                                if (isPlate && r.plateRole === 'INCLUDED') {
+                                                    text = 'Backplate — INCLUDED: $0 whenever the step carries a bracket arm or a french/miter return (its price lives in the arm). Bills at its own price only when nothing includes it.';
+                                                } else if (isPlate && r.plateRole === 'UPGRADE') {
+                                                    const pair = String(r.plateUpgradeOf || '').trim() || r.derivedPair;
+                                                    const pairSrc = String(r.plateUpgradeOf || '').trim() ? 'explicit' : 'derived from the code — set it explicitly to be safe';
+                                                    const bp = pair ? byCode.get(upper(pair)) : null;
+                                                    const bpBase = bp ? parseFloat(bp.manufacturingSpecs?.basePrice ?? bp.basePrice) : NaN;
+                                                    const ownBase = parseFloat(ms.basePrice ?? r.p.basePrice);
+                                                    const up = String(r.plateUpcharge ?? '').trim();
+                                                    const upP = String(r.plateUpchargePremium ?? '').trim();
+                                                    const upTxt = up !== ''
+                                                        ? `flat $${up} painted / $${upP !== '' ? upP : up} premium (explicit)`
+                                                        : (Number.isFinite(bpBase) && Number.isFinite(ownBase)
+                                                            ? `live difference: $${Math.max(0, ownBase - bpBase).toFixed(2)} today (own $${ownBase.toFixed(2)} − ${pair} $${bpBase.toFixed(2)}) — computed per quote, moves with base prices`
+                                                            : 'live difference — but the paired backplate could not be resolved, so it BILLS IN FULL');
+                                                    warn = !pair || (!up && !(Number.isFinite(bpBase) && Number.isFinite(ownBase)));
+                                                    text = `Cover plate — UPGRADE over ${pair || '??'} (${pairSrc}): bills the upcharge only, the arm/return still covers the plate; the BOM carries this cover plate instead of the backplate. Upcharge: ${upTxt}.`;
+                                                } else if (isPlate) {
+                                                    warn = true;
+                                                    text = 'NO plate rule declared — the engine prices this plate at its full price on every quote. Declare it in the Plate Rules mode (or Seed rules from item codes).';
+                                                } else if (isCarrier) {
+                                                    text = r.carriesPlate
+                                                        ? `Covers its backplate — the plate rides at $0 with this ${r.isFeeRec ? 'return' : 'arm'}; a cover plate bills only its upcharge.`
+                                                        : `EXCEPTION — this ${r.isFeeRec ? 'return' : 'arm'} does NOT cover its plate; the plate bills at its own price and the quote line says so.`;
+                                                    warn = !r.carriesPlate;
+                                                }
+                                                if (!text) return null;
+                                                return (
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px', flexWrap: 'wrap' }}>
+                                                        <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>⚙ Effective engine rule</span>
+                                                        <span style={{ flex: 1, minWidth: '320px', fontFamily: theme.mono, fontSize: '11px', lineHeight: 1.5, color: warn ? theme.red : theme.brassDark }}>{text}</span>
+                                                        <button onClick={() => setTierEdit(prev => ({ ...prev, pricedWith: text }))} style={btn(false)} title='Copy this sentence into "Priced in conjunction with" (saved with Save tiers).'>Use as rule text</button>
+                                                    </div>
+                                                );
+                                            })()}
                                             <div style={{ display: 'flex', alignItems: 'flex-end', gap: '14px', marginTop: '14px', paddingTop: '14px', borderTop: `1px solid ${theme.line}`, flexWrap: 'wrap' }}>
                                                 <span style={{ width: '250px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.inkSoft }}>Their part #s</span>
                                                 {CODE_FIELDS.map(f => (
