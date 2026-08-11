@@ -150,6 +150,30 @@ export function recipeStepCount(recipes, key) {
   return (r && Array.isArray(r.steps) && r.steps.length) || 0;
 }
 
+// ── STREAM RECIPE VARIANTS (Stuart & Grace 2026-08-11) ─────────────────────────────────────────
+// ONE customer color code, TWO internal routings. CPQ, the quote and the work order all say `CP`;
+// the floor runs `CP-S` on the small parts and `CP-P` on the poles WHENEVER those recipe docs
+// exist in Finish Recipes (Grace authors them like any other recipe — same code plus -S / -P).
+// No variant recipe → the base code resolves exactly as before, so every existing recipe and
+// every order without poles is untouched. The -S/-P extension affects ONLY finishing-floor
+// routing — never item codes, pricing, or what the customer sees.
+export const STREAM_SUFFIX = { SMALL: 'S', POLES: 'P' };
+export function streamRecipeKey(recipes, key, stream) {
+  if (!key) return key;
+  const sfx = STREAM_SUFFIX[stream] || String(stream || '').trim().toUpperCase();
+  if (!sfx) return key;
+  const base = String(key).split(' - ')[0].trim();
+  const cand = `${base}-${sfx}`;
+  return resolveRecipe(recipes, cand) ? cand : key;
+}
+export function resolveStreamRecipe(recipes, key, stream) {
+  return resolveRecipe(recipes, streamRecipeKey(recipes, key, stream));
+}
+export function streamRecipeStepCount(recipes, key, stream) {
+  const r = resolveStreamRecipe(recipes, key, stream);
+  return (r && Array.isArray(r.steps) && r.steps.length) || 0;
+}
+
 // Price one batch (WOs that share a recipe + a sled pool) from capacity + timers.
 function priceBatch(recipeCode, wos, kind, recipes, matrix, timers) {
   const recipe = resolveRecipe(recipes, recipeCode);

@@ -123,7 +123,9 @@ export function pickGateOf(wo) {
 
 // THE ONE CALL. `recipeLen` is the coat count for this order's recipe — the caller resolves it
 // (the recipes live in different places on different screens) and passes it in.
-export function orderStatusOf(wo, { recipeLen = 0 } = {}) {
+// `poleRecipeLen` — the pole stream's own coat count when the -P recipe variant differs
+// (Grace's CP case); defaults to recipeLen so existing callers are untouched.
+export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     if (!wo) return { streams: [], fulfilment: null, isSplit: false, slowest: null, done: false };
 
     if (wo.currentPhase === 'Closed') {
@@ -145,7 +147,7 @@ export function orderStatusOf(wo, { recipeLen = 0 } = {}) {
         streams.push({ key: 'PARTS', label: 'Finishing', stage: 'FINISHED', detail: 'off the floor', since: wo.completedAt || null });
     } else {
         streams.push(finishingStream(wo, { key: 'PARTS', label: hasPoles(wo) ? 'Small parts' : 'Finishing', idxField: 'currentStepIndex', taskKeys: ['spinSetup', 'spinSpray', 'hand'], ovenKey: 'spinBake', len: recipeLen }));
-        if (hasPoles(wo)) streams.push(finishingStream(wo, { key: 'POLES', label: 'Poles', idxField: 'poleStepIndex', taskKeys: ['poleSpray'], ovenKey: 'poleBake', len: recipeLen }));
+        if (hasPoles(wo)) streams.push(finishingStream(wo, { key: 'POLES', label: 'Poles', idxField: 'poleStepIndex', taskKeys: ['poleSpray'], ovenKey: 'poleBake', len: poleRecipeLen !== undefined ? poleRecipeLen : recipeLen }));
     }
 
     const fulfilment = fulfilmentOf(wo);

@@ -3,7 +3,7 @@ import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone } from '../Shared/floorActivity';
 import { finishingDb as db } from '../../firebase';
 import { doc, updateDoc, addDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
-import { resolveRecipe, recipeStepCount } from '../Shared/finishingTime';
+import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { pickGateOf } from '../Shared/orderStatus';
 
@@ -172,7 +172,14 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // never see pole cards or pole gates at all.
   const woHasPoles = (wo) => Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0 || wo.type === 'Poles';
   const poleIdxOf = (wo) => (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null) ? wo.poleStepIndex : (wo.currentStepIndex || 0);
-  const recipeLen = (wo) => recipeStepCount(recipes, wo && wo.recipe);
+  // STREAM RECIPE VARIANTS (Stuart & Grace 2026-08-11): the order says `CP`; the small parts run
+  // `CP-S` and the poles run `CP-P` when those recipes exist — Grace's CP case, where poles take
+  // 4 coats of DTM-7/Champagne/hand/30-sheen and the small parts 2 coats of DTM-11/tinted. Base
+  // code when no variant exists, so everything pre-existing behaves exactly as before.
+  const recipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, 'SMALL');
+  const poleRecipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, 'POLES');
+  const partsRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, 'SMALL');
+  const poleRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, 'POLES');
 
   // ⛔ ZERO COATS IS NOT "FINISHED" (Stuart 2026-08-03, WO11374: "when the operator scanned it to
   // start, it immediately shows completed??").
@@ -186,8 +193,8 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   //
   // resolveRecipe now matches far more forgivingly, but a recipe can still be genuinely absent —
   // so this refuses to advance at all and names the recipe, instead of quietly finishing the job.
-  const recipeMissing = (wo) => {
-      if (recipeLen(wo) > 0) return false;
+  const recipeMissing = (wo, len) => {
+      if ((len !== undefined ? len : recipeLen(wo)) > 0) return false;
       alert(`⛔ Can't advance ${woRef(wo)} — its finish recipe "${wo.recipe || '(none)'}" isn't in Finish Recipes.\n\nNothing was changed. Add or rename the recipe (Finishing → FINISH RECIPES) so its code matches, then advance the coat.\n\nWithout it the app has no idea how many coats this order needs.`);
       return true;
   };
@@ -196,10 +203,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // stream. When BOTH streams are past the last step, the order completes (currentPhase Complete
   // → it enters the WMS packing queue) and the sled frees either way.
   const finalizePartsAdvance = async (wo) => {
-      if (recipeMissing(wo)) return;
       const len = recipeLen(wo);
+      if (recipeMissing(wo, len)) return;
       const nextParts = (wo.currentStepIndex || 0) + 1;
-      const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= len;
+      const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= poleRecipeLen(wo);
       const updates = {
           currentStepIndex: nextParts,
           lastCoatTime: Date.now(),
@@ -219,10 +226,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // completion posts the GOOD count), and a custom sales order with ANY scrap is redline-BLOCKED
   // with the supervisor alerted. The order only completes after QC passes.
   const handleCompleteRecipeStep = async (wo) => {
-      if (recipeMissing(wo)) return;
       const len = recipeLen(wo);
+      if (recipeMissing(wo, len)) return;
       const nextParts = (wo.currentStepIndex || 0) + 1;
-      const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= len;
+      const polesFinished = !woHasPoles(wo) || poleIdxOf(wo) >= poleRecipeLen(wo);
       if (nextParts >= len && polesFinished && setQcModal) {
           setQcModal({ id: wo.id, parts: wo.totalParts || 0, taskType: null, onPassed: () => finalizePartsAdvance(wo) });
           return;
@@ -233,10 +240,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // Advance the POLE stream one coat (its own pointer). Completes the order when parts are
   // already done too — through the same final QC gate.
   const finalizePoleAdvance = async (wo) => {
-      if (recipeMissing(wo)) return;
-      const len = recipeLen(wo);
+      const len = poleRecipeLen(wo);
+      if (recipeMissing(wo, len)) return;
       const next = poleIdxOf(wo) + 1;
-      const partsFinished = (wo.currentStepIndex || 0) >= len;
+      const partsFinished = (wo.currentStepIndex || 0) >= recipeLen(wo);
       const updates = {
           poleStepIndex: next,
           lastPoleCoatTime: Date.now(),
@@ -247,10 +254,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       await updateDoc(doc(db,"fin_workorders", wo.id), updates);
   };
   const handleCompletePoleStep = async (wo) => {
-      if (recipeMissing(wo)) return;
-      const len = recipeLen(wo);
+      const len = poleRecipeLen(wo);
+      if (recipeMissing(wo, len)) return;
       const next = poleIdxOf(wo) + 1;
-      const partsFinished = (wo.currentStepIndex || 0) >= len;
+      const partsFinished = (wo.currentStepIndex || 0) >= recipeLen(wo);
       if (next >= len && partsFinished && setQcModal) {
           setQcModal({ id: wo.id, parts: wo.totalParts || 0, taskType: null, onPassed: () => finalizePoleAdvance(wo) });
           return;
@@ -328,7 +335,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           forceCompleteNsBuildSkipped: isStockBuild ? blockNsPost : null,
       };
       if (woHasPoles(wo)) {
-          updates.poleStepIndex = len || poleIdxOf(wo);
+          updates.poleStepIndex = poleRecipeLen(wo) || len || poleIdxOf(wo);
           updates["tasks.poleSpray.status"] = "Complete";
           updates["tasks.poleBake.status"] = "Complete";
       }
@@ -374,12 +381,12 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const after = { ...wo, tasks: { ...(wo.tasks || {}), [taskKey]: { ...((wo.tasks || {})[taskKey] || {}), status: 'Complete' } } };
       const act = stream === 'poles' ? nextPoleAction(after) : nextPartsAction(after);
       if (!act || !act.advance) return;                       // more steps left in this coat
-      const len = recipeLen(wo);
+      const len = stream === 'poles' ? poleRecipeLen(wo) : recipeLen(wo);
       const idx = stream === 'poles' ? poleIdxOf(wo) : (wo.currentStepIndex || 0);
       const isFinal = idx + 1 >= len;
       const otherDone = stream === 'poles'
-          ? (wo.currentStepIndex || 0) >= len
-          : (!woHasPoles(wo) || poleIdxOf(wo) >= len);
+          ? (wo.currentStepIndex || 0) >= recipeLen(wo)
+          : (!woHasPoles(wo) || poleIdxOf(wo) >= poleRecipeLen(wo));
       setAdvancePrompt({
           woId: wo.id, ref: woRef(wo), stream, label: act.label, isFinal, otherDone,
           coat: idx + 1, len,
@@ -542,7 +549,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
   // The single next action for the PARTS stream on the current coat.
   const nextPartsAction = (wo) => {
-      const r = resolveRecipe(recipes, wo.recipe);
+      const r = partsRecipeOf(wo);
       const len = (r && r.steps && r.steps.length) || 0;
       const idx = wo.currentStepIndex || 0;
       if (!len || idx >= len) return null; // parts done (order completes when poles catch up)
@@ -563,7 +570,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
   const nextPoleAction = (wo) => {
       if (!woHasPoles(wo)) return null;
-      const len = recipeLen(wo);
+      const len = poleRecipeLen(wo);
       const idx = poleIdxOf(wo);
       if (!len || idx >= len) return null;
       const t = wo.tasks || {};
@@ -640,7 +647,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
 
   const colorGroups = {};
   activeWOs.forEach(wo => {
-      const r = resolveRecipe(recipes, wo.recipe);
+      const r = partsRecipeOf(wo);
       if (!r || !r.steps || r.steps.length <= wo.currentStepIndex) return;
       const step = r.steps[wo.currentStepIndex];
       if (!colorGroups[step.color]) colorGroups[step.color] = [];
@@ -651,7 +658,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const poleGroups = {};
   activeWOs.forEach(wo => {
       if (!woHasPoles(wo)) return;
-      const r = resolveRecipe(recipes, wo.recipe);
+      const r = poleRecipeOf(wo);
       const idx = poleIdxOf(wo);
       if (!r || !r.steps || idx >= r.steps.length) return;
       const step = r.steps[idx];
@@ -667,18 +674,19 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // here exactly when its next action IS the advance.
   const readyToAdvance = activeWOs.flatMap(wo => {
       const out = [];
-      const len = recipeLen(wo);
+      const pLen = recipeLen(wo);
+      const polLen = poleRecipeLen(wo);
       const pa = nextPartsAction(wo);
       if (pa && pa.advance) {
           const idx = wo.currentStepIndex || 0;
-          out.push({ wo, stream: 'parts', label: pa.label, coat: idx + 1, len, isFinal: idx + 1 >= len,
-              blocked: idx + 1 >= len && woHasPoles(wo) && poleIdxOf(wo) < len });
+          out.push({ wo, stream: 'parts', label: pa.label, coat: idx + 1, len: pLen, isFinal: idx + 1 >= pLen,
+              blocked: idx + 1 >= pLen && woHasPoles(wo) && poleIdxOf(wo) < polLen });
       }
       const po = nextPoleAction(wo);
       if (po && po.advance) {
           const idx = poleIdxOf(wo);
-          out.push({ wo, stream: 'poles', label: po.label, coat: idx + 1, len, isFinal: idx + 1 >= len,
-              blocked: idx + 1 >= len && (wo.currentStepIndex || 0) < len });
+          out.push({ wo, stream: 'poles', label: po.label, coat: idx + 1, len: polLen, isFinal: idx + 1 >= polLen,
+              blocked: idx + 1 >= polLen && (wo.currentStepIndex || 0) < pLen });
       }
       return out;
   });
@@ -781,7 +789,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                 </span>
             </div>
             {manualWo ? (() => {
-                const r = resolveRecipe(recipes, manualWo.recipe);
+                const r = partsRecipeOf(manualWo);
                 const len = (r && r.steps && r.steps.length) || 0;
                 const idx = manualWo.currentStepIndex || 0;
                 const step = len && idx < len ? r.steps[idx] : null;
@@ -962,7 +970,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                             <div style={{ fontSize: '0.9rem', color: 'var(--ink)', marginBottom: '16px' }}>Coat Complete</div>
                                             <button onClick={() => {
                                                 if (!woHasPoles(item.wo)) return handleCompleteRecipeStep(item.wo);
-                                                const len = recipeLen(item.wo);
+                                                const len = poleRecipeLen(item.wo);
                                                 const pIdx = poleIdxOf(item.wo);
                                                 const polesCaughtUp = pIdx >= len || pIdx > item.wo.currentStepIndex || (pIdx === item.wo.currentStepIndex && item.wo.tasks?.poleBake?.status === 'Complete');
                                                 if (polesCaughtUp || window.confirm(`Poles for this order are still on coat ${pIdx + 1} of ${len}.\n\nAdvance the SMALL PARTS anyway? Poles keep moving on their own track.`)) handleCompleteRecipeStep(item.wo);
@@ -1001,7 +1009,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                                 // Poles never gate the small parts (Stuart 2026-07-20): batching the
                                                 // two together is the ideal, so we SUGGEST — but each moves on its own.
                                                 if (!woHasPoles(item.wo)) return handleCompleteRecipeStep(item.wo);
-                                                const len = recipeLen(item.wo);
+                                                const len = poleRecipeLen(item.wo);
                                                 const pIdx = poleIdxOf(item.wo);
                                                 const polesCaughtUp = pIdx >= len || pIdx > item.wo.currentStepIndex || (pIdx === item.wo.currentStepIndex && item.wo.tasks?.poleBake?.status === 'Complete');
                                                 if (polesCaughtUp || window.confirm(`Poles for this order are still on coat ${pIdx + 1} of ${len}.\n\nAdvance the SMALL PARTS anyway? Poles keep moving on their own track (painting them together is ideal, not required).`)) handleCompleteRecipeStep(item.wo);
@@ -1222,7 +1230,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           // reads the CURRENT coat's `app` and only looks at `hand` for a Hand Applied step — so the
           // order was never actually blocked. The grid was simply telling the operator to do
           // something the recipe never asked for.
-          const rSteps = (resolveRecipe(recipes, wo.recipe)?.steps) || [];
+          const rSteps = (partsRecipeOf(wo)?.steps) || [];
           const anyHand = rSteps.some(x => x.app === 'Hand Applied');
           const anySpray = rSteps.some(x => x.app && x.app !== 'Hand Applied');
           const appliesTo = { spinSetup: anySpray, spinSpray: anySpray, spinBake: anySpray, hand: anyHand, poleSpray: hasP, poleBake: hasP };
