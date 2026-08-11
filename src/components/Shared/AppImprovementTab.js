@@ -285,7 +285,10 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
         setReopenDrafts(d => { const n = { ...d }; delete n[entry.id]; return n; });
     };
 
-    const visibleEntries = entries.filter(en => showResolved || !['RESOLVED', 'VERIFIED'].includes(en.status));
+    // RESOLVED stays IN the default list — the loop isn't closed until the original poster reads
+    // the fix and marks it tested (Stuart 2026-08-11: resolving made the card vanish before the
+    // reporter ever saw the resolution). Only VERIFIED (tested & confirmed) leaves the view.
+    const visibleEntries = entries.filter(en => showResolved || en.status !== 'VERIFIED');
     const typeOf = (id) => ISSUE_TYPES.find(t => t.id === id) || { label: id, color: theme.inkSoft };
     const fmtDate = (t) => { try { return t?.toDate ? t.toDate().toLocaleString() : ''; } catch (e) { return ''; } };
 
@@ -391,14 +394,14 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
                 <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.2em', textTransform: 'uppercase', color: theme.inkSoft }}>Submitted Reports ({visibleEntries.length})</span>
                 <label style={{ fontSize: '0.8rem', color: theme.inkSoft, cursor: 'pointer' }}>
                     <input type="checkbox" checked={showResolved} onChange={e => setShowResolved(e.target.checked)} style={{ marginRight: '6px' }} />
-                    Show resolved
+                    Show tested &amp; verified
                 </label>
             </div>
             {visibleEntries.length === 0 && <div style={{ padding: '30px', textAlign: 'center', color: theme.inkSoft, fontStyle: 'italic', border: `1px dashed ${theme.line}` }}>No reports yet.</div>}
             {visibleEntries.map(en => {
                 const t = typeOf(en.issueType);
                 return (
-                    <div key={en.id} style={{ background: '#fff', border: `1px solid ${theme.line}`, borderLeft: `3px solid ${['RESOLVED', 'VERIFIED'].includes(en.status) ? '#1e8449' : (en.status === 'REOPENED' ? '#c0392b' : t.color)}`, borderRadius: '2px', padding: '14px 18px', marginBottom: '10px', opacity: ['RESOLVED', 'VERIFIED'].includes(en.status) ? 0.7 : 1 }}>
+                    <div key={en.id} style={{ background: '#fff', border: `1px solid ${theme.line}`, borderLeft: `3px solid ${['RESOLVED', 'VERIFIED'].includes(en.status) ? '#1e8449' : (en.status === 'REOPENED' ? '#c0392b' : t.color)}`, borderRadius: '2px', padding: '14px 18px', marginBottom: '10px', opacity: en.status === 'VERIFIED' ? 0.7 : 1 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '6px' }}>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: '#fff', background: t.color, padding: '3px 8px', borderRadius: '2px' }}>{t.label}</span>
