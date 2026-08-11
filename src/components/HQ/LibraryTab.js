@@ -2,14 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { buildStockFinPayload } from '../Shared/stockRun';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
-import { isOutsourcedFinishCode } from '../Shared/finishRouting';
+import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
-import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc, getDocs, writeBatch, updateDoc, addDoc, serverTimestamp } from "firebase/firestore";
 import { fixMojibake } from '../Shared/textRepair';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { subscribeProgramPrints, resolvePrintUrlAny } from '../Shared/programPrints';
@@ -1043,6 +1043,80 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
   };
 
+  // ── MAKE-UP ORDER CASCADE (Eric 2026-08-10: "system sees component shortage of the Phosphate
+  // parts and creates orders … also sees shortage in the Mill Finish parts … and creates those
+  // sub-orders … prompts for confirmation or quantity adjustment … then released"). Called when a
+  // finished-goods run's stock check finds shorts. Each short cascades:
+  //   /P core short   → phosphate CONVERT demand (WMS Convert tab executes raw → /P), AND if the
+  //                     raw behind it is short too, a shop-floor stock WO for the raw difference
+  //   raw part short  → shop-floor stock WO
+  // Shop WOs park in RTG 'Approved' — the existing confirm-and-release gate; quantities are
+  // confirmed or adjusted at the prompt (batch efficiency); OS Comms gets the broadcast.
+  const offerMakeUpOrders = async (shortRows, parentErp) => {
+      if (!shortRows || !shortRows.length) return;
+      if (!window.confirm(`Create the MAKE-UP orders for the ${shortRows.length} short component(s) now?\n\n${shortRows.map(r => `• ${r.code} — short ${r.short}`).join('\n')}\n\n/P cores → a phosphate CONVERT demand (WMS Convert tab); raw parts → a shop-floor stock WO parked in RTG for release. You confirm each quantity next.`)) return;
+      const made = [];
+      const partOfCode = (c) => inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === c);
+      try {
+          // Raw availability behind the /P shorts — a convert can only phosphate raw that exists.
+          const millCodes = [...new Set(shortRows.map(r => millBaseOf(r.code)).filter(Boolean))];
+          let millAvail = {};
+          try { millAvail = await fetchAvailability(millCodes, BRAND_NS_LOCATION[activeBrand] || '17'); }
+          catch (e) { console.warn('Raw availability check failed — prompts show unknown:', e); }
+
+          for (let i = 0; i < shortRows.length; i++) {
+              const r = shortRows[i];
+              const qty = parseInt(window.prompt(`Make-up quantity for ${r.code}?\n(short ${r.short} — adjust up for efficient batch sizes)`, String(r.short))) || 0;
+              if (qty <= 0) { made.push(`• ${r.code} — skipped`); continue; }
+              const mill = millBaseOf(r.code);
+              const isPhos = /\/P$/.test(r.code) && mill !== r.code;
+              if (isPhos) {
+                  const basePart = partOfCode(mill);
+                  const targetPart = partOfCode(r.code);
+                  const demandId = `CVD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
+                  await setDoc(doc(db, 'convert_demand', demandId), {
+                      id: demandId, brandId: activeBrand, status: 'open',
+                      woNum: `CVW-${activeBrand.toUpperCase()}-${(Date.now() + i).toString().slice(-6)}`,
+                      baseErpId: mill, baseItemId: basePart?.id || null,
+                      baseInternalId: basePart?.netSuiteInternalId ? String(basePart.netSuiteInternalId) : null,
+                      baseAvailAtRequest: millAvail[mill] ?? null,
+                      targetErpId: r.code, targetItemId: targetPart?.id || null,
+                      targetInternalId: targetPart?.netSuiteInternalId ? String(targetPart.netSuiteInternalId) : null,
+                      qty, source: 'library-makeup',
+                      note: `Make-up for finished run ${parentErp} — ${r.code} short ${r.short}`,
+                      createdBy: (currentUser && (currentUser.name || currentUser.email)) || '', createdAt: Date.now(),
+                  });
+                  made.push(`⇄ CONVERT ${qty} × ${mill} → ${r.code} (WMS Convert tab)`);
+                  const rawHave = Number(millAvail[mill]) || 0;
+                  if (rawHave < qty) {
+                      const shortRaw = qty - rawHave;
+                      if (basePart) {
+                          if (window.confirm(`Raw ${mill} holds ${rawHave} — the convert needs ${qty}.\n\nAlso park a shop-floor stock WO for ${shortRaw} × ${mill} in RTG?`)) {
+                              const woId = await createStockBuildWO(basePart, shortRaw);
+                              made.push(`🏭 SHOP WO ${woId} — ${shortRaw} × ${mill} (RTG → release to shop)`);
+                          } else made.push(`⚠ raw ${mill} short ${shortRaw} — no WO raised (declined)`);
+                      } else made.push(`⚠ raw ${mill} not in the library — shortfall ${shortRaw} needs a manual order`);
+                  }
+              } else {
+                  const p = partOfCode(r.code);
+                  if (!p) { made.push(`⚠ ${r.code} not in the library — order manually`); continue; }
+                  const woId = await createStockBuildWO(p, qty);
+                  made.push(`🏭 SHOP WO ${woId} — ${qty} × ${r.code} (RTG → release to shop)`);
+              }
+          }
+          // The notification leg — production/management see the confirm-and-release ask.
+          try {
+              await addDoc(collection(db, 'global_messages'), {
+                  sender: 'System', sourceApp: 'HQ', target: 'ALL', isSystem: true, t: serverTimestamp(),
+                  msg: `Make-up orders raised from Master Library for ${parentErp}:\n${made.map(m => `• ${m}`).join('\n')}\n\nConfirm & release: shop WOs in 13. RTG Dispatch; converts on the WMS Convert tab.`,
+              });
+          } catch (e) { console.warn('OS Comms notify failed (orders still created):', e); }
+          alert(`Make-up orders:\n\n${made.map(m => `• ${m}`).join('\n')}\n\n📣 OS Comms notified. Shop WOs await release in RTG Dispatch; converts appear on the WMS Convert tab.`);
+      } catch (e) {
+          alert('Make-up order creation failed partway:\n' + (e.message || e) + (made.length ? '\n\nCreated before the failure:\n' + made.map(m => `• ${m}`).join('\n') : ''));
+      }
+  };
+
   // A FINISHED-GOODS run, straight to the floor (Stuart 2026-08-10 rework). This tool creates
   // FINISHED items, so before anything is written it (1) explodes the assembly BOM into the real
   // pull lines — an assembly's own code never holds stock, its components do — and (2) checks the
@@ -1079,7 +1153,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           : `${qty} × ${erp} · ${finishLabel}\n\nPull:`;
       const body = check ? `${check.text}` : `${pullText}\n\n${checkNote}`;
       if (!window.confirm(`Push this run to the finishing floor?\n\n${header}\n${body}\n\nWMS picks exactly these lines. It lands in the Setup Queue now; RTG records it as dispatched.`)) { setRunBusy(false); return; }
-      if (check && !check.ok && !window.confirm(`⚠ ${check.shortRows.length} pull line${check.shortRows.length === 1 ? ' is' : 's are'} SHORT:\n\n${check.shortRows.map(r => `• ${r.code} — need ${r.need}, available ${r.have}`).join('\n')}\n\nRelease anyway? The pick will come up short on those lines — raise stock builds for them first if that's not intended.`)) { setRunBusy(false); return; }
+      if (check && !check.ok && !window.confirm(`⚠ ${check.shortRows.length} pull line${check.shortRows.length === 1 ? ' is' : 's are'} SHORT:\n\n${check.shortRows.map(r => `• ${r.code} — need ${r.need}, available ${r.have}`).join('\n')}\n\nRelease anyway? The pick will come up short on those lines — you'll be offered the make-up orders either way.`)) {
+          // Held the run because of the shorts — the make-up cascade is exactly what they want next.
+          setRunBusy(false);
+          await offerMakeUpOrders(check.shortRows, erp);
+          return;
+      }
 
       try {
           const woId = `WO-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now().toString().slice(-6)}`;
@@ -1134,6 +1213,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           alert(`✅ ${woId} is on the finishing floor.\n\n${qty} × ${erp} · ${finishLabel}\nPull lines:\n${pullText}\n\nIt's in the Setup Queue now and recorded in RTG.${nsNote}`);
           setRunFinishId('');
           setWoTargetQty(1);
+          // Shorts released-through still need making up — cascade the sub-orders now.
+          if (check && !check.ok) await offerMakeUpOrders(check.shortRows, erp);
       } catch (err) {
           console.error('Direct release error:', err);
           alert('Could not release the run: ' + (err.message || err) + '\n\nNothing was left half-created.');

@@ -677,8 +677,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             });
         } else if (job.orderType === 'stock') {
             // Stock build: what gets handled here is the FINISHED item going back to the shelf —
-            // not the raw pull line the pick stage used.
-            out.push({ key: 'STOCK', erp: job.stockErpId || job.type || '', name: `${job.stockErpId || job.type || 'Stock'} — finished stock, bin & shelve`, qty: Number(job.totalParts) || 1 });
+            // not the raw pull line the pick stage used. Qty is the GOOD count: completedParts
+            // already nets out packing scrap (Sandra 2026-08-10: scrapped 1 of 120 rings and the
+            // card still said 120 — totalParts never changes, completedParts does).
+            const goodQty = (job.completedParts !== undefined && job.completedParts !== null) ? Math.max(0, Number(job.completedParts) || 0) : (Number(job.totalParts) || 1);
+            out.push({ key: 'STOCK', erp: job.stockErpId || job.type || '', name: `${job.stockErpId || job.type || 'Stock'} — finished stock, bin & shelve${(Number(job.packScrap) || 0) > 0 ? ` (${job.packScrap} scrapped)` : ''}`, qty: goodQty });
         } else {
             (job.partsList || []).forEach((l, i) => {
                 if (lineIsFeeish(l)) return;
@@ -2074,6 +2077,54 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         }
     };
 
+    // ⇄ SUBSTITUTE PULL (Eric 2026-08-11): the stated code doesn't exist or holds nothing, but an
+    // EQUIVALENT item does (another finish of the same part — his HHRMBF75/M6 case, typical for
+    // Just-For-Paint repaints). Pull that instead: the substitution is recorded on the order and —
+    // when no NetSuite work order will consume components (JFP / no nsWoId) — a −qty inventory
+    // adjustment for the substitute queues to NetSuite so stock stays true (the "two raws added in
+    // but never removed" drift). When an NS WO exists, the substitution is recorded for review
+    // instead, because the NS WO will consume the STATED component and a second write would drift
+    // the other way.
+    const handleSubstitutePick = async () => {
+        const lineItem = activePickJob.partsList[currentPickLine];
+        const target = String(lineItem.legacyErpId || lineItem.partId || '').toUpperCase();
+        const code = String(window.prompt(`⇄ SUBSTITUTE PULL — which item are you taking INSTEAD of ${target}?\n\n(e.g. another finish of the same part: HHRMBF75/M6)`, '') || '').trim().toUpperCase();
+        if (!code) return;
+        if (code === target) return alert('That is the same code — scan the bin and pick it normally.');
+        const part = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === code);
+        if (!part) return alert(`${code} isn't in the library — check the code.`);
+        if (!part.netSuiteInternalId) return alert(`${code} has no NetSuite id, so stock can't be adjusted out of it. Pick an item NetSuite tracks.`);
+        const qty = parseInt(window.prompt(`How many ${code} did you pull?`, String(Number(lineItem.quantity ?? lineItem.qty) || 1))) || 0;
+        if (qty <= 0) return;
+        const subBin = String(window.prompt(`Which bin did you pull ${code} from? (leave blank if unbinned)`, '') || '').trim().toUpperCase();
+        const postAdj = activePickJob.paintOnly === true || !activePickJob.nsWoId;
+        if (!window.confirm(`⇄ Pull ${qty} × ${code}${subBin ? ` from ${subBin}` : ''} in place of ${target}?\n\n${postAdj ? `A −${qty} inventory adjustment for ${code} queues to NetSuite so stock stays true.` : `Recorded on the order for review — this order's NetSuite WO consumes the STATED component, so no adjustment posts here; reconcile the variance in NetSuite.`}`)) return;
+        try {
+            await updateDoc(doc(db, 'fin_workorders', activePickJob.id), {
+                pickSubstitutions: arrayUnion({ forCode: target, code, qty, bin: subBin || null, adjustedOut: postAdj, by: operator?.name || '', at: Date.now() })
+            });
+            if (postAdj) {
+                const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
+                await enqueueNsWrite({
+                    kind: 'inventoryadjustment',
+                    label: `Substitute pull −${qty} × ${code} (for ${target} on ${packRef(activePickJob)})`,
+                    sourceApp: 'WMS', createdBy: operator?.name || '',
+                    targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                    method: 'POST',
+                    payload: {
+                        account: { id: "254" }, subsidiary: { id: nsCfg.subsidiary },
+                        memo: `Substitute pull on ${packRef(activePickJob)}: took ${qty} × ${code} in place of ${target}`,
+                        inventory: { items: [{ item: { id: String(part.netSuiteInternalId) }, location: { id: nsCfg.location }, adjustQtyBy: -qty, ...((subBin && subBin !== 'UNASSIGNED') ? { inventoryDetail: { quantity: -qty, inventoryAssignment: { items: [{ binNumber: { refName: subBin }, quantity: -qty }] } } } : {}) }] }
+                    },
+                });
+            }
+            writeLog(`⇄ SUBSTITUTE PULL on ${packRef(activePickJob)}: ${qty} × ${code} taken in place of ${target}${subBin ? ` (bin ${subBin})` : ''}${postAdj ? ` — −${qty} adjustment queued` : ' — recorded for NS review (order has an NS WO)'}.`, 'wms');
+        } catch (e) { return alert('Substitute failed: ' + (e.message || e)); }
+        setValidation({ bin: '', qty: '' });
+        if (currentPickLine + 1 < activePickJob.partsList.length) setCurrentPickLine(prev => prev + 1);
+        else completePick(pickSkips, pickShorts);
+    };
+
     const handleStagingMatch = async (e) => {
         e.preventDefault();
         // §A2: two-label staging handshake. Both halves of an order carry the same orderKey —
@@ -2637,6 +2688,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 </button>
                                 <button type="button" onClick={handleSkipLine} style={{ padding: '14px', background: 'transparent', color: '#d9534f', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', border: `1px solid ${theme.line}`, cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = '#d9534f'} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>
                                     ⤼ Skip This Item — can't pick / not on order
+                                </button>
+                                <button type="button" onClick={handleSubstitutePick} style={{ padding: '14px', background: 'transparent', color: theme.brass, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', border: `1px solid ${theme.line}`, cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => e.currentTarget.style.borderColor = theme.brass} onMouseOut={(e) => e.currentTarget.style.borderColor = theme.line}>
+                                    ⇄ Substitute — pull an equivalent item instead
                                 </button>
                             </form>
                         </div>

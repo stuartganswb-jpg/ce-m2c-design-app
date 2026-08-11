@@ -130,14 +130,20 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       const stockErp = String(wo.stockErpId || (wo.orderType === 'stock' ? wo.type : '') || '');
       if (stockErp) {
           const cut = stockErp.lastIndexOf('/');
-          const base = cut > 0 ? stockErp.slice(0, cut) : stockErp;
+          // JFP paint-only (Eric 2026-08-11): the code as typed IS the thing to pull and repaint —
+          // stripping the finish suffix invented a "raw core" demand for an item that may not
+          // exist. The WMS pick's ⇄ Substitute button covers pulling a different finish variant.
+          const base = wo.paintOnly === true ? stockErp : (cut > 0 ? stockErp.slice(0, cut) : stockErp);
           const qty = Number(wo.totalParts) || 1;
+          const label = wo.paintOnly === true
+              ? `${base} — pull ${qty} to repaint ${wo.recipe || ''} (JFP · ⇄ Substitute if pulling a different finish)`
+              : `RAW ${base} — pull ${qty} to finish ${wo.recipe || ''} → ${stockErp}`;
           return {
               patch: {
                   sentToPickPack: true, pickStatus: wo.pickStatus || 'Pending', sentToPickPackAt: Date.now(),
-                  partsList: [{ legacyErpId: base, partId: base, partName: `RAW ${base} — pull ${qty} to finish ${wo.recipe || ''} → ${stockErp}`, quantity: qty, partHandling: 'Small Parts' }]
+                  partsList: [{ legacyErpId: base, partId: base, partName: label, quantity: qty, partHandling: 'Small Parts' }]
               },
-              note: ` — pull ${qty} × ${base} (raw base) released to the WMS pick queue`
+              note: ` — pull ${qty} × ${base}${wo.paintOnly === true ? ' (JFP repaint)' : ' (raw base)'} released to the WMS pick queue`
           };
       }
       return { patch: {}, note: ' — no small parts to pick (not sent to WMS)' };
