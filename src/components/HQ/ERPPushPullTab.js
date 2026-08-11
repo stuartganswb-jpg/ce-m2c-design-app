@@ -211,6 +211,12 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               // Fee/Charge entities price the quote (their charge rides the rollup item's price) but are
               // NOT physical NetSuite BOM components — skip instead of pushing an UNMAPPED item line.
               if (masterPart.partClass === 'Fee' || String(masterPart.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE') return;
+              // KIT records are the SALES face of a set (Stuart 2026-08-08): the customer part# may
+              // appear on the quote, but what ships to NetSuite is the exploded ORDER totals of the
+              // kit's components — never the kit itself, which has no NetSuite item. The explosion
+              // logic lands with the traverse configurator; until then a kit line is skipped exactly
+              // like a fee rather than pushed as an UNMAPPED item.
+              if (masterPart.partClass === 'Kit') return;
               // The demand lands on the finished assembly (base/CODE, e.g. H1-138BF/EP1 or H1-138BF/P) instead of the
               // bare base when the selected finish is either (a) OUTSOURCED — always consumes finished stock — or
               // (b) IN-HOUSE but the finished assembly is flagged "Stocked" in the library (held in stock, not

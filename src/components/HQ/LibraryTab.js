@@ -51,7 +51,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [syncingThumbs, setSyncingThumbs] = useState(null);   // {done,total} while syncing, else null
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
-  const [partClassFilter, setPartClassFilter] = useState("ALL"); 
+  const [partClassFilter, setPartClassFilter] = useState("ALL");
+  const [kitSearch, setKitSearch] = useState("");   // Kit Contents item picker (Kit records only)
   const [collectionFilter, setCollectionFilter] = useState(""); 
   const [watchlistFilter, setWatchlistFilter] = useState("");
   const [appOnlyFilter, setAppOnlyFilter] = useState(false); // show only app-created parts with no NetSuite item #
@@ -228,6 +229,11 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // rather than only after a save-and-reopen.
   const openClass = editSpecs.partClass !== undefined ? editSpecs.partClass : (activePart?.partClass || '');
   const isFeeRecord = openClass === 'Fee' || openPT === 'FEE' || /(^|-)FEE-/.test(openErp);
+  // KIT (Stuart 2026-08-08, the traverse project): a sellable SET — a customer part# wrapping real
+  // component items (the 4ft traverse starter: fascia + track + 2 brackets). The kit is a SALES
+  // face only: CPQ/quotes can show its part#, but the BOM, shop floor and finishing floor always
+  // see the exploded ORDER totals ("a 7ft pole and track"), never the kit. No NetSuite item.
+  const isKitRecord = openClass === 'Kit' || /(^|-)KIT-/.test(openErp);
   const isBracketRecord = openPT.includes('BRACKET');
   const isBackplateRecord = openPT.includes('BACKPLATE') || openPT.includes('BACK PLATE');
   const isAssemblyRecord = openClass === 'Assembly' || openClass === 'Master Assembly';
@@ -433,6 +439,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         // fee items can come back with their own product type, so the code pattern is the
         // reliable catch-all (Stuart 2026-07-22 — the App-only button stopped finding them all).
         else if (partClassFilter === "FEES") matchesClass = String(specs.productType || part.productType || '').toUpperCase() === 'FEE' || part.partClass === 'Fee' || /(^|-)FEE-/.test(String(part.legacyErpId || part.itemId || '').toUpperCase());
+        else if (partClassFilter === "KITS") matchesClass = part.partClass === 'Kit' || /(^|-)KIT-/.test(String(part.legacyErpId || part.itemId || '').toUpperCase());
         else if (partClassFilter === "UNASSIGNED") matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
         else matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
     }
@@ -802,10 +809,13 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     //             the amount rolls into the CPQ mainline.
     //   Inventory a NetSuite item, bought on a PO and resold.
     //   Assembly  a NetSuite item with a BOM — made or bought.
+    //   Kit       a sellable SET — a customer part# wrapping component items. Sales face only:
+    //             no NetSuite item, and shop documents always show the exploded components.
     const actualClass = partClassFilter === 'FEES' ? 'Fee'
+        : partClassFilter === 'KITS' ? 'Kit'
         : (partClassFilter === 'ALL' || partClassFilter === 'INVENTORY' || partClassFilter === 'OUTSOURCED') ? 'Inventory'
         : 'Assembly';
-    const prefix = actualClass === 'Fee' ? 'FEE' : actualClass === 'Inventory' ? 'INV' : 'ASM';
+    const prefix = actualClass === 'Fee' ? 'FEE' : actualClass === 'Kit' ? 'KIT' : actualClass === 'Inventory' ? 'INV' : 'ASM';
     const newId = `${activeBrand.toUpperCase()}-${prefix}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
@@ -1396,6 +1406,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               <option value="INVENTORY">Raw Mat / Components (In-House)</option>
               <option value="OUTSOURCED">Outsourced Components</option>
               <option value="FEES">Fees & Charges</option>
+            <option value="KITS">Kits (Customer Sets)</option>
               <optgroup label="Assemblies & Kits">
                   <option value="UNASSIGNED">Unassigned / Pending</option>
                   {(globalLists.assemblyTypes || []).map(type => (
@@ -1634,9 +1645,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                          <input name="tempLegacyId" value={editSpecs.tempLegacyId !== undefined ? editSpecs.tempLegacyId : (activePart.legacyErpId === "PENDING" ? "" : activePart.legacyErpId)} onChange={handleSpecChange} placeholder="e.g. P-1234" style={{ ...fieldStyle, textTransform: 'uppercase' }} />
                      </div>
                      <div>
-                         <label style={labelStyle}>{isFeeRecord ? 'Reference only' : 'BOM Revision'}</label>
-                         {isFeeRecord
-                             ? <div style={{ ...fieldStyle, background: 'var(--paper-2)', color: 'var(--ink-soft)', fontSize: '0.8rem', lineHeight: 1.35, display: 'flex', alignItems: 'center' }}>A fee has no BOM and no NetSuite item.</div>
+                         <label style={labelStyle}>{(isFeeRecord || isKitRecord) ? 'Reference only' : 'BOM Revision'}</label>
+                         {(isFeeRecord || isKitRecord)
+                             ? <div style={{ ...fieldStyle, background: 'var(--paper-2)', color: 'var(--ink-soft)', fontSize: '0.8rem', lineHeight: 1.35, display: 'flex', alignItems: 'center' }}>{isKitRecord ? 'A kit has no NetSuite item — its contents live below.' : 'A fee has no BOM and no NetSuite item.'}</div>
                              : <input name="bomRevision" value={editSpecs.bomRevision || ''} onChange={handleSpecChange} placeholder="N/A" style={fieldStyle} />}
                      </div>
                  </div>
@@ -1651,13 +1662,68 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                          <option value="Assembly">Assembly — a NetSuite item with a BOM, made or bought</option>
                          <option value="Master Assembly">Master Assembly — the mainline product an order is built around</option>
                          <option value="Fee">Fee — a charge. No stock, no BOM, no NetSuite item</option>
+                         <option value="Kit">Kit — a sellable set: a customer part# wrapping component items. No NetSuite item</option>
                      </select>
                      <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px' }}>
-                         {isFeeRecord
+                         {isKitRecord
+                             ? 'A kit is the SALES face of a set (e.g. a 4ft traverse starter: fascia + track + 2 brackets). CPQ and quotes may show this part#, but the BOM, shop floor and finishing floor always see the exploded ORDER totals — never the kit. Its ERP Legacy ID is a reference, and nothing here is ever pushed to NetSuite as an item.'
+                             : isFeeRecord
                              ? 'A fee bills through the CPQ flow and rolls into the mainline — its ERP Legacy ID above is a REFERENCE, not a NetSuite item number, and nothing here is ever pushed to NetSuite as an item.'
                              : 'This is what the record IS. Entering an ERP Legacy ID never changes it — the id prefix follows the class, not the other way round.'}
                      </div>
                  </div>
+
+                 {/* KIT CONTENTS (Stuart 2026-08-08) — the component items this customer part#
+                     wraps, stored at manufacturingSpecs.kitComponents [{ partId, qty }]. This list
+                     is what the order EXPLODES to downstream: quotes may show the kit part#, but
+                     the BOM / shop floor / finishing floor only ever see these components summed
+                     across the order. Real items only — a kit never contains a fee or another kit. */}
+                 {isKitRecord && (() => {
+                     const kitRows = Array.isArray(editSpecs.kitComponents) ? editSpecs.kitComponents : [];
+                     const byId = (k) => inventory.find(p => p.id === k || p.itemId === k || p.legacyErpId === k) || null;
+                     const setRows = (rows) => setEditSpecs(prev => ({ ...prev, kitComponents: rows }));
+                     const q = kitSearch.trim().toUpperCase();
+                     const inKit = new Set(kitRows.map(r => r.partId));
+                     const hits = !q ? [] : inventory.filter(p => {
+                         if (p.partClass === 'Fee' || p.partClass === 'Kit' || p.isRetired) return false;
+                         if (String(p.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE') return false;
+                         if (inKit.has(p.id)) return false;
+                         return `${p.legacyErpId || ''} ${p.itemId || ''} ${p.itemName || ''}`.toUpperCase().includes(q);
+                     }).slice(0, 8);
+                     const codeOf = (p) => (p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId);
+                     return (
+                         <div style={{ background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)', marginBottom: '30px' }}>
+                             <h4 style={{ margin: '0 0 8px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Kit Contents</h4>
+                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>The real items this kit wraps. Orders explode to these on every shop document — the kit part# itself never reaches the floor.</div>
+                             {kitRows.length === 0 && <div style={{ fontStyle: 'italic', color: 'var(--ink-soft)', marginBottom: '16px' }}>No components yet — search below to add the first one.</div>}
+                             {kitRows.map((r, i) => {
+                                 const p = byId(r.partId);
+                                 return (
+                                     <div key={`${r.partId}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
+                                         <div style={{ flex: 1 }}>
+                                             <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{p ? codeOf(p) : r.partId}</span>
+                                             <span style={{ fontSize: '0.85rem', color: p ? 'var(--ink-soft)' : 'var(--red, #b00020)', marginLeft: '10px' }}>{p ? p.itemName : '⚠ not found in library'}</span>
+                                         </div>
+                                         <input type="number" min="1" value={r.qty} title="Quantity of this component in ONE kit"
+                                             onChange={e => setRows(kitRows.map((x, j) => j === i ? { ...x, qty: Math.max(1, parseInt(e.target.value) || 1) } : x))}
+                                             style={{ width: '70px', padding: '8px', border: '1px solid var(--line)', textAlign: 'center', fontFamily: 'var(--sans)' }} />
+                                         <button onClick={() => setRows(kitRows.filter((_, j) => j !== i))} title="Remove from kit" style={{ padding: '8px 12px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', color: 'var(--ink-soft)' }}>✕</button>
+                                     </div>
+                                 );
+                             })}
+                             <div style={{ marginTop: '16px' }}>
+                                 <input value={kitSearch} onChange={e => setKitSearch(e.target.value)} placeholder="Search items to add (code or name)…" style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
+                                 {hits.map(p => (
+                                     <div key={p.id} onClick={() => { setRows([...kitRows, { partId: p.id, qty: 1 }]); setKitSearch(''); }}
+                                         style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', border: '1px solid var(--line)', borderTop: 'none', cursor: 'pointer', background: '#fff' }}>
+                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{codeOf(p)}</span>
+                                         <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginLeft: '12px' }}>{p.itemName}</span>
+                                     </div>
+                                 ))}
+                             </div>
+                         </div>
+                     );
+                 })()}
 
                  <div style={{ marginBottom: '30px' }}>
                      <label style={labelStyle}>Warehouse Bin Location (Barcode/Ref)</label>

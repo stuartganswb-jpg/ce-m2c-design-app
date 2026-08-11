@@ -123,6 +123,10 @@ const isFeeItem = (p) => {
     const pt = upper(p?.manufacturingSpecs?.productType || p?.productType);
     return pt === 'FEE' || p?.partClass === 'Fee' || /(^|-)FEE-/.test(upper(p?.legacyErpId || p?.itemId));
 };
+// KIT RECORDS (Stuart 2026-08-08, the traverse project) — the sales face of a set: a customer part#
+// wrapping real component items (manufacturingSpecs.kitComponents). Same class-first test shape as
+// isFeeItem, with the KIT- code convention as the legacy fallback.
+const isKitItem = (p) => p?.partClass === 'Kit' || /(^|-)KIT-/.test(upper(p?.legacyErpId || p?.itemId));
 
 // Every collection an item claims — explicit list first, else the NetSuite-synced single value.
 const collectionsOf = (specs) => {
@@ -159,6 +163,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     // update this properly as it does not have fields for the plated/premium items").
     const [tierRow, setTierRow] = useState(null);          // docId of the open editor
     const [tierEdit, setTierEdit] = useState({});          // field → value while open
+    // 📦 KIT BUILDER (Stuart 2026-08-08) — kits are customer/collection creatures, so they are
+    // built HERE in bulk, not one at a time in the Master Library (same ruling as fees, 07-30).
+    const [newKit, setNewKit] = useState(null);            // ＋ New kit form (KITS mode)
+    const [kitRow, setKitRow] = useState(null);            // docId of the open contents editor
+    const [kitEditRows, setKitEditRows] = useState([]);    // working copy of kitComponents while open
+    const [kitSearch, setKitSearch] = useState('');        // component picker (form + row editor share it)
     const fileRef = useRef(null);
 
     useEffect(() => {
@@ -248,6 +258,11 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             return out;
         };
         if (mode === 'FEES') return fold(inventory.filter(isFeeItem));
+        // KITS: the brand's kit records, scoped by the collection picker when one is chosen (same
+        // rule as PLATES — a list that quietly ignores the visible selector reads as a bug).
+        if (mode === 'KITS') return fold(inventory.filter(p => isKitItem(p)
+            && p.manufacturingSpecs?.isRetired !== true
+            && (!coll || collectionsOf(p.manufacturingSpecs).includes(upper(coll)))));
         // CHECKOUT ITEMS (Stuart 2026-07-31): what the CPQ checkout screen offers. By default the
         // list IS the curated set, so you see exactly what a customer sees. Type in the search box
         // and it searches the WHOLE library instead — that is how you find something new to tick.
@@ -602,6 +617,95 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         } catch (e) { console.error(e); alert('Could not create it:\n\n' + (e.message || e)); }
     };
 
+    // ---- CREATE A KIT (Stuart 2026-08-08, the traverse project) --------------------------------
+    // "this kit will be where we load all of the actual associated inventory or assembly items,
+    // and attach the customer alias/pricing tool to this. so we can give our customer a part# for
+    // a 4ft set." Same one-action shape as createFee: the record, its contents, and the customer's
+    // association (clientPricing row) are made together, tagged into the selected collection. The
+    // kit is the SALES face only — shop documents always explode to kitComponents, so nothing here
+    // ever reaches NetSuite as an item.
+    const createKit = async () => {
+        const f = newKit || {};
+        const code = upper(f.code);
+        if (!code) return alert('Give the kit an item # — ours, not the customer’s (e.g. CE-KIT-2TRV4).');
+        if (!String(f.name || '').trim()) return alert('Give the kit a description (e.g. "4ft Traverse Starter Set").');
+        if (inventory.some(p => codeOf(p) === code)) return alert(`"${code}" already exists in the library. Find it in the list and add ${customer?.name || 'the customer'}'s part # to it instead — that is the association.`);
+        const comps = (f.components || []).filter(r => r.partId && (parseInt(r.qty) || 0) > 0);
+        if (!comps.length) return alert('A kit with no contents cannot explode on the shop documents — add at least one component item.');
+        const row = (f.theirSku || f.theirNet !== '' || f.theirSales !== '') ? [{
+            customerId: custId, customerName: customer?.name || '',
+            clientSku: String(f.theirSku || '').trim(), price: money(f.theirNet), clientSalesPrice: money(f.theirSales),
+            source: 'COLLECTION_PAGE', updatedAt: Date.now(), updatedBy: String(currentUser || ''),
+        }] : [];
+        const id = `KIT-${code.replace(/[^A-Za-z0-9-]/g, '_')}-${Date.now().toString().slice(-6)}`;
+        try {
+            await setDoc(doc(db, 'Approved_Designs', id), {
+                id, itemId: code, legacyErpId: code, itemName: String(f.name).trim(),
+                brandId: activeBrand, sharedBrands: [activeBrand],
+                partClass: 'Kit', routingType: '',
+                clientPricing: row,
+                manufacturingSpecs: {
+                    basePrice: money(f.basePrice),
+                    kitComponents: comps.map(r => ({ partId: r.partId, qty: parseInt(r.qty) || 1 })),
+                    ...(coll ? { collections: [upper(coll)] } : {}),
+                    status: 'APP_ONLY', createdAt: Date.now(), createdBy: String(currentUser || ''),
+                },
+            });
+            setNewKit(null); setKitSearch('');
+        } catch (e) { alert(`Create failed: ${e?.message || e}`); }
+    };
+
+    // Save the open row editor's contents back onto the kit record. Contents are item metadata
+    // (shared by every customer), so this writes the item doc, not the clientPricing row.
+    const saveKitContents = async () => {
+        if (!kitRow) return;
+        const comps = kitEditRows.filter(r => r.partId && (parseInt(r.qty) || 0) > 0)
+            .map(r => ({ partId: r.partId, qty: parseInt(r.qty) || 1 }));
+        if (!comps.length) return alert('A kit needs at least one component — delete the kit record in the Master Library if it is obsolete.');
+        try {
+            await updateDoc(doc(db, 'Approved_Designs', kitRow), { 'manufacturingSpecs.kitComponents': comps, updatedAt: new Date().toISOString() });
+            setKitRow(null); setKitEditRows([]); setKitSearch('');
+        } catch (e) { alert(`Save failed: ${e?.message || e}`); }
+    };
+
+    // The component picker + qty rows, shared by the ＋New kit form and the per-row editor. Real
+    // items only — a kit never contains a fee or another kit.
+    const kitContentsEditor = (rowsIn, setRowsFn) => {
+        const q = upper(kitSearch).trim();
+        const inKit = new Set(rowsIn.map(r => r.partId));
+        const hits = !q ? [] : inventory.filter(p => {
+            if (isFeeItem(p) || isKitItem(p) || p.manufacturingSpecs?.isRetired === true) return false;
+            if (inKit.has(p.id)) return false;
+            return codeOf(p).includes(q) || upper(p.itemName).includes(q);
+        }).slice(0, 8);
+        const partById = (k) => inventory.find(p => p.id === k) || null;
+        return (
+            <div>
+                {rowsIn.map((r, i) => {
+                    const p = partById(r.partId);
+                    return (
+                        <div key={`${r.partId}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 0', borderBottom: `1px solid ${theme.paper2}` }}>
+                            <span style={{ fontFamily: theme.mono, fontSize: '11px', width: '160px' }}>{p ? codeOf(p) : r.partId}</span>
+                            <span style={{ flex: 1, fontSize: '0.84rem', color: p ? theme.inkSoft : theme.red, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p ? p.itemName : '⚠ not found in library'}</span>
+                            <input type="number" min="1" value={r.qty} title="Quantity in ONE kit"
+                                onChange={e => setRowsFn(rowsIn.map((x, j) => j === i ? { ...x, qty: Math.max(1, parseInt(e.target.value) || 1) } : x))}
+                                style={{ ...fld, width: '64px', textAlign: 'center' }} />
+                            <button onClick={() => setRowsFn(rowsIn.filter((_, j) => j !== i))} style={{ ...btn(false), padding: '6px 10px' }}>✕</button>
+                        </div>
+                    );
+                })}
+                <input value={kitSearch} onChange={e => setKitSearch(e.target.value)} placeholder="Search items to add (code or name)…" style={{ ...fld, width: '100%', marginTop: '10px' }} />
+                {hits.map(p => (
+                    <div key={p.id} onClick={() => { setRowsFn([...rowsIn, { partId: p.id, qty: 1 }]); setKitSearch(''); }}
+                        style={{ display: 'flex', gap: '10px', padding: '7px 12px', border: `1px solid ${theme.line}`, borderTop: 'none', cursor: 'pointer', background: '#fff' }}>
+                        <span style={{ fontFamily: theme.mono, fontSize: '11px', width: '160px' }}>{codeOf(p)}</span>
+                        <span style={{ flex: 1, fontSize: '0.82rem', color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.itemName}</span>
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
     // ---- ADD AN ITEM TO THE COLLECTION -------------------------------------------------------
     // The H1-1D case: an item that belongs to the collection but was never tagged into it. Adding
     // writes manufacturingSpecs.collections (app-owned) — pricing is then entered on its row.
@@ -720,8 +824,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
                 <div style={{ display: 'flex', border: `1px solid ${theme.line}` }}>
-                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons'], ['CHECKOUT', '🛒 Checkout Items'], ['PLATES', '🔗 Plate Pricing'], ['ARMS', '🦾 Arms & Returns']].map(([k, l]) => (
-                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : k === 'ARMS' ? 'Which bracket arms and return fees carry a free backplate in their price. Everything does by default — untick the exceptions.' : k === 'PLATES' ? 'Backplate / cover-plate pricing roles for the whole brand at once — which plates ride free with the arm, and what the upgrade costs painted vs premium.' : k === 'CHECKOUT' ? 'What the CPQ checkout screen offers as add-on lines — fees OR real items. Only ticked items appear there.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
+                    {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons'], ['KITS', '📦 Kit Builder'], ['CHECKOUT', '🛒 Checkout Items'], ['PLATES', '🔗 Plate Pricing'], ['ARMS', '🦾 Arms & Returns']].map(([k, l]) => (
+                        <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : k === 'KITS' ? 'Kit records — a customer part# wrapping component items (the 4ft traverse starter). Build the kit, its contents, and the customer\'s SKU/pricing in one place. Shop documents always see the exploded components, never the kit.' : k === 'ARMS' ? 'Which bracket arms and return fees carry a free backplate in their price. Everything does by default — untick the exceptions.' : k === 'PLATES' ? 'Backplate / cover-plate pricing roles for the whole brand at once — which plates ride free with the arm, and what the upgrade costs painted vs premium.' : k === 'CHECKOUT' ? 'What the CPQ checkout screen offers as add-on lines — fees OR real items. Only ticked items appear there.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>
                     ))}
                 </div>
                 <select value={coll} onChange={e => { setColl(e.target.value); setEdits({}); }} title={mode === 'FEES' ? 'In Fees mode this does not filter the list (fees are brand-wide) — it is the collection a NEW fee gets tagged into.' : 'Parts carrying this collection'} style={{ ...fld, minWidth: '220px' }}>
@@ -935,6 +1039,18 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         </div>
                     )}
 
+                    {mode === 'KITS' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
+                            <button onClick={() => { setKitSearch(''); setNewKit({ code: '', name: '', basePrice: '', theirSku: '', theirNet: '', theirSales: '', components: [] }); }} style={btn(true, { background: theme.green, borderColor: theme.green })}>＋ New kit</button>
+                            <span style={{ fontSize: '0.88rem', color: theme.ink, flex: 1, minWidth: '420px' }}>
+                                A kit is the <b>sales face of a set</b> — a customer part# wrapping real component items (the 4ft traverse starter: fascia + track + 2 brackets). Give {customer?.name || 'the customer'} their SKU and pricing on the row, exactly like any item.
+                                <span style={{ display: 'block', color: theme.inkSoft, marginTop: '4px' }}>
+                                    The <b>BOM, shop floor and finishing floor never see the kit</b> — orders explode to its contents summed with everything else (a 4ft set + 3 more feet reads as one 7ft pole and track). ⚙ Contents opens the component list; contents are item metadata, shared by every customer.
+                                </span>
+                            </span>
+                        </div>
+                    )}
+
                     {/* FILTERS + ADD */}
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
                         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item # or name…" style={{ ...fld, width: '260px' }} />
@@ -972,6 +1088,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                         <th style={{ ...th, textAlign: 'right' }} title="The /EP and /P25 premium tier. Blank = same as the painted upcharge.">Premium $</th>
                                     </>}
                                     {mode === 'CHECKOUT' && <th style={{ ...th, textAlign: 'center', width: '78px' }} title="Ticked = it appears on the CPQ checkout screen as an add-on line. Fees and real items both work; a real item stays a real part line (own NetSuite line, own routing).">On&nbsp;checkout</th>}
+                                    {mode === 'KITS' && <th style={{ ...th, borderLeft: `2px solid ${theme.ink}`, width: '150px' }} title="The component items ONE kit wraps — what an order explodes to on every shop document. Item metadata, shared by every customer.">Contents</th>}
                                     <th style={th}>Item #</th>
                                     <th style={{ ...th, width: '38%' }}>Description</th>
                                     <th style={{ ...th, textAlign: 'right' }} title="OUR price — shared by every customer. Editing it here changes it everywhere.">Base $</th>
@@ -1020,6 +1137,19 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 <div style={{ fontFamily: theme.mono, fontSize: '9px', color: r.isFeeRec ? theme.brassDark : theme.inkSoft, marginTop: '3px' }}>{r.isFeeRec ? 'FEE' : 'ITEM'}</div>
                                             </td>
                                         )}
+                                        {mode === 'KITS' && (() => {
+                                            const comps = r.p.manufacturingSpecs?.kitComponents || [];
+                                            const open = kitRow === r.p.id;
+                                            return (
+                                                <td style={{ ...td, borderLeft: `2px solid ${theme.ink}`, whiteSpace: 'nowrap' }}>
+                                                    <button onClick={() => { if (open) { setKitRow(null); setKitEditRows([]); } else { setKitEditRows(comps.map(c => ({ ...c }))); setKitSearch(''); setKitRow(r.p.id); } }}
+                                                        title="Open the component list — what ONE kit explodes to on shop documents"
+                                                        style={{ background: comps.length ? 'none' : 'rgba(176,45,32,.08)', border: `1px solid ${comps.length ? theme.line : theme.red}`, color: comps.length ? theme.inkSoft : theme.red, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', padding: '5px 9px' }}>
+                                                        {open ? '⚙ Close' : `⚙ ${comps.length} item${comps.length === 1 ? '' : 's'}`}
+                                                    </button>
+                                                </td>
+                                            );
+                                        })()}
                                         <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 600 }}>{r.code}
                                             {r.aliasCodes.length > 0 && <span title={`Customer-facing alias code${r.aliasCodes.length > 1 ? 's' : ''} pointing at this item — quotes and the portal show the alias; the data you edit here lives on THIS main record (the one the engine reads).`} style={{ marginLeft: '8px', fontSize: '10px', color: theme.inkSoft, fontWeight: 600 }}>⤿ {r.aliasCodes.join(' · ')}</span>}
                                             {r.sug && !r.dirty && <span title={`These numbers come from the ${legacySrc?.label} on the item — not a saved ${customer?.name} price row yet`} style={{ marginLeft: '8px', fontSize: '10px', color: theme.brassDark, fontWeight: 600 }}>SUGGESTED</span>}
@@ -1072,7 +1202,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                     </tr>
                                 ), tierRow === r.p.id ? (
                                     <tr key={r.p.id + '-tiers'}>
-                                        <td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : mode === 'ARMS' ? 9 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
+                                        <td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : mode === 'ARMS' ? 9 : mode === 'KITS' ? 9 : 8} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
                                                 <span style={{ fontFamily: theme.serif, fontSize: '1.15rem', color: theme.ink }}>Customer Alias &amp; Pricing — {r.code}</span>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>drives the CPQ price levels · blank = no price at that tier</span>
@@ -1189,9 +1319,23 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                             </div>
                                         </td>
                                     </tr>
+                                ) : null, kitRow === r.p.id ? (
+                                    <tr key={r.p.id + '-kit'}>
+                                        <td colSpan={9} style={{ padding: '18px 22px', background: 'rgba(176,141,87,.07)', borderBottom: `1px solid ${theme.line}` }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
+                                                <span style={{ fontFamily: theme.serif, fontSize: '1.15rem', color: theme.ink }}>Kit contents — {r.code}</span>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>what ONE kit explodes to · item metadata, shared by every customer</span>
+                                            </div>
+                                            {kitContentsEditor(kitEditRows, setKitEditRows)}
+                                            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '14px' }}>
+                                                <button onClick={() => { setKitRow(null); setKitEditRows([]); setKitSearch(''); }} style={btn(false)}>Cancel</button>
+                                                <button onClick={saveKitContents} style={btn(true, { background: theme.green, borderColor: theme.green })}>Save contents</button>
+                                            </div>
+                                        </td>
+                                    </tr>
                                 ) : null])}
                                 {rows.length === 0 && (
-                                    <tr><td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : mode === 'ARMS' ? 9 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
+                                    <tr><td colSpan={mode === 'FEES' ? 13 : mode === 'CHECKOUT' ? 9 : mode === 'PLATES' ? 12 : mode === 'ARMS' ? 9 : mode === 'KITS' ? 9 : 8} style={{ padding: '28px 36px', textAlign: 'center', fontFamily: theme.serif, fontStyle: 'italic', color: theme.inkSoft }}>
                                         {members.length === 0 ? `No parts carry the ${coll} collection yet — add them with the search on the right.` : 'No parts match this filter.'}
                                         {searchMisses.length > 0 && (
                                             <div style={{ marginTop: '18px', fontStyle: 'normal', fontFamily: theme.sans }}>
@@ -1273,6 +1417,41 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         <div style={{ padding: '16px 26px', borderTop: `1px solid ${theme.line}`, display: 'flex', gap: '12px', justifyContent: 'flex-end', background: theme.paper }}>
                             <button onClick={() => setNewFee(null)} style={btn(false)}>Cancel</button>
                             <button onClick={createFee} style={btn(true, { background: theme.green, borderColor: theme.green })}>Create fee →</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ＋ NEW KIT — record, contents, and the customer association in one action */}
+            {newKit && (
+                <div onClick={() => setNewKit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '760px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: `1px solid ${theme.line}` }}>
+                        <div style={{ padding: '20px 26px', borderBottom: `1px solid ${theme.line}`, background: theme.paper2 }}>
+                            <div style={{ fontFamily: theme.serif, fontSize: '1.4rem' }}>New kit{coll ? ` — tagged into ${coll}` : ''}</div>
+                            <div style={{ fontSize: '0.85rem', color: theme.inkSoft, marginTop: '4px' }}>The sales face of a set. Shop documents always explode to the contents below — the kit part# never reaches the floor, and nothing here is pushed to NetSuite as an item.</div>
+                        </div>
+                        <div style={{ padding: '22px 26px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 120px', gap: '16px' }}>
+                                <div><label style={lbl}>Our item #</label><input value={newKit.code} onChange={e => setNewKit({ ...newKit, code: e.target.value.toUpperCase() })} placeholder="CE-KIT-2TRV4" style={{ ...fld, width: '100%', fontFamily: theme.mono }} /></div>
+                                <div><label style={lbl}>Description</label><input value={newKit.name} onChange={e => setNewKit({ ...newKit, name: e.target.value })} placeholder="4ft Traverse Starter Set" style={{ ...fld, width: '100%' }} /></div>
+                                <div><label style={lbl}>Our base $</label><input value={newKit.basePrice} onChange={e => setNewKit({ ...newKit, basePrice: e.target.value })} placeholder="0.00" style={{ ...fld, width: '100%', textAlign: 'right', fontFamily: theme.mono }} /></div>
+                            </div>
+                            <div style={{ border: `1px solid ${theme.line}`, padding: '14px 16px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginBottom: '8px' }}>Kit contents — what one kit explodes to</div>
+                                {kitContentsEditor(newKit.components || [], (rows) => setNewKit({ ...newKit, components: rows }))}
+                            </div>
+                            <div style={{ borderTop: `1px solid ${theme.line}`, paddingTop: '18px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.brassDark, marginBottom: '10px' }}>{customer?.name || 'This customer'} — their side of it</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                                    <div><label style={lbl}>Their part #</label><input value={newKit.theirSku} onChange={e => setNewKit({ ...newKit, theirSku: e.target.value })} placeholder="H1-2TRV-SET4" style={{ ...fld, width: '100%', fontFamily: theme.mono }} /></div>
+                                    <div><label style={lbl}>Their net $</label><input value={newKit.theirNet} onChange={e => setNewKit({ ...newKit, theirNet: e.target.value })} placeholder="0.00" style={{ ...fld, width: '100%', textAlign: 'right', fontFamily: theme.mono }} /></div>
+                                    <div><label style={lbl}>Their sales $</label><input value={newKit.theirSales} onChange={e => setNewKit({ ...newKit, theirSales: e.target.value })} placeholder="0.00" style={{ ...fld, width: '100%', textAlign: 'right', fontFamily: theme.mono }} /></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{ padding: '16px 26px', borderTop: `1px solid ${theme.line}`, display: 'flex', gap: '12px', justifyContent: 'flex-end', background: theme.paper }}>
+                            <button onClick={() => setNewKit(null)} style={btn(false)}>Cancel</button>
+                            <button onClick={createKit} style={btn(true, { background: theme.green, borderColor: theme.green })}>Create kit →</button>
                         </div>
                     </div>
                 </div>
