@@ -380,3 +380,31 @@ parked-pin guard only suppresses clusters whose every pin is parked/hidden. Also
 flow-settings panel now carries a visible "Flow mode: Single assembly / Combined size family" switch
 (persisted `singleAssembly`), and `sizeFamilyOfParts` requires DOMINANCE (≥5 keyed parts, ≥60%) —
 one stray family-stamped pin can no longer family-ize a foreign flow. Regenerate honors the switch.
+
+---
+
+# THE CONFIGURATOR PROJECT — kicked off 2026-08-08 (Stuart's plan, his order)
+
+The traverse becomes a major project in three parts. His framing: the CPQ flow we built works; the
+big difference is traverse systems carry many internal components ("carriers") that run inside the
+tracks, and systems sell in **4ft sets to start**.
+
+**The selling model:** steps 1–2 start at 48" = the 4ft billable set — its price includes the
+fascia, the track and 2 brackets. Every additional foot adds a foot of fascia + track, and at
+certain lengths additional center brackets. The carriers are chosen in a **pop-up configurator
+AFTER the visible system is configured** — it prices nothing (the per-foot price already covers it)
+but its selections must land on the BOM.
+
+**Shop documents never see kits or sets:** a 4ft kit + 3 more feet reads as one 7ft pole and track
+with the standard deductions, like every rod. The kit is sales-facing only.
+
+| Step | What | Status |
+|---|---|---|
+| **1a** | **Kit record class** in the Master Library — contents editor (`manufacturingSpecs.kitComponents`), KIT- prefix, KITS filter, clientPricing attaches as on any item, push guard (kit skipped like a fee) | ✅ `58319ed` |
+| **1b** | **Kit Builder in 4.6** — KITS mode: bulk list scoped by collection, ＋New kit (record + contents + customer row in one action), ⚙ per-row contents editor | ✅ `58319ed` |
+| **2** | **Traverse rules tab in 4.6** — the per-foot inclusion rules (what each added foot includes, center-bracket thresholds) + the carrier components and rules the configurator reads | ⏳ Stuart is preparing spreadsheets/docs — DO NOT GUESS the shape, wait for them |
+| **3** | **The carriers configurator** — pop-up after the visible system is configured; no pricing; writes selections onto the BOM | after 2 |
+| — | CPQ flow changes (48" start, 4ft-set pricing), Vision changes | woven in once 2 defines the rules |
+
+Step 1 deliberately does NOT touch CPQ: nothing shows a kit part# in a flow yet, and the per-foot
+explosion logic belongs with the rules tab. The `resolveJobLines` kit guard notes this.
