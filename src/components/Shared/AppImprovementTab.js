@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy, limit, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy, limit, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 
 // APP IMP. — the one place any operator, in any section, reports a bug or asks for an improvement.
@@ -204,6 +204,10 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
     const [flash, setFlash] = useState('');
     const [entries, setEntries] = useState([]);
     const [showResolved, setShowResolved] = useState(false);
+    // The resolve → test → verify loop (Stuart 2026-08-11): admins write an EXPLANATION with the
+    // resolve; the reporter marks it tested (VERIFIED) or fails it back open with details.
+    const [noteDrafts, setNoteDrafts] = useState({});     // entryId -> resolution note draft
+    const [reopenDrafts, setReopenDrafts] = useState({}); // entryId -> failure-details draft (undefined = box hidden)
 
     useEffect(() => {
         const q = query(entriesCol(), orderBy('t', 'desc'), limit(150));
@@ -269,9 +273,19 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
         setSubmitting(false);
     };
 
-    const setStatus = (entry, status) => updateDoc(doc(db, 'system', 'app_feedback', 'entries', entry.id), { status, statusBy: currentUser || '', statusAt: serverTimestamp() }).catch(e => alert('Update failed: ' + (e.message || e)));
+    const setStatus = (entry, status, extra = {}) => updateDoc(doc(db, 'system', 'app_feedback', 'entries', entry.id), { status, statusBy: currentUser || '', statusAt: serverTimestamp(), ...extra }).catch(e => alert('Update failed: ' + (e.message || e)));
 
-    const visibleEntries = entries.filter(en => showResolved || en.status !== 'RESOLVED');
+    // Reporter marks the fix TESTED — the closed-loop confirmation.
+    const markTested = (entry) => setStatus(entry, 'VERIFIED', { testedBy: currentUser || '', testedAt: serverTimestamp() });
+    // …or FAILS it back open, with the details appended to the report's history.
+    const reopenFailed = (entry) => {
+        const note = String(reopenDrafts[entry.id] || '').trim();
+        if (!note) return alert('Describe what failed — that detail is the whole point of reopening.');
+        setStatus(entry, 'REOPENED', { reopens: arrayUnion({ note, by: currentUser || '', at: Date.now() }) });
+        setReopenDrafts(d => { const n = { ...d }; delete n[entry.id]; return n; });
+    };
+
+    const visibleEntries = entries.filter(en => showResolved || !['RESOLVED', 'VERIFIED'].includes(en.status));
     const typeOf = (id) => ISSUE_TYPES.find(t => t.id === id) || { label: id, color: theme.inkSoft };
     const fmtDate = (t) => { try { return t?.toDate ? t.toDate().toLocaleString() : ''; } catch (e) { return ''; } };
 
@@ -384,13 +398,15 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
             {visibleEntries.map(en => {
                 const t = typeOf(en.issueType);
                 return (
-                    <div key={en.id} style={{ background: '#fff', border: `1px solid ${theme.line}`, borderLeft: `3px solid ${en.status === 'RESOLVED' ? '#1e8449' : t.color}`, borderRadius: '2px', padding: '14px 18px', marginBottom: '10px', opacity: en.status === 'RESOLVED' ? 0.65 : 1 }}>
+                    <div key={en.id} style={{ background: '#fff', border: `1px solid ${theme.line}`, borderLeft: `3px solid ${['RESOLVED', 'VERIFIED'].includes(en.status) ? '#1e8449' : (en.status === 'REOPENED' ? '#c0392b' : t.color)}`, borderRadius: '2px', padding: '14px 18px', marginBottom: '10px', opacity: ['RESOLVED', 'VERIFIED'].includes(en.status) ? 0.7 : 1 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '6px' }}>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: '#fff', background: t.color, padding: '3px 8px', borderRadius: '2px' }}>{t.label}</span>
                                 <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '2px 7px', borderRadius: '2px' }}>{en.app}</span>
                                 <strong style={{ fontSize: '0.9rem', color: theme.ink }}>{en.tabScope === 'NEW' ? `NEW TAB: ${en.tabRef || '(unnamed)'}` : `${en.section ? en.section + ' · ' : ''}${en.tabRef || '(no tab given)'}`}</strong>
-                                {en.status === 'RESOLVED' && <span style={{ fontSize: '0.75rem', color: '#1e8449' }}>✓ resolved{en.statusBy ? ` by ${en.statusBy}` : ''}</span>}
+                                {en.status === 'RESOLVED' && <span style={{ fontSize: '0.75rem', color: '#1e8449' }}>✓ resolved{en.statusBy ? ` by ${en.statusBy}` : ''} · awaiting test</span>}
+                                {en.status === 'VERIFIED' && <span style={{ fontSize: '0.75rem', color: '#1e8449', fontWeight: 600 }}>✓✓ tested & verified{en.testedBy ? ` by ${en.testedBy}` : ''}</span>}
+                                {en.status === 'REOPENED' && <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: '#fff', background: '#c0392b', padding: '3px 8px', borderRadius: '2px' }}>Reopened — failed test</span>}
                             </div>
                             <span style={{ fontSize: '0.75rem', color: theme.inkSoft }}>{en.user} · {fmtDate(en.t)}</span>
                         </div>
@@ -412,11 +428,55 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
                                 ))}
                             </div>
                         )}
+                        {/* RESOLUTION — the explanation travels with the resolve, so the reporter
+                            reads WHAT changed before testing it. */}
+                        {en.resolutionNote && (
+                            <div style={{ marginTop: '10px', padding: '10px 12px', background: '#f0f7f1', border: '1px solid #cfe3d2', borderRadius: '2px' }}>
+                                <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: '#1e8449', display: 'block', marginBottom: '4px' }}>Resolution{en.statusBy ? ` — ${en.statusBy}` : ''}</span>
+                                <div style={{ fontSize: '0.85rem', color: theme.ink, whiteSpace: 'pre-wrap' }}>{en.resolutionNote}</div>
+                            </div>
+                        )}
+                        {(en.reopens || []).map((r, i) => (
+                            <div key={i} style={{ marginTop: '8px', padding: '10px 12px', background: '#fdf3f3', border: '1px solid #e2b8b8', borderRadius: '2px' }}>
+                                <span style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.1em', textTransform: 'uppercase', color: '#c0392b', display: 'block', marginBottom: '4px' }}>Failed test — {r.by || '?'} · {r.at ? new Date(r.at).toLocaleString() : ''}</span>
+                                <div style={{ fontSize: '0.85rem', color: theme.ink, whiteSpace: 'pre-wrap' }}>{r.note}</div>
+                            </div>
+                        ))}
+
+                        {/* Admin: explanation + resolve. The note saves WITH the resolve; on an
+                            already-resolved report it stays editable. */}
                         {canManage && (
                             <div style={{ marginTop: '10px' }}>
-                                {en.status !== 'RESOLVED'
-                                    ? <button onClick={() => setStatus(en, 'RESOLVED')} style={{ padding: '6px 14px', background: 'transparent', color: '#1e8449', border: '1px solid #1e8449', borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>Mark Resolved</button>
-                                    : <button onClick={() => setStatus(en, 'NEW')} style={{ padding: '6px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>Reopen</button>}
+                                <textarea value={noteDrafts[en.id] ?? en.resolutionNote ?? ''} onChange={e => setNoteDrafts(d => ({ ...d, [en.id]: e.target.value }))} rows={2}
+                                    placeholder="Explanation for the reporter — what changed, how to use it, what to test…"
+                                    style={{ ...inputStyle, resize: 'vertical', fontSize: '0.85rem', marginBottom: '6px' }} />
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                    {!['RESOLVED', 'VERIFIED'].includes(en.status)
+                                        ? <button onClick={() => setStatus(en, 'RESOLVED', { resolutionNote: (noteDrafts[en.id] ?? en.resolutionNote ?? '').trim() })} style={{ padding: '6px 14px', background: 'transparent', color: '#1e8449', border: '1px solid #1e8449', borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>Mark Resolved (saves note)</button>
+                                        : <>
+                                            <button onClick={() => updateDoc(doc(db, 'system', 'app_feedback', 'entries', en.id), { resolutionNote: (noteDrafts[en.id] ?? en.resolutionNote ?? '').trim() }).catch(e => alert('Save failed: ' + (e.message || e)))} style={{ padding: '6px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>Save Note</button>
+                                            <button onClick={() => setStatus(en, 'REOPENED', { reopens: arrayUnion({ note: 'Reopened by admin', by: currentUser || '', at: Date.now() }) })} style={{ padding: '6px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>Reopen</button>
+                                        </>}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Reporter: test the resolution — verify it, or fail it back open with details. */}
+                        {en.status === 'RESOLVED' && (
+                            <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                <button onClick={() => markTested(en)} style={{ padding: '8px 16px', background: '#1e8449', color: '#fff', border: 'none', borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>✓ Tested — it works</button>
+                                <button onClick={() => setReopenDrafts(d => ({ ...d, [en.id]: d[en.id] ?? '' }))} style={{ padding: '8px 16px', background: 'transparent', color: '#c0392b', border: '1px solid #c0392b', borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>✗ Failed — reopen</button>
+                            </div>
+                        )}
+                        {reopenDrafts[en.id] !== undefined && (
+                            <div style={{ marginTop: '8px' }}>
+                                <textarea value={reopenDrafts[en.id]} onChange={e => setReopenDrafts(d => ({ ...d, [en.id]: e.target.value }))} rows={3} autoFocus
+                                    placeholder="What failed? What did you do, what did you expect, what happened instead…"
+                                    style={{ ...inputStyle, resize: 'vertical', fontSize: '0.85rem', marginBottom: '6px' }} />
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button onClick={() => reopenFailed(en)} style={{ padding: '8px 16px', background: '#c0392b', color: '#fff', border: 'none', borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>Reopen Report</button>
+                                    <button onClick={() => setReopenDrafts(d => { const n = { ...d }; delete n[en.id]; return n; })} style={{ padding: '8px 16px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, borderRadius: '2px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.12em', textTransform: 'uppercase' }}>Cancel</button>
+                                </div>
                             </div>
                         )}
                     </div>
