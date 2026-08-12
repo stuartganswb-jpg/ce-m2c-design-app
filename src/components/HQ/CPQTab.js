@@ -12,7 +12,7 @@ import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
-import { buildFeeCatalog, buildCheckoutCatalog, anyCheckoutSelectable, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
+import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
@@ -685,7 +685,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           docs = docs.filter(d => d.brandId === activeBrand || (d.sharedBrands && d.sharedBrands.includes(activeBrand)));
           // Fee/Charge + Alias entities included: fee options price from the fee ENTITY's basePrice
           // (e.g. CE-FEE-5138) — filtering to Inventory only left them unresolvable, so fees sat at $0.
-          setLibraryParts(docs.filter(d => ["Inventory", "Fee", "Alias"].includes(d.partClass)));
+          // CHECKOUT-TICKED parts ride along REGARDLESS of class (Eric 2026-08-12: HBMB40/P — an
+          // Assembly — was ticked in 4.6 but never showed: the class filter dropped it before the
+          // catalog ever looked).
+          setLibraryParts(docs.filter(d => ["Inventory", "Fee", "Alias"].includes(d.partClass) || d.manufacturingSpecs?.checkoutSelectable === true));
           setLiveAssemblies(docs.filter(d => d.partClass === "Assembly" || d.partClass === "Master Assembly"));
       });
 
@@ -728,9 +731,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
   // catalogue, so the screen never goes blank on the way to being curated.
   const addOnCatalog = useMemo(() => {
       const priceFor = (p) => clientPriceFor(p.clientPricing, addOnCustKeys) ?? (parseFloat(p.manufacturingSpecs?.basePrice) || 0);
-      return anyCheckoutSelectable(libraryParts)
-          ? buildCheckoutCatalog(libraryParts, { priceFor })
-          : buildFeeCatalog(libraryParts, { priceFor });
+      // ITEMS and FEES curate INDEPENDENTLY (Eric 2026-08-12: ticking one real item made every
+      // fee vanish — the old either/or swapped the WHOLE catalog). Ticked real items always show;
+      // fees show ALL unless at least one FEE is itself ticked, in which case only the ticked
+      // fees show (that's the curation Stuart asked for on 2026-07-31 — it was never meant to be
+      // switched off by an unrelated item tick).
+      const checkout = buildCheckoutCatalog(libraryParts, { priceFor });
+      const curatedFeeCount = checkout.filter(e => e.isFee).length;
+      const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(libraryParts, { priceFor });
+      const seen = new Set(checkout.map(e => e.id));
+      return [...checkout, ...fees.filter(e => !seen.has(e.id))];
   }, [libraryParts, addOnCustKeys]);
 
   // TRADE DISCOUNT (customer's CRM discountCode, e.g. D20 = less 20%). Applies per cart item,
