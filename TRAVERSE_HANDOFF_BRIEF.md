@@ -408,3 +408,52 @@ with the standard deductions, like every rod. The kit is sales-facing only.
 
 Step 1 deliberately does NOT touch CPQ: nothing shows a kit part# in a flow yet, and the per-foot
 explosion logic belongs with the rules tab. The `resolveJobLines` kit guard notes this.
+
+---
+
+# STEP 2 SPEC — Fabricut_Traverse.xlsx decisions (2026-08-12, Stuart's answers verbatim-close)
+
+Source: `Fabricut/Aug12/Fabricut_Traverse.xlsx` (+ their PDF order form for configurator styling).
+Ignore tabs H1-138TRV (future flow) and Discards. Column A = step 3 main, B = Front Rail sub
+("rear track front rings" = front-as-ring), D drive, E mount, F our kit code, G their pattern,
+H/I/J their net/wholesale/retail, L/M/N the ADDITIONAL FOOT triple.
+
+1. **Billable configurator accessories** (all others included in kit/per-foot price):
+   HSOM-19, -39, -23, -45, -42, -40, -44, -43, -46, -47, -48. Seeded as a per-item `billable`
+   FIELD on the rules doc — the rules tab may change it.
+2. **Carrier style**: CSR picks one (pinch pleat / 80% RF / 100% RF); qty defaults from the
+   length chart, may be raised/lowered; RAISING charges per piece. Same overage rule for brackets
+   and splices.
+3. **Kit quoting scope**: kit codes only for kit-priced customers. BUT the 4ft start + included
+   components apply to the main CPQ for EVERYONE (48" minimum charge; operator may shorten below,
+   price floors at the 4ft kit).
+4. **Column H = our sales TO Fabricut** → clientPricing.price on the kit row. ALL pricing lives in
+   Customer Alias & Pricing (4.6) — fields, never Fabricut-hardcoded.
+5. **Splices/brackets/carriers**: included per chart at each length (TOTALS, not increments);
+   customer-ordered extras are charged.
+6. **Ceiling**: coming — designer will add the CB bracket to the assembly/flow. Kits carry the
+   mount axis now; the flow gains it later.
+7. **Kit code field**: top of CPQ tab 8 next to the flow selector; parses the code → prepopulates
+   the steps (grammar: `H1-2TRV-4` `M?` `D|FRT?` `C?` `/P|/EP|/W` `-{watt}{W|C}?` — the trailing
+   letter is MOUNT, not wood).
+8. **Motor model**: motorized Base Set price INCLUDES HSOM-21 (35W). Per-motor Fabricut codes are
+   identification only — they fold onto the base kit as `kitMotorCodes` and CPQ prices the motor
+   as an upcharge = motor price delta (verified exact across the sheet: 60W +100, 45W +100, 50W +25).
+9. **Quote shape** (kit-priced customers): kit line + additional-foot × (len−4) + end-treatment
+   items with part#s (steps 7/8 components) + billable configurator picks + overages. Their PO $
+   must match our invoice $.
+10. **Step 4 rework**: Manual vs Motorized; Manual auto-includes H1-2TRVPLUG; Motorized reveals a
+    motor dropdown (HSOM-21/20/22/41).
+
+## Where step 2 stands
+
+| Piece | Status |
+|---|---|
+| Kit sheet importer (4.6 KITS mode, preview-then-apply) | ✅ `78181b9` — kits + kitAlign + kitMotorCodes + 3-tier & per-foot pricing on the customer row; component alignment (existing items only); rules doc `traverse_rules/H1-2TRV` |
+| Parser tests against the REAL sheet | ✅ 37 total — `sh scripts/run-traverse-tests.sh` |
+| CPQ: 48" start + 4ft floor (everyone), step 4 Manual/Motorized + motor dropdown | ⏳ next |
+| Kit resolution at quote time (kit line + per-foot + end treatments) | ⏳ |
+| Kit code field → prepopulate | ⏳ |
+| Carriers configurator popup (checkbox style, per-length defaults, overage billing) | ⏳ |
+| Traverse rules TAB in 4.6 (edit usage/billable) | ⏳ importer seeds the doc; tab later |
+| KITS grid per-foot columns in 4.6 | ⏳ data lands via import; columns cosmetic |
