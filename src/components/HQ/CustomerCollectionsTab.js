@@ -21,7 +21,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatch, deleteField } from "firebase/firestore";
-import { parseControlWorkbook, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
+import { parseControlWorkbook, workbookFileToSheets, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
+import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } from '../Shared/traverseKitImport';
 import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
 import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable } from '../Shared/feeRules';
 import { PLATE_ROLES, plateRoleOf, pairedBackplateCode, includesPlate } from '../Shared/plateRules';
@@ -166,6 +167,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     // 📦 KIT BUILDER (Stuart 2026-08-08) — kits are customer/collection creatures, so they are
     // built HERE in bulk, not one at a time in the Master Library (same ruling as fees, 07-30).
     const [newKit, setNewKit] = useState(null);            // ＋ New kit form (KITS mode)
+    const [kitImp, setKitImp] = useState(null);            // kit-sheet import preview { parsed, kitEntries, compEntries, fileName }
+    const kitFileRef = useRef(null);
     const [kitRow, setKitRow] = useState(null);            // docId of the open contents editor
     const [kitEditRows, setKitEditRows] = useState([]);    // working copy of kitComponents while open
     const [kitSearch, setKitSearch] = useState('');        // component picker (form + row editor share it)
@@ -706,6 +709,82 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         );
     };
 
+    // ---- KIT SHEET IMPORT (Stuart 2026-08-12, Fabricut/Aug12/Fabricut_Traverse.xlsx) ----------
+    // Reads the traverse kit workbook and shows what it WOULD do before anything is written — the
+    // same read-then-apply shape as the control-file import. Parsing lives in
+    // Shared/traverseKitImport (pure, node-tested against the real sheet).
+    const onKitSheetFile = async (file) => {
+        if (!file || !custId) { if (!custId) alert('Pick the customer this kit sheet belongs to first.'); return; }
+        setBusy('Reading the kit sheet…');
+        try {
+            const parsed = parseTraverseKitSheets(await workbookFileToSheets(file));
+            const libByCode = new Map();
+            inventory.forEach(p => { const c = codeOf(p); if (c && !libByCode.has(c)) libByCode.set(c, { id: p.id }); });
+            const { kitEntries, compEntries } = diffTraverseKits(parsed, libByCode);
+            setKitImp({ parsed, kitEntries, compEntries, fileName: file.name });
+        } catch (e) { console.error(e); alert('Could not read that workbook:\n\n' + (e.message || e)); }
+        setBusy('');
+    };
+
+    const applyKitImport = async () => {
+        const { parsed, kitEntries, compEntries } = kitImp;
+        setBusy('Writing kits…');
+        try {
+            const batch = writeBatch(db);
+            const otherRows = (p) => (p?.clientPricing || []).filter(r =>
+                upper(r?.customerId) !== upper(custId) && upper(r?.customerId) !== upper(customer?.name));
+            kitEntries.forEach(k => {
+                const row = kitPricingRow(k, { customerId: custId, customerName: customer?.name, user: currentUser });
+                if (k.status === 'NEW') {
+                    // Deterministic id — re-importing the sheet UPDATES rather than duplicating.
+                    const id = `KIT-${k.code.replace(/[^A-Za-z0-9-]/g, '_')}`;
+                    batch.set(doc(db, 'Approved_Designs', id), {
+                        id, itemId: k.code, legacyErpId: k.code, itemName: k.name,
+                        brandId: activeBrand, sharedBrands: [activeBrand], partClass: 'Kit', routingType: '',
+                        clientPricing: [row],
+                        manufacturingSpecs: {
+                            kitFamily: parsed.family, kitAlign: k.align, kitMotorCodes: k.motorCodes,
+                            ...(coll ? { collections: [upper(coll)] } : {}),
+                            status: 'APP_ONLY', createdAt: Date.now(), createdBy: String(currentUser || ''),
+                        },
+                    });
+                } else {
+                    const p = inventory.find(x => x.id === k.docId);
+                    batch.update(doc(db, 'Approved_Designs', k.docId), {
+                        partClass: 'Kit', itemName: k.name,
+                        clientPricing: [...otherRows(p), row],
+                        'manufacturingSpecs.kitFamily': parsed.family,
+                        'manufacturingSpecs.kitAlign': k.align,
+                        'manufacturingSpecs.kitMotorCodes': k.motorCodes,
+                        updatedAt: new Date().toISOString(),
+                    });
+                }
+            });
+            // Component alignment — EXISTING items only, last row per code wins (a code can appear
+            // on both the main tab and Carrier Parts).
+            const compByDoc = new Map();
+            compEntries.filter(c => c.status === 'ALIGN').forEach(c => compByDoc.set(c.docId, c));
+            compByDoc.forEach((c, docId) => {
+                const p = inventory.find(x => x.id === docId);
+                batch.update(doc(db, 'Approved_Designs', docId), {
+                    clientPricing: [...otherRows(p), kitPricingRow(c, { customerId: custId, customerName: customer?.name, user: currentUser })],
+                    updatedAt: new Date().toISOString(),
+                });
+            });
+            // The rules doc — per-length usage + configurator list. One doc per flow family; the
+            // future traverse rules tab edits THIS, so billable is a field, seeded not hardcoded.
+            batch.set(doc(db, 'traverse_rules', parsed.family), {
+                ...parsed.rules, billableSeed: BILLABLE_ACCESSORY_SEED,
+                updatedAt: Date.now(), updatedBy: String(currentUser || ''),
+            });
+            await batch.commit();
+            const missing = compEntries.filter(c => c.status === 'MISSING');
+            alert(`✅ Applied: ${kitEntries.length} kit(s), ${compByDoc.size} component(s) priced for ${customer?.name}, rules doc written.${missing.length ? `\n\n⚠ ${missing.length} component code(s) not in the library — not created, price them once the items exist:\n${missing.map(m => m.code).join(', ')}` : ''}${parsed.warnings.length ? `\n\nWarnings:\n• ${parsed.warnings.join('\n• ')}` : ''}`);
+            setKitImp(null);
+        } catch (e) { console.error(e); alert(`Apply failed: ${e?.message || e}`); }
+        setBusy('');
+    };
+
     // ---- ADD AN ITEM TO THE COLLECTION -------------------------------------------------------
     // The H1-1D case: an item that belongs to the collection but was never tagged into it. Adding
     // writes manufacturingSpecs.collections (app-owned) — pricing is then entered on its row.
@@ -1042,6 +1121,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     {mode === 'KITS' && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
                             <button onClick={() => { setKitSearch(''); setNewKit({ code: '', name: '', basePrice: '', theirSku: '', theirNet: '', theirSales: '', components: [] }); }} style={btn(true, { background: theme.green, borderColor: theme.green })}>＋ New kit</button>
+                            <input ref={kitFileRef} type="file" accept=".xlsx" style={{ display: 'none' }} onChange={e => { onKitSheetFile(e.target.files[0]); e.target.value = ''; }} />
+                            <button onClick={() => kitFileRef.current?.click()} disabled={!custId || !!busy} title="Read a traverse kit workbook (Fabricut_Traverse.xlsx shape) and preview what it would create/update — kit records, component pricing, and the per-length usage rules. Nothing is written until you apply." style={btn(false)}>⬆ Import kit sheet</button>
                             <span style={{ fontSize: '0.88rem', color: theme.ink, flex: 1, minWidth: '420px' }}>
                                 A kit is the <b>sales face of a set</b> — a customer part# wrapping real component items (the 4ft traverse starter: fascia + track + 2 brackets). Give {customer?.name || 'the customer'} their SKU and pricing on the row, exactly like any item.
                                 <span style={{ display: 'block', color: theme.inkSoft, marginTop: '4px' }}>
@@ -1452,6 +1533,59 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                         <div style={{ padding: '16px 26px', borderTop: `1px solid ${theme.line}`, display: 'flex', gap: '12px', justifyContent: 'flex-end', background: theme.paper }}>
                             <button onClick={() => setNewKit(null)} style={btn(false)}>Cancel</button>
                             <button onClick={createKit} style={btn(true, { background: theme.green, borderColor: theme.green })}>Create kit →</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* KIT SHEET IMPORT — preview before anything is written */}
+            {kitImp && (
+                <div onClick={() => setKitImp(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '28px' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '1000px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: `1px solid ${theme.line}` }}>
+                        <div style={{ padding: '20px 26px', borderBottom: `1px solid ${theme.line}`, background: theme.paper2 }}>
+                            <div style={{ fontFamily: theme.serif, fontSize: '1.4rem' }}>Kit sheet — what it would do</div>
+                            <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '4px' }}>{kitImp.fileName} · {customer?.name} · family {kitImp.parsed.family}{coll ? ` · tagged into ${coll}` : ''}</div>
+                            <div style={{ display: 'flex', gap: '18px', marginTop: '12px', fontFamily: theme.mono, fontSize: '11px' }}>
+                                <span style={{ color: theme.green }}>KITS NEW {kitImp.kitEntries.filter(k => k.status === 'NEW').length}</span>
+                                <span style={{ color: theme.brass }}>KITS UPDATE {kitImp.kitEntries.filter(k => k.status === 'UPDATE').length}</span>
+                                <span>MOTOR CODES {kitImp.kitEntries.reduce((s, k) => s + k.motorCodes.length, 0)}</span>
+                                <span style={{ color: theme.brassDark }}>COMPONENTS PRICED {kitImp.compEntries.filter(c => c.status === 'ALIGN').length}</span>
+                                <span style={{ color: theme.red }}>NOT IN LIBRARY {kitImp.compEntries.filter(c => c.status === 'MISSING').length}</span>
+                                <span>RULES: {kitImp.parsed.rules.usage.length} usage · {kitImp.parsed.rules.configurator.length} configurator</span>
+                            </div>
+                        </div>
+                        <div style={{ padding: '18px 26px', overflowY: 'auto' }}>
+                            {kitImp.parsed.warnings.length > 0 && (
+                                <div style={{ background: 'rgba(176,45,32,.06)', border: `1px solid ${theme.red}`, padding: '10px 14px', marginBottom: '14px', fontSize: '0.85rem' }}>
+                                    {kitImp.parsed.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+                                </div>
+                            )}
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
+                                <thead><tr>{['', 'Kit code', 'Their pattern', 'Net $', '+/ft $', 'Setup · Drive · Mount', 'Motor codes'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', color: theme.inkSoft }}>{h}</th>)}</tr></thead>
+                                <tbody>
+                                    {kitImp.kitEntries.map(k => (
+                                        <tr key={k.code}>
+                                            <td style={{ padding: '5px 8px', fontFamily: theme.mono, fontSize: '10px', color: k.status === 'NEW' ? theme.green : theme.brass }}>{k.status}</td>
+                                            <td style={{ padding: '5px 8px', fontFamily: theme.mono, fontSize: '11px' }}>{k.code}</td>
+                                            <td style={{ padding: '5px 8px', fontFamily: theme.mono, fontSize: '11px', color: theme.brassDark }}>{k.fabSku || '—'}</td>
+                                            <td style={{ padding: '5px 8px', textAlign: 'right' }}>{k.net ?? '—'}</td>
+                                            <td style={{ padding: '5px 8px', textAlign: 'right' }}>{k.perFootNet ?? '—'}</td>
+                                            <td style={{ padding: '5px 8px', color: theme.inkSoft }}>{k.align.setup}{k.align.frontRail === 'RING' ? ' (front ring)' : ''} · {k.align.drive} · {k.align.mount} · /{k.align.material}</td>
+                                            <td style={{ padding: '5px 8px', color: theme.inkSoft }}>{k.motorCodes.length || '—'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {kitImp.compEntries.filter(c => c.status === 'MISSING').length > 0 && (
+                                <div style={{ marginTop: '14px', fontSize: '0.85rem', color: theme.inkSoft }}>
+                                    <b style={{ color: theme.red }}>Not in the library</b> (aligned once the items exist — never auto-created):{' '}
+                                    <span style={{ fontFamily: theme.mono, fontSize: '11px' }}>{kitImp.compEntries.filter(c => c.status === 'MISSING').map(c => c.code).join(' · ')}</span>
+                                </div>
+                            )}
+                        </div>
+                        <div style={{ padding: '16px 26px', borderTop: `1px solid ${theme.line}`, display: 'flex', gap: '12px', justifyContent: 'flex-end', background: theme.paper }}>
+                            <button onClick={() => setKitImp(null)} style={btn(false)}>Cancel</button>
+                            <button onClick={applyKitImport} disabled={!!busy} style={btn(true, { background: theme.green, borderColor: theme.green })}>Apply →</button>
                         </div>
                     </div>
                 </div>

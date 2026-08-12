@@ -111,10 +111,13 @@ export function parseControlWorkbookFromSheets(sheets) {
     return { rows, sheetsRead, sheetsSkipped };
 }
 
-export async function parseControlWorkbook(file) {
+// File → [{ name, grid }] — exported so other sheet importers (traverseKitImport) read workbooks
+// through the SAME cell normalization (formula results unwrapped, rich text flattened) instead of
+// growing a second, slightly different loader.
+export async function workbookFileToSheets(file) {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(await file.arrayBuffer());
-    const sheets = wb.worksheets.map(ws => {
+    return wb.worksheets.map(ws => {
         const grid = [];
         ws.eachRow({ includeEmpty: true }, (row) => {
             const vals = [];
@@ -126,7 +129,10 @@ export async function parseControlWorkbook(file) {
         });
         return { name: ws.name, grid };
     });
-    return parseControlWorkbookFromSheets(sheets);
+}
+
+export async function parseControlWorkbook(file) {
+    return parseControlWorkbookFromSheets(await workbookFileToSheets(file));
 }
 
 // De-duplicate to ONE row per SKU. A control file repeats a part across finish rows; the last

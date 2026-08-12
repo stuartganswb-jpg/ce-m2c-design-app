@@ -4,6 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildTraverseFlow, isTraverseAssembly, projectionsOffered } from './traverseFlow.mjs';
+// Node lists are joined by Shared/nodeList (pipe-delimited since c9e3755, comma-safe) — tests
+// assert through its splitter rather than a hardcoded separator, so a delimiter change never
+// breaks them again.
+import { splitNodes } from './nodeList.mjs';
 
 // ── Fixture: his tag dump, in post-groupPlacements option shape ──────────────────────────────────
 const opt = (o) => ({ price: 0, position: '', targetNode: `N-${o.optId}`, ...o });
@@ -107,7 +111,7 @@ test('one material, listed once — the four fascia pins dedupe to two, keeping 
     assert.equal(fascia.styleOptions.length, 2);
     // both copies' geometry survives the merge — dropping one is what made the fascia vanish
     const ar = fascia.styleOptions.find(o => o.partName === 'H1-2RCTAR');
-    assert.deepEqual(ar.targetNode.split(', ').sort(), ['N-F-AR-A', 'N-F-AR-B']);
+    assert.deepEqual(splitNodes(ar.targetNode).sort(), ['N-F-AR-A', 'N-F-AR-B']);
 });
 
 test('the Track step exists — proving the OTHER pool now reaches the generator', () => {
@@ -149,7 +153,7 @@ test('a DOUBLE pin on the SAME mesh as the base track adds nothing — it never 
     assert.deepEqual(setup.geometryMap, {});
     assert.equal(setup.styleOptions.find(o => o.trvSetup === 'DOUBLE').targetNode, '');
     // the base track is still offered and still owns its mesh (alongside its own ends)
-    assert.ok(steps.find(s => s.title === 'Track').geometryMap['TRK-S'].split(', ').includes('N-TRK-S'));
+    assert.ok(splitNodes(steps.find(s => s.title === 'Track').geometryMap['TRK-S']).includes('N-TRK-S'));
 });
 
 test('DOUBLE ADDS the second track — it does not swap for it', () => {
@@ -175,11 +179,11 @@ test('the REAR track\'s ends ride the DOUBLE answer too — no rear pulley on a 
     const { steps } = run({ other: withRearEnds });
     const setup = steps.find(s => s.stepRole === 'TRV_SETUP');
     // the rear pulley is gated by DOUBLE...
-    assert.ok(setup.geometryMap['OPT-SETUP-DOUBLE'].split(', ').includes('N-PULL-RD'));
+    assert.ok(splitNodes(setup.geometryMap['OPT-SETUP-DOUBLE']).includes('N-PULL-RD'));
     // ...AND by the drive, because visibilityOverrides ANDs every step that lists the node
     const drive = steps.find(s => s.stepRole === 'TRV_DRIVE');
     const motor = drive.styleOptions.find(o => o.driveType === 'MOTORIZED');
-    assert.ok(motor.targetNode.split(', ').includes('N-PULL-RD'));
+    assert.ok(splitNodes(motor.targetNode).includes('N-PULL-RD'));
     // and the drive answer carries no setup tag, so it is never filtered out of its own picker
     assert.equal(motor.trvSetup, '');
 });
@@ -213,7 +217,7 @@ test('one answer lights BOTH ends — the plug is pinned left and right', () => 
     const { steps } = run();
     const drive = steps.find(s => s.stepRole === 'TRV_DRIVE');
     const manual = drive.styleOptions.find(o => o.driveType === 'MANUAL');
-    assert.deepEqual(manual.targetNode.split(', ').sort(), ['N-PLUG-L', 'N-PLUG-R']);
+    assert.deepEqual(splitNodes(manual.targetNode).sort(), ['N-PLUG-L', 'N-PLUG-R']);
     assert.deepEqual(drive.geometryMap[manual.optId], manual.targetNode);
 });
 
@@ -323,7 +327,7 @@ test('the front track\'s ends ride WITH the front track, the rear\'s do not', ()
         opt({ optId: 'PULL-RD', partId: 'p-pull', partName: 'HSOM-04', traverseRole: 'TRV_END', driveType: 'MOTORIZED', trvSetup: 'DOUBLE' }),
     ];
     const { steps } = run({ other: withRearEnds });
-    const trackGeom = steps.find(s => s.title === 'Track').geometryMap['TRK-S'].split(', ');
+    const trackGeom = splitNodes(steps.find(s => s.title === 'Track').geometryMap['TRK-S']);
     // the Track step co-owns the FRONT ends, so disabling it (front-as-ring) takes them with it
     assert.ok(trackGeom.includes('N-TRK-S'));
     ['N-PLUG-L', 'N-PLUG-R', 'N-PULL-L', 'N-PULL-R'].forEach(n =>
