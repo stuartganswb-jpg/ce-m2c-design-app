@@ -222,6 +222,28 @@ const stockItemLabelInner = ({ itemId, itemName, uom, woNum }) => `<div class="l
   <div class="uom">UOM: ${esc(uom || 'EA')}</div>
   <div class="bc">${code128BSvg(String(itemId || ''))}<div class="bct">${esc(itemId || '')}</div></div>
 </div>`;
+// ── ROD LABELS (Eric 2026-08-12 App Imp): custom CPQ rods — line sidemark + cut length + a piece
+// counter ("1 of 3") for halves and multi-count rods. 4×2, one label per piece.
+const ROD_CSS = `${PAGE_CSS}
+.l{padding:0.1in 0.16in;display:flex;flex-direction:column;}
+.hd{display:flex;justify-content:space-between;align-items:baseline;}
+.k{font-size:9pt;font-weight:800;letter-spacing:2.5px;}
+.n{font-size:12pt;font-weight:800;}
+.sm{font-size:15pt;font-weight:800;line-height:1.1;margin-top:2pt;white-space:nowrap;overflow:hidden;}
+.ln{font-size:11pt;font-weight:600;margin-top:2pt;}
+.ln b{font-weight:800;font-size:13pt;}
+.ft{margin-top:auto;font-size:9pt;letter-spacing:1px;}`;
+export const printRodLabels = ({ orderRef, itemId, sidemark, length, count = 1 }) => {
+    const n = Math.max(1, Math.min(40, parseInt(count) || 1));
+    const bodies = Array.from({ length: n }, (_, i) => `<div class="l">
+        <div class="hd"><span class="k">ROD</span><span class="n">${esc(String(i + 1))} of ${esc(String(n))}</span></div>
+        <div class="sm">${esc(sidemark || '')}</div>
+        <div class="ln">${esc(itemId || '')}${length ? ` · <b>${esc(String(length))}</b>` : ''}</div>
+        <div class="ft">${esc(orderRef || '')}</div>
+    </div>`);
+    return printDoc(`Rod labels ${orderRef || ''} ×${n}`, ROD_CSS, bodies);
+};
+
 export const printStockItemLabels = ({ itemId, itemName, uom, woNum, copies = 1 }) =>
     printDoc(`Item ${itemId || ''} ×${copies}`, STOCK_CSS, Array.from({ length: Math.max(1, Math.min(50, parseInt(copies) || 1)) }, () => stockItemLabelInner({ itemId, itemName, uom, woNum })));
 

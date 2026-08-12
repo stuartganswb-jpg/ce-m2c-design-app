@@ -16,7 +16,7 @@ import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveByExactKey, normalizeKey, stagingScanMatches } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
-import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
+import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
 import { readConvertDiag, diagSummary, isHealthyState } from '../Shared/convertDiag';
 import { useRetiredSet } from '../Shared/retiredItems';
@@ -693,6 +693,26 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return out.map(l => ({ ...l, cat: packCatOf(l) }));
     };
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : (j.nsWoTran || j.displayId || j.woNum || j.id);
+
+    // 🖨 PACK-LINE LABELS (Sandra + Eric 2026-08-12 App Imp): item labels for packed orders, and
+    // rod labels for custom CPQ poles — Line Sidemark · Length · "1 of X" per piece (halves and
+    // multi-count rods print one label each). Defaults come off the order (cart sidemark, first
+    // cut length found); the prompts let the packer correct them per line before printing.
+    const printPackLineLabel = (job, l) => {
+        if (l.cat === 'POLE' || l.isPole) {
+            const carts = (job.cpqSpecs && job.cpqSpecs.cartItems) || [];
+            const defSidemark = String((carts.find(c => String(c.sidemark || '').trim()) || {}).sidemark || job.sidemark || job.note || '').trim();
+            let defLen = '';
+            carts.some(c => Object.values(c.dimensionInputs || {}).some(d => { if (d && d.length) { defLen = String(d.length); return true; } return false; }));
+            const sidemark = window.prompt('Line sidemark for the rod label:', defSidemark); if (sidemark === null) return;
+            const length = window.prompt('Length (as it should print, e.g. 96 1/2"):', defLen); if (length === null) return;
+            const count = parseInt(window.prompt('How many pieces? (each label prints "1 of X", "2 of X"…)', String(l.qty || 1))) || 0;
+            if (count <= 0) return;
+            printRodLabels({ orderRef: packRef(job), itemId: l.erp || '', sidemark: sidemark.trim(), length: String(length).trim(), count });
+        } else {
+            printStockItemLabels({ itemId: l.erp || '', itemName: l.name || '', uom: 'EA', woNum: packRef(job), copies: Math.max(1, Math.min(50, Number(l.qty) || 1)) });
+        }
+    };
 
     // PRODUCTION WINS (Stuart 2026-08-10: "one status in one place"): a pick still Pending while
     // the finishing floor is already painting/baking (or done) has been OVERTAKEN — the queue must
@@ -3053,6 +3073,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 {side === 'right' && packJob.packedLines[l.key] && <div style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', marginTop: '2px' }}>✓ {packJob.packedLines[l.key].by} · {new Date(packJob.packedLines[l.key].at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
                             </div>
                             <span style={{ fontFamily: theme.mono, fontWeight: 'bold', fontSize: '1rem', color: theme.ink, whiteSpace: 'nowrap' }}>× {l.qty}</span>
+                            <button onClick={() => printPackLineLabel(packJob, l)} title={l.cat === 'POLE' ? 'Rod labels — sidemark · length · 1 of X per piece' : 'Item labels — one per piece'} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>🖨</button>
                             {side === 'left'
                                 ? <button onClick={() => confirmPackLine(packJob, l)} style={{ background: theme.ink, color: '#fff', border: 'none', padding: '12px 16px', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>✓ Packed</button>
                                 : <button onClick={() => unpackLine(packJob, l)} title="Undo — move back to TO PACK" style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '8px 10px', fontFamily: theme.mono, fontSize: '10px', cursor: 'pointer' }}>↩</button>}
@@ -3700,9 +3721,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     assembly build the CONVERT tab uses, so NetSuite's BOM governs what is consumed. */}
                 {activeTab === 'ROD CUTS' && rodTabMode === 'PACKS' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                        {Object.keys(nsStock).length === 0 && (
-                            <div style={{ background: '#fff', border: `1px solid ${theme.brass}`, padding: '14px 18px', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
-                                ⚠ No live stock pulled this session — quantities and bins will read 0. Hit <b>PULL LIVE STOCK</b> on the Stock or Bin Count tab first.
+                        {/* Live pull ON this tab (Eric 2026-08-12 App Imp) — no more detour to Stock/Bin Count. */}
+                        {Object.keys(nsStock).length === 0 ? (
+                            <div style={{ background: '#fff', border: `1px solid ${theme.brass}`, padding: '14px 18px', fontFamily: theme.mono, fontSize: '11px', color: theme.ink, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                <span>⚠ No live stock pulled this session — quantities and bins will read 0.</span>
+                                <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '10px 18px', background: isSyncing ? theme.inkSoft : theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: isSyncing ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{isSyncing ? 'Pulling…' : '⟳ Pull Live Stock'}</button>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                <button onClick={pullNetSuiteStock} disabled={isSyncing} style={{ padding: '8px 14px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: isSyncing ? 'wait' : 'pointer' }}>{isSyncing ? 'Pulling…' : '⟳ Refresh Live Stock'}</button>
                             </div>
                         )}
                         <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px' }}>
@@ -3735,7 +3762,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         <div style={{ fontFamily: theme.sans, fontSize: '13px', color: theme.inkSoft }}>{packTarget.itemName || ''}</div>
                                         <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.brass, marginTop: '4px' }}>{packSize}-pack · on hand {ohOf(packTarget)} · home bin {binOf(packTarget)}</div>
                                     </div>
-                                    <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); setDiagNames({}); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        {/* 🖨 Pack labels — the qty being built (Eric 2026-08-12 App Imp). */}
+                                        <button onClick={() => { const n = packQtyNum || parseInt(window.prompt(`How many ${erpOf(packTarget)} labels?`, '1')) || 0; if (n > 0) printStockItemLabels({ itemId: erpOf(packTarget), itemName: packTarget.itemName || '', uom: 'PACK', woNum: '', copies: Math.min(50, n) }); }} title="Print an item label per pack being built (uses the qty entered below, or asks)" style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.brass}`, color: theme.brass, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 LABELS{packQtyNum ? ` ×${packQtyNum}` : ''}</button>
+                                        <button onClick={() => { setPackTargetId(""); setPackSearch(""); setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackDiag(null); setDiagNames({}); }} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>CHANGE</button>
+                                    </div>
                                 </div>
 
                                 {/* BUILD or BREAK — the reversal shares the pack picker above. */}

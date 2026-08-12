@@ -130,7 +130,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               quantities: ci.stepQuantities || {},
               dimensions: ci.dimensionInputs || {},
               flowId: ci.flowId || job.flowId,
-              assemblyQty: parseInt(ci.qty) || 1
+              assemblyQty: parseInt(ci.qty) || 1,
+              // Line-level sidemark ("Formal Living 1") — rides every line this cart item
+              // produces and lands in NetSuite's line Tag (custcol3; Eric 2026-08-11).
+              sidemark: String(ci.sidemark || '').trim()
             }))
           : [{
               config: job.cpqData.configuration || {},
@@ -294,7 +297,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   finishedErpId,   // non-empty when this line pushes a finished assembly (outsourced or stocked in-house)
                   finishUnmapped,  // non-empty when a finished SKU couldn't be NS-resolved (fell back to base)
                   partCategory: masterPart.manufacturingSpecs?.partHandling || '',
-                  projection: cart.dimensions?.[dimStepId]?.length || ''
+                  projection: cart.dimensions?.[dimStepId]?.length || '',
+                  sidemark: cart.sidemark || ''
               });
               // 🔩 Paired wall mount (backplates/cover plates): one per plate rides the push like a
               // BOM component — mirrors the cart line CPQTab adds. Aggregator below merges duplicates.
@@ -310,7 +314,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                           finishedErpId: '',
                           finishUnmapped: '',
                           partCategory: wmPart.manufacturingSpecs?.partHandling || 'Small Parts',
-                          projection: ''
+                          projection: '',
+                          sidemark: cart.sidemark || ''
                       });
                   } else {
                       result.unresolved.push({ stepTitle: `${step?.title || stepId} — wall mount`, partId: wmPair.partId });
@@ -325,7 +330,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
       const agg = new Map();
       rawLines.forEach(l => {
           const unmapped = (l.nsId === 'UNMAPPED' || l.nsId === 'PENDING');
-          const key = `${l.nsId}|${l.finishedErpId}|${l.projection}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}`;
+          // Sidemark is part of line identity: two rooms ordering the same pole stay TWO lines,
+          // each carrying its own Tag (custcol3) — merging them would blank the room attribution.
+          const key = `${l.nsId}|${l.finishedErpId}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}`;
           const cur = agg.get(key);
           if (cur) cur.qty += l.qty;
           else agg.set(key, { ...l });
@@ -429,6 +436,9 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   if (line.projection) {
                       linePayload.custcol_bracket_projection = line.projection.toString();
                   }
+                  // Line-level sidemark → NetSuite line Tag (custcol3, internal id 3769 — Eric
+                  // 2026-08-11 App Imp, exact field ids from the report).
+                  if (line.sidemark) linePayload.custcol3 = String(line.sidemark).slice(0, 300);
 
                   lineItems.push(linePayload);
               } else {
@@ -496,8 +506,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               };
           }
 
-          // De-duped: legacy jobs stamp sidemark = jobName, which used to read "X - X" in the memo.
-          const memoText = [...new Set([job.jobName, job.sidemark].filter(Boolean))].join(' - ').trim();
+          // ONE value, not a join (Eric 2026-08-11: "the mainline sidemark … is pushing a duplicate
+          // value of the entry"). The memo is the mainline sidemark/job — sidemark wins when typed,
+          // jobName otherwise; joining the two produced "X - X" whenever they matched loosely.
+          const memoText = String((job.sidemark || '').trim() || (job.jobName || '').trim());
 
           // Quote's shipping charge → estimate HEADER shipping cost (never a line item):
           // lines + rollup still sum to cpqData.totalPrice; NetSuite adds shipping on top.
@@ -518,7 +530,14 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               entity: { id: nsCustomerId },
               subsidiary: { id: brandMapping.subsidiary },
               location: { id: brandMapping.location },
+              // CE estimates ride the CE - Quote custom form (299) + Hardware class (2) — exact NS
+              // ids from Eric's 2026-08-11 App Imp report (before this, CE quotes pulled the M2C
+              // form, which skews every downstream printed form). Other brands keep NS defaults.
+              ...(activeBrand === 'ce' ? { customForm: { id: '299' }, class: { id: '2' } } : {}),
               memo: memoText,
+              // Customer PO # + Internal Memo from the CPQ checkout fields (Eric 2026-08-11).
+              ...(job.poNumber ? { otherRefNum: String(job.poNumber).slice(0, 40) } : {}),
+              ...(job.internalMemo ? { custbody_bit_internalmemo: String(job.internalMemo).slice(0, 999) } : {}),
               custbody50: job.jobId || job.id,
               ...shippingPayload,
               item: {

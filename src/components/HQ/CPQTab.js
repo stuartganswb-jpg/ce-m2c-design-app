@@ -657,6 +657,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                       customerId: reopen.customerId || '',
                       jobName: reopen.jobName || '',
                       sidemark: reopen.sidemark || '',
+                      poNumber: reopen.poNumber || '',
+                      internalMemo: reopen.internalMemo || '',
                       shippingMethod: reopen.shippingMethod || 'SAVED',
                       shippingAddressId: reopen.shippingAddressId || '',
                       shippingAmount: reopen.shippingAmount || '',
@@ -2382,6 +2384,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
           linkedAssemblyId: cart[0].assemblyId || null,
           isProjectManaged: activeAssembly?.manufacturingSpecs?.isProjectManaged || false, 
           
+          // PO # / Internal Memo only write when typed — merge:true keeps an earlier value on a
+          // reopen-refinalize where the fields came back blank.
+          ...(String(jobData.poNumber || '').trim() ? { poNumber: String(jobData.poNumber).trim() } : {}),
+          ...(String(jobData.internalMemo || '').trim() ? { internalMemo: String(jobData.internalMemo).trim() } : {}),
           shippingMethod: jobData.shippingMethod || 'SAVED',
           shippingAddressId: jobData.shippingAddressId || null,
           customShippingAddress: jobData.shippingMethod === 'CUSTOM' ? jobData.customShippingAddress : null,
@@ -4025,6 +4031,24 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                             <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Order Sidemark (Optional)</label>
                             <input type="text" placeholder="e.g. Smith Residence" value={jobData.sidemark} onChange={e => setJobData({...jobData, sidemark: e.target.value})}
                                 title="Prints at the header of the quote, sales order and packing slip (NetSuite estimate memo)."
+                                style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
+                        </div>
+                    </div>
+
+                    {/* PO # + INTERNAL MEMO (Eric 2026-08-11, App Imp): PO # → the NetSuite
+                        estimate's PO field (otherrefnum); Internal Memo → custbody_bit_internalmemo.
+                        Internal only — neither prints on customer documents from here. */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Customer PO # (Optional)</label>
+                            <input type="text" placeholder="e.g. PO-48213" value={jobData.poNumber || ''} onChange={e => setJobData({...jobData, poNumber: e.target.value})}
+                                title="Pushes to the NetSuite estimate's PO # field (otherrefnum)."
+                                style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
+                        </div>
+                        <div>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Internal Memo (Optional)</label>
+                            <input type="text" placeholder="Internal note — rides to NetSuite's internal memo" value={jobData.internalMemo || ''} onChange={e => setJobData({...jobData, internalMemo: e.target.value})}
+                                title="Pushes to NetSuite's Internal Memo (custbody_bit_internalmemo). Never prints on customer documents."
                                 style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
                         </div>
                     </div>
