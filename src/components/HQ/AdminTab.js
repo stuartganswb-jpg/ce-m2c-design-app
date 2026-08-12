@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { isRider } from '../Shared/traverseTags';
+import { isStreamVariantCode } from '../Shared/finishingTime';
 import { isTraverseAssembly, buildTraverseFlow } from '../Shared/traverseFlow';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from "firebase/functions";
@@ -1993,6 +1994,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           for (const f of [...globalFinishes, ...colGlobalFinishes, ...inhouseFinishes, ...outsourceFinishes, ...floor]) {
               const id = f.id || f.code; if (!id) continue;
               const key = String(f.code || f.id).trim().toUpperCase(); if (seen.has(key)) continue;
+              // -S/-P stream variants are FLOOR ROUTING detail (CP-S small parts / CP-P poles) —
+              // never a finish a flow builder should pick. The master (CP) is the finish; the
+              // floor resolves the variant per stream (Stuart 2026-08-11: "they are getting
+              // confused on the sub finishes as if they need to select those").
+              if (isStreamVariantCode(key)) continue;
               // Label = code + name combined when they differ (newer finishes carry the code in a
               // separate field, e.g. MEP*), else whichever field holds the recognizable value.
               const cd = f.code ? String(f.code).trim() : '';

@@ -158,6 +158,11 @@ export function recipeStepCount(recipes, key) {
 // every order without poles is untouched. The -S/-P extension affects ONLY finishing-floor
 // routing — never item codes, pricing, or what the customer sees.
 export const STREAM_SUFFIX = { SMALL: 'S', POLES: 'P' };
+// A -S/-P stream variant code (CP-S, CP-P). These are FLOOR ROUTING detail: they must never
+// appear as selectable finishes in CPQ flow building, 4.5's master list, or customer surfaces —
+// the master code (CP) is the finish; the floor resolves the variant per stream.
+export const isStreamVariantCode = (code) => /-(S|P)$/i.test(String(code || '').trim());
+export const streamMasterOf = (code) => String(code || '').trim().replace(/-(S|P)$/i, '');
 export function streamRecipeKey(recipes, key, stream) {
   if (!key) return key;
   const sfx = STREAM_SUFFIX[stream] || String(stream || '').trim().toUpperCase();

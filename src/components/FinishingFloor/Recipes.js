@@ -172,39 +172,93 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
                 {/* RECIPE LIST */}
                 <div>
                     <h3 style={sectionHeaderStyle}>Saved Recipe Dictionary</h3>
+                    {/* MASTER-GROUPED (Stuart 2026-08-11): the master (CP) is the top level; its
+                        -S/-P stream variants live INSIDE the card as checkboxes — check to create
+                        (starts as a copy of the master's steps), uncheck to delete. Matches the
+                        4.5 In-House Master Finishes view so the two screens read the same. */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                       {Object.values(recipes).sort((a, b) => String(a.code).localeCompare(String(b.code), undefined, { numeric: true })).map(r => (
-                            <div key={r.code} style={cardStyle}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
-                                    <div style={{ minWidth: 0 }}>
-                                        <strong style={{ fontSize: '1.2rem', color: 'var(--ink)', fontFamily: 'var(--serif)' }}>{r.code}</strong>
-                                        {/^\S+-S$/.test(String(r.code)) && <span title="Small-parts stream variant" style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px', verticalAlign: 'middle' }}>SMALL PARTS</span>}
-                                        {/^\S+-P$/.test(String(r.code)) && <span title="Pole stream variant" style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px', verticalAlign: 'middle' }}>POLES</span>}
-                                        {r.name && <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', display: 'block', marginTop: '2px' }}>{r.name}</span>}
+                       {(() => {
+                            const byCode = {};
+                            Object.values(recipes).forEach(r => { byCode[String(r.code).toUpperCase()] = r; });
+                            const isSub = (c) => /-(S|P)$/.test(String(c || '').toUpperCase());
+                            const cmp = (a, b) => String(a.code).localeCompare(String(b.code), undefined, { numeric: true });
+                            const masters = Object.values(recipes).filter(r => !isSub(r.code)).sort(cmp);
+                            const orphanSubs = Object.values(recipes).filter(r => isSub(r.code) && !byCode[String(r.code).toUpperCase().replace(/-(S|P)$/, '')]).sort(cmp);
+                            const stepsLine = (rec) => (rec.steps || []).map(s => s.color).filter(Boolean).join(' → ');
+                            const variantRow = (master, sfx) => {
+                                const code = `${String(master.code).toUpperCase()}-${sfx}`;
+                                const sub = byCode[code];
+                                const label = sfx === 'S' ? 'Small parts' : 'Poles';
+                                return (
+                                    <div key={sfx} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', background: 'var(--paper)', border: '1px solid var(--line)', marginTop: '6px' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: canEdit ? 'pointer' : 'default', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--ink)', whiteSpace: 'nowrap' }}>
+                                            <input type="checkbox" checked={!!sub} disabled={!canEdit}
+                                                onChange={() => sub
+                                                    ? (window.confirm(`Delete ${code}? ${label} on ${master.code} orders fall back to the master recipe.`) && deleteDoc(doc(db, "fin_recipes", code)).then(() => writeLog && writeLog(`Deleted stream variant ${code}`, 'recipes')))
+                                                    : (window.confirm(`Create ${code} — the ${label.toUpperCase()} variant of ${master.code}?\n\nIt starts as a copy of ${master.code}'s steps; press Edit on it to set the real ${label.toLowerCase()} sequence (coats, DTMs). The floor picks it automatically for the ${label.toLowerCase()} stream.`) && setDoc(doc(db, "fin_recipes", code), { code, name: `${master.name || master.code} — ${label.toUpperCase()}`, masterCode: String(master.code).toUpperCase(), steps: (master.steps || []).map(s => ({ ...s })), instructions: master.instructions || '' }).then(() => writeLog && writeLog(`Created stream variant ${code} from ${master.code}`, 'recipes')))}
+                                                style={{ accentColor: 'var(--brass)' }} />
+                                            -{sfx} · {label}
+                                        </label>
+                                        {sub ? (
+                                            <>
+                                                <span style={{ flex: 1, minWidth: 0, fontSize: '0.82rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={stepsLine(sub)}>{(sub.steps || []).length} coat{(sub.steps || []).length === 1 ? '' : 's'} · {stepsLine(sub) || '—'}</span>
+                                                {canEdit && <button onClick={() => handleEditRecipe(sub)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '4px 10px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Edit</button>}
+                                            </>
+                                        ) : (
+                                            <span style={{ flex: 1, fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>not defined — {label.toLowerCase()} run the master recipe</span>
+                                        )}
                                     </div>
-                                    {canEdit && (
-                                        <div style={{ display: 'flex', gap: '8px' }}>
-                                            <button onClick={() => handleEditRecipe(r)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Edit</button>
-                                            <button onClick={() => { if(window.confirm(`Delete recipe ${r.code}?`)) deleteDoc(doc(db, "fin_recipes", r.code)); }} style={{ background: 'transparent', color: '#d9534f', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Del</button>
+                                );
+                            };
+                            const card = (r, isOrphan) => (
+                                <div key={r.code} style={{ ...cardStyle, ...(isOrphan ? { borderLeft: '3px solid #d9534f' } : {}) }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
+                                        <div style={{ minWidth: 0 }}>
+                                            <strong style={{ fontSize: '1.2rem', color: 'var(--ink)', fontFamily: 'var(--serif)' }}>{r.code}</strong>
+                                            {isOrphan && <span title="This -S/-P variant has no master recipe — create the master, or rename this" style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', color: '#d9534f', border: '1px solid #d9534f', padding: '2px 6px', marginLeft: '8px', verticalAlign: 'middle' }}>NO MASTER</span>}
+                                            {r.name && <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', display: 'block', marginTop: '2px' }}>{r.name}</span>}
+                                        </div>
+                                        {canEdit && (
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <button onClick={() => handleEditRecipe(r)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Edit</button>
+                                                <button onClick={() => { if(window.confirm(`Delete recipe ${r.code}?${byCode[`${String(r.code).toUpperCase()}-S`] || byCode[`${String(r.code).toUpperCase()}-P`] ? `\n\n⚠ Its -S/-P variants stay — delete or re-home them too.` : ''}`)) deleteDoc(doc(db, "fin_recipes", r.code)); }} style={{ background: 'transparent', color: '#d9534f', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Del</button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {r.steps?.map(st => (
+                                        <div key={st.step} style={{ fontSize: '0.9rem', padding: '8px 0', borderBottom: '1px solid rgba(28,26,22,.05)', display: 'flex', alignItems: 'center' }}>
+                                            <span style={{ width: '40px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>S{st.step}</span>
+                                            <span style={{ flex: 1, color: 'var(--ink)' }}>{st.color}</span>
+                                            <span style={{ background: st.app === 'Sprayed' ? 'var(--paper-2)' : 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{st.app}</span>
+                                        </div>
+                                    ))}
+
+                                    {!isOrphan && (
+                                        <div style={{ marginTop: '14px' }}>
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '2px' }}>Stream variants — the floor picks these automatically</div>
+                                            {variantRow(r, 'S')}
+                                            {variantRow(r, 'P')}
+                                        </div>
+                                    )}
+
+                                    {r.instructions && (
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--line)' }}>
+                                            Includes Floor Instructions
                                         </div>
                                     )}
                                 </div>
-                                
-                                {r.steps?.map(st => (
-                                    <div key={st.step} style={{ fontSize: '0.9rem', padding: '8px 0', borderBottom: '1px solid rgba(28,26,22,.05)', display: 'flex', alignItems: 'center' }}>
-                                        <span style={{ width: '40px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>S{st.step}</span> 
-                                        <span style={{ flex: 1, color: 'var(--ink)' }}>{st.color}</span>
-                                        <span style={{ background: st.app === 'Sprayed' ? 'var(--paper-2)' : 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{st.app}</span>
-                                    </div>
-                                ))}
-                                
-                                {r.instructions && (
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid var(--line)' }}>
-                                        Includes Floor Instructions
-                                    </div>
-                                )}
-                            </div>
-                        ))}
+                            );
+                            return (
+                                <>
+                                    {masters.map(r => card(r, false))}
+                                    {orphanSubs.length > 0 && (
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', marginTop: '8px' }}>⚠ Variants with no master recipe</div>
+                                    )}
+                                    {orphanSubs.map(r => card(r, true))}
+                                </>
+                            );
+                       })()}
                     </div>
                 </div>
 

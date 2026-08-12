@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
+import { isStreamVariantCode } from '../Shared/finishingTime';
 import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShipUom';
 import { SOURCING, sourcingPatch } from '../Shared/sourcing';
 import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where } from "firebase/firestore";
@@ -826,9 +827,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     };
 
     const handleSyncFloorRecipes = async () => {
-        if (!window.confirm("Scan the Finishing Floor database and import missing recipes to HQ?")) return;
+        if (!window.confirm("Scan the Finishing Floor database and sync recipes with HQ?\n\n• Missing floor recipes import here\n• -S/-P stream variants are SKIPPED (floor routing detail — they show as chips on their master)\n• Finishes whose floor recipe was DELETED are offered for cleanup")) return;
         let currentFinishes = [...globalFinishes]; let addedCount = 0;
         floorRecipeData.forEach(recipe => {
+            // -S/-P stream variants never become HQ finishes — the MASTER code is the finish;
+            // the floor resolves the variant per stream (Stuart 2026-08-11).
+            if (isStreamVariantCode(recipe.id)) return;
             if (!currentFinishes.find(f => (f.name || '').toUpperCase() === recipe.id.toUpperCase() || (f.code && f.code.toUpperCase() === recipe.id.toUpperCase()))) {
                 // Floor recipes are keyed by their code (fin_recipes doc id). Carry the FULL code as
                 // the finish ID/Code (was truncated to 5 chars, which broke code-based dedup on
@@ -837,7 +841,31 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 addedCount++;
             }
         });
-        if (addedCount > 0) { await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true }); alert(`Successfully synced ${addedCount} recipes!`); } else alert("HQ is in sync with floor database!");
+
+        // DELETE-PROPAGATION (Stuart 2026-08-11: "grace deleted a lot of older finishes from the
+        // floor but HQ did not get updated"). Candidates: sub-coded rows (never belong here), and
+        // in-house finishes with NO matching floor recipe. Species finishes (bomSuffix — wood/
+        // acrylic, no spray recipe by design) are never offered. The user confirms the exact list;
+        // a removed finish disappears from every CPQ flow palette, so the warning says so.
+        const floorCodes = new Set(floorRecipeData.map(r => String(r.id).toUpperCase()));
+        const orphans = currentFinishes.filter(f => {
+            const code = String(f.code || f.name || '').toUpperCase();
+            if (!code) return false;
+            if (isStreamVariantCode(code)) return true;                       // routing detail row — never belongs
+            if (String(f.bomSuffix || '').trim()) return false;               // species finish — no floor recipe by design
+            return !floorCodes.has(code) && !floorCodes.has(String(f.name || '').toUpperCase());
+        });
+        let removedCount = 0;
+        if (orphans.length && window.confirm(`${orphans.length} finish(es) here have NO recipe on the finishing floor (deleted there, or -S/-P rows that belong inside their master):\n\n${orphans.map(f => `• ${f.code || f.name}${isStreamVariantCode(f.code || f.name) ? ' (stream variant row)' : ''}`).join('\n')}\n\nRemove them from HQ too? ⚠ A removed finish disappears from every CPQ flow's finish palette — keep anything you still quote with.`)) {
+            const orphanIds = new Set(orphans.map(f => f.id));
+            currentFinishes = currentFinishes.filter(f => !orphanIds.has(f.id));
+            removedCount = orphans.length;
+        }
+
+        if (addedCount > 0 || removedCount > 0) {
+            await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true });
+            alert(`Sync complete: ${addedCount} imported, ${removedCount} removed.`);
+        } else alert("HQ is in sync with floor database!");
     };
 
     const handleAddGlobalFinish = async () => {
@@ -1533,8 +1561,14 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                     )}
                                     <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '400px', overflowY: 'auto', background: '#fff' }}>
                                         {globalFinishes.length === 0 && <span style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem' }}>No finishes added yet.</span>}
-                                        {globalFinishes.map(finish => {
+                                        {/* MASTERS ONLY at top level (Stuart 2026-08-11): -S/-P stream variants are
+                                            floor routing detail — they show INSIDE their master's card as chips,
+                                            never as their own rows, and never in the CPQ flow builder. */}
+                                        {globalFinishes.filter(f => !isStreamVariantCode(f.code || f.name)).map(finish => {
                                             const hasRecipe = activeRecipes.includes(finish.code) || activeRecipes.includes(finish.name);
+                                            const masterCode = String(finish.code || finish.name || '').toUpperCase();
+                                            const variantS = activeRecipes.includes(`${masterCode}-S`);
+                                            const variantP = activeRecipes.includes(`${masterCode}-P`);
                                             return (
                                                 <div key={finish.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: theme.paper, padding: '20px', border: `1px solid ${theme.line}`, borderLeft: `2px solid ${theme.brass}` }}>
                                                     <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
@@ -1543,6 +1577,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                             <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', fontWeight: 500, color: theme.ink }}>{finish.code || finish.name}</div>
                                                             {finish.code && finish.name && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: theme.inkSoft, marginTop: '2px' }}>{finish.name}</div>}
                                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, marginTop: '6px' }}>Status: {hasRecipe ? 'Production Ready' : 'Working / R&D'}</div>
+                                                            {(variantS || variantP) && (
+                                                                <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+                                                                    {variantS && <span title={`Floor runs ${masterCode}-S on the small-parts stream`} style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', textTransform: 'uppercase', color: theme.brass, border: `1px solid ${theme.brass}`, padding: '2px 6px' }}>-S · Small parts</span>}
+                                                                    {variantP && <span title={`Floor runs ${masterCode}-P on the pole stream`} style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', textTransform: 'uppercase', color: theme.brass, border: `1px solid ${theme.brass}`, padding: '2px 6px' }}>-P · Poles</span>}
+                                                                </div>
+                                                            )}
                                                             {finish.clientMapping && finish.clientMapping.length > 0 && (
                                                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, marginTop: '4px' }}>{finish.clientMapping.length} Client Map(s) Active</div>
                                                             )}
