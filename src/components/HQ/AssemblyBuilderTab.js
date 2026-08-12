@@ -1667,7 +1667,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         {END_TREATMENTS.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
                                                     </select>
                                                 ))}
-                                                <span style={{ display: 'grid', gridTemplateColumns: 'repeat(3, max-content)', gap: '7px 18px', alignItems: 'center', justifyContent: 'start' }}>
+                                                {/* WRAPPING flags cell — same fix as the slot rows (Liesl 2026-08-12). */}
+                                                <span style={{ display: 'flex', flexWrap: 'wrap', gap: '7px 18px', alignItems: 'center', minWidth: 0 }}>
                                                     <label title="Fee choice (e.g. a french-return bend): shows this geometry as a selectable option, bills as a fee — no item # / BOM line. Position comes from the cluster's tag." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                         <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
                                                         fee
@@ -1804,9 +1805,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: '18px', alignItems: 'start' }}>
+            {/* FLEX-WRAP, not a fixed grid (Liesl 2026-08-12: "see all check boxes on screen
+                without having to scroll over to see those hidden by assembly visual") — when the
+                window can't fit slot rows AND the 3D visual side by side, the visual WRAPS BELOW
+                instead of sitting on top of the checkboxes. Wide screens look exactly as before. */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '18px', alignItems: 'flex-start' }}>
                 {/* LEFT: slot uploader */}
-                <div style={{ ...card, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '78vh', overflowY: 'auto' }}>
+                <div style={{ ...card, flex: '1.15 1 680px', minWidth: 0, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '78vh', overflowY: 'auto' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>Slots — one .glb each (choices stacked inside)</span>
                         <button onClick={addSlot} style={{ ...sel, cursor: 'pointer', background: 'var(--paper-2)' }}>+ Slot</button>
@@ -1863,7 +1868,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                             {END_TREATMENTS.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
                                                         </select>
                                                     ))}
-                                                    <span style={{ display: 'grid', gridTemplateColumns: 'repeat(3, max-content)', gap: '6px 14px', alignItems: 'center', justifyContent: 'start' }}>
+                                                    {/* WRAPPING flags cell (Liesl 2026-08-12): flex-wrap folds the checkboxes
+                                                        into more rows instead of widening the grid past the visible panel. */}
+                                                    <span style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', alignItems: 'center', minWidth: 0 }}>
                                                         <label title="Fee choice (e.g. a french-return bend): selectable option that bills as a fee — no item # / BOM line." style={{ display: 'flex', alignItems: 'center', gap: '5px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.isFee} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />fee
                                                         </label>
@@ -1951,7 +1958,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 </div>
 
                 {/* RIGHT: live preview */}
-                <div style={{ ...card, position: 'sticky', top: '16px', height: '78vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ ...card, flex: '1 1 380px', minWidth: '340px', position: 'sticky', top: '16px', height: '78vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                     <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--line)', background: 'var(--paper)', fontFamily: 'var(--serif)', fontSize: '1.1rem', color: 'var(--ink)' }}>
                         Live Preview — {filledSlots.length} layer(s){extendId ? (extendInfo?.loading ? ' · loading existing…' : extendInfo?.scene ? ' · + existing assembly' : '') : ''}
                     </div>
