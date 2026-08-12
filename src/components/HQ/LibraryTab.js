@@ -509,6 +509,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         watchList: currentWatchList,
         isProjectManaged: baseSpecs.isProjectManaged || false,
         partHandling: baseSpecs.partHandling || "",
+        finishStream: baseSpecs.finishStream || "",
         customOverrideFee: !!baseSpecs.customOverrideFee,
         weight: baseSpecs.weight || "",
         wallMount: baseSpecs.wallMount || { partId: "", desc: "" },
@@ -1039,13 +1040,16 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           // Released from the library, not the board — but the board still holds the record.
           status: "Dispatched", pushedToFinishing: true,
           dispatchedAt: now, dispatchedBy: (currentUser && (currentUser.name || currentUser.email)) || '', releasedFrom: 'MASTER_LIBRARY',
+          // FINISH-STREAM EXCEPTION rides the order (e.g. the elbow: small part finished to match
+          // the poles) — the floor's recipe resolution reads it off the WO doc.
+          ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
           ...hqExtra,
       });
       try {
           await setDoc(doc(db, "fin_workorders", woId), buildStockFinPayload({
               woId, part, qty, finishLabel: recipe || finishLabel, brand: activeBrand,
               createdBy: (currentUser && (currentUser.name || currentUser.email)) || '', reqDate, note,
-              tasks: makeFullTasks(), extra: { finishLabel: finishLabel || '', ...finExtra }, now,
+              tasks: makeFullTasks(), extra: { finishLabel: finishLabel || '', ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}), ...finExtra }, now,
           }));
       } catch (err) {
           try { await deleteDoc(doc(db, "hq_work_orders", woId)); } catch (e) { /* leave the ledger entry; it is visible in RTG */ }
@@ -2275,6 +2279,18 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                                 <option value="S">S — 70 / section</option>
                                 <option value="M">M — 35 / section</option>
                                 <option value="L">L — 22 / section</option>
+                            </select>
+                        </div>
+                        {/* FINISH-STREAM EXCEPTION (Stuart 2026-08-11): which recipe stream this
+                            item's finishing runs follow. Auto = by Product Type (POLE/ROD → poles).
+                            The elbow case: physically a small part (sled capacity, S/M/L size all
+                            unchanged) but finished to MATCH the poles → set POLES and its runs use
+                            the -P recipe variant. */}
+                        <div><label style={labelStyle}>Finish Stream</label>
+                            <select name="finishStream" value={editSpecs.finishStream || ""} onChange={handleSpecChange} title="Exception flag — only changes WHICH recipe variant (-S/-P) the floor runs; physical handling is untouched" style={{ ...fieldStyle, background: '#fff' }}>
+                                <option value="">Auto (by product type)</option>
+                                <option value="POLES">POLES — finish like a pole (-P recipe)</option>
+                                <option value="SMALL">SMALL — force small parts (-S recipe)</option>
                             </select>
                         </div>
                     </div>

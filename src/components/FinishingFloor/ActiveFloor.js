@@ -176,10 +176,15 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // `CP-S` and the poles run `CP-P` when those recipes exist — Grace's CP case, where poles take
   // 4 coats of DTM-7/Champagne/hand/30-sheen and the small parts 2 coats of DTM-11/tinted. Base
   // code when no variant exists, so everything pre-existing behaves exactly as before.
-  const recipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, 'SMALL');
-  const poleRecipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, 'POLES');
-  const partsRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, 'SMALL');
-  const poleRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, 'POLES');
+  // FINISH-STREAM EXCEPTION (the elbow): a WO stamped finishStream 'POLES' (from the item
+  // master's flag) runs its PARTS stream on the -P recipe — physically still a small part on a
+  // sled, finished to match the poles. 'SMALL' forces the reverse on a pole item.
+  const partsStreamOf = (wo) => String(wo?.finishStream || '').toUpperCase() === 'POLES' ? 'POLES' : 'SMALL';
+  const poleStreamOf = (wo) => String(wo?.finishStream || '').toUpperCase() === 'SMALL' ? 'SMALL' : 'POLES';
+  const recipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, partsStreamOf(wo));
+  const poleRecipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, poleStreamOf(wo));
+  const partsRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, partsStreamOf(wo));
+  const poleRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, poleStreamOf(wo));
 
   // ⛔ ZERO COATS IS NOT "FINISHED" (Stuart 2026-08-03, WO11374: "when the operator scanned it to
   // start, it immediately shows completed??").

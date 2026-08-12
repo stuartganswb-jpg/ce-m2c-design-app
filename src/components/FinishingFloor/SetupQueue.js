@@ -377,6 +377,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               stockErpId: code, stockInternalId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null,
               paintSize: isPole ? null : size, productType: String(specs.productType || '').toUpperCase() || null, paintSizes,
               ...(isPole ? { poles: { qty, type: String(specs.productType || 'POLE').toUpperCase() }, totalPoles: qty } : {}),
+              ...(specs.finishStream ? { finishStream: String(specs.finishStream).toUpperCase() } : {}),
               note: `⟲ SCRAP RE-MAKE · ${rmNote || ''}`.trim(),
               remake: true,
               cpqSpecs: {}, imageUrl: part.finalImageUrl || null,

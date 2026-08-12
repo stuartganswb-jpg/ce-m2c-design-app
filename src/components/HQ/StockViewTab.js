@@ -1099,6 +1099,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     stockErpId: r.itemid, stockInternalId: r.internalId,
                     paintSize: info.isPole ? null : (info.size || null), productType: info.ptype || null, paintSizes,
                     ...(info.isPole ? { poles: { qty, type: info.ptype || 'POLE' }, totalPoles: qty } : {}),
+                    // Finish-stream exception (library flag): e.g. the elbow — small part, but its
+                    // runs use the -P pole recipe. The floor reads this off the WO doc.
+                    ...(info.part?.manufacturingSpecs?.finishStream ? { finishStream: String(info.part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
                     note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}${info.isPole ? ' · POLE (rack of 8)' : ''}${sug ? ` · ⇄ SUGGEST: convert ${sug.qty} × ${sug.from} → raw ${sugBase}` : ''}${bomLines.length ? ` · BOM pull: ${bomLines.map(l => `${l.quantity}×${l.legacyErpId}`).join(', ')}` : ''}`,
                     cpqSpecs: {}, imageUrl: info.part?.finalImageUrl || null,
                     dimensions: { length: 0, width: 0, height: 0 },
