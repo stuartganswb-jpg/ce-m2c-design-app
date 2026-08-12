@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { finishingDb as db } from '../../firebase'; 
-import { doc, setDoc, deleteDoc } from "firebase/firestore";
+import { doc, setDoc, deleteDoc, getDoc } from "firebase/firestore";
 import { cardStyle, btnStyle, inputStyle, labelStyle, sectionHeaderStyle } from './finishingStyles';
 
 const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
@@ -78,6 +78,28 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
         setRBase(p.rBase || "");
         setRCat(p.rCat || "");
         window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    // Delete a recipe; a NEEDS-RECIPE stub (pushed from HQ 4.5 by the sync) also offers to remove
+    // the HQ master finish, so a finish sales created by mistake dies in ONE place — here, on the
+    // floor, which is where Stuart wants mismatches fixed or deleted (2026-08-12).
+    const handleDeleteRecipe = async (r) => {
+        const isStub = r.needsRecipe || r.stub || !(r.steps || []).length;
+        if (!window.confirm(`Delete recipe ${r.code}?${isStub ? '' : '\n\nOrders carrying this code will show "recipe missing" until it is re-created.'}`)) return;
+        await deleteDoc(doc(db, "fin_recipes", r.code));
+        if (writeLog) writeLog(`Deleted recipe ${r.code}${isStub ? ' (needs-recipe stub)' : ''}`, 'recipes');
+        if (isStub && r.pushedFromHQ && window.confirm(`${r.code} came from HQ 4.5 (a sales-created finish).\n\nAlso remove it from the HQ In-House Master Finishes list? OK = gone everywhere (incl. CPQ flow palettes). Cancel = it stays in HQ and will push back here on the next sync.`)) {
+            try {
+                const snap = await getDoc(doc(db, "system", "master_finishes"));
+                const list = (snap.exists() && snap.data().finishes) || [];
+                const next = list.filter(f => String(f.code || f.name || '').trim().toUpperCase() !== String(r.code).toUpperCase());
+                if (next.length !== list.length) {
+                    await setDoc(doc(db, "system", "master_finishes"), { finishes: next }, { merge: true });
+                    if (writeLog) writeLog(`Removed finish ${r.code} from HQ master finishes (floor delete)`, 'recipes');
+                    alert(`${r.code} removed here AND from HQ master finishes.`);
+                }
+            } catch (e) { alert(`Deleted here, but the HQ removal failed: ${e.message || e}\n\nRemove it in HQ 4.5 manually.`); }
+        }
     };
 
     const updateStep = (index, field, value) => {
@@ -210,21 +232,27 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
                                     </div>
                                 );
                             };
-                            const card = (r, isOrphan) => (
-                                <div key={r.code} style={{ ...cardStyle, ...(isOrphan ? { borderLeft: '3px solid #d9534f' } : {}) }}>
+                            const card = (r, isOrphan) => {
+                                const isStub = r.needsRecipe || r.stub || !(r.steps || []).length;
+                                return (
+                                <div key={r.code} style={{ ...cardStyle, ...(isOrphan ? { borderLeft: '3px solid #d9534f' } : (isStub ? { borderLeft: '3px solid #d9a648' } : {})) }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
                                         <div style={{ minWidth: 0 }}>
                                             <strong style={{ fontSize: '1.2rem', color: 'var(--ink)', fontFamily: 'var(--serif)' }}>{r.code}</strong>
                                             {isOrphan && <span title="This -S/-P variant has no master recipe — create the master, or rename this" style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', color: '#d9534f', border: '1px solid #d9534f', padding: '2px 6px', marginLeft: '8px', verticalAlign: 'middle' }}>NO MASTER</span>}
+                                            {!isOrphan && isStub && <span title="Created in HQ 4.5 (sales) with no recipe yet — press Edit and build the steps, or delete it" style={{ fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.08em', color: '#8a6d3b', background: '#fdf6ec', border: '1px solid #d9a648', padding: '2px 6px', marginLeft: '8px', verticalAlign: 'middle' }}>⚠ NEEDS RECIPE — NEW FROM HQ</span>}
                                             {r.name && <span style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', display: 'block', marginTop: '2px' }}>{r.name}</span>}
                                         </div>
                                         {canEdit && (
                                             <div style={{ display: 'flex', gap: '8px' }}>
                                                 <button onClick={() => handleEditRecipe(r)} style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Edit</button>
-                                                <button onClick={() => { if(window.confirm(`Delete recipe ${r.code}?${byCode[`${String(r.code).toUpperCase()}-S`] || byCode[`${String(r.code).toUpperCase()}-P`] ? `\n\n⚠ Its -S/-P variants stay — delete or re-home them too.` : ''}`)) deleteDoc(doc(db, "fin_recipes", r.code)); }} style={{ background: 'transparent', color: '#d9534f', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Del</button>
+                                                <button onClick={() => handleDeleteRecipe(r)} style={{ background: 'transparent', color: '#d9534f', border: '1px solid var(--line)', padding: '6px 12px', fontSize: '9px', fontFamily: 'var(--mono)', textTransform: 'uppercase', cursor: 'pointer' }}>Del</button>
                                             </div>
                                         )}
                                     </div>
+                                    {isStub && !isOrphan && (
+                                        <div style={{ fontSize: '0.85rem', color: '#8a6d3b', fontStyle: 'italic', marginBottom: '10px' }}>No steps yet — sales created this finish in HQ. Press Edit to build the recipe, or Del if it shouldn't exist (that also offers to remove it from HQ).</div>
+                                    )}
 
                                     {r.steps?.map(st => (
                                         <div key={st.step} style={{ fontSize: '0.9rem', padding: '8px 0', borderBottom: '1px solid rgba(28,26,22,.05)', display: 'flex', alignItems: 'center' }}>
@@ -248,7 +276,8 @@ const Recipes = ({ recipes, paintProfiles, supplies, writeLog, user }) => {
                                         </div>
                                     )}
                                 </div>
-                            );
+                                );
+                            };
                             return (
                                 <>
                                     {masters.map(r => card(r, false))}

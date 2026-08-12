@@ -827,7 +827,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     };
 
     const handleSyncFloorRecipes = async () => {
-        if (!window.confirm("Scan the Finishing Floor database and sync recipes with HQ?\n\n• Missing floor recipes import here\n• -S/-P stream variants are SKIPPED (floor routing detail — they show as chips on their master)\n• Finishes whose floor recipe was DELETED are offered for cleanup")) return;
+        if (!window.confirm("Sync finishes with the Finishing Floor?\n\n• Floor recipes missing here import to HQ\n• HQ finishes with NO floor recipe (new from sales) PUSH to the floor as NEEDS-RECIPE stubs — Grace builds the recipe there, or deletes it\n• -S/-P stream variants are skipped both ways (floor routing detail)")) return;
         let currentFinishes = [...globalFinishes]; let addedCount = 0;
         floorRecipeData.forEach(recipe => {
             // -S/-P stream variants never become HQ finishes — the MASTER code is the finish;
@@ -842,30 +842,32 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             }
         });
 
-        // DELETE-PROPAGATION (Stuart 2026-08-11: "grace deleted a lot of older finishes from the
-        // floor but HQ did not get updated"). Candidates: sub-coded rows (never belong here), and
-        // in-house finishes with NO matching floor recipe. Species finishes (bomSuffix — wood/
-        // acrylic, no spray recipe by design) are never offered. The user confirms the exact list;
-        // a removed finish disappears from every CPQ flow palette, so the warning says so.
+        // HQ → FLOOR PUSH (Stuart 2026-08-12 correction: "it needs to push any mismatches to
+        // finishing floor recipes and that is where they can be fixed or deleted"). Sales create
+        // new finishes HERE; Grace never saw them because nothing reached the floor. Every master
+        // finish with NO floor recipe now lands in fin_recipes as a NEEDS-RECIPE stub (steps: [])
+        // — the floor Recipes tab flags it, and Grace either builds the real recipe or deletes it
+        // (deleting a stub there offers to remove the HQ finish too, closing the loop). Species
+        // finishes (bomSuffix — wood/acrylic) never spray, so they are never pushed.
         const floorCodes = new Set(floorRecipeData.map(r => String(r.id).toUpperCase()));
-        const orphans = currentFinishes.filter(f => {
-            const code = String(f.code || f.name || '').toUpperCase();
-            if (!code) return false;
-            if (isStreamVariantCode(code)) return true;                       // routing detail row — never belongs
-            if (String(f.bomSuffix || '').trim()) return false;               // species finish — no floor recipe by design
-            return !floorCodes.has(code) && !floorCodes.has(String(f.name || '').toUpperCase());
-        });
-        let removedCount = 0;
-        if (orphans.length && window.confirm(`${orphans.length} finish(es) here have NO recipe on the finishing floor (deleted there, or -S/-P rows that belong inside their master):\n\n${orphans.map(f => `• ${f.code || f.name}${isStreamVariantCode(f.code || f.name) ? ' (stream variant row)' : ''}`).join('\n')}\n\nRemove them from HQ too? ⚠ A removed finish disappears from every CPQ flow's finish palette — keep anything you still quote with.`)) {
-            const orphanIds = new Set(orphans.map(f => f.id));
-            currentFinishes = currentFinishes.filter(f => !orphanIds.has(f.id));
-            removedCount = orphans.length;
+        let pushedCount = 0; const pushedCodes = [];
+        for (const f of currentFinishes) {
+            const code = String(f.code || f.name || '').trim().toUpperCase().replace(/\//g, '-');
+            if (!code || isStreamVariantCode(code)) continue;
+            if (String(f.bomSuffix || '').trim()) continue;
+            if (floorCodes.has(code) || floorCodes.has(String(f.name || '').trim().toUpperCase())) continue;
+            await setDoc(doc(db, "fin_recipes", code), {
+                code, name: (f.name && String(f.name).toUpperCase() !== code) ? f.name : '',
+                steps: [], instructions: '',
+                stub: true, needsRecipe: true, pushedFromHQ: Date.now(),
+            });
+            pushedCount++; pushedCodes.push(code);
         }
 
-        if (addedCount > 0 || removedCount > 0) {
-            await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true });
-            alert(`Sync complete: ${addedCount} imported, ${removedCount} removed.`);
-        } else alert("HQ is in sync with floor database!");
+        if (addedCount > 0) await setDoc(doc(db, "system", "master_finishes"), { finishes: currentFinishes }, { merge: true });
+        if (addedCount > 0 || pushedCount > 0) {
+            alert(`Sync complete:\n\n• ${addedCount} floor recipe(s) imported to HQ\n• ${pushedCount} HQ finish(es) pushed to the floor as NEEDS-RECIPE stubs${pushedCodes.length ? `:\n  ${pushedCodes.join(', ')}` : ''}\n\nGrace finds them flagged on Finishing → FINISH RECIPES — she adds the recipe steps, or deletes them (which offers to remove the finish from HQ too).`);
+        } else alert("HQ and the floor are in sync!");
     };
 
     const handleAddGlobalFinish = async () => {
