@@ -2049,6 +2049,39 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             shortRec = { line: currentPickLine, itemId: code, name: lineItem.name || '', target, picked: entered, platingDemandId: routedShort };
         }
 
+        // JFP AUTO-ADJUST (Eric 2026-08-12: "add the selection of replacement part at start
+        // rather than pick"): a paint-only pull FROM STOCK adjusts −qty of the pulled item at
+        // pick confirm — packing later adjusts the painted pieces IN, so without this every JFP
+        // pull double-counted (the 'two raws added but never removed' drift). The source was
+        // chosen at creation (Pull Pieces From) or defaults to the item's own code; customer-
+        // supplied pieces are SKIPPED lines and never adjust.
+        if (activePickJob.paintOnly === true && entered > 0) {
+            const nsId = lineItem.jfpSourceNsId || (hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === code) || {}).netSuiteInternalId;
+            if (nsId) {
+                const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
+                const adjBin = scanned && scanned !== 'UNASSIGNED' ? scanned : '';
+                try {
+                    await enqueueNsWrite({
+                        kind: 'inventoryadjustment',
+                        label: `JFP pull −${entered} × ${code} (${packRef(activePickJob)})`,
+                        sourceApp: 'WMS', createdBy: operator?.name || '',
+                        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                        method: 'POST',
+                        payload: {
+                            account: { id: "254" }, subsidiary: { id: nsCfg.subsidiary },
+                            memo: `JFP pull for ${packRef(activePickJob)}: −${entered} × ${code} (repaint source)`,
+                            inventory: { items: [{ item: { id: String(nsId) }, location: { id: nsCfg.location }, adjustQtyBy: -entered, ...(adjBin ? { inventoryDetail: { quantity: -entered, inventoryAssignment: { items: [{ binNumber: { refName: adjBin }, quantity: -entered }] } } } : {}) }] }
+                        },
+                    });
+                    writeLog(`JFP pull: −${entered} × ${code} adjustment queued (${packRef(activePickJob)}${adjBin ? ` · bin ${adjBin}` : ''}).`, 'wms');
+                } catch (adjErr) {
+                    alert(`Pick recorded, but the −${entered} × ${code} NetSuite adjustment could not be queued: ${adjErr.message || adjErr}\n\nAdjust it manually (11.1 / NetSuite).`);
+                }
+            } else {
+                writeLog(`⚠ JFP pull of ${entered} × ${code} on ${packRef(activePickJob)} — no NetSuite id resolved, NO adjustment queued (adjust manually).`, 'alert');
+            }
+        }
+
         setValidation({ bin: '', qty: '' });
         const nextShorts = shortRec ? [...pickShorts, shortRec] : pickShorts;
         if (shortRec) setPickShorts(nextShorts);

@@ -104,7 +104,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // JUST FOR PAINT (Stuart 2026-08-03) — a paint run for a legacy NetSuite item the app was never
   // taught. The item # is typed, not picked, because there is no library record behind it.
   const [inHouseFinishes, setInHouseFinishes] = useState([]);
-  const [jfp, setJfp] = useState({ itemCode: '', finishId: '', note: '', busy: false });
+  const [jfp, setJfp] = useState({ itemCode: '', finishId: '', note: '', pullFrom: '', busy: false });
   // Same idea for an ORDINARY part: choose a finish and push it to the floor from here.
   const [runFinishId, setRunFinishId] = useState('');
   const [runBusy, setRunBusy] = useState(false);
@@ -1250,14 +1250,21 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       const finishLabel = fin ? (fin.code ? `${fin.code} - ${fin.name}` : fin.name) : '';
       const code = normalizeItemCode(jfp.itemCode);
 
+      // PULL SOURCE decided at CREATION (Eric 2026-08-12): resolve it against NetSuite now, same
+      // rule as the target — the WMS pick pulls this code and posts the −qty adjustment on
+      // confirm, so the id has to be right before anything is created.
+      const pullCode = normalizeItemCode(jfp.pullFrom || '');
       setJfp(j => ({ ...j, busy: true }));
-      let nsItem = null;
+      let nsItem = null, nsPull = null;
       try {
-          const q = `SELECT Item.id AS id, Item.itemid AS itemid, Item.displayname AS displayname FROM Item WHERE UPPER(Item.itemid) = '${code.replace(/'/g, "''")}'`;
+          const codesIn = [code, ...(pullCode && pullCode !== code ? [pullCode] : [])].map(c => `'${c.replace(/'/g, "''")}'`).join(',');
+          const q = `SELECT Item.id AS id, Item.itemid AS itemid, Item.displayname AS displayname FROM Item WHERE UPPER(Item.itemid) IN (${codesIn})`;
           const resp = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q } });
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
-          nsItem = (data.items && data.items[0]) || null;
+          const rows = data.items || [];
+          nsItem = rows.find(r => String(r.itemid).toUpperCase() === code) || null;
+          nsPull = pullCode ? (rows.find(r => String(r.itemid).toUpperCase() === pullCode) || null) : null;
       } catch (err) {
           setJfp(j => ({ ...j, busy: false }));
           return alert(`Couldn't reach NetSuite to check ${code} — nothing was created. Try again.\n\n${err.message || err}`);
@@ -1266,9 +1273,13 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           setJfp(j => ({ ...j, busy: false }));
           return alert(`NetSuite has no item called "${code}".\n\nCheck the spelling — this is the item the finished pieces get adjusted into at packing, so it has to be right before the paint is run.`);
       }
+      if (pullCode && pullCode !== code && !nsPull) {
+          setJfp(j => ({ ...j, busy: false }));
+          return alert(`NetSuite has no item called "${pullCode}" (the Pull Pieces From item).\n\nCheck the spelling — the pick adjusts this item OUT of NetSuite, so it has to be right. Leave the field blank if the pieces aren't coming from stock.`);
+      }
 
       const desc = paintOnlyDescription({ itemCode: code, finishLabel, qty, note: jfp.note });
-      if (!window.confirm(`Send a JUST FOR PAINT run to the finishing floor?\n\n${desc}\nNetSuite item: ${nsItem.itemid}${nsItem.displayname ? ` — ${nsItem.displayname}` : ''}\n\nNo assembly, no NetSuite work order. At packing the painted pieces are adjusted into the bin that gets scanned.`)) {
+      if (!window.confirm(`Send a JUST FOR PAINT run to the finishing floor?\n\n${desc}\nNetSuite item: ${nsItem.itemid}${nsItem.displayname ? ` — ${nsItem.displayname}` : ''}${nsPull && pullCode !== code ? `\nPull pieces from: ${nsPull.itemid}${nsPull.displayname ? ` — ${nsPull.displayname}` : ''} (−${qty} adjusts out at pick)` : ''}\n\nNo assembly, no NetSuite work order. At packing the painted pieces are adjusted into the bin that gets scanned.`)) {
           setJfp(j => ({ ...j, busy: false }));
           return;
       }
@@ -1280,6 +1291,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           const jfpFields = {
               paintOnly: true, jfpItemCode: code, jfpItemId: String(nsItem.id),
               jfpItemName: nsItem.displayname || '', jfpFinishId: jfp.finishId, jfpFinishLabel: finishLabel,
+              ...(nsPull && pullCode !== code ? { jfpPullFrom: pullCode, jfpPullFromNsId: String(nsPull.id), jfpPullFromName: nsPull.displayname || '' } : {}),
           };
           await releaseRunToFloor({
               woId: newWoId, part: { ...activePart, legacyErpId: code, itemName: nsItem.displayname || code },
@@ -1288,7 +1300,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               finExtra: { ...jfpFields, type: nsItem.displayname || code },
           });
           alert(`✅ ${newWoId} is on the finishing floor.\n\n${desc}\n\nIt is in the Setup Queue now, and recorded in RTG. Packing does a bin count and adjusts ${code} into that bin.`);
-          setJfp({ itemCode: '', finishId: '', note: '', busy: false });
+          setJfp({ itemCode: '', finishId: '', note: '', pullFrom: '', busy: false });
           setWoTargetQty(1);
       } catch (err) {
           console.error('JFP WO error:', err);
@@ -2361,11 +2373,20 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                       <p style={{ margin: '0 0 20px 0', fontSize: '0.88rem', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
                           For a legacy NetSuite item with no assembly in the app. Type its item #, pick the finish, set the quantity — it runs the finishing floor like any other job. It lands in the finishing floor Setup Queue immediately (RTG still records it). At packing the operator scans a bin and the painted pieces are adjusted into it in NetSuite. No assembly build, no NetSuite work order.
                       </p>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1.4fr 0.7fr', gap: '16px', marginBottom: '16px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 1.2fr 0.6fr', gap: '16px', marginBottom: '16px' }}>
                           <div>
                               <label style={labelStyle}>NetSuite Item #</label>
                               <input value={jfp.itemCode} onChange={e => setJfp(j => ({ ...j, itemCode: e.target.value }))} placeholder="e.g. H1-138BE/P" style={{ ...fieldStyle, fontFamily: 'var(--mono)' }} />
                               <span style={{ display: 'block', marginTop: '5px', fontSize: '0.75rem', color: 'var(--ink-soft)' }}>Checked against NetSuite before the run is created.</span>
+                          </div>
+                          {/* PULL PIECES FROM (Eric 2026-08-12: "add the selection of replacement
+                              part at start rather than pick") — decided HERE, while the person who
+                              knows is standing at the form. The WMS pick pulls THIS code and posts
+                              the −qty adjustment automatically at pick confirm. */}
+                          <div>
+                              <label style={labelStyle}>Pull Pieces From (Optional)</label>
+                              <input value={jfp.pullFrom} onChange={e => setJfp(j => ({ ...j, pullFrom: e.target.value }))} placeholder="e.g. HHRMBF75/M6 — another finish of the part" style={{ ...fieldStyle, fontFamily: 'var(--mono)' }} />
+                              <span style={{ display: 'block', marginTop: '5px', fontSize: '0.75rem', color: 'var(--ink-soft)' }}>Blank = pull the item's own stock (or customer-supplied pieces — skip the pick line). Set it to repaint stock of a DIFFERENT finish; the pick adjusts that item out of NetSuite automatically.</span>
                           </div>
                           <div>
                               <label style={labelStyle}>In-House Finish</label>

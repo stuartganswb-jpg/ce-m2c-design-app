@@ -130,18 +130,21 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       const stockErp = String(wo.stockErpId || (wo.orderType === 'stock' ? wo.type : '') || '');
       if (stockErp) {
           const cut = stockErp.lastIndexOf('/');
-          // JFP paint-only (Eric 2026-08-11): the code as typed IS the thing to pull and repaint —
-          // stripping the finish suffix invented a "raw core" demand for an item that may not
-          // exist. The WMS pick's ⇄ Substitute button covers pulling a different finish variant.
-          const base = wo.paintOnly === true ? stockErp : (cut > 0 ? stockErp.slice(0, cut) : stockErp);
+          // JFP paint-only (Eric 2026-08-11/12): the PULL SOURCE was decided at creation —
+          // jfpPullFrom when repainting stock of a different finish, else the code as typed.
+          // Never strip the suffix into an invented "raw core". The pick posts the −qty
+          // adjustment for JFP pulls automatically (jfpSource flag below).
+          const jfpBase = String(wo.jfpPullFrom || stockErp);
+          const base = wo.paintOnly === true ? jfpBase : (cut > 0 ? stockErp.slice(0, cut) : stockErp);
           const qty = Number(wo.totalParts) || 1;
           const label = wo.paintOnly === true
-              ? `${base} — pull ${qty} to repaint ${wo.recipe || ''} (JFP · ⇄ Substitute if pulling a different finish)`
+              ? `${base} — pull ${qty} to repaint ${wo.recipe || ''} → ${stockErp}${base !== stockErp ? ' (source set at creation)' : ''} · skip if customer-supplied`
               : `RAW ${base} — pull ${qty} to finish ${wo.recipe || ''} → ${stockErp}`;
           return {
               patch: {
                   sentToPickPack: true, pickStatus: wo.pickStatus || 'Pending', sentToPickPackAt: Date.now(),
-                  partsList: [{ legacyErpId: base, partId: base, partName: label, quantity: qty, partHandling: 'Small Parts' }]
+                  partsList: [{ legacyErpId: base, partId: base, partName: label, quantity: qty, partHandling: 'Small Parts',
+                      ...(wo.paintOnly === true ? { jfpSource: true, ...(wo.jfpPullFromNsId ? { jfpSourceNsId: String(wo.jfpPullFromNsId) } : {}) } : {}) }]
               },
               note: ` — pull ${qty} × ${base}${wo.paintOnly === true ? ' (JFP repaint)' : ' (raw base)'} released to the WMS pick queue`
           };
