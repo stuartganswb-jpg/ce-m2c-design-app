@@ -450,6 +450,8 @@ H/I/J their net/wholesale/retail, L/M/N the ADDITIONAL FOOT triple.
 | Piece | Status |
 |---|---|
 | Kit sheet importer (4.6 KITS mode, preview-then-apply) | ✅ `78181b9` — kits + kitAlign + kitMotorCodes + 3-tier & per-foot pricing on the customer row; component alignment (existing items only); rules doc `traverse_rules/H1-2TRV` |
+| Tier inheritance: unstamped /P //EP variants price from the BASE doc's painted/plated tiers (own price = mill/simple-finish only, never shadows a tier) | ✅ `ad78065` — opt-in `findByCode` param on `fabricutPriceOf`; only CPQTab passes it. **⚠ Session A: portal mirror (`portal/src/shared/priceLevels.js` + `functions/portalEngine.js`) NOT swept — traverse is portal-held; sweep when it lands there** |
+| Component finishes Bronze `/B` / Champagne `/C`: retire the suffix ITEMS, make B + C finishes, new finish-library field mapping main finish → component finish (e.g. P01 → C for tracks/kit brackets) | ⏳ decided 2026-08-12; the mapping field + BOM application build with the rules tab / kit explosion |
 | Parser tests against the REAL sheet | ✅ 37 total — `sh scripts/run-traverse-tests.sh` |
 | CPQ: 48" start + 4ft floor (everyone), step 4 Manual/Motorized + motor dropdown | ⏳ next |
 | Kit resolution at quote time (kit line + per-foot + end treatments) | ⏳ |
