@@ -234,6 +234,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // face only: CPQ/quotes can show its part#, but the BOM, shop floor and finishing floor always
   // see the exploded ORDER totals ("a 7ft pole and track"), never the kit. No NetSuite item.
   const isKitRecord = openClass === 'Kit' || /(^|-)KIT-/.test(openErp);
+  // NON-INVENTORY (Stuart 2026-08-13): a NetSuite nonInventorySaleItem — sold, never stocked. The
+  // $-holders (CE-TRV-SYSTEM), rollups and service charges. Mapped EXACTLY like the 11 CPQ-flow
+  // rollup tool, because that mapping "works/maps perfectly with NetSuite".
+  const isNonInvRecord = openClass === 'Non-Inventory';
   const isBracketRecord = openPT.includes('BRACKET');
   const isBackplateRecord = openPT.includes('BACKPLATE') || openPT.includes('BACK PLATE');
   const isAssemblyRecord = openClass === 'Assembly' || openClass === 'Master Assembly';
@@ -440,6 +444,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
         // reliable catch-all (Stuart 2026-07-22 — the App-only button stopped finding them all).
         else if (partClassFilter === "FEES") matchesClass = String(specs.productType || part.productType || '').toUpperCase() === 'FEE' || part.partClass === 'Fee' || /(^|-)FEE-/.test(String(part.legacyErpId || part.itemId || '').toUpperCase());
         else if (partClassFilter === "KITS") matchesClass = part.partClass === 'Kit' || /(^|-)KIT-/.test(String(part.legacyErpId || part.itemId || '').toUpperCase());
+        else if (partClassFilter === "NONINV") matchesClass = part.partClass === 'Non-Inventory';
         else if (partClassFilter === "UNASSIGNED") matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && (!part.routingType || part.routingType === "UNASSIGNED");
         else matchesClass = (part.partClass === "Assembly" || part.partClass === "Master Assembly") && part.routingType?.toUpperCase() === partClassFilter.toUpperCase();
     }
@@ -814,9 +819,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     //             no NetSuite item, and shop documents always show the exploded components.
     const actualClass = partClassFilter === 'FEES' ? 'Fee'
         : partClassFilter === 'KITS' ? 'Kit'
+        : partClassFilter === 'NONINV' ? 'Non-Inventory'
         : (partClassFilter === 'ALL' || partClassFilter === 'INVENTORY' || partClassFilter === 'OUTSOURCED') ? 'Inventory'
         : 'Assembly';
-    const prefix = actualClass === 'Fee' ? 'FEE' : actualClass === 'Kit' ? 'KIT' : actualClass === 'Inventory' ? 'INV' : 'ASM';
+    const prefix = actualClass === 'Fee' ? 'FEE' : actualClass === 'Kit' ? 'KIT' : actualClass === 'Non-Inventory' ? 'NIV' : actualClass === 'Inventory' ? 'INV' : 'ASM';
     const newId = `${activeBrand.toUpperCase()}-${prefix}-${Math.floor(1000+Math.random()*9000)}`;
     
     setActivePart({ isNew: true, id: newId, itemId: newId, legacyErpId: "PENDING", itemName: `NEW ${actualClass.toUpperCase()}`, brandId: activeBrand, partClass: actualClass });
@@ -893,6 +899,44 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       ]);
       setTimeout(() => { setIsSaving(false); setActivePart(null); setUploadProgress(0); setCadUploadProgress(0); }, 500);
     } catch (err) { console.error(err); setIsSaving(false); alert(`Failed to save: ${err?.message || err}`); }
+  };
+
+  // CREATE / MAP a NetSuite non-inventory sale item for a Non-Inventory record — the EXACT mapping
+  // the 11 CPQ-flow rollup tool uses (find-by-itemid first, then nonInventorySaleItem with income
+  // acct 249 + tax schedule 2), because that mapping is proven against this NetSuite account.
+  const handleCreateNonInvItem = async () => {
+      const code = String(editSpecs.tempLegacyId || activePart.legacyErpId || '').trim().toUpperCase();
+      if (!code || code === 'PENDING') return alert('Give the record its item code (ERP Legacy ID) first — that becomes the NetSuite itemid.');
+      if (!window.confirm(`Create / map NetSuite non-inventory item "${code}"?\n\nSafe to re-run — it maps to the existing item if one already exists.`)) return;
+      setIsPushingErp(true);
+      try {
+          const SUITEQL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
+          const findId = async () => {
+              const r = await nsProxyFetch({ targetUrl: SUITEQL, method: 'POST', payload: { q: `SELECT id FROM item WHERE itemid = '${code.replace(/'/g, "''")}'` } });
+              const d = await r.json().catch(() => ({}));
+              return (r.ok && Array.isArray(d.items) && d.items.length) ? String(d.items[d.items.length - 1].id) : null;
+          };
+          let newId = await findId();
+          if (!newId) {
+              const sub = (BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2' }).subsidiary;
+              const payload = {
+                  itemid: code,
+                  displayname: (editSpecs.tempName || activePart.itemName || code).slice(0, 40),
+                  subsidiary: { items: [{ id: sub }] },
+                  incomeaccount: { id: '249' },
+                  taxschedule: { id: '2' },
+              };
+              const resp = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/nonInventorySaleItem', method: 'POST', payload });
+              if (!resp.ok) throw new Error(`NetSuite rejected [${resp.status}]: ${JSON.stringify(await resp.json().catch(() => ({})))}`);
+              const result = await resp.json().catch(() => ({}));
+              newId = result.id || (result.links && result.links[0]?.href ? result.links[0].href.split('/').pop() : null) || await findId();
+          }
+          if (!newId) throw new Error(`Item created but its internal id could not be resolved — look up "${code}" in NetSuite and enter it via sync.`);
+          await updateDoc(doc(db, 'Approved_Designs', activePart.id), { netSuiteInternalId: String(newId), netSuiteRecordType: 'noninventorysaleitem', legacyErpId: code, updatedAt: new Date().toISOString() });
+          setActivePart(prev => ({ ...prev, netSuiteInternalId: String(newId), netSuiteRecordType: 'noninventorysaleitem', legacyErpId: code }));
+          alert(`✅ "${code}" mapped to NetSuite non-inventory item — internal id ${newId}.`);
+      } catch (e) { console.error(e); alert(`Create/map failed: ${e?.message || e}`); }
+      setIsPushingErp(false);
   };
 
   const handlePushUpdatesToNetSuite = async () => {
@@ -1423,6 +1467,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               <option value="OUTSOURCED">Outsourced Components</option>
               <option value="FEES">Fees & Charges</option>
             <option value="KITS">Kits (Customer Sets)</option>
+            <option value="NONINV">Non-Inventory ($ Holders / Services)</option>
               <optgroup label="Assemblies & Kits">
                   <option value="UNASSIGNED">Unassigned / Pending</option>
                   {(globalLists.assemblyTypes || []).map(type => (
@@ -1679,15 +1724,34 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                          <option value="Master Assembly">Master Assembly — the mainline product an order is built around</option>
                          <option value="Fee">Fee — a charge. No stock, no BOM, no NetSuite item</option>
                          <option value="Kit">Kit — a sellable set: a customer part# wrapping component items. No NetSuite item</option>
+                         <option value="Non-Inventory">Non-Inventory — a NetSuite non-inventory sale item: sold, never stocked ($ holders, services)</option>
                      </select>
                      <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px' }}>
-                         {isKitRecord
+                         {isNonInvRecord
+                             ? 'A non-inventory sale item bills on an SO but is never stocked or picked — the traverse $-holder (CE-TRV-SYSTEM), rollups, services. Use "Create / map in NetSuite" below: it finds an existing item by this code first and only creates when none exists, with the same income account and tax schedule as the CPQ rollup tool.'
+                             : isKitRecord
                              ? 'A kit is the SALES face of a set (e.g. a 4ft traverse starter: fascia + track + 2 brackets). CPQ and quotes may show this part#, but the BOM, shop floor and finishing floor always see the exploded ORDER totals — never the kit. Its ERP Legacy ID is a reference, and nothing here is ever pushed to NetSuite as an item.'
                              : isFeeRecord
                              ? 'A fee bills through the CPQ flow and rolls into the mainline — its ERP Legacy ID above is a REFERENCE, not a NetSuite item number, and nothing here is ever pushed to NetSuite as an item.'
                              : 'This is what the record IS. Entering an ERP Legacy ID never changes it — the id prefix follows the class, not the other way round.'}
                      </div>
                  </div>
+
+                 {isNonInvRecord && (
+                     <div style={{ background: 'var(--paper)', padding: '20px 24px', border: `1px solid ${activePart.netSuiteInternalId ? 'var(--line)' : 'var(--brass)'}`, marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+                         <div>
+                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>NetSuite non-inventory sale item</div>
+                             <div style={{ fontSize: '0.95rem', color: 'var(--ink)' }}>
+                                 {activePart.netSuiteInternalId
+                                     ? <>Mapped — internal id <b>{activePart.netSuiteInternalId}</b> ✓</>
+                                     : 'Not in NetSuite yet — create/map it so SO lines can bill against it.'}
+                             </div>
+                         </div>
+                         <button onClick={handleCreateNonInvItem} disabled={isPushingErp} style={{ padding: '14px 22px', background: activePart.netSuiteInternalId ? 'transparent' : 'var(--ink)', color: activePart.netSuiteInternalId ? 'var(--ink-soft)' : '#fff', border: activePart.netSuiteInternalId ? '1px solid var(--line)' : 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                             {isPushingErp ? 'Working…' : activePart.netSuiteInternalId ? 'Re-create / re-map' : 'Create / map in NetSuite'}
+                         </button>
+                     </div>
+                 )}
 
                  {/* KIT CONTENTS (Stuart 2026-08-08) — the component items this customer part#
                      wraps, stored at manufacturingSpecs.kitComponents [{ partId, qty }]. This list
