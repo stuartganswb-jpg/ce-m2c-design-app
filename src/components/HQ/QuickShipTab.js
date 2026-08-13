@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
+import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode } from "../Shared/aliasIdentity";
@@ -132,6 +133,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
 
     const [cart, setCart] = useState([]);             // flat lines (rates resolve LIVE — see pricedCart)
     const [quickItemId, setQuickItemId] = useState('');
+    // 📦 TRAVERSE KITS (Stuart 2026-08-13, the hybrid): the CSR fast path for kit-code POs — kit +
+    // extra feet + motor as cart lines, priced from the customer's own kit row. End treatments are
+    // added with the ordinary item search (they are real, NetSuite-mapped items).
+    const [trvCode, setTrvCode] = useState('');
+    const [trvKitId, setTrvKitId] = useState('');
+    const [trvFeet, setTrvFeet] = useState('');
+    const [trvMotor, setTrvMotor] = useState('');
     const [quickQty, setQuickQty] = useState('');   // blank, like every other qty on this tab
     const [kb, setKb] = useState(EMPTY_KB);
     const [kitName, setKitName] = useState('');
@@ -469,6 +477,49 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // qty is counted in PACKS; this is what the warehouse and NetSuite actually see.
     const eachQtyOf = (l) => (parseInt(l.qty) || 0) * (l.packSize || 1);
 
+    // ── TRAVERSE KITS ────────────────────────────────────────────────────────────────────────────
+    // A kit the customer is entitled to = a Kit-class record carrying kitAlign AND a pricing row
+    // for this customer — the same entitlement rule as every Quick Ship item.
+    const kitRowOf = (it) => findClientPriceRow(it?.clientPricing, custKeys) || null;
+    const trvKits = useMemo(() => allItems.filter(p => p.partClass === 'Kit' && p.manufacturingSpecs?.kitAlign && kitRowOf(p)),
+        [allItems, customerId]); // eslint-disable-line react-hooks/exhaustive-deps
+    const trvKit = trvKits.find(k => k.id === trvKitId) || null;
+    const trvResolve = (code) => {
+        setTrvCode(code);
+        const c = String(code || '').trim().toUpperCase();
+        // their pattern # (clientSku) or our code, base or per-motor — all four spellings land
+        const bySku = trvKits.find(k => { const r = kitRowOf(k); return r && String(r.clientSku || '').trim().toUpperCase() === c; })
+            || trvKits.find(k => (k.manufacturingSpecs.kitMotorCodes || []).some(x => String(x.fabSku || '').trim().toUpperCase() === c));
+        if (bySku) {
+            const mc = (bySku.manufacturingSpecs.kitMotorCodes || []).find(x => String(x.fabSku || '').trim().toUpperCase() === c);
+            setTrvKitId(bySku.id); if (mc?.motorItem) setTrvMotor(mc.motorItem);
+            return;
+        }
+        const r = resolveKitCode(trvKits, c);
+        if (r) { setTrvKitId(r.kit.id); if (r.motorItem) setTrvMotor(r.motorItem); }
+    };
+    const addTraverse = () => {
+        if (!trvKit) return alert("Pick a kit (or paste one of the customer's kit codes).");
+        const row = kitRowOf(trvKit);
+        const align = trvKit.manufacturingSpecs.kitAlign;
+        const feet = Math.max(parseInt(trvFeet) || 4, 1);
+        const billFeet = Math.max(feet, align.minFeet || 4);   // 4ft is the MINIMUM CHARGE — a shorter cut still bills the set
+        // The 4ft set — the kit record prices from its clientPricing row; NO NetSuite identity by
+        // design (the SO push gets exploded components via the CPQ-shaped handoff, not this line).
+        pushLine(trvKit, 1, `${feet}ft system — 4ft set${feet < billFeet ? ' (min charge)' : ''}`, null, { noNs: true, noPack: true });
+        const extra = billFeet - (align.minFeet || 4);
+        const perFoot = parseFloat(row?.perFootPrice);
+        if (extra > 0) pushLine(trvKit, extra, 'Additional foot', null, { noNs: true, noPack: true, rateOverride: Number.isFinite(perFoot) ? perFoot : 0 });
+        // Motor upgrade: the set price includes the base motor (HSOM-21); any other motor bills the
+        // DELTA between its per-motor kit price and the base set — that is how the sheet is built.
+        if (String(align.drive).toUpperCase() === 'MOTORIZED' && trvMotor) {
+            const mc = (trvKit.manufacturingSpecs.kitMotorCodes || []).find(x => String(x.motorItem).toUpperCase() === trvMotor.toUpperCase());
+            const delta = mc && Number.isFinite(parseFloat(mc.net)) && Number.isFinite(parseFloat(row?.price)) ? parseFloat(mc.net) - parseFloat(row.price) : 0;
+            if (mc && delta > 0) pushLine(trvKit, 1, `Motor upgrade — ${trvMotor}`, null, { noNs: true, noPack: true, rateOverride: delta });
+        }
+        setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor('');
+    };
+
     const pushLine = (it, qty, note, kitMeta, opts) => {
         if (!it) return;
         const pack = opts?.noPack ? { uom: '', size: 1 } : packForItem(it);
@@ -477,7 +528,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const face = aliasFaceOf(it);
         setCart(prev => [...prev, {
             key: `${it.id}-${Date.now()}-${Math.round(prev.length)}`,
-            itemId: it.id, erp: erpOf(it), nsId: nsIdOf(it), name: it.itemName || erpOf(it),
+            // noNs: a line with NO NetSuite identity BY DESIGN (traverse kit + per-foot lines —
+            // the kit is the sales face; NetSuite gets the exploded components via the CPQ-shaped
+            // handoff). Without this, nsIdOf's legacyErpId fallback would push the kit CODE as an
+            // item id and the SO line would 400.
+            itemId: it.id, erp: erpOf(it), nsId: opts?.noNs ? '' : nsIdOf(it), name: it.itemName || erpOf(it),
             // Customer-facing alias: shown on the quote/SO/invoice and priced from. The REAL item
             // above is what we stock, pick, barcode and send to NetSuite.
             aliasErp: face ? aliasCodeFor(face, it) : '', aliasItemId: face ? face.id : null,
@@ -1017,6 +1072,45 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             <button onClick={addQuick} style={btn('var(--ink)', '#fff')}>Add</button>
                         </div>
                     </div>
+
+                    {trvKits.length > 0 && (
+                        <div style={card}>
+                            <div style={cardHd}>Traverse Kits — {trvKits.length} for this customer</div>
+                            <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                <div>
+                                    <span style={lbl}>Their kit code (paste from the PO)</span>
+                                    <input value={trvCode} onChange={e => trvResolve(e.target.value)} placeholder="e.g. HTS7504F or H1-2TRV-4M/P-60W" style={inp} />
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: '10px' }}>
+                                    <div>
+                                        <span style={lbl}>Kit</span>
+                                        <select value={trvKitId} onChange={e => { setTrvKitId(e.target.value); setTrvMotor(''); }} style={inp}>
+                                            <option value="">— pick a kit —</option>
+                                            {trvKits.map(k => { const r = kitRowOf(k); return <option key={k.id} value={k.id}>{k.legacyErpId}{r?.clientSku ? ` · ${r.clientSku}` : ''} — ${r?.price ?? '—'}</option>; })}
+                                        </select>
+                                    </div>
+                                    <div><span style={lbl}>Total feet</span><input type="number" min="1" value={trvFeet} onChange={e => setTrvFeet(e.target.value)} placeholder="4" style={qtyInp} /></div>
+                                </div>
+                                {trvKit && String(trvKit.manufacturingSpecs.kitAlign.drive).toUpperCase() === 'MOTORIZED' && (
+                                    <div>
+                                        <span style={lbl}>Motor — set includes HSOM-21; others bill the difference</span>
+                                        <select value={trvMotor} onChange={e => setTrvMotor(e.target.value)} style={inp}>
+                                            <option value="">HSOM-21 (included)</option>
+                                            {[...new Set((trvKit.manufacturingSpecs.kitMotorCodes || []).map(x => x.motorItem).filter(Boolean))].map(mi =>
+                                                <option key={mi} value={mi}>{mi}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+                                {trvKit && (
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.7 }}>
+                                        {describeKitAlign(trvKit.manufacturingSpecs.kitAlign, trvMotor).join(' · ')}
+                                        <br />End treatments (return arms) bill separately — add them with Quick Add above.
+                                    </div>
+                                )}
+                                <button onClick={addTraverse} disabled={!trvKit} style={btn(trvKit ? 'var(--ink)' : 'var(--paper-2)', trvKit ? '#fff' : 'var(--ink-soft)')}>Add kit to cart</button>
+                            </div>
+                        </div>
+                    )}
 
                     <div style={card}>
                         <div style={cardHd}>Kit Builder</div>
