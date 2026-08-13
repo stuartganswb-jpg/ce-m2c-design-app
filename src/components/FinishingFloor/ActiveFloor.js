@@ -133,6 +133,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const redlineWOs = workOrders.filter(w => w.redlineAlert);
   const floorOps = users?.filter(u => ['painter', 'hand_painter', 'paint_manager'].includes(u.role)) || [];
   const [viewWo, setViewWo] = useState(null); // read-only order details popup (tap any job window)
+  const [recipeView, setRecipeView] = useState(null); // 📖 finish-recipe dialog (Grace 2026-08-12)
 
   const cfg = {
     potLifeMins: sysConfig?.potLifeMins || 189, recoatMins: sysConfig?.recoatMins || 90,
@@ -806,6 +807,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap', marginBottom: '6px' }}>
                             <span onClick={() => setViewWo(manualWo)} title={`${manualWo.id} — tap for full details`} style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 600, color: 'var(--ink)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'var(--line)' }}>{woRef(manualWo)}</span>
                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)' }}>{manualWo.stockErpId || manualWo.type || ''} ×{manualWo.totalParts || 0} · {manualWo.recipe || ''}</span>
+                            <button onClick={() => setRecipeView(manualWo)} title="The finish recipe(s) this order runs — steps, paints, floor instructions, live from FINISH RECIPES" style={{ background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>📖 Recipe</button>
                             <button onClick={() => setManualWoId(null)} style={{ marginLeft: 'auto', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', padding: '8px 14px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>✕ Done — scan next</button>
                         </div>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '14px' }}>
@@ -1214,6 +1216,69 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       })()}
 
       {/* 📋 ORDER DETAILS — read-only view+confirm popup; tap any job window to open. */}
+      {/* 📖 FINISH RECIPE DIALOG (Grace 2026-08-12: "Rafa and Jhonatan are not able to see the
+          Finish recipes unless they are in the Asset gallery"). The LIVE fin_recipes doc(s) for
+          this order — per stream (-S/-P resolved the same way the steps run), with paints,
+          application and the typed floor instructions. Edits on FINISH RECIPES show here the
+          moment they save; nothing is uploaded to the Asset Gallery ever again. */}
+      {recipeView && (() => {
+          const wo = recipeView;
+          const hasP = woHasPoles(wo);
+          const rParts = partsRecipeOf(wo);
+          const rPoles = hasP ? poleRecipeOf(wo) : null;
+          const samePoleDoc = rPoles && rParts && rPoles === rParts;
+          const section = (title, rec) => (
+              <div key={title} style={{ marginBottom: '20px' }}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--brass)', borderBottom: '1px solid var(--line)', paddingBottom: '6px', marginBottom: '10px' }}>
+                      {title}{rec?.code ? ` — ${rec.code}` : ''}
+                  </div>
+                  {!rec ? (
+                      <div style={{ fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '0.9rem' }}>Recipe "{wo.recipe || '(none)'}" isn't in FINISH RECIPES — add it there and it appears here.</div>
+                  ) : (
+                      <>
+                          {rec.name && <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>{rec.name}</div>}
+                          {(rec.steps || []).map(st => (
+                              <div key={st.step} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0', borderBottom: '1px solid rgba(28,26,22,.06)' }}>
+                                  <span style={{ width: '34px', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>S{st.step}</span>
+                                  <span style={{ flex: 1, fontSize: '0.95rem', color: 'var(--ink)' }}>{st.color}</span>
+                                  <span style={{ background: st.app === 'Sprayed' ? 'var(--paper-2)' : 'var(--paper)', border: '1px solid var(--line)', color: 'var(--ink)', padding: '3px 9px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{st.app}</span>
+                              </div>
+                          ))}
+                          {!(rec.steps || []).length && <div style={{ fontStyle: 'italic', color: '#a05a2c', fontSize: '0.9rem' }}>⚠ No steps defined yet — build them in FINISH RECIPES.</div>}
+                          {rec.instructions && (
+                              <div style={{ marginTop: '12px', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                                  <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>Floor Instructions</div>
+                                  <div style={{ fontSize: '0.92rem', color: 'var(--ink)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{rec.instructions}</div>
+                              </div>
+                          )}
+                      </>
+                  )}
+              </div>
+          );
+          return (
+              <div onClick={() => setRecipeView(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '540px', maxWidth: '95vw', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 12px 48px rgba(0,0,0,0.2)' }}>
+                      <div style={{ padding: '16px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                              <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>📖 Finish Recipe · {wo.recipe || '—'}</div>
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '3px' }}>{woRef(wo)} · {wo.stockErpId || wo.type || ''}</div>
+                          </div>
+                          <button onClick={() => setRecipeView(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                      </div>
+                      <div style={{ padding: '20px 24px' }}>
+                          {section(hasP ? 'Small Parts' : 'Recipe', rParts)}
+                          {hasP && (samePoleDoc
+                              ? <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '14px' }}>Poles run the SAME recipe (no -P variant defined for {wo.recipe || ''}).</div>
+                              : section('Poles', rPoles))}
+                          <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em', borderTop: '1px dashed var(--line)', paddingTop: '10px' }}>
+                              Live from Finishing → FINISH RECIPES — edits there show here immediately. Expiring or changed finishes never need an Asset Gallery upload.
+                          </div>
+                      </div>
+                  </div>
+              </div>
+          );
+      })()}
+
       {viewWo && (() => {
           const wo = workOrders.find(w => w.id === viewWo.id) || viewWo;
           const len = recipeLen(wo);
@@ -1291,7 +1356,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                               <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: 'var(--ink)' }}>{woRef(wo)}</div>
                               {woRef(wo) !== wo.id && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '3px' }}>{wo.id}</div>}
                           </div>
-                          <button onClick={() => setViewWo(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <button onClick={() => setRecipeView(wo)} title="The finish recipe(s) this order runs — steps, paints, floor instructions, live from FINISH RECIPES" style={{ background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', padding: '7px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>📖 Recipe</button>
+                              <button onClick={() => setViewWo(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.8rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                          </div>
                       </div>
                       <div style={{ padding: '20px 26px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           <OrderStatusChips wo={wo} recipeLen={len} size="md" style={{ marginBottom: '14px' }} />

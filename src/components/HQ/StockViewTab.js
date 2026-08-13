@@ -1775,7 +1775,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     let woHiddenNotStocked = 0;
     let woHiddenOutsourced = 0;
     if (activeBuilder === 'PO' && activeVendor) {
-        displayItems = baseFilteredItems.filter(p => p.manufacturingSpecs?.vendorName === activeVendor && !p.manufacturingSpecs?.isInHouse);
+        // Vendor catalog = everything BUYABLE from this vendor: OUT *and* BOTH (Eric 2026-08-13 —
+        // the raw !isInHouse test hid BOTH-sourced items, which store isInHouse TRUE by design;
+        // sourcingOf is the one place the three-way answer is derived).
+        displayItems = baseFilteredItems.filter(p => {
+            const specs = p.manufacturingSpecs || {};
+            return specs.vendorName === activeVendor && sourcingOf(specs) !== SOURCING.IN;
+        });
     } else if (activeBuilder === 'WO') {
         // Only in-house items flagged STOCKED get replenishment WOs by default — in-house
         // NOT-stocked items are made-to-order straight from the sales order. But the queue must
