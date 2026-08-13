@@ -1750,6 +1750,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         };
         const total = lines.reduce((s, l) => s + rateOf(l) * (parseInt(l.qty) || 0), 0);
         const pcs = lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0);
+        // ZERO-RATE GUARD (Eric 2026-08-13: the screw plating service rode the EP11 PO at $0 —
+        // its product type has no rule in HQ Admin → Plating Fees and no per-line $ was typed).
+        // A $0 plating line is never right: name each one and stop, instead of posting a PO the
+        // vendor bill can't reconcile.
+        const zeroRated = lines.filter(l => (parseInt(l.qty) || 0) > 0 && rateOf(l) === 0);
+        if (zeroRated.length && !window.confirm(`⚠ ${zeroRated.length} line(s) carry a $0 plating rate:\n\n${zeroRated.map(l => { const pt = String(hqParts.find(p => p.id === l.itemId)?.manufacturingSpecs?.productType || '(no product type)').toUpperCase(); return `• ${l.erpId} — product type ${pt}: no Plating Fees rule, no per-line $ typed`; }).join('\n')}\n\nFix: type the $/ea on the line, or add the product type's rate in HQ Admin (tab 11) → Plating Fees — then ship.\n\nShip at $0 anyway?`)) return;
         const shipId = `PLT-${activeBrand.toUpperCase()}-${Date.now()}`;
         // Vendor = the plater carried on each line from its finish (vendorCrmId "VEND-{id}" → nsVendorId). A weekly
         // shipment is per-vendor; if lines mix vendors, ship them separately so each gets its own PO.
