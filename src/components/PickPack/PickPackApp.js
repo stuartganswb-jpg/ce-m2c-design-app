@@ -15,6 +15,7 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveByExactKey, normalizeKey, stagingScanMatches } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
+import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
@@ -2416,6 +2417,27 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     };
     const platingRateFor = (l) => { const v = shipCosts[l.id]; return v !== undefined ? (parseFloat(v) || 0) : platingBaseCost(l); };
 
+    // Re-printable plating PO (Stuart 2026-08-13: "my vendor just asked for a copy of this po") —
+    // rebuild the packing-list payload from the shipped lines, any time after ship. Same shape the
+    // ship-time print used, so the laser copy and the PDF both carry Finish + Returns-As columns.
+    const shipmentPrintData = (g) => {
+        const lines = g.lines.map(l => ({ erpId: l.erpId, itemName: l.itemName || '', finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', platingBin: l.platingBin || '', woNum: l.woNum || '', qty: l.qty }));
+        const total = g.lines.reduce((s, l) => s + (parseFloat(l.platingRate) || 0) * (parseInt(l.qty) || 0), 0);
+        const shippedMs = g.lines.map(l => (l.shippedAt && l.shippedAt.seconds ? l.shippedAt.seconds * 1000 : 0)).find(Boolean);
+        return {
+            shipId: g.shipmentId,
+            brand: String(activeBrand || '').toUpperCase(),
+            vendor: g.lines.find(l => l.vendorName)?.vendorName || 'Plater',
+            poLabel: g.nsPoTran || g.nsPoId || '',
+            dateStr: shippedMs ? new Date(shippedMs).toLocaleDateString() : new Date().toLocaleDateString(),
+            operator: operator?.name || '',
+            lines,
+            pcs: g.lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0),
+            total,
+            finishSummary: [...new Set(g.lines.map(l => l.finishCode).filter(Boolean))].join(', '),
+        };
+    };
+
     // RING PACKS derived. A pack SKU ends in "-<count>" (…/G-10, …/BL-12); "-EA" is the single.
     // The component defaults to the bare root (HCUSR15 for HCUSR15/G-10 — what Stuart described),
     // with the finished each (…/G-EA) offered as the alternative, because only NetSuite's BOM
@@ -4436,6 +4458,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         <span>{g.shipmentId} · {g.lines.length} line{g.lines.length === 1 ? '' : 's'} · {g.lines.reduce((s, l) => s + (parseInt(l.qty) || 0), 0)} pcs · NS PO {poUrl ? <a href={poUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: theme.brass, textDecoration: 'underline' }}>{poText}</a> : poText}</span>
                                                     </div>
                                                     <div style={{ display: 'flex', gap: '8px' }} onClick={e => e.stopPropagation()}>
+                                                        <button onClick={() => printPlatingPackingList(shipmentPrintData(g))} title="Print the plating PO / packing list (item · finish · returns-as · qty)" style={{ padding: '10px 12px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>🖨 Print</button>
+                                                        <button onClick={async () => { try { const fn = await downloadPlatingOrderPdf(shipmentPrintData(g)); if (fn) alert(`⬇ ${fn} downloaded — attach it to your email to the plater.`); } catch (e) { alert('PDF failed: ' + (e.message || e)); } }} title="Save the plating PO as a PDF to email the vendor" style={{ padding: '10px 12px', background: 'transparent', color: theme.brass, border: `1px solid ${theme.brass}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>⬇ PDF</button>
                                                         {isPlatingAdmin && <button onClick={() => resetPlatingShipment(g.shipmentId, g.lines.map(l => l.id))} disabled={isSyncing} title="Admin only — sends the shipment back to staged" style={{ padding: '10px 12px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Reset</button>}
                                                         <button onClick={() => pushPlatingReceive(g.shipmentId, g.nsPoId, g.lines.map(l => l.id))} disabled={isSyncing} style={{ padding: '10px 16px', background: theme.brass, color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Receive PO → Item Receipt</button>
                                                     </div>
@@ -4443,9 +4467,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {open && (
                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 14px 14px' }}>
                                                         {g.lines.map(l => (
-                                                            <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
-                                                                <span>{l.erpId} — {l.itemName}</span>
-                                                                <span>{l.qty} @ {l.platingBin}</span>
+                                                            <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>
+                                                                {/* WHAT IT RETURNS AS (Stuart 2026-08-13): the mill core is the pull; the
+                                                                    plated target is the point — show both. */}
+                                                                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.erpId} — {l.itemName}{(l.targetErpId || l.finishCode) && <span style={{ color: theme.brass }}> → {l.targetErpId || `/${l.finishCode}`}</span>}</span>
+                                                                <span style={{ whiteSpace: 'nowrap' }}>{l.qty} @ {l.platingBin}</span>
                                                             </div>
                                                         ))}
                                                     </div>
