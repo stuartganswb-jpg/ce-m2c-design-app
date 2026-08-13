@@ -1086,7 +1086,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                         <span style={lbl}>Kit</span>
                                         <select value={trvKitId} onChange={e => { setTrvKitId(e.target.value); setTrvMotor(''); }} style={inp}>
                                             <option value="">— pick a kit —</option>
-                                            {trvKits.map(k => { const r = kitRowOf(k); return <option key={k.id} value={k.id}>{k.legacyErpId}{r?.clientSku ? ` · ${r.clientSku}` : ''} — ${r?.price ?? '—'}</option>; })}
+                                            {trvKits.map(k => { const r = kitRowOf(k); return <option key={k.id} value={k.id}>{k.legacyErpId}{r?.clientSku ? ` · ${r.clientSku}` : ''} — {k.itemName || ''} — ${r?.price ?? '—'}</option>; })}
                                         </select>
                                     </div>
                                     <div><span style={lbl}>Total feet</span><input type="number" min="1" value={trvFeet} onChange={e => setTrvFeet(e.target.value)} placeholder="4" style={qtyInp} /></div>
@@ -1096,8 +1096,17 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                         <span style={lbl}>Motor — set includes HSOM-21; others bill the difference</span>
                                         <select value={trvMotor} onChange={e => setTrvMotor(e.target.value)} style={inp}>
                                             <option value="">HSOM-21 (included)</option>
-                                            {[...new Set((trvKit.manufacturingSpecs.kitMotorCodes || []).map(x => x.motorItem).filter(Boolean))].map(mi =>
-                                                <option key={mi} value={mi}>{mi}</option>)}
+                                            {[...new Set((trvKit.manufacturingSpecs.kitMotorCodes || []).map(x => x.motorItem).filter(Boolean))].map(mi => {
+                                                // The motor is a real library item — show its description and the
+                                                // CUSTOMER'S code for it (their component sku, else the per-motor kit
+                                                // pattern), plus the upcharge over the included HSOM-21.
+                                                const mDoc = allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === mi.toUpperCase());
+                                                const mSku = kitRowOf(mDoc)?.clientSku || '';
+                                                const mc = (trvKit.manufacturingSpecs.kitMotorCodes || []).find(x => String(x.motorItem).toUpperCase() === mi.toUpperCase());
+                                                const kitRow = kitRowOf(trvKit);
+                                                const d = mc && Number.isFinite(parseFloat(mc.net)) && Number.isFinite(parseFloat(kitRow?.price)) ? parseFloat(mc.net) - parseFloat(kitRow.price) : 0;
+                                                return <option key={mi} value={mi}>{mi}{mSku ? ` · ${mSku}` : (mc?.fabSku ? ` · ${mc.fabSku}` : '')} — {mDoc?.itemName || 'motor'}{d > 0 ? ` (+$${d})` : ' (included)'}</option>;
+                                            })}
                                         </select>
                                     </div>
                                 )}
