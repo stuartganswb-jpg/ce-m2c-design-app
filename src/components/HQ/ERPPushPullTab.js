@@ -324,6 +324,29 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           });
       });
 
+      // CHECKOUT ADD-ON ITEMS (Eric 2026-08-13: "the order came in without the Wand item on a
+      // line — it rolled up the wand pricing into the top-line Fee roll up"). A real item picked
+      // at checkout lives ONLY in cpqData.breakdown (it is not a flow step), so the step walk
+      // above never sees it — and its dollars silently landed in the rollup. Append every
+      // non-fee add-on breakdown line as a REAL line: its own NetSuite line, its own routing.
+      ((job.cpqData && job.cpqData.breakdown) || [])
+          .filter(l => l && l.isAddOn && l.isFee === false && (l.partId || l.legacyErpId))
+          .forEach(l => {
+              const part = matchPart(l.partId) || matchPart(l.legacyErpId);
+              if (!part) { result.unresolved.push({ stepTitle: `Checkout add-on — ${l.name || l.legacyErpId || l.partId}`, partId: l.partId || l.legacyErpId }); return; }
+              rawLines.push({
+                  stepId: `addon:${part.id}`,
+                  masterPart: part,
+                  qty: Number(l.qty) || 1,
+                  nsId: part.netSuiteInternalId || part.legacyErpId || part.itemId || 'UNMAPPED',
+                  finishedErpId: '',
+                  finishUnmapped: '',
+                  partCategory: l.partHandling || part.manufacturingSpecs?.partHandling || '',
+                  projection: '',
+                  sidemark: ''
+              });
+          });
+
       // Aggregate identical resolved lines across assemblies (same NetSuite item + finished variant +
       // projection) into one summed-quantity line, so 3× + 2× of the same pole become a single line. Keep
       // UNMAPPED/PENDING lines distinct per part so their skip-warnings still name each one.
