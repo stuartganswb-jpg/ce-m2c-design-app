@@ -544,7 +544,7 @@ export const EngineeringSpecsStrip = ({ draft, notes, parts, hideHangers }) => {
     );
 };
 
-const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
+const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false }) => {
   const [liveAssemblies, setLiveAssemblies] = useState([]);
   const [liveCustomers, setLiveCustomers] = useState([]);
   const [crmDiscounts, setCrmDiscounts] = useState([]);
@@ -3778,7 +3778,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                               map names nodes the model doesn't have (stale after a re-import/rename/
                               re-namespace). That used to read as "the part won't render" with nothing
                               to go on — now it names itself. */}
-                          {!debugShowAll && visAudit.length > 0 && (
+                          {/* SUPER-ADMIN-ONLY (Stuart 2026-08-13): legacy Blender-era flows (Flat
+                              Iron…) trip hundreds of mapped-node misses that are known and pending a
+                              1.6 rebuild — the wall of red scared CSRs off a flow that still quotes
+                              correctly. Diagnostics stay fully visible to super admins. */}
+                          {!debugShowAll && visAudit.length > 0 && isSuperAdmin && (
                               <div style={{ marginTop: '8px', padding: '10px 14px', border: '1px solid #b00020', background: 'rgba(176,0,32,0.05)', fontFamily: 'var(--mono)', fontSize: '10px', color: '#b00020', lineHeight: 1.6 }}>
                                   ⚠ {visAudit.length} mapped node name{visAudit.length === 1 ? '' : 's'} not found in this model — by owner: {(() => { const g = {}; visAudit.forEach(t => { const o = visTokenOwners[t] || 'unattributed'; (g[o] = g[o] || []).push(t); }); return Object.entries(g).map(([o, ts]) => `${o} (${ts.length}: ${ts.slice(0, 2).join(', ')}${ts.length > 2 ? '…' : ''})`).join(' · '); })()}.
                                   The option(s) naming them will select and price but render nothing. Rendering model: {activeAssembly?.id || '?'} · {String(activeAssembly?.manufacturingSpecs?.cadUrl || '').split('/').pop().split('?')[0] || 'no cadUrl'} — if 1.6 Load Choices shows a DIFFERENT doc/file for this assembly name, the flow is linked to the wrong record (fix in flow settings), not a naming problem.
