@@ -459,3 +459,34 @@ H/I/J their net/wholesale/retail, L/M/N the ADDITIONAL FOOT triple.
 | Carriers configurator popup (checkbox style, per-length defaults, overage billing) | ⏳ |
 | Traverse rules TAB in 4.6 (edit usage/billable) | ⏳ importer seeds the doc; tab later |
 | KITS grid per-foot columns in 4.6 | ⏳ data lands via import; columns cosmetic |
+
+---
+
+# THE HYBRID (Stuart 2026-08-13, decided after the kits landed)
+
+**Quick Ship = the kit fast path. CPQ = custom orders, lightly realigned. One shared primitive
+underneath: kit code ⇄ flow selections, both directions, from `kitAlign`.**
+
+1. **Quick Ship tab 7 — traverse kit orders.** Pick the kit (entitled via its clientPricing row,
+   like every Quick Ship item) → lines populate immediately: kit @ kit price, extra feet @ the
+   row's per-foot price, end treatments picked from the component items (their part#s + prices),
+   finish applied (P01 → /P tier pricing; component finish via the mapping field when built).
+   "4ft kit + 5 extra feet in P01" = three or four lines, total matches their PO.
+2. **CPQ — small realignment only.** Fascia length starts at 48"; operator may shorten but the
+   PRICE floors at the 4ft set (min charge). Kit-code field at the top of tab 8: parse the code →
+   show what it means (setup · drive · motor · mount · material) and prefill those selections —
+   BY WRITING dynamicConfigParams exactly as clicks would. **⛔ THE RENDERING/VISIBILITY SYSTEM IS
+   FROZEN (Stuart: "please do not touch any of the rendering effects... i really do not want to
+   work on that part again"). Prefill = simulated clicks through existing mechanics. Nothing in
+   visibilityOverrides, geometry maps, hidden-until-chosen, or the reconcile changes.**
+3. **Reverse mapping in CPQ (pointer idea, approved-in-principle):** when the customer carries kit
+   pricing, a passive banner shows the kit code the CURRENT selections resolve to (or "no kit
+   matches — custom"), so a CSR always knows where they stand relative to the PO code. Portal gets
+   the same treatment when traverse lands there.
+
+**Build order:** ① `Shared/kitCode.js` — pure, node-tested: parse/format kit codes ⇄ kitAlign +
+motor; ② Quick Ship traverse section (lines + pricing from the kit rows); ③ CPQ 48"/floor + code
+field + banner; ④ carriers configurator popup (checkbox style, defaults from
+`system/traverse_rules_H1-2TRV`, billable accessories + overages billed); ⑤ rules tab in 4.6.
+Shop-doc explosion (7ft pole + track, deductions) rides the existing CPQ/ERP path — Quick Ship
+traverse orders should hand off through the SAME cpqData shape so push/shop docs need no new path.
