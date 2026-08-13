@@ -172,6 +172,8 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const [kitRow, setKitRow] = useState(null);            // docId of the open contents editor
     const [kitEditRows, setKitEditRows] = useState([]);    // working copy of kitComponents while open
     const [kitSearch, setKitSearch] = useState('');        // component picker (form + row editor share it)
+    const [masterFin, setMasterFin] = useState([]);        // system/master_finishes — the in-house codes
+    const [kitFinSel, setKitFinSel] = useState({});        // code → true while the kit row editor is open
     const fileRef = useRef(null);
 
     useEffect(() => {
@@ -188,9 +190,11 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             setCustomers(all.filter(c => c.brandId === activeBrand || (c.sharedBrands || []).includes(activeBrand))
                 .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))));
         });
+        const unsubMF = onSnapshot(doc(db, 'system', 'master_finishes'), s2 =>
+            setMasterFin(((s2.exists() && s2.data().finishes) || []).filter(f => f && f.code).map(f => ({ code: String(f.code).toUpperCase(), name: f.name || f.code, outsourced: false }))));
         const unsubFin = onSnapshot(collection(db, 'hq_outsource_finishes'), snap =>
             setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.code || f.name)));
-        return () => { unsubItems(); unsubCust(); unsubFin(); };
+        return () => { unsubItems(); unsubCust(); unsubFin(); unsubMF(); };
     }, [activeBrand]);
 
     // 'PENDING' is the app's placeholder for a record with no ERP id yet — the Master Library falls
@@ -666,8 +670,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             .map(r => ({ partId: r.partId, qty: parseInt(r.qty) || 1 }));
         if (!comps.length) return alert('A kit needs at least one component — delete the kit record in the Master Library if it is obsolete.');
         try {
-            await updateDoc(doc(db, 'Approved_Designs', kitRow), { 'manufacturingSpecs.kitComponents': comps, updatedAt: new Date().toISOString() });
-            setKitRow(null); setKitEditRows([]); setKitSearch('');
+            await updateDoc(doc(db, 'Approved_Designs', kitRow), {
+                'manufacturingSpecs.kitComponents': comps,
+                'manufacturingSpecs.kitFinishOptions': Object.keys(kitFinSel).filter(c => kitFinSel[c]),
+                updatedAt: new Date().toISOString(),
+            });
+            setKitRow(null); setKitEditRows([]); setKitSearch(''); setKitFinSel({});
         } catch (e) { alert(`Save failed: ${e?.message || e}`); }
     };
 
@@ -1228,7 +1236,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                             const open = kitRow === r.p.id;
                                             return (
                                                 <td style={{ ...td, borderLeft: `2px solid ${theme.ink}`, whiteSpace: 'nowrap' }}>
-                                                    <button onClick={() => { if (open) { setKitRow(null); setKitEditRows([]); } else { setKitEditRows(comps.map(c => ({ ...c }))); setKitSearch(''); setKitRow(r.p.id); } }}
+                                                    <button onClick={() => { if (open) { setKitRow(null); setKitEditRows([]); setKitFinSel({}); } else { setKitEditRows(comps.map(c => ({ ...c }))); setKitSearch(''); setKitFinSel(Object.fromEntries((r.p.manufacturingSpecs?.kitFinishOptions || []).map(c => [String(c).toUpperCase(), true]))); setKitRow(r.p.id); } }}
                                                         title="Open the component list — what ONE kit explodes to on shop documents"
                                                         style={{ background: comps.length ? 'none' : 'rgba(176,45,32,.08)', border: `1px solid ${comps.length ? theme.line : theme.red}`, color: comps.length ? theme.inkSoft : theme.red, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', padding: '5px 9px' }}>
                                                         {open ? '⚙ Close' : `⚙ ${comps.length} item${comps.length === 1 ? '' : 's'}`}
@@ -1413,9 +1421,45 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>what ONE kit explodes to · item metadata, shared by every customer</span>
                                             </div>
                                             {kitContentsEditor(kitEditRows, setKitEditRows)}
+                                            {(() => {
+                                                // FINISH MATRIX (Stuart 2026-08-13): check off which finishes THIS kit
+                                                // may be ordered in — the CPQ-flow checkbox model, not code rules.
+                                                // Quick Ship's finish dropdown reads exactly this list.
+                                                const catalog = [...masterFin, ...outsourceFinishes.filter(f => f && f.code).map(f => ({ code: upper(f.code), name: f.name || f.code, outsourced: true }))];
+                                                const seen = new Set(); const cat = catalog.filter(f => !seen.has(f.code) && seen.add(f.code));
+                                                const nSel = Object.values(kitFinSel).filter(Boolean).length;
+                                                const kitMat = String(r.p.manufacturingSpecs?.kitAlign?.material || '').toUpperCase();
+                                                const copyToMaterial = async () => {
+                                                    const codes = Object.keys(kitFinSel).filter(c => kitFinSel[c]);
+                                                    const targets = members.filter(m => isKitItem(m) && String(m.manufacturingSpecs?.kitAlign?.material || '').toUpperCase() === kitMat && m.id !== r.p.id);
+                                                    if (!targets.length) return alert(`No other /${kitMat} kits in view.`);
+                                                    if (!window.confirm(`Apply these ${codes.length} finish(es) to ${targets.length} other /${kitMat} kit(s) shown?`)) return;
+                                                    const b = writeBatch(db);
+                                                    targets.forEach(t => b.update(doc(db, 'Approved_Designs', t.id), { 'manufacturingSpecs.kitFinishOptions': codes, updatedAt: new Date().toISOString() }));
+                                                    await b.commit();
+                                                    alert(`✅ ${targets.length} /${kitMat} kit(s) now carry the same finish list.`);
+                                                };
+                                                return (
+                                                    <div style={{ marginTop: '16px', borderTop: `1px dashed ${theme.line}`, paddingTop: '14px' }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '10px', gap: '10px', flexWrap: 'wrap' }}>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft }}>Finish matrix — which finishes this kit sells in ({nSel || 'none'} checked{nSel ? '' : ' = Quick Ship falls back to material rules'})</span>
+                                                            <button onClick={copyToMaterial} style={{ ...btn(false), padding: '6px 12px' }} title={`Copy this exact finish list onto every other /${kitMat} kit currently shown`}>⇒ Apply to all /{kitMat} kits shown</button>
+                                                        </div>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '6px 14px' }}>
+                                                            {cat.map(f => (
+                                                                <label key={f.code} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.84rem', color: theme.ink }}>
+                                                                    <input type="checkbox" checked={!!kitFinSel[f.code]} onChange={e => setKitFinSel(prev => ({ ...prev, [f.code]: e.target.checked }))} style={{ cursor: 'pointer' }} />
+                                                                    <span style={{ fontFamily: theme.mono, fontSize: '11px', color: f.outsourced ? theme.blueDark : theme.ink }}>{f.code}</span>
+                                                                    <span style={{ color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                                                                </label>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
                                             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '14px' }}>
-                                                <button onClick={() => { setKitRow(null); setKitEditRows([]); setKitSearch(''); }} style={btn(false)}>Cancel</button>
-                                                <button onClick={saveKitContents} style={btn(true, { background: theme.green, borderColor: theme.green })}>Save contents</button>
+                                                <button onClick={() => { setKitRow(null); setKitEditRows([]); setKitSearch(''); setKitFinSel({}); }} style={btn(false)}>Cancel</button>
+                                                <button onClick={saveKitContents} style={btn(true, { background: theme.green, borderColor: theme.green })}>Save contents + finishes</button>
                                             </div>
                                         </td>
                                     </tr>

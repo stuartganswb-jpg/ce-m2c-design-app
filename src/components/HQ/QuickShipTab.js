@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -142,6 +142,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [trvFeet, setTrvFeet] = useState('');
     const [trvMotor, setTrvMotor] = useState('');
     const [trvFinish, setTrvFinish] = useState('');   // the ACTUAL finish: /P kits → P01…, /EP → EP1…, /W → S01… stains
+    // Shipping — the same fields the CPQ checkout collects, because NetSuite's SO wants them
+    // (Stuart 2026-08-13: "Netsuite not going to accept an order without this stuff").
+    const [ship, setShip] = useState({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+    const shipMethodRef = useRef(undefined); // undefined = not looked up; null = none found (same cache as ERPPushPull)
     const [quickQty, setQuickQty] = useState('');   // blank, like every other qty on this tab
     const [kb, setKb] = useState(EMPTY_KB);
     const [kitName, setKitName] = useState('');
@@ -504,6 +508,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // in-house paints, /W kits the S-stains (Stuart 2026-08-13: "in the case of the W items those
     // should be looking for our S01, S02.. for the stained finishes").
     const trvFinishOptions = useMemo(() => {
+        // The kit's own finish MATRIX wins (4.6 Kit Builder checkboxes, Stuart 2026-08-13: "just
+        // check off which apply, this will work better than just rules and scale better") — the
+        // material rules below are only the fallback for kits nobody has curated yet.
+        const allowed = (trvKit?.manufacturingSpecs?.kitFinishOptions || []).map(c => String(c).toUpperCase());
+        if (allowed.length) return finishList.filter(f => allowed.includes(f.code));
         const mat = String(trvKit?.manufacturingSpecs?.kitAlign?.material || '').toUpperCase();
         if (!mat) return [];
         if (mat === 'EP') return finishList.filter(f => f.outsourced);
@@ -829,11 +838,40 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 }
             }
 
+            // Shipping — the exact shape ERPPushPull sends (proven against this account): saved
+            // address by NetSuite Address Book id, or the custom override; a charge needs a ship
+            // METHOD riding along or NetSuite 400s the order.
+            const shippingPayload = {};
+            if (ship.method === 'SAVED' && ship.addressId) shippingPayload.shipaddresslist = { id: ship.addressId };
+            else if (ship.method === 'CUSTOM' && ship.custom.addr1) {
+                shippingPayload.shippingaddress = {
+                    attention: ship.custom.attention || '', addressee: ship.custom.addressee || '',
+                    addr1: ship.custom.addr1 || '', addr2: ship.custom.addr2 || '',
+                    city: ship.custom.city || '', state: String(ship.custom.state || '').toUpperCase().replace(/\./g, '').trim(),
+                    zip: ship.custom.zip || '', country: { id: ship.custom.country || 'US' },
+                };
+            }
+            const shipAmt = parseFloat(ship.amount) || 0;
+            if (shipAmt > 0) {
+                if (shipMethodRef.current === undefined) {
+                    try {
+                        const r = await nsProxyFetch({ targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql', method: 'POST', payload: { q: "SELECT id, itemid FROM item WHERE itemtype = 'ShipItem' AND NVL(isinactive,'F') = 'F' ORDER BY id" } });
+                        const b = await r.json().catch(() => ({}));
+                        const rows = (r.ok && b.items) || [];
+                        const pick = rows.find(x => /ship|freight|delivery|best way/i.test(String(x.itemid))) || rows[0] || null;
+                        shipMethodRef.current = pick ? { id: String(pick.id), name: String(pick.itemid) } : null;
+                    } catch { shipMethodRef.current = null; }
+                }
+                if (shipMethodRef.current) { shippingPayload.shippingcost = parseFloat(shipAmt.toFixed(2)); shippingPayload.shipMethod = { id: shipMethodRef.current.id }; }
+                else addLog(`⚠️ No active Ship Item in NetSuite — pushing WITHOUT the $${shipAmt.toFixed(2)} shipping charge; add it on the SO manually.`, 'warn');
+            }
+
             const payload = {
                 entity: { id: nsCustomerId },
                 subsidiary: { id: brandMapping.subsidiary },
                 location: { id: brandMapping.location },
                 memo: memoText,
+                ...shippingPayload,
                 item: {
                     // PACKS never reach NetSuite: we stock and transmit EACH (2 × 7-pack = 14), and
                     // the pack only shows on the customer-facing quote/invoice. The description
@@ -1342,6 +1380,39 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 <button onClick={() => removeLine(l.key)} style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.1rem' }} title="Remove">×</button>
                             </div>
                         ))}
+                    </div>
+                    <div style={{ borderTop: '1px solid var(--line)', padding: '14px 20px' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+                            <span style={{ ...lbl, marginBottom: 0, flex: 1 }}>Shipping</span>
+                            {[['SAVED', 'Saved address'], ['CUSTOM', 'Custom drop-ship']].map(([k, l2]) => (
+                                <button key={k} onClick={() => setShip(prev => ({ ...prev, method: k }))} style={{ padding: '7px 12px', border: `1px solid ${ship.method === k ? 'var(--ink)' : 'var(--line)'}`, background: ship.method === k ? 'var(--ink)' : '#fff', color: ship.method === k ? '#fff' : 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>{l2}</button>
+                            ))}
+                        </div>
+                        {ship.method === 'SAVED' ? (
+                            (selectedCustomer?.shippingAddresses?.length ? (
+                                <select value={ship.addressId} onChange={e => setShip(prev => ({ ...prev, addressId: e.target.value }))} style={{ ...inp, width: '100%', marginBottom: '10px' }}>
+                                    <option value="">— saved NetSuite address (default if blank) —</option>
+                                    {selectedCustomer.shippingAddresses.map(a => <option key={a.addressBookId} value={a.addressBookId}>{a.label} — {a.addr1}, {a.city} {a.state}</option>)}
+                                </select>
+                            ) : <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginBottom: '10px' }}>No synced NetSuite addresses — use Custom drop-ship, or the SO ships to the customer default.</div>)
+                        ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '10px' }}>
+                                <input placeholder="Attention" value={ship.custom.attention} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, attention: e.target.value } }))} style={inp} />
+                                <input placeholder="Addressee / company" value={ship.custom.addressee} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addressee: e.target.value } }))} style={inp} />
+                                <input placeholder="Address 1" value={ship.custom.addr1} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addr1: e.target.value } }))} style={{ ...inp, gridColumn: '1 / -1' }} />
+                                <input placeholder="Address 2" value={ship.custom.addr2} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, addr2: e.target.value } }))} style={{ ...inp, gridColumn: '1 / -1' }} />
+                                <input placeholder="City" value={ship.custom.city} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, city: e.target.value } }))} style={inp} />
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <input placeholder="ST" value={ship.custom.state} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, state: e.target.value } }))} style={{ ...inp, width: '54px' }} />
+                                    <input placeholder="Zip" value={ship.custom.zip} onChange={e => setShip(p2 => ({ ...p2, custom: { ...p2.custom, zip: e.target.value } }))} style={inp} />
+                                </div>
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ ...lbl, marginBottom: 0 }}>Shipping charge $</span>
+                            <input type="number" min="0" step="0.01" value={ship.amount} onChange={e => setShip(prev => ({ ...prev, amount: e.target.value }))} placeholder="0.00" style={{ ...inp, width: '110px', textAlign: 'right' }} />
+                            <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>rides the SO header with an auto-resolved ship method</span>
+                        </div>
                     </div>
                     <div style={{ borderTop: '1px solid var(--line)', padding: '16px 20px', background: 'var(--paper)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
