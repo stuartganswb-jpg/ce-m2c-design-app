@@ -1833,7 +1833,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             const packingList = {
                 shipId, brand: activeBrand, vendor: vendorName, poLabel: nsPoLabel,
                 dateStr: new Date().toLocaleDateString(), operator: operator?.name || 'Unknown',
-                lines: lines.map(l => ({ erpId: l.erpId || '', itemName: l.itemName || '', finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', platingBin: l.platingBin || '', woNum: l.woNum || '', qty: parseInt(l.qty) || 0 })),
+                lines: lines.map(l => ({ erpId: l.erpId || '', itemName: l.itemName || '', finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', platingBin: l.platingBin || '', woNum: l.woNum || '', qty: parseInt(l.qty) || 0, rate: rateOf(l) })),
                 pcs, total: Number(total.toFixed(2)), finishSummary
             };
             await addDoc(collection(db, "hq_purchase_orders"), {
@@ -2421,7 +2421,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // rebuild the packing-list payload from the shipped lines, any time after ship. Same shape the
     // ship-time print used, so the laser copy and the PDF both carry Finish + Returns-As columns.
     const shipmentPrintData = (g) => {
-        const lines = g.lines.map(l => ({ erpId: l.erpId, itemName: l.itemName || '', finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', platingBin: l.platingBin || '', woNum: l.woNum || '', qty: l.qty }));
+        const lines = g.lines.map(l => ({ erpId: l.erpId, itemName: l.itemName || '', finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', platingBin: l.platingBin || '', woNum: l.woNum || '', qty: l.qty, rate: parseFloat(l.platingRate) || 0 }));
         const total = g.lines.reduce((s, l) => s + (parseFloat(l.platingRate) || 0) * (parseInt(l.qty) || 0), 0);
         const shippedMs = g.lines.map(l => (l.shippedAt && l.shippedAt.seconds ? l.shippedAt.seconds * 1000 : 0)).find(Boolean);
         return {

@@ -66,7 +66,8 @@ export async function buildPlatingOrderPdf({ shipId, brand, vendor, poLabel, dat
 // Generate + download the order PDF. Returns the filename so the caller can tell the operator what to attach.
 export async function downloadPlatingOrderPdf(data) {
     const bytes = await buildPlatingOrderPdf(data);
-    const fname = `Plating-Order-${A(data.shipId || 'order')}.pdf`;
+    // FILENAME = "<Vendor> <NetSuite PO#>" (Stuart 2026-08-13) — what the vendor's inbox reads.
+    const fname = `${A(`${String(data.vendor || 'Plater').trim()} ${String(data.poLabel || data.shipId || '').trim()}`).replace(/[\\/:*?"<>|]/g, '-')}.pdf`;
     const blob = new Blob([bytes], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
