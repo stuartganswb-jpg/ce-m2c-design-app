@@ -4,6 +4,7 @@ import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where } 
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
+import { explodeTraverse } from '../Shared/traverseExplode';
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode } from "../Shared/aliasIdentity";
@@ -140,6 +141,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [trvKitId, setTrvKitId] = useState('');
     const [trvFeet, setTrvFeet] = useState('');
     const [trvMotor, setTrvMotor] = useState('');
+    const [trvFinish, setTrvFinish] = useState('');   // the ACTUAL finish: /P kits → P01…, /EP → EP1…, /W → S01… stains
     const [quickQty, setQuickQty] = useState('');   // blank, like every other qty on this tab
     const [kb, setKb] = useState(EMPTY_KB);
     const [kitName, setKitName] = useState('');
@@ -498,26 +500,58 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const r = resolveKitCode(trvKits, c);
         if (r) { setTrvKitId(r.kit.id); if (r.motorItem) setTrvMotor(r.motorItem); }
     };
+    // The finishes a kit's material accepts: /EP kits take the outsourced plated codes, /P kits the
+    // in-house paints, /W kits the S-stains (Stuart 2026-08-13: "in the case of the W items those
+    // should be looking for our S01, S02.. for the stained finishes").
+    const trvFinishOptions = useMemo(() => {
+        const mat = String(trvKit?.manufacturingSpecs?.kitAlign?.material || '').toUpperCase();
+        if (!mat) return [];
+        if (mat === 'EP') return finishList.filter(f => f.outsourced);
+        if (mat === 'W') return finishList.filter(f => /^S/.test(f.code));
+        return finishList.filter(f => !f.outsourced && /^P/.test(f.code));
+    }, [trvKit, finishList]);
+
     const addTraverse = () => {
         if (!trvKit) return alert("Pick a kit (or paste one of the customer's kit codes).");
+        if (!trvFinish) return alert('Pick the finish — the shop cannot build "painted" without knowing WHICH paint.');
         const row = kitRowOf(trvKit);
         const align = trvKit.manufacturingSpecs.kitAlign;
         const feet = Math.max(parseInt(trvFeet) || 4, 1);
         const billFeet = Math.max(feet, align.minFeet || 4);   // 4ft is the MINIMUM CHARGE — a shorter cut still bills the set
-        // The 4ft set — the kit record prices from its clientPricing row; NO NetSuite identity by
-        // design (the SO push gets exploded components via the CPQ-shaped handoff, not this line).
-        pushLine(trvKit, 1, `${feet}ft system — 4ft set${feet < billFeet ? ' (min charge)' : ''}`, null, { noNs: true, noPack: true });
+        // THE LINE IS THEIR COMPLETE KIT (Stuart 2026-08-13: "the in app forms should resolve to
+        // the finished fabricut kits that include the motor upgrade to match their complete kit
+        // code"). A motor pick folds INTO the kit line — their per-motor code at their per-motor
+        // price — never a separate upgrade line, so our form line matches their PO line exactly.
+        const mc = String(align.drive).toUpperCase() === 'MOTORIZED' && trvMotor
+            ? (trvKit.manufacturingSpecs.kitMotorCodes || []).find(x => String(x.motorItem).toUpperCase() === trvMotor.toUpperCase())
+            : null;
+        const theirSku = mc?.fabSku || row?.clientSku || '';
+        const mcNet = mc && Number.isFinite(parseFloat(mc.net)) ? parseFloat(mc.net) : null;
+        // NO NetSuite identity by design (noNs) — the SO push consumes exploded components plus a
+        // generic traverse $-holder, never the kit itself.
+        setCart(prev => [...prev, {
+            key: `${trvKit.id}-${Date.now()}`,
+            itemId: trvKit.id, erp: mc?.code || trvKit.legacyErpId, nsId: '', name: trvKit.itemName || trvKit.legacyErpId,
+            aliasErp: theirSku, aliasItemId: null,
+            qty: 1, note: `${feet}ft system — 4ft set${feet < billFeet ? ' (min charge)' : ''} · ${trvFinish}${mc ? ` · ${trvMotor}` : ''}`,
+            bin: '', packUom: '', packSize: 1,
+            rateOverride: mcNet, // per-motor kits price at THEIR number; base kits price from the row (null → rateForLine)
+            kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
+            trvFinish, trvMotor: mc ? trvMotor : '', trvFeet: billFeet, trvKitCode: mc?.code || trvKit.legacyErpId,
+        }]);
         const extra = billFeet - (align.minFeet || 4);
         const perFoot = parseFloat(row?.perFootPrice);
-        if (extra > 0) pushLine(trvKit, extra, 'Additional foot', null, { noNs: true, noPack: true, rateOverride: Number.isFinite(perFoot) ? perFoot : 0 });
-        // Motor upgrade: the set price includes the base motor (HSOM-21); any other motor bills the
-        // DELTA between its per-motor kit price and the base set — that is how the sheet is built.
-        if (String(align.drive).toUpperCase() === 'MOTORIZED' && trvMotor) {
-            const mc = (trvKit.manufacturingSpecs.kitMotorCodes || []).find(x => String(x.motorItem).toUpperCase() === trvMotor.toUpperCase());
-            const delta = mc && Number.isFinite(parseFloat(mc.net)) && Number.isFinite(parseFloat(row?.price)) ? parseFloat(mc.net) - parseFloat(row.price) : 0;
-            if (mc && delta > 0) pushLine(trvKit, 1, `Motor upgrade — ${trvMotor}`, null, { noNs: true, noPack: true, rateOverride: delta });
-        }
-        setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor('');
+        if (extra > 0) setCart(prev => [...prev, {
+            key: `${trvKit.id}-ft-${Date.now()}`,
+            itemId: trvKit.id, erp: mc?.code || trvKit.legacyErpId, nsId: '', name: trvKit.itemName || trvKit.legacyErpId,
+            aliasErp: theirSku, aliasItemId: null,
+            qty: extra, note: `Additional foot · ${trvFinish}`,
+            bin: '', packUom: '', packSize: 1,
+            rateOverride: Number.isFinite(perFoot) ? perFoot : 0,
+            kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
+            trvFinish, trvKitCode: mc?.code || trvKit.legacyErpId, trvIsFeet: true,
+        }]);
+        setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish('');
     };
 
     const pushLine = (it, qty, note, kitMeta, opts) => {
@@ -742,19 +776,58 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const pushToNetSuite = async () => {
         if (!customerId) return alert('Select a customer first.');
         if (cart.length === 0) return alert('Cart is empty.');
-        const unmapped = pricedCart.filter(l => !l.nsId);
+        // TRAVERSE ORDERS (Stuart 2026-08-13): the kit + feet lines never push as themselves —
+        // NetSuite gets the exploded COMPONENTS (consumed from inventory, $0 rate) plus ONE generic
+        // traverse $-holder carrying the order's traverse dollars so the SO total matches the quote.
+        const trvOrder = pricedCart.filter(l => l.trvKitCode);
+        const unmapped = pricedCart.filter(l => !l.nsId && !l.trvKitCode);
         if (unmapped.length) {
             if (!window.confirm(`${unmapped.length} line(s) have no NetSuite ID and will be skipped:\n\n${unmapped.map(l => `• ${l.erp || l.name}`).join('\n')}\n\nContinue with the rest?`)) return;
         }
         const lines = pricedCart.filter(l => l.nsId);
-        if (!lines.length) return alert('No lines have a NetSuite item ID. Sync these items to NetSuite first.');
-        if (!window.confirm(`Create a NetSuite SALES ORDER for ${selectedCustomer?.name || customerId} with ${lines.length} stock line(s)?`)) return;
+        if (!lines.length && !trvOrder.length) return alert('No lines have a NetSuite item ID. Sync these items to NetSuite first.');
+        if (!window.confirm(`Create a NetSuite SALES ORDER for ${selectedCustomer?.name || customerId} with ${lines.length} stock line(s)${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?`)) return;
 
         setPushing(true);
         try {
             let nsCustomerId = customerId.startsWith('CUST-') ? customerId.replace('CUST-', '') : customerId;
             const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "17" };
             const memoText = `Quick Ship${jobName ? ' - ' + jobName : ''}`.slice(0, 40);
+
+            // ── traverse explosion ───────────────────────────────────────────────────────────
+            const trvPushLines = [];
+            if (trvOrder.length) {
+                // The $-holder: a generic traverse non-inventory item (made once with the 11.1
+                // item tool), found by its code; falls back to the CPQ rollup item so a missing
+                // holder can never silently drop the dollars.
+                const holderDoc = allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === 'CE-TRV-SYSTEM');
+                const holderNs = holderDoc?.netSuiteInternalId || '61502';
+                if (!holderDoc) addLog('No CE-TRV-SYSTEM holder item found — using the CPQ rollup item (61502). Create it with the 11.1 tool and sync to use a dedicated holder.', 'warn');
+                const trvTotal = trvOrder.reduce((sum, l) => sum + (l.rate || 0) * l.eachQty, 0);
+                const kitLines = trvOrder.filter(l => !l.trvIsFeet);
+                trvPushLines.push({
+                    item: { id: String(holderNs) }, quantity: 1, rate: parseFloat(trvTotal.toFixed(2)), price: { id: '-1' },
+                    description: `${kitLines.map(l => `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.erp}`).join(' + ')} · ${kitLines.map(l => l.note).join(' · ')} [traverse system — components below]`,
+                });
+                const byId = (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase());
+                let rulesDoc = null;
+                for (const l of kitLines) {
+                    const kitDoc = itemById(l.itemId);
+                    const fam = kitDoc?.manufacturingSpecs?.kitFamily || 'H1-2TRV';
+                    if (!rulesDoc) { try { const snap = await getDoc(doc(db, 'system', `traverse_rules_${fam}`)); rulesDoc = snap.exists() ? snap.data() : null; } catch { rulesDoc = null; } }
+                    if (!rulesDoc) addLog(`No traverse rules doc for ${fam} — bracket/splice counts fall back to defaults. Re-run the 4.6 kit sheet import.`, 'warn');
+                    const ex = explodeTraverse({ family: fam, align: kitDoc?.manufacturingSpecs?.kitAlign, feet: l.trvFeet, motorItem: l.trvMotor, rules: rulesDoc });
+                    ex.lines.forEach(c => {
+                        const cd = byId(c.code);
+                        if (!cd?.netSuiteInternalId) { addLog(`Component ${c.code} has no NetSuite ID — NOT consumed (${c.why}).`, 'warn'); return; }
+                        trvPushLines.push({
+                            item: { id: String(cd.netSuiteInternalId) }, quantity: c.qty, rate: 0, price: { id: '-1' },
+                            description: `${c.code} — ${c.why} · ${l.trvFinish || ''} [consumed — $ in the traverse system line]`,
+                        });
+                    });
+                    ex.skipped.forEach(sk => addLog(`Traverse: ${sk}`, 'info'));
+                }
+            }
 
             const payload = {
                 entity: { id: nsCustomerId },
@@ -773,11 +846,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         // The customer ordered the alias code — name it first so the SO reads the way
                         // they ordered, while the LINE ITEM stays the real stocked part.
                         description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`
-                    }))
+                    })).concat(trvPushLines)
                 }
             };
 
-            addLog(`Transmitting Sales Order (${lines.length} lines) to NetSuite…`, 'info');
+            addLog(`Transmitting Sales Order (${lines.length + trvPushLines.length} lines) to NetSuite…`, 'info');
             const response = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder`, method: 'POST', payload });
             const result = await response.json();
             if (!response.ok) throw new Error(`API Rejected [${response.status}]: ${JSON.stringify(result)}`);
@@ -1107,6 +1180,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                                 const d = mc && Number.isFinite(parseFloat(mc.net)) && Number.isFinite(parseFloat(kitRow?.price)) ? parseFloat(mc.net) - parseFloat(kitRow.price) : 0;
                                                 return <option key={mi} value={mi}>{mi}{mSku ? ` · ${mSku}` : (mc?.fabSku ? ` · ${mc.fabSku}` : '')} — {mDoc?.itemName || 'motor'}{d > 0 ? ` (+$${d})` : ' (included)'}</option>;
                                             })}
+                                        </select>
+                                    </div>
+                                )}
+                                {trvKit && (
+                                    <div>
+                                        <span style={lbl}>Finish — {String(trvKit.manufacturingSpecs.kitAlign.material).toUpperCase() === 'W' ? 'stain (S…)' : String(trvKit.manufacturingSpecs.kitAlign.material).toUpperCase() === 'EP' ? 'plated (EP…)' : 'paint (P…)'}</span>
+                                        <select value={trvFinish} onChange={e => setTrvFinish(e.target.value)} style={inp}>
+                                            <option value="">— pick the finish —</option>
+                                            {trvFinishOptions.map(f => <option key={f.code} value={f.code}>{f.code} — {f.name}</option>)}
                                         </select>
                                     </div>
                                 )}

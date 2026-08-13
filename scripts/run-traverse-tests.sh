@@ -13,7 +13,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 
-for f in traverseTags traverseFlow traverseKitImport nodeList priceLevels kitCode; do
+for f in traverseTags traverseFlow traverseKitImport nodeList priceLevels kitCode traverseExplode; do
     sed -e "s#from '\./traverseTags'#from './traverseTags.mjs'#" \
         -e "s#from '\./nodeList'#from './nodeList.mjs'#" \
         "$ROOT/src/components/Shared/$f.js" > "$OUT/$f.mjs"
