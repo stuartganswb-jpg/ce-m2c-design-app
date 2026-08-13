@@ -773,7 +773,12 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             });
             // The rules doc — per-length usage + configurator list. One doc per flow family; the
             // future traverse rules tab edits THIS, so billable is a field, seeded not hardcoded.
-            batch.set(doc(db, 'traverse_rules', parsed.family), {
+            // Lives in the SYSTEM collection (system/traverse_rules_<family>) — firestore.rules is
+            // a whitelist and a brand-new top-level collection is denied until a Cloud Shell rules
+            // deploy; system/** is already open to authed staff and is where quick_ship_kits lives.
+            // (First import attempt failed exactly there: "Missing or insufficient permissions",
+            // 2026-08-13 — the batch is atomic, so the one denied write voided all of it.)
+            batch.set(doc(db, 'system', `traverse_rules_${parsed.family}`), {
                 ...parsed.rules, billableSeed: BILLABLE_ACCESSORY_SEED,
                 updatedAt: Date.now(), updatedBy: String(currentUser || ''),
             });
