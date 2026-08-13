@@ -932,8 +932,20 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               newId = result.id || (result.links && result.links[0]?.href ? result.links[0].href.split('/').pop() : null) || await findId();
           }
           if (!newId) throw new Error(`Item created but its internal id could not be resolved — look up "${code}" in NetSuite and enter it via sync.`);
-          await updateDoc(doc(db, 'Approved_Designs', activePart.id), { netSuiteInternalId: String(newId), netSuiteRecordType: 'noninventorysaleitem', legacyErpId: code, updatedAt: new Date().toISOString() });
-          setActivePart(prev => ({ ...prev, netSuiteInternalId: String(newId), netSuiteRecordType: 'noninventorysaleitem', legacyErpId: code }));
+          // setDoc+merge, never updateDoc: the button must work on a record that has not been SAVED
+          // yet (first live click was exactly that — "No document to update"). A new record gets its
+          // identity written here so the mapping and the record land together; an existing one is
+          // merely stamped. NetSuite-side this is already safe — find-first means a retry after a
+          // failed write maps to the item it made rather than creating a twin.
+          await setDoc(doc(db, 'Approved_Designs', activePart.id), {
+              id: activePart.id, itemId: activePart.itemId || activePart.id,
+              itemName: editSpecs.tempName || activePart.itemName || code,
+              brandId: activePart.brandId || activeBrand, sharedBrands: editSpecs.sharedBrands || [activeBrand],
+              partClass: 'Non-Inventory', legacyErpId: code,
+              netSuiteInternalId: String(newId), netSuiteRecordType: 'noninventorysaleitem',
+              updatedAt: new Date().toISOString(),
+          }, { merge: true });
+          setActivePart(prev => ({ ...prev, isNew: false, partClass: 'Non-Inventory', netSuiteInternalId: String(newId), netSuiteRecordType: 'noninventorysaleitem', legacyErpId: code }));
           alert(`✅ "${code}" mapped to NetSuite non-inventory item — internal id ${newId}.`);
       } catch (e) { console.error(e); alert(`Create/map failed: ${e?.message || e}`); }
       setIsPushingErp(false);
