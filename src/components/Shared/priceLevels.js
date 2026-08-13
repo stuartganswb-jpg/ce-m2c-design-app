@@ -69,19 +69,39 @@ export function fabricutCodeOf(part, findByCode, outsourceCodes) {
 //     finish suffix through isPlatedSuffix (…/EPn AND /P25 → plated), defaulting to painted.
 //   - Explicit null (backplates — "arm price includes the plate") → a $0 line, NOT a fallback.
 //   - Missing wholesale falls back to retail ÷ 2 (the Traversing sheet has no wholesale column).
-export function fabricutPriceOf(part, levelId, finishCode, outsourceCodes) {
+export function fabricutPriceOf(part, levelId, finishCode, outsourceCodes, findByCode) {
     const lvl = PRICE_LEVELS.find(l => l.id === levelId);
-    const fab = part?.manufacturingSpecs?.fabricut;
-    if (!lvl?.field || !fab) return null;
+    let fab = part?.manufacturingSpecs?.fabricut;
+    if (!lvl?.field) return null;
 
-    const code = String(part.legacyErpId || part.itemId || '').trim().toUpperCase();
-    const suffix = code.includes('/') ? code.split('/')[1] : '';
+    const code = String(part?.legacyErpId || part?.itemId || '').trim().toUpperCase();
+    let suffix = code.includes('/') ? code.split('/')[1] : '';
+
+    // VARIANTS INHERIT THE BASE ITEM'S TIERS (Stuart 2026-08-12, the traverse brackets). The 4.6
+    // tier editor has always SAID "a base item carries the painted and plated tiers — its variants
+    // inherit them", but only pattern CODES ever fell back to the base doc; prices did not, so a
+    // /P variant with no imported struct silently kept standard pricing while the operator's tier
+    // entry on the base sat unread. H1 never noticed because its import stamped every variant.
+    //
+    // Fallback fires ONLY when the resolved doc is a suffixed variant carrying NO fabricut struct
+    // of its own — a stamped variant still wins with its exact numbers, and the caller that passes
+    // no findByCode (the portal mirror) behaves exactly as before. In the fallback the base doc's
+    // DIRECT cost/wholesale/retail are deliberately invisible: those are "this item's own price" —
+    // the mill / simple-finish rate — and must never shadow the painted/plated tier a variant
+    // prices from.
+    let tierOnly = false;
+    if (!fab && suffix && typeof findByCode === 'function') {
+        const baseDoc = findByCode(code.split('/')[0]);
+        const baseFab = baseDoc?.manufacturingSpecs?.fabricut;
+        if (baseFab) { fab = baseFab; tierOnly = true; }
+    }
+    if (!fab) return null;
     // Suffixless docs (FEE items, mill bases priced directly) tier by the CHOSEN finish when the
     // caller passes it — a fee has no /P //EP variant docs; its painted vs plated price follows
     // the finish picked on that step (french return $35 painted / $43 plated on ONE record).
     const fcU = String(finishCode || '').toUpperCase();
     const tier = (isPlatedSuffix(suffix, outsourceCodes) || (!suffix && isPlatedSuffix(fcU, outsourceCodes))) ? 'plated' : 'painted';
-    const tiered = (f) => fab[f] !== undefined ? fab[f] : fab[`${tier}${f[0].toUpperCase()}${f.slice(1)}`];
+    const tiered = (f) => (!tierOnly && fab[f] !== undefined) ? fab[f] : fab[`${tier}${f[0].toUpperCase()}${f.slice(1)}`];
 
     let v = tiered(lvl.field);
     if (lvl.field === 'wholesale' && (v === undefined || v === null)) {

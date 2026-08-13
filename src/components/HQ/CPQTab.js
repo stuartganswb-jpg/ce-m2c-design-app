@@ -1638,6 +1638,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
       // Try exact first, then the "/P" paint rollup, else stay on the base.
       const byCode = new Map();
       allParts.forEach(p => { [p.legacyErpId, p.itemId].forEach(c => { const k = String(c || '').trim().toUpperCase(); if (k && k !== 'PENDING' && !byCode.has(k)) byCode.set(k, p); }); });
+      // UPPERCASE code → base doc, for fabricutPriceOf's variant-inherits-base-tiers fallback.
+      const fabFindByCode = (c) => byCode.get(String(c || '').trim().toUpperCase()) || null;
       const finishVariantOf = (basePart, finishCode) => {
           if (!basePart || !finishCode) return basePart;
           const baseCode = String((basePart.legacyErpId && basePart.legacyErpId !== 'PENDING' ? basePart.legacyErpId : basePart.itemId) || '').trim().toUpperCase();
@@ -1841,7 +1843,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           // On pole steps the SELECTION is the finish — species rides it (wood pole → oak/walnut item).
                           const linkedBase = speciesSwap(linkedSized, selFinish || finishObjForStep(step.id));
                           const linkedPart = finishVariantOf(linkedBase, fc);
-                          const fabLp = priceLevel !== 'STANDARD' ? fabricutPriceOf(linkedPart, priceLevel, fc, outsourceFinishes) : null;
+                          const fabLp = priceLevel !== 'STANDARD' ? fabricutPriceOf(linkedPart, priceLevel, fc, outsourceFinishes, fabFindByCode) : null;
                           // Variant unpriced → base item price (M2C prices the base, CE the variant).
                           const lp = fabLp != null ? fabLp : (parseFloat(linkedPart.manufacturingSpecs?.basePrice ?? linkedPart.basePrice) || parseFloat(linkedBase.manufacturingSpecs?.basePrice ?? linkedBase.basePrice) || 0);
                           if (optionNativePrice === 0 && stepPrice === 0 && lp > 0) optionNativePrice = lp;
@@ -1862,7 +1864,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // = explicit $0, included in the arm). Fees and non-Fabricut items fall through
                   // untouched, so the quote is a faithful mix.
                   if (priceLevel !== 'STANDARD') {
-                      const fp = fabricutPriceOf(partObj, priceLevel, finishCodeForStep(step.id), outsourceFinishes);
+                      const fp = fabricutPriceOf(partObj, priceLevel, finishCodeForStep(step.id), outsourceFinishes, fabFindByCode);
                       if (fp != null) optionNativePrice = fp;
                   }
 
@@ -1909,7 +1911,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                           if (!pp && polePart) pp = parseFloat(polePart.manufacturingSpecs?.basePrice ?? polePart.basePrice) || 0;
                           if (!pp && matOpt.price !== undefined && matOpt.price !== '') pp = parseFloat(matOpt.price) || 0;
                           if (matStep.useClientPricing) { const cv = clientPriceOf(poleFinished) ?? clientPriceOf(polePart); if (cv != null) pp = cv; }
-                          if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel, finishCodeForStep(matStep.id), outsourceFinishes); if (fp != null) pp = fp; }
+                          if (priceLevel !== 'STANDARD') { const fp = fabricutPriceOf(poleFinished, priceLevel, finishCodeForStep(matStep.id), outsourceFinishes, fabFindByCode); if (fp != null) pp = fp; }
                           if (stepPrice === 0 && pp > 0) stepPrice = pp;
                           resolvedPartId = poleFinished.itemId || poleFinished.id;
                           resolvedErpId = poleFinished.legacyErpId || poleFinished.itemId || null;
@@ -2021,7 +2023,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart }) => {
                   // Fabricut levels stay authoritative for their own customers — they carry the same
                   // intent in the imported data (retail null = included), so the two agree.
                   if (priceLevel !== 'STANDARD') {
-                      const fp = fabricutPriceOf(subPart, priceLevel, undefined, outsourceFinishes);
+                      const fp = fabricutPriceOf(subPart, priceLevel, undefined, outsourceFinishes, fabFindByCode);
                       if (fp != null) subPrice = fp;
                   }
                   breakdown.push({
