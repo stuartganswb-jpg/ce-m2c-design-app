@@ -5,6 +5,7 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse } from '../Shared/traverseExplode';
+import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
 import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode } from "../Shared/aliasIdentity";
@@ -150,6 +151,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // list): PO# → otherrefnum, sidemark → mainline memo + every line's Tag (custcol3), internal
     // memo → custbody_bit_internalmemo. Form/class/status ride the payload, not fields here.
     const [soExtras, setSoExtras] = useState({ po: '', sidemark: '', internalMemo: '' });
+    // The components configurator (required at checkout): opens right after a kit lands in the
+    // cart, offering the rules doc's carrier styles / included picks / billable accessories.
+    const [trvCfg, setTrvCfg] = useState(null);          // { drive, feet, kitCode, finish } while open
+    const [trvRules, setTrvRules] = useState(null);      // system/traverse_rules_H1-2TRV
     const [quickQty, setQuickQty] = useState('');   // blank, like every other qty on this tab
     const [kb, setKb] = useState(EMPTY_KB);
     const [kitName, setKitName] = useState('');
@@ -192,6 +197,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             const arr = (s.exists() && s.data().finishes) || [];
             setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false, subFinishCode: String(f.subFinishCode || '').toUpperCase() })), ...prev.filter(p => p.outsourced)]);
         }, e => console.warn('Quick Ship finishes listen failed', e));
+        const unsubTrvRules = onSnapshot(doc(db, "system", "traverse_rules_H1-2TRV"), (s) => {
+            setTrvRules(s.exists() ? s.data() : null);
+        }, e => console.warn('Quick Ship traverse rules listen failed', e));
         const unsubOut = onSnapshot(collection(db, "hq_outsource_finishes"), (s) => {
             // code falls back to NAME (the finishText convention) — EP3–EP6 are stored name-only
             const arr = s.docs.map(d => d.data()).filter(f => f && (f.code || f.name));
@@ -201,7 +209,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (s) => {
             setRushTypes(s.exists() ? (s.data().rushFeeTypes || []) : []);
         }, e => console.warn('Quick Ship master lists listen failed', e));
-        return () => { unsubParts(); unsubCrm(); unsubKits(); unsubFin(); unsubOut(); unsubLists(); };
+        return () => { unsubParts(); unsubCrm(); unsubKits(); unsubFin(); unsubOut(); unsubLists(); unsubTrvRules(); };
     }, [activeBrand]);
 
     // Strictly-stocked: only items flagged isStocked feed quick-add + the part dropdowns.
@@ -565,7 +573,26 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
             trvFinish, trvKitCode: mc?.code || trvKit.legacyErpId, trvIsFeet: true,
         }]);
+        // The components configurator opens NOW — required at checkout, and this IS checkout for
+        // a kit order. Skip stays possible (the operator may be quoting blind), but the default
+        // path walks through it.
+        setTrvCfg({ drive: String(align.drive).toUpperCase(), feet: billFeet, kitCode: mc?.code || trvKit.legacyErpId, finish: trvFinish });
         setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish('');
+    };
+
+    // Configurator lines → cart. Every line is a REAL library item (they consume inventory):
+    // included lines ride rate 0, billables at the customer's price — both push as real NetSuite
+    // lines, so no special casing downstream.
+    const applyTrvComponents = (cfgLines) => {
+        const byCode = (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase());
+        let missing = 0;
+        cfgLines.forEach(cl => {
+            const it = byCode(cl.code);
+            if (!it) { missing++; return; }
+            pushLine(it, cl.qty, `${cl.why}${trvCfg?.finish ? ` · ${trvCfg.finish}` : ''} [${trvCfg?.kitCode || 'traverse'}]`, null, { noPack: true, rateOverride: cl.billable ? cl.rate : 0 });
+        });
+        if (missing) alert(`${missing} component code(s) not in the library — not added. Check the rules doc against the Master Library.`);
+        setTrvCfg(null);
     };
 
     const pushLine = (it, qty, note, kitMeta, opts) => {
@@ -1469,6 +1496,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     </div>
                 </div>
             </div>
+
+            {trvCfg && (
+                <TraverseConfiguratorModal
+                    rules={trvRules} drive={trvCfg.drive} feet={trvCfg.feet} kitLabel={trvCfg.kitCode}
+                    itemInfo={(id) => { const it = allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === id); const r = it && findClientPriceRow(it.clientPricing, custKeys); return it ? { name: it.itemName || id, sku: r?.clientSku || '' } : null; }}
+                    priceOf={(id) => { const it = allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === id); return it ? rateFor(it) : 0; }}
+                    onCancel={() => setTrvCfg(null)} onApply={applyTrvComponents}
+                />
+            )}
 
             {/* FINISH CHOOSER — a pattern kit with 2+ available finishes asks for the color first */}
             {kitFinishPick && (
