@@ -924,6 +924,60 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // (leave shared hardware like screws/standoffs blank → stays always-on). Writes one assembly_pin per
     // filled choice with choiceNode = that node, so the generator fans them out into individual options.
     const choiceLabel = (nm) => String(nm || '').split('__').pop().replace(/^\d+_?/, '') || String(nm || '');
+    // 🗑 DELETE AN ENTIRE SECTION (Stuart 2026-08-14: designer re-uploading the whole finial
+    // sections — "keep the overall file size/download time down"). Reuses the repair pipeline:
+    // fetch the merged .glb fresh, REMOVE the cluster's group node, re-export + upload (old .glb
+    // kept as backup on the doc), then drop the cluster record and delete its pins. The geometry
+    // actually leaves the file, so the download shrinks; the replacement section arrives via
+    // ➕ Extend as usual, and a flow Regenerate clears the old options.
+    const deleteSection = async (r) => {
+        if (!assignId || !assignData) return;
+        if (!window.confirm(`🗑 DELETE the entire "${r.clusterName}" section?\n\n• ${r.choices.length} choice node(s) and their pins are removed\n• Its geometry is REMOVED from the .glb (file shrinks; the old .glb is kept as a backup on the record)\n• REGENERATE the flow afterwards — the section's options disappear\n\nUpload the replacement section with ➕ Extend. This cannot be undone in place.`)) return;
+        setAssignBusy(true);
+        try {
+            const dref = doc(db, 'Approved_Designs', assignId);
+            const snapD = await getDoc(dref);
+            const data = snapD.data() || {};
+            const cadUrl = data.manufacturingSpecs?.cadUrl;
+            const cl = (data.nodeClusters || []).find(x => x.id === r.clusterId) || {};
+            let newCadUrl = null;
+            if (cadUrl) {
+                const buf = await (await fetch(cadUrl)).arrayBuffer();
+                const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
+                const scene = gltf.scene;
+                const nrm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+                let grp = scene.getObjectByName((cl.nodes && cl.nodes[0]) || cl.name || r.clusterName);
+                if (!grp) { const wants = new Set([nrm((cl.nodes && cl.nodes[0]) || ''), nrm(cl.name || r.clusterName)].filter(Boolean)); scene.traverse(n => { if (!grp && !n.isMesh && wants.has(nrm(n.name))) grp = n; }); }
+                if (grp) {
+                    grp.removeFromParent();
+                    addLog(`Re-exporting the .glb without "${r.clusterName}"…`, 'info');
+                    const glbBuffer = await new Promise((res, rej) => new GLTFExporter().parse(scene, out => res(out), e => rej(e), { binary: true }));
+                    const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
+                    const path = `assemblies/${activeBrand}_${String(data.itemName || 'asm').replace(/[^a-z0-9]/gi, '_')}_sectiondel_${Date.now()}.glb`;
+                    const up = uploadBytesResumable(sRef(storage, path), blob);
+                    newCadUrl = await new Promise((res, rej) => up.on('state_changed', null, rej, async () => res(await getDownloadURL(up.snapshot.ref))));
+                } else {
+                    addLog(`⚠ "${r.clusterName}" group not found in the .glb — records removed, geometry left in the file (Repair Node Names or the re-upload merge can strip it later).`, 'error');
+                }
+            }
+            await updateDoc(dref, {
+                nodeClusters: (data.nodeClusters || []).filter(x => x.id !== r.clusterId),
+                ...(newCadUrl ? { 'manufacturingSpecs.cadUrl': newCadUrl, 'manufacturingSpecs.cadUrlBackup': cadUrl } : {}),
+                updatedAt: Date.now()
+            });
+            const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', data.itemId || assignId), where('clusterId', '==', r.clusterId)));
+            for (const d of pinsSnap.docs) await deleteDoc(d.ref);
+            addLog(`🗑 Section "${r.clusterName}" deleted — ${pinsSnap.size} pin(s) removed${newCadUrl ? ', geometry stripped from the .glb (old kept as backup)' : ''}. REGENERATE the flow, then ➕ Extend with the replacement section.`, 'success');
+            setAssignBusy(false);
+            await handleLoadChoices();
+            return;
+        } catch (e) {
+            console.error('Section delete failed:', e);
+            alert('Section delete failed: ' + (e.message || e) + '\n\nNothing may be half-deleted — reload choices to see the current state.');
+        }
+        setAssignBusy(false);
+    };
+
     const handleLoadChoices = async () => {
         if (!assignId) return alert('Pick an assembly.');
         setAssignBusy(true);
@@ -1645,6 +1699,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                 <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
                                         {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>{twinOf(r) && <button onClick={() => swapSides(r)} disabled={assignBusy} title="LEFT and RIGHT render on each other's ends? The clusters carry each other's nodes — this swaps the geometry records (clusters + pins) with the twin, then Regenerate." style={{ marginLeft: '10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>⇄ sides</button>}
+                                        <button onClick={() => deleteSection(r)} disabled={assignBusy} title="Delete this ENTIRE section: every choice + pin, and its geometry is stripped from the .glb so the file shrinks (old .glb kept as backup). For re-uploading a whole section via ➕ Extend." style={{ marginLeft: '8px', border: '1px solid #d9534f', background: '#fff', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>🗑 section</button>
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(r.category) === 'FINIAL' ? '48px minmax(150px,230px) 220px 122px minmax(300px,1fr) 72px' : '48px minmax(150px,230px) 220px minmax(300px,1fr) 72px', gap: '6px 12px', alignItems: 'center' }}>
                                         {r.choices.map((c) => (
@@ -1748,13 +1803,15 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         the choices to match"). A traverse RETURN ARM is tagged FINIAL — it sits in
                                                         the finial position — so the dropdown was hidden on exactly the rows whose
                                                         projection has to match the bracket's. Any tagged end treatment gets it. */}
-                                                    {(normalizeCategory(c.catOverride || r.category) === 'BRACKET' || !!String(c.endTreatment || '').trim()) && (
+                                                    {/* BACKPLATES tag proj: too (Stuart 2026-08-14, H1-138: a backplate per bracket per projection). */}
+                                                    {(['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || r.category)) || !!String(c.endTreatment || '').trim()) && (
                                                         <select value={c.projInches || ''} title="PROJECTION — the 4.5 Master-Dictionary list (BRACKET PROJECTIONS). Brackets: the exact projection this item IS (shows only at that projection). FRENCH/MITER RETURN choices: the MINIMUM projection (returns need depth — tag 4-5/8 and they show at 4-5/8 AND 6, hidden below). '— any —' = always offered." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { projInches: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.projInches ? 'var(--brass)' : 'var(--line)', color: c.projInches ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                             <option value="">proj: — any —</option>
                                                             {((dictLists && dictLists.projections) || []).map(p => <option key={p} value={String(p).toUpperCase()}>proj: {p}"</option>)}
                                                         </select>
                                                     )}
-                                                    {normalizeCategory(c.catOverride || r.category) === 'BRACKET' && !c.isFee && (
+                                                    {/* BACKPLATES tag mount: too (ceiling backplates — Stuart 2026-08-14). */}
+                                                    {['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || r.category)) && !c.isFee && (
                                                         <select value={c.mountType || ''} title="BRACKET MOUNT TYPE — the 4.5 Master-Dictionary list (BRACKET MOUNT TYPES); saved on the pin in the same vocabulary the Library editor + Vision engine use." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { mountType: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.mountType ? 'var(--brass)' : 'var(--line)', color: c.mountType ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                             <option value="">mount: — any —</option>
                                                             {((dictLists && dictLists.bracketMounts) || []).map(m => <option key={m} value={String(m).toUpperCase()}>mount: {m}</option>)}
@@ -1915,13 +1972,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                                 {c.requiresCollar && !slotCollarCands.codes.some(code => code.toUpperCase() === String(c.requiresCollar).toUpperCase()) && <option value={c.requiresCollar}>{c.requiresCollar}</option>}
                                                             </select>
                                                         )}
-                                                        {(normalizeCategory(c.catOverride || slot.category) === 'BRACKET' || !!String(c.endTreatment || '').trim()) && (
+                                                        {(['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || slot.category)) || !!String(c.endTreatment || '').trim()) && (
                                                             <select value={c.projInches || ''} title="PROJECTION — 4.5 Master-Dictionary list. Brackets: the exact projection this item IS. FRENCH/MITER RETURN choices: the MINIMUM projection (tag 4-5/8 → shows at 4-5/8 AND 6). '— any —' = always offered." onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { projInches: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.projInches ? 'var(--brass)' : 'var(--line)', color: c.projInches ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                                 <option value="">proj: — any —</option>
                                                                 {((dictLists && dictLists.projections) || []).map(p => <option key={p} value={String(p).toUpperCase()}>proj: {p}"</option>)}
                                                             </select>
                                                         )}
-                                                        {normalizeCategory(c.catOverride || slot.category) === 'BRACKET' && !c.isFee && (
+                                                        {['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || slot.category)) && !c.isFee && (
                                                             <select value={c.mountType || ''} title="BRACKET MOUNT TYPE — the 4.5 Master-Dictionary list (BRACKET MOUNT TYPES); saved on the pin in the Vision vocabulary." onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { mountType: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.mountType ? 'var(--brass)' : 'var(--line)', color: c.mountType ? 'var(--brass)' : 'var(--ink-soft)' }}>
                                                                 <option value="">mount: — any —</option>
                                                                 {((dictLists && dictLists.bracketMounts) || []).map(m => <option key={m} value={String(m).toUpperCase()}>mount: {m}</option>)}
