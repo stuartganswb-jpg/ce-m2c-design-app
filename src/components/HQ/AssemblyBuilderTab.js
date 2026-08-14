@@ -1768,7 +1768,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 )}
                 {assignData && (
                     <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '10px', maxHeight: '46vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        {assignData.rows.filter(r => r.choices.length > 0).map((r) => {
+                        {/* 2D sections start EMPTY (choices are added via ➕, not read from a scene) —
+                            hiding zero-choice rows would hide every fresh tear-sheet section. */}
+                        {assignData.rows.filter(r => r.choices.length > 0 || r.is2d).map((r) => {
                             return (
                                 <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
