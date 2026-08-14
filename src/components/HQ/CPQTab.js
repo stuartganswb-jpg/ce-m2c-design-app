@@ -932,6 +932,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // pattern id. FAB WHOLESALE / RETAIL show the Fabricut pattern id (their world). STANDARD keeps
   // our sized code + description.
   const optionDisplayFor = (o) => {
+      // A traverse SELECTOR ANSWER (Single/Double, Front as track/ring) is a question's answer,
+      // not an item — it may CARRY a partId purely to bill what the answer adds (the rear track,
+      // the ring), and resolving that partId here replaced "Double (two tracks)" with
+      // "H1-2TRVTRK/C — 1.5\" Square Traverse Track" in the picker (Stuart 2026-08-14: "step 3
+      // gets weird"). An answer keeps its own words at every price level.
+      if (o.trvSetup) return { name: o.partName, desc: '' };
       const allParts = [...libraryParts, ...liveAssemblies];
       const findBase = (k) => !k ? null : (allParts.find(x => String(x.legacyErpId || x.itemId || '').trim().toUpperCase() === String(k).trim().toUpperCase()) || null);
       const sized = sizedPartForLabel(o.partId, o.partName);
