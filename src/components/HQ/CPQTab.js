@@ -938,6 +938,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // "H1-2TRVTRK/C — 1.5\" Square Traverse Track" in the picker (Stuart 2026-08-14: "step 3
       // gets weird"). An answer keeps its own words at every price level.
       if (o.trvSetup) return { name: o.partName, desc: '' };
+      // Same rule for the DRIVE answers: "Manual" / "Motorized", the end part it bills in small
+      // print rather than as the name.
+      if (o.traverseRole === 'TRV_END' && o.driveType) return { name: o.partName, desc: o.driveLabel && o.driveLabel !== o.partName ? o.driveLabel : '' };
       const allParts = [...libraryParts, ...liveAssemblies];
       const findBase = (k) => !k ? null : (allParts.find(x => String(x.legacyErpId || x.itemId || '').trim().toUpperCase() === String(k).trim().toUpperCase()) || null);
       const sized = sizedPartForLabel(o.partId, o.partName);

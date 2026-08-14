@@ -210,7 +210,10 @@ test('the drive is ITS OWN step — an either/or for the order, never a per-trac
     assert.ok(drive, 'no Drive step');
     // exactly two answers, no combination — one per drive, not one per end
     assert.deepEqual(drive.styleOptions.map(o => o.driveType), ['MOTORIZED', 'MANUAL']);
-    assert.deepEqual(drive.styleOptions.map(o => o.partName), ['HSOM-04', 'H1-2TRVPLUG']);
+    // the answer speaks the question's language; the real part rides in driveLabel + partId
+    assert.deepEqual(drive.styleOptions.map(o => o.partName), ['Motorized', 'Manual']);
+    assert.deepEqual(drive.styleOptions.map(o => o.driveLabel), ['HSOM-04', 'H1-2TRVPLUG']);
+    assert.deepEqual(drive.styleOptions.map(o => o.partId), ['p-pull', 'p-plug']);
 });
 
 test('one answer lights BOTH ends — the plug is pinned left and right', () => {

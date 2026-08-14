@@ -114,8 +114,14 @@ export function buildTraverseFlow({
     // The merged answer carries NO setup tag: a drive answer is about the drive, and the rear
     // track's ends are separated by the setup step's geometry instead (see doubleOnlyNodes). Left
     // tagged, a copy pinned setup:DOUBLE would filter the whole answer out of its own picker.
+    // THE ANSWER SAYS "MANUAL" OR "MOTORIZED" (Stuart 2026-08-14: "step 4 traverse drive should
+    // present manual or motorized rather than the somfy or end plug options"). The end part still
+    // rides underneath — partId bills it, geometry renders it — but the QUESTION is the drive, and
+    // the picker speaks the question's language. driveLabel keeps the real part visible in small
+    // print wherever the UI wants it.
     const endsForDrive = (d) => dedupeByPart(ends.filter(e => driveTypeOf(e) === d))
-        .map(o => ({ ...o, driveType: d, trvSetup: '' }));
+        .map(o => ({ ...o, driveType: d, trvSetup: '', driveLabel: o.partName,
+            partName: d === 'MOTORIZED' ? 'Motorized' : 'Manual' }));
 
     // ── Never a question, always built ───────────────────────────────────────────────────────────
     // Carriers ride inside the track; the F-clip attaches the track to the fascia. Both are cut and
