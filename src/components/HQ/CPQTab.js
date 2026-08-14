@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
+import { Sheet2DOverlay } from '../Shared/sheet2d';
 import { setupAllows, driveAllows } from '../Shared/traverseTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { configuratorTotal } from '../Shared/traverseConfigurator';
@@ -3152,6 +3153,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return [main, sub].flatMap(splitNodesLower);
   }, [debugHighlight, currentStep, dynamicConfigParams]);
 
+  // 2D TEAR-SHEET HALOS (Stuart 2026-08-14, M2C lighting): a sheet2d flow renders the tear-sheet
+  // drawing instead of the 3D canvas. The region of the step being answered NOW breathes with a
+  // soft brass halo; regions already answered stay faintly lit — "each area they are specifying
+  // with their answers". Reads only the flow doc (sheet2d + steps' sheet2dClusterId).
+  const sheetHalo = useMemo(() => {
+      const act = [], lit = [];
+      if (activeFlow?.sheet2d?.url) (activeFlow.steps || []).forEach(s => {
+          if (!s.sheet2dClusterId) return;
+          if (currentStep && s.id === currentStep.id) act.push(s.sheet2dClusterId);
+          else if (dynamicConfigParams[s.id]) lit.push(s.sheet2dClusterId);
+      });
+      return { act, lit };
+  }, [activeFlow, currentStep, dynamicConfigParams]);
+
   // Traverse checkout modal inputs — resolved at render, outside the pricing memo's scope.
   const trvModalProps = (() => {
       if (!trvCfgOpen || !activeFlow) return null;
@@ -3801,7 +3816,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   </div>
                   
                   <div style={{ height: '440px', flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper-2)' }}>
-                      {!activeAssembly ? (
+                      {/* 2D TEAR-SHEET FLOW (M2C lighting): the flow doc carries the drawing + regions —
+                          render it regardless of viewMode/assembly state; the halos follow the steps. */}
+                      {activeFlow?.sheet2d?.url ? (
+                          <div style={{ position: 'absolute', inset: '14px', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto' }}>
+                              <Sheet2DOverlay
+                                  sheet2d={activeFlow.sheet2d}
+                                  regions={activeFlow.sheet2d.regions || []}
+                                  activeIds={sheetHalo.act}
+                                  litIds={sheetHalo.lit}
+                                  style={{ width: '100%', maxWidth: `${Math.max(160, Math.round(412 * ((activeFlow.sheet2d.w || 1) / (activeFlow.sheet2d.h || 1))))}px` }}
+                              />
+                          </div>
+                      ) : !activeAssembly ? (
                           <div style={{ color: 'var(--ink-soft)', textAlign: 'center', zIndex: 1 }}>
                               <div style={{ fontSize: '2rem', marginBottom: '16px', opacity: 0.5 }}>⚙️</div>
                               <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontWeight: 500, fontSize: '1.4rem' }}>Visual Engine Ready</h3>

@@ -14,6 +14,8 @@ import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES, sizeK
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { joinNodes, splitNodes } from '../Shared/nodeList';
 import { normalizeLocation } from '../Shared/assemblyTags';
+import { isSheet2dAssembly } from '../Shared/sheet2d';
+import { buildSheet2dFlow } from '../Shared/sheet2dFlow';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -805,6 +807,55 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       pins.forEach(p => { if (p.clusterId) (pinsByCluster[p.clusterId] = pinsByCluster[p.clusterId] || []).push(p); });
       const partsById = {};
       allApprovedDesigns.forEach(p => { partsById[p.id] = p; if (p.itemId) partsById[p.itemId] = p; if (p.legacyErpId) partsById[p.legacyErpId] = p; });
+      // ── 2D TEAR-SHEET FORK (Stuart 2026-08-14, M2C lighting) ─────────────────────────────────
+      // A drawing-based assembly (manufacturingSpecs.sheet2d, no cadUrl) never runs the pole
+      // grammar — Shared/sheet2dFlow.js emits one step per drawn region, options from the
+      // region's pins, and stamps sheet2d {url,w,h,regions} onto the flow doc so the CPQ
+      // renders the drawing + brass halos with no assembly read. Same fork shape as traverse.
+      if (isSheet2dAssembly(asm)) {
+          const ts2 = Date.now();
+          const r2 = buildSheet2dFlow({ asm, pinsByCluster, ts: ts2 });
+          if (r2.error) return alert(r2.error);
+          const noteNo = r2.noChoice.length ? `\n\n⚠ Region(s) skipped — NO choices yet (add item #s in 1.6's Assign tool, then Regenerate): ${r2.noChoice.join(', ')}` : '';
+          if (inPlaceFlowId && oldFlow) {
+              // Compact price-carryover mirror of the 3D in-place merge: (title, optId) first,
+              // (title, partId) second — optIds are part-keyed here so both are stable.
+              const nrm = (s) => String(s == null ? '' : s).trim().toUpperCase();
+              const oldByKey = {}, oldByPart = {};
+              (oldFlow.steps || []).forEach(s => {
+                  const t = nrm(s.title);
+                  [...(s.styleOptions || []), ...(s.subOptions || [])].forEach(o => {
+                      const k = o && (o.optId || o.partId);
+                      if (k != null) oldByKey[`${t}||${k}`] = o;
+                      if (o && o.partId && !oldByPart[`${t}||${o.partId}`]) oldByPart[`${t}||${o.partId}`] = o;
+                  });
+              });
+              const merged = r2.steps.map(s => ({
+                  ...s,
+                  styleOptions: (s.styleOptions || []).map(o => {
+                      const old = oldByKey[`${nrm(s.title)}||${o.optId}`] || oldByPart[`${nrm(s.title)}||${o.partId}`];
+                      return (old && old.price !== undefined) ? { ...o, price: old.price } : o;
+                  }),
+              }));
+              try {
+                  await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: merged, sheet2d: r2.sheet2d, hiddenClusters: [], hiddenNodes: [] }));
+                  alert(`✅ Regenerated 2D flow "${oldFlow.name}" in place — ${merged.length} region step(s) rebuilt from the tear sheet (authored prices carried by option).${noteNo}`);
+              } catch (err) { console.error("2D regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
+              return;
+          }
+          const flowId2 = `FLOW-${ts2}`;
+          try {
+              await setDoc(doc(db, "cpq_flows", flowId2), stripUndefined({
+                  id: flowId2, brandId: activeBrand, name: `${String(asm.itemName || 'FIXTURE').toUpperCase()} — GENERATED`,
+                  singleAssembly: true, legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id,
+                  sheet2d: r2.sheet2d, hiddenClusters: [], hiddenNodes: [], steps: r2.steps, sizeFamily: null,
+                  fabShape: '', fabEndStyle: '', fabProjection: '', defaultFinishOptions: [],
+              }));
+              setActiveFlowId(flowId2);
+              alert(`Generated 2D tear-sheet flow "${String(asm.itemName || 'FIXTURE').toUpperCase()} — GENERATED":\n• ${r2.steps.length} region step(s), in the order the regions were drawn\n• Each step's options = that region's pinned choices; the CPQ shows the drawing with a brass halo over the region being specified\n\nReview + set prices, then test in tab 8.${noteNo}`);
+          } catch (err) { console.error("2D generate failed:", err); alert("Generate failed: " + (err?.message || err)); }
+          return;
+      }
       const classifyCat = (pt) => { const t = String(pt || '').toUpperCase(); if (t.includes('BACKPLATE') || t.includes('BACK PLATE')) return 'BACKPLATE'; if (t.includes('BRACKET')) return 'BRACKET'; if (t.includes('FINIAL')) return 'FINIAL'; if (t.includes('RING')) return 'RING'; if (t.includes('POLE') || t.includes('ROD')) return 'POLE'; return ''; };
       // Category from the cluster tag, falling back to the pin's part product type (so clusters
       // tagged only with Location/Position still classify).

@@ -1,0 +1,66 @@
+// 2D TEAR-SHEET FLOW GENERATOR (Stuart 2026-08-14) — the fork for drawings.
+//
+// Same call as the traverse fork: the pole grammar in AdminTab never runs for a
+// 2D assembly. A tear-sheet flow is simply ONE STEP PER DRAWN REGION, in the
+// order the regions were drawn (draw order = question order): the Dawn's
+// regions are Metal Frame / Wood Disc / Tassels / Diffuser / Chain — exactly
+// the questions on M2C's static Build & Quote form. Options come from the
+// region's pins (1.6 Assign tool), so BOM assignment and per-customer pricing
+// ride the same rails as every 3D flow. The flow doc carries sheet2d
+// { url, w, h, regions } so the CPQ renders the drawing + halos with no
+// assembly read.
+import { regionNodeId } from './sheet2d';
+
+export function buildSheet2dFlow({ asm, pinsByCluster, ts }) {
+    const sheet = asm?.manufacturingSpecs?.sheet2d;
+    if (!sheet?.url) return { error: 'This assembly has no tear sheet (manufacturingSpecs.sheet2d). Import one in 1.5 Node Grouping.' };
+    const regions = (asm.nodeClusters || []).filter(c => c.region2d && !c.hidden);
+    if (!regions.length) return { error: 'No regions drawn on the tear sheet yet — draw them in 1.5 Node Grouping (drag = oval, SHIFT = circle), then add each region\'s choices in 1.6\'s Assign tool.' };
+
+    const steps = []; let n = 0; const noChoice = [];
+    regions.forEach(cl => {
+        const node = regionNodeId(cl.id);
+        const pins = pinsByCluster[cl.id] || [];
+        // Hidden pins with a REAL item # = BOM-only hardware riding this region's step.
+        const included = pins.filter(p => p.isHiddenPart && p.partId && !String(p.partId).startsWith('HIDDEN-'))
+            .map(p => ({ partId: p.partId, partName: p.partName || cl.name, qty: parseInt(p.defaultQty) || 1 }));
+        const choicePins = pins.filter(p => !p.isHiddenPart && !p.parked)
+            .sort((a, b) => ((a.choiceSort ?? 9999) - (b.choiceSort ?? 9999)) || String(a.partName || '').localeCompare(String(b.partName || '')));
+        const clShort = String(cl.id).replace(/[^A-Za-z0-9]/g, '').slice(-8);
+        const seen = {};
+        const styleOptions = choicePins.map(p => {
+            const pid = p.partId || cl.name;
+            // optId keyed by part (stable across regenerates → authored prices survive);
+            // a rare duplicate part in one region gets a -2/-3 suffix instead of colliding.
+            const pShort = String(pid).replace(/[^A-Za-z0-9]/g, '').slice(0, 20);
+            const k = `${clShort}|${pShort}`; seen[k] = (seen[k] || 0) + 1;
+            return {
+                optId: `OPT-2D-${clShort}-${pShort}${seen[k] > 1 ? `-${seen[k]}` : ''}`,
+                partId: pid,
+                partName: p.isFee ? `${p.partName || 'Charge'} (fee)` : (p.partName || pid),
+                position: '', location: '', targetNode: node, price: 0,
+                ...(p.isFee ? { isFee: true } : {}),
+                ...(Array.isArray(p.customerIds) && p.customerIds.length ? { customerIds: p.customerIds, customerNames: p.customerNames || [] } : {}),
+            };
+        });
+        if (!styleOptions.length) { noChoice.push(cl.name || cl.id); return; } // no options = no step; flagged in the alert
+        const gmap = {}; styleOptions.forEach(o => { gmap[o.optId] = node; });
+        steps.push({
+            id: `STEP-${ts}-${++n}`,
+            title: String(cl.name || 'Choice').replace(/[-_]+/g, ' ').trim(),
+            type: 'STYLE_SWAP', partHandling: 'Small Parts', hideQty: true,
+            required: styleOptions.length >= 2, // a single-choice region is informational, not a gate
+            finishDataSource: 'master_finishes', useClientPricing: true,
+            styleOptions, geometryMap: gmap, sheet2dClusterId: cl.id,
+            ...(included.length ? { includedParts: included } : {}),
+        });
+    });
+    if (!steps.length) return { error: `Every region is missing choices (${noChoice.join(', ')}) — add each region's item #s in 1.6's Assign tool first.` };
+    return {
+        steps, noChoice,
+        sheet2d: {
+            url: sheet.url, w: sheet.w || 0, h: sheet.h || 0,
+            regions: regions.map(c => ({ id: c.id, name: c.name || '', ...c.region2d })),
+        },
+    };
+}

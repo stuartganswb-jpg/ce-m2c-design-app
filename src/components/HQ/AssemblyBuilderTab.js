@@ -14,6 +14,7 @@ import { analyzeFusionFbx, buildGlbFromAnalysis, UNIT_CHOICES } from '../Shared/
 import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
 import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, normalizePosition, normalizeCategory, suggestTagsFromName } from '../Shared/assemblyTags';
+import { sheet2dChoiceNode } from '../Shared/sheet2d';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -996,6 +997,18 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         setAssignBusy(false);
     };
 
+    // 2D tear-sheet section: add a blank choice row (name + item # typed by the operator; the
+    // synthetic 2D__ choiceNode is its stable id — pins/BOM/generator read it like any node name).
+    const addChoice2d = (clusterId) => {
+        setAssignData(prev => prev ? {
+            ...prev,
+            rows: prev.rows.map(r => r.clusterId === clusterId ? {
+                ...r,
+                choices: [...r.choices, { nodeName: sheet2dChoiceNode(clusterId, Date.now() % 1000000), label: '', itemNo: '', endTreatment: '', isFee: false, isHidden: false, parked: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, note: '', thumb: '' }],
+            } : r),
+        } : prev);
+    };
+
     const handleLoadChoices = async () => {
         if (!assignId) return alert('Pick an assembly.');
         setAssignBusy(true);
@@ -1004,6 +1017,39 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const data = snap.data() || {};
             const cadUrl = data.manufacturingSpecs?.cadUrl;
             const clusters = data.nodeClusters || [];
+            // ── 2D TEAR-SHEET PATH (Stuart 2026-08-14, M2C lighting): no .glb — rows come from the
+            // drawn region clusters, choices are the region's pins + operator-added rows (➕ choice).
+            // Pins save through the exact same writer below; synthetic 2D__ node ids never go stale.
+            if (!cadUrl && data.manufacturingSpecs?.sheet2d?.url) {
+                const pinSnap2 = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', data.itemId || assignId)));
+                const byCl2 = {};
+                pinSnap2.docs.forEach(d => { const p = d.data(); if (p.clusterId) (byCl2[p.clusterId] = byCl2[p.clusterId] || []).push(p); });
+                const index2 = await refreshCodeIndex().catch(() => null);
+                const byItemId2 = new Map();
+                (index2 || []).forEach(e => { if (e.itemId && e.erp && e.erp !== 'PENDING') byItemId2.set(e.itemId, e.erp); });
+                const rows2 = clusters.filter(c => c.region2d && !c.hidden).map(cl => {
+                    const pins2 = (byCl2[cl.id] || []).sort((a, b) => ((a.choiceSort ?? 1e9) - (b.choiceSort ?? 1e9)));
+                    const choices = pins2.map(pin => {
+                        const synthetic = /^(HIDDEN|FEE)-/.test(String(pin?.partId || ''));
+                        let itemNo = '';
+                        if (pin.isFee) itemNo = pin.feeItemNo || (!synthetic && pin.partId ? pin.partId : '');
+                        else {
+                            const liveErp = byItemId2.get(pin.partId) || '';
+                            if (liveErp) itemNo = liveErp;
+                            else if (pin.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId) && pin.legacyErpId !== pin.partId) itemNo = pin.legacyErpId;
+                            else if (!synthetic && pin.partId && !/-\d{12,}/.test(String(pin.partId))) itemNo = pin.partId;
+                        }
+                        return { nodeName: pin.choiceNode, label: pin.partName || '', itemNo, endTreatment: '', isFee: !!pin.isFee, isHidden: !!pin.isHiddenPart && !pin.parked, parked: !!pin.parked, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: pin.customerIds || [], custNames: pin.customerNames || [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: !!pin.alwaysShown, note: pin.designerNote || '', thumb: '' };
+                    });
+                    return { clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(), found: true, is2d: true, choices };
+                });
+                assignSceneRef.current = null;
+                setAssignModelInfo({ docId: assignId, itemId: data.itemId || assignId, cadFile: '2D tear sheet (no .glb)' });
+                setAssignData({ asmId: data.itemId || assignId, asmName: data.itemName || assignId, rows: rows2 });
+                addLog(`Loaded ${rows2.length} tear-sheet section(s), ${rows2.reduce((s, r) => s + r.choices.length, 0)} choice(s) from "${data.itemName}" — 2D mode: ➕ choice on a section header adds an option (name + item #), then Save Assignments as usual.`, 'success');
+                setAssignBusy(false);
+                return;
+            }
             if (!cadUrl) throw new Error('This assembly has no .glb (cadUrl).');
             addLog('⏳ Loading choices — downloading the .glb…', 'info');
             await new Promise(res => setTimeout(res, 60));
@@ -1432,7 +1478,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     reconStatus = `FAILED — ${reconErr.message || reconErr}`;
                 }
             }
-            if (!scene) { addLog('⚠ Node reconciliation skipped — no loaded scene (run Load Choices first in this session).', 'error'); reconStatus = 'SKIPPED — no loaded scene'; }
+            if (!scene) {
+                // 2D tear-sheet assemblies have no scene and synthetic 2D__ node ids that never go
+                // stale — reconciliation is a no-op, not a warning.
+                if ((assignData.rows || []).some(rr => rr.is2d)) reconStatus = 'ran';
+                else { addLog('⚠ Node reconciliation skipped — no loaded scene (run Load Choices first in this session).', 'error'); reconStatus = 'SKIPPED — no loaded scene'; }
+            }
             let n = 0, fees = 0, hides = 0, removed = 0, parked = 0;
             for (const r of assignData.rows) {
                 for (let idx = 0; idx < r.choices.length; idx++) {
@@ -1471,7 +1522,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // carrying it, and partId is rewritten by anything that re-saves a choice — once it
                     // became the synthetic FEE-<slug> the code was unrecoverable. This field is written
                     // by nothing else and read back first, so the code survives a bad round-trip.
-                    ...(ch.isFee && String(ch.itemNo || '').trim() ? { feeItemNo: String(ch.itemNo).trim().toUpperCase() } : {}), ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}) });
+                    ...(ch.isFee && String(ch.itemNo || '').trim() ? { feeItemNo: String(ch.itemNo).trim().toUpperCase() } : {}), ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}),
+                    // 2D tear-sheet rows: the operator-typed choice NAME is the display name the CPQ
+                    // option card shows — it must survive the libLink partName (= ERP code) overwrite.
+                    ...(r.is2d && String(ch.label || '').trim() ? { partName: String(ch.label).trim() } : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -1719,6 +1773,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                 <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
                                         {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>{twinOf(r) && <button onClick={() => swapSides(r)} disabled={assignBusy} title="LEFT and RIGHT render on each other's ends? The clusters carry each other's nodes — this swaps the geometry records (clusters + pins) with the twin, then Regenerate." style={{ marginLeft: '10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>⇄ sides</button>}
+                                        {r.is2d && <button onClick={() => addChoice2d(r.clusterId)} disabled={assignBusy} title="Add a choice to this tear-sheet section — type its display name (what the CPQ card shows) and its item #, then Save Assignments." style={{ marginLeft: '8px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>➕ choice</button>}
                                         <button onClick={() => deleteSection(r)} disabled={assignBusy} title="Delete this ENTIRE section: every choice + pin, and its geometry is stripped from the .glb so the file shrinks (old .glb kept as backup). For re-uploading a whole section via ➕ Extend." style={{ marginLeft: '8px', border: '1px solid #d9534f', background: '#fff', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>🗑 section</button>
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(r.category) === 'FINIAL' ? '48px minmax(150px,230px) 220px 122px minmax(300px,1fr) 72px' : '48px minmax(150px,230px) 220px minmax(300px,1fr) 72px', gap: '6px 12px', alignItems: 'center' }}>
@@ -1728,8 +1783,10 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     ? <img src={c.thumb} alt="" title="Click to enlarge" onClick={() => setZoomThumb({ url: c.thumb, label: `${r.clusterName} · ${c.label}${c.itemNo ? ` · ${c.itemNo}` : ''}` })} style={{ width: '44px', height: '44px', objectFit: 'contain', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px', cursor: 'zoom-in' }} />
                                                     : <span style={{ width: '44px', height: '44px', border: '1px dashed var(--line)', borderRadius: '2px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '7px', color: 'var(--ink-soft)' }}>…</span>}
                                                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-                                                    <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
-                                                    <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>
+                                                    {r.is2d
+                                                        ? <input value={c.label} placeholder="choice name — what the CPQ card shows (e.g. GOLDEN BRASS)" title="Display name for this choice on the configurator" onChange={e => setChoicePatch(r.clusterId, c.nodeName, { label: e.target.value })} style={{ ...inp, padding: '4px 6px', fontSize: '10px', fontFamily: 'var(--mono)', textTransform: 'uppercase', flex: 1, minWidth: 0, borderColor: c.label ? 'var(--line)' : 'var(--brass)' }} />
+                                                        : <span title={c.nodeName} style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>}
+                                                    {!r.is2d && <button onClick={() => splitChoice(r.clusterId, c.nodeName)} title="This row is really several parts merged under one wrapper node — split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>⤢ split</button>}
                                                 </span>
                                                 {(() => { const willPark = !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && looksRealPart(c.label); const missing = nodeMissing(c.nodeName); return (
                                                 <span style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>

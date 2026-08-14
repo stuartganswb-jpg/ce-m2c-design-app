@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { db } from '../../firebase';
+import { db, storage } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, updateDoc, getDoc, getDocs, deleteDoc } from "firebase/firestore";
+import { ref as sRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
+import { isSheet2dAssembly, Sheet2DRegionEditor, regionNodeId } from '../Shared/sheet2d';
 
 // --- HIERARCHY CASCADE HELPERS ---
 const findNodeByName = (tree, name) => {
@@ -368,7 +370,10 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
     const [newClusterName, setNewClusterName] = useState("");
     const [selectedNodes, setSelectedNodes] = useState([]);
-    
+    // 2D tear-sheet mode (M2C lighting fast-load)
+    const [sheetBusy, setSheetBusy] = useState(false);
+    const [selRegionId, setSelRegionId] = useState(null);
+
     const [interactionMode, setInteractionMode] = useState("select");
     const [hiddenNodes, setHiddenNodes] = useState([]);
     const [highlightUnassigned, setHighlightUnassigned] = useState(false);
@@ -537,6 +542,46 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const handleSetClusterLocation = (clusterId, location) => setClusterField(clusterId, { location });
     const handleSetClusterPosition = (clusterId, position) => setClusterField(clusterId, { position });
     const handleSetClusterCategory = (clusterId, category) => setClusterField(clusterId, { category });
+
+    // ── 2D TEAR-SHEET MODE (Stuart 2026-08-14, M2C lighting fast-load) ───────────────────────
+    // No .glb: import the tear sheet's line drawing (PDF page 1 or an image) and DRAW the
+    // sections instead — drag = oval, SHIFT = circle. Each drawn section is a normal
+    // nodeClusters[] entry (plus region2d + a synthetic 2D__ node id), so pins/BOM/generator
+    // all read it unchanged. Uploading a real .glb later graduates the assembly to 3D.
+    const handleImportSheet = async (file) => {
+        if (!file || !activeAssembly) return;
+        setSheetBusy(true);
+        try {
+            const { rasterizeSheetFile } = await import('../Shared/sheet2dImport'); // pdfjs stays out of the chunk until used
+            const { blob, w, h } = await rasterizeSheetFile(file);
+            const path = `sheet2d/${activeBrand}_${String(activeAssembly.id).replace(/[^a-zA-Z0-9-]/g, '_')}_${Date.now()}.png`;
+            const r = sRef(storage, path);
+            await uploadBytes(r, blob, { contentType: 'image/png' });
+            const url = await getDownloadURL(r);
+            await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { 'manufacturingSpecs.sheet2d': { url, w, h } });
+        } catch (e) { console.error('tear-sheet import failed', e); alert('Tear-sheet import failed: ' + (e.message || e)); }
+        setSheetBusy(false);
+    };
+    const handleCreateRegion = async (region2d) => {
+        const name = window.prompt('Name this section (it becomes the CPQ step title — e.g. METAL FRAME FINISH, TASSELS):', '');
+        if (!name || !name.trim()) return;
+        const id = `CLUSTER-${Date.now()}`;
+        const newCluster = { id, name: name.trim().toUpperCase(), nodes: [regionNodeId(id)], region2d };
+        try {
+            const ref = doc(db, "Approved_Designs", activeAssembly.id);
+            const snap = await getDoc(ref);
+            const currentClusters = (snap.exists() ? snap.data().nodeClusters : activeAssembly.nodeClusters) || [];
+            await updateDoc(ref, { nodeClusters: [...currentClusters, newCluster] });
+            setSelRegionId(id);
+        } catch (e) { console.error(e); alert('Region save failed: ' + (e.message || e)); }
+    };
+    const handleUpdateRegion = (clusterId, region2d) => setClusterField(clusterId, { region2d });
+    const handleRenameRegion = (clusterId) => {
+        const cl = (activeAssembly?.nodeClusters || []).find(c => c.id === clusterId);
+        const name = window.prompt('Rename section:', cl?.name || '');
+        if (!name || !name.trim()) return;
+        setClusterField(clusterId, { name: name.trim().toUpperCase() });
+    };
     const handleSetClusterHidden = (clusterId, hidden) => setClusterField(clusterId, { hidden });
 
     // Fix 1B — per-assembly LEFT/RIGHT flip (safety net for mirrored models). Persists on the
@@ -942,10 +987,38 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                 </div>
 
                 {/* CENTER & RIGHT PANEL */}
-                {activeAssembly && activeAssembly.manufacturingSpecs?.cadUrl ? (
+                {activeAssembly && (activeAssembly.manufacturingSpecs?.cadUrl || isSheet2dAssembly(activeAssembly)) ? (
                     <div style={{ flex: 1, display: 'flex', gap: '24px', minHeight: '600px' }}>
-                        
-                        {/* 3D VIEWER — pinned so it stays visible/draggable no matter how long the BOM list */}
+
+                        {isSheet2dAssembly(activeAssembly) ? (
+                        /* 2D TEAR-SHEET EDITOR — the drawing replaces the 3D viewer; drawn sections are
+                           normal clusters, so the Saved BOM Bindings panel on the right works unchanged. */
+                        <div style={{ flex: 1.8, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '16px', alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto', borderRadius: '2px' }}>
+                            <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', position: 'sticky', top: 0, background: '#fff', zIndex: 5 }}>
+                                <div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>2D tear sheet — drag to draw a section (hold SHIFT for a circle)</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '4px' }}>Each section = a CPQ step + BOM slot. Drag inside a section to move it · corner handle resizes · double-click renames · Del is in the list on the right.</div>
+                                </div>
+                                <label style={{ flexShrink: 0, padding: '8px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: sheetBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                    {sheetBusy ? '⏳ Importing…' : '⇪ Replace sheet'}
+                                    <input type="file" accept="image/*,application/pdf,.pdf" style={{ display: 'none' }} disabled={sheetBusy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) handleImportSheet(f); }} />
+                                </label>
+                            </div>
+                            <div style={{ padding: '16px' }}>
+                                <Sheet2DRegionEditor
+                                    sheet2d={activeAssembly.manufacturingSpecs.sheet2d}
+                                    clusters={existingClusters.filter(c => c.region2d)}
+                                    selectedId={selRegionId}
+                                    onSelect={setSelRegionId}
+                                    onCreate={handleCreateRegion}
+                                    onUpdateRegion={handleUpdateRegion}
+                                    onRename={handleRenameRegion}
+                                    highlightIds={[locatingClusterId, hoveredClusterId].filter(Boolean)}
+                                />
+                            </div>
+                        </div>
+                        ) : (
+                        /* 3D VIEWER — pinned so it stays visible/draggable no matter how long the BOM list */
                         <div style={{ flex: 1.8, background: '#fff', border: '1px solid var(--line)', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', position: 'sticky', top: '16px', alignSelf: 'flex-start', height: 'calc(100vh - 32px)', borderRadius: '2px', overflow: 'hidden' }}>
                             <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10, background: 'rgba(255,255,255,0.95)', padding: '16px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>
                                 {showAutoPanel ? (
@@ -1030,9 +1103,12 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 </Bounds>
                             </Canvas>
                         </div>
+                        )}
 
                         <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: '24px', alignSelf: 'flex-start', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}>
-                            
+
+                            {/* Scene-tree + node-selection panels are 3D-only; 2D sections are drawn, not picked. */}
+                            {!isSheet2dAssembly(activeAssembly) && (<>
                             <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', height: '400px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
                                     <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Native CAD Hierarchy</span>
@@ -1071,6 +1147,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                     Saving this cluster makes it instantly available to the BOM Engine.
                                 </div>
                             </div>
+                            </>)}
 
                             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
@@ -1142,8 +1219,18 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
 
                     </div>
                 ) : activeAssembly && (
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: '1px dashed var(--line)' }}>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '18px', background: '#fff', border: '1px dashed var(--line)', padding: '40px' }}>
                         <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)', fontSize: '1.4rem' }}>Please upload a 3D CAD model to manage nodes.</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>— or —</div>
+                        {/* 2D FAST PATH (Stuart 2026-08-14): the M2C lighting line loads from its tear
+                            sheets — no .fbx/.glb needed for a working CPQ + BOM. */}
+                        <label style={{ padding: '14px 22px', background: 'var(--brass)', color: '#fff', cursor: sheetBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
+                            {sheetBusy ? '⏳ Importing tear sheet…' : '📄 Import 2D tear sheet (PDF or image)'}
+                            <input type="file" accept="image/*,application/pdf,.pdf" style={{ display: 'none' }} disabled={sheetBusy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) handleImportSheet(f); }} />
+                        </label>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', maxWidth: '520px', textAlign: 'center', lineHeight: 1.5 }}>
+                            The fast path for the lighting line: import the tear sheet's line drawing, then drag circle/oval sections over its areas (SHIFT = circle) — each section becomes a CPQ step + BOM slot, and the configurator highlights it with a brass halo as the customer specifies it. Upload a .glb later and the assembly graduates to the full 3D pipeline automatically.
+                        </div>
                     </div>
                 )}
             </div>
