@@ -4,10 +4,11 @@
 // method"). ONE component, mounted behind a guard by each surface — the logic lives in
 // Shared/traverseConfigurator (pure, node-tested); this renders it and nothing else.
 import React, { useMemo, useState } from 'react';
-import { configuratorOffer, configuratorLines, configuratorTotal } from './traverseConfigurator';
+import { configuratorOffer, configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
 
-export default function TraverseConfiguratorModal({ rules, drive, feet, kitLabel, itemInfo, priceOf, onCancel, onApply }) {
-    const [sel, setSel] = useState({ carrierStyle: '', carrierQty: '', picks: {}, accessories: {} });
+export default function TraverseConfiguratorModal({ rules, drive, feet, trackCount = 1, kitLabel, itemInfo, priceOf, onCancel, onApply }) {
+    // Opens with his defaults, not an empty form: end stops 2 per track, chart-included splice.
+    const [sel, setSel] = useState(() => ({ carrierStyle: '', carrierQty: '', picks: defaultPicks({ rules, drive, feet, trackCount }), accessories: {} }));
     const offer = useMemo(() => configuratorOffer({ rules, drive, feet }), [rules, drive, feet]);
     const lines = useMemo(() => configuratorLines({ rules, drive, feet, sel, priceOf }), [rules, drive, feet, sel, priceOf]);
     const addTotal = configuratorTotal(lines);
@@ -54,16 +55,25 @@ export default function TraverseConfiguratorModal({ rules, drive, feet, kitLabel
                         )}
                     </div>
                     <div>
-                        <div style={{ ...lbl, marginBottom: '8px' }}>Included components — no charge, consumed with the order</div>
+                        <div style={{ ...lbl, marginBottom: '8px' }}>Components — end stops default 2 per track; chart items say when they are included vs charged</div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '10px' }}>
                             {offer.picks.map(pk => {
                                 const q = sel.picks[pk.itemId] || 0; const on = q > 0; const inf = info(pk.itemId);
+                                // chart-governed pick (the splice): included where the chart says so at this
+                                // length, CHARGED where it does not — say which, in place.
+                                const chart = pk.includedQty;
+                                const each = parseFloat(priceOf(pk.itemId)) || 0;
+                                const note = chart === null ? ''
+                                    : chart > 0 ? `included at ${feet}ft (chart ${chart}${q > chart ? `; +${q - chart} × $${each.toFixed(2)}` : ''})`
+                                    : `not included at ${feet}ft — $${each.toFixed(2)} each`;
+                                const seed = chart !== null && chart > 0 ? chart : 1;
                                 return (
                                     <label key={pk.itemId} style={row(on)}>
-                                        <input type="checkbox" checked={on} onChange={e => setSel(p => ({ ...p, picks: { ...p.picks, [pk.itemId]: e.target.checked ? 1 : 0 } }))} style={{ cursor: 'pointer' }} />
+                                        <input type="checkbox" checked={on} onChange={e => setSel(p => ({ ...p, picks: { ...p.picks, [pk.itemId]: e.target.checked ? (/ENDSTOP/i.test(pk.itemId) ? 2 * Math.max(1, trackCount) : seed) : 0 } }))} style={{ cursor: 'pointer' }} />
                                         <span style={{ flex: 1, minWidth: 0 }}>
                                             <span style={{ display: 'block', fontSize: '0.88rem', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inf.name}</span>
                                             <span style={{ ...mono, color: 'var(--ink-soft)' }}>{pk.itemId}{inf.sku ? ` · ${inf.sku}` : ''}</span>
+                                            {note && <span style={{ ...mono, display: 'block', color: chart > 0 ? 'var(--ink-soft)' : 'var(--brass)' }}>{note}</span>}
                                         </span>
                                         {on && <input type="number" min="1" value={q} onClick={e => e.preventDefault()} onChange={e => setSel(p => ({ ...p, picks: { ...p.picks, [pk.itemId]: Math.max(1, parseInt(e.target.value) || 1) } }))} style={qtyBox} />}
                                     </label>

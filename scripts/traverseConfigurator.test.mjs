@@ -58,3 +58,22 @@ test('blank qty = exactly the chart; accessories bill at the customer price; pic
         sel: { picks: {}, accessories: { 'HSOM-19': 1 } } });
     assert.equal(wrong.length, 0);
 });
+
+test('the splice follows the chart: charged on a 9ft set, included on an 11ft one', { skip }, () => {
+    const at9 = configuratorLines({ rules, drive: 'MANUAL', feet: 9, priceOf: () => 6,
+        sel: { picks: { 'H1-2TRVSPLC': 1 }, accessories: {} } });
+    assert.deepEqual([at9[0].billable, at9[0].rate, at9[0].qty], [true, 6, 1]);
+    const at11 = configuratorLines({ rules, drive: 'MANUAL', feet: 11, priceOf: () => 6,
+        sel: { picks: { 'H1-2TRVSPLC': 1 }, accessories: {} } });
+    assert.deepEqual([at11[0].billable, at11[0].rate], [false, 0]);
+});
+
+test('defaults: end stops 2 per track, splice pre-set only where the chart includes it', { skip }, async () => {
+    const { defaultPicks } = await import('./traverseConfigurator.mjs');
+    const single9 = defaultPicks({ rules, drive: 'MANUAL', feet: 9, trackCount: 1 });
+    assert.equal(single9['HTTENDSTOP'], 2);
+    assert.equal(single9['H1-2TRVSPLC'], undefined);   // 9ft: not included, operator adds AND pays
+    const dbl12 = defaultPicks({ rules, drive: 'MANUAL', feet: 12, trackCount: 2 });
+    assert.equal(dbl12['HTTENDSTOP'], 4);              // 2 per track
+    assert.equal(dbl12['H1-2TRVSPLC'], 1);             // 12ft: chart includes one
+});

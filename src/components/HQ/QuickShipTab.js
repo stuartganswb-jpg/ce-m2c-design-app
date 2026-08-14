@@ -500,8 +500,20 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // A kit the customer is entitled to = a Kit-class record carrying kitAlign AND a pricing row
     // for this customer — the same entitlement rule as every Quick Ship item.
     const kitRowOf = (it) => findClientPriceRow(it?.clientPricing, custKeys) || null;
-    const trvKits = useMemo(() => allItems.filter(p => p.partClass === 'Kit' && p.manufacturingSpecs?.kitAlign && kitRowOf(p)),
-        [allItems, customerId]); // eslint-disable-line react-hooks/exhaustive-deps
+    const trvKits = useMemo(() => {
+        // Dropdown order (Stuart 2026-08-13): all MANUAL first — wall, double, ceiling — then the
+        // same shape again for MOTORIZED, so the CSR's eye lands where the PO does.
+        const rank = (k) => {
+            const a = k.manufacturingSpecs.kitAlign;
+            const drive = String(a.drive).toUpperCase() === 'MOTORIZED' ? 1 : 0;
+            const mount = String(a.mount).toUpperCase() === 'CEILING' ? 1 : 0;
+            const setup = String(a.setup).toUpperCase() !== 'DOUBLE' ? 0 : (String(a.frontRail).toUpperCase() === 'RING' ? 2 : 1);
+            const mat = { P: 0, EP: 1, W: 2 }[String(a.material).toUpperCase()] ?? 3;
+            return drive * 1000 + mount * 100 + setup * 10 + mat;
+        };
+        return allItems.filter(p => p.partClass === 'Kit' && p.manufacturingSpecs?.kitAlign && kitRowOf(p))
+            .sort((x, y) => rank(x) - rank(y));
+    }, [allItems, customerId]); // eslint-disable-line react-hooks/exhaustive-deps
     const trvKit = trvKits.find(k => k.id === trvKitId) || null;
     const trvResolve = (code) => {
         setTrvCode(code);
@@ -576,7 +588,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // The components configurator opens NOW — required at checkout, and this IS checkout for
         // a kit order. Skip stays possible (the operator may be quoting blind), but the default
         // path walks through it.
-        setTrvCfg({ drive: String(align.drive).toUpperCase(), feet: billFeet, kitCode: mc?.code || trvKit.legacyErpId, finish: trvFinish });
+        setTrvCfg({ drive: String(align.drive).toUpperCase(), feet: billFeet, kitCode: mc?.code || trvKit.legacyErpId, finish: trvFinish,
+            trackCount: String(align.setup).toUpperCase() === 'DOUBLE' && String(align.frontRail).toUpperCase() !== 'RING' ? 2 : 1 });
         setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish('');
     };
 
@@ -589,7 +602,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         cfgLines.forEach(cl => {
             const it = byCode(cl.code);
             if (!it) { missing++; return; }
-            pushLine(it, cl.qty, `${cl.why}${trvCfg?.finish ? ` · ${trvCfg.finish}` : ''} [${trvCfg?.kitCode || 'traverse'}]`, null, { noPack: true, rateOverride: cl.billable ? cl.rate : 0 });
+            const row = findClientPriceRow(it.clientPricing, custKeys);
+            pushLine(it, cl.qty, `${cl.why}${trvCfg?.finish ? ` · ${trvCfg.finish}` : ''} [${trvCfg?.kitCode || 'traverse'}]`, null, { noPack: true, rateOverride: cl.billable ? cl.rate : 0, aliasErp: row?.clientSku || '' });
         });
         if (missing) alert(`${missing} component code(s) not in the library — not added. Check the rules doc against the Master Library.`);
         setTrvCfg(null);
@@ -610,7 +624,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             itemId: it.id, erp: erpOf(it), nsId: opts?.noNs ? '' : nsIdOf(it), name: it.itemName || erpOf(it),
             // Customer-facing alias: shown on the quote/SO/invoice and priced from. The REAL item
             // above is what we stock, pick, barcode and send to NetSuite.
-            aliasErp: face ? aliasCodeFor(face, it) : '', aliasItemId: face ? face.id : null,
+            // opts.aliasErp: the customer's part# straight from a clientPricing row (traverse
+            // components) — alias DOCS are a different mechanism and most components have none.
+            aliasErp: (opts && opts.aliasErp) || (face ? aliasCodeFor(face, it) : ''), aliasItemId: face ? face.id : null,
             qty: Math.max(1, parseInt(qty) || 1), note: note || '',
             bin: it.manufacturingSpecs?.homeBin || it.binLocation || '',
             // SELLING unit. qty means packs; packSize converts to the each count we stock, pick and
@@ -877,7 +893,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         if (takesSub && !finObj?.subFinishCode) addLog(`${c.code} is marked for a SUB finish but ${l.trvFinish || 'the chosen finish'} has no aligned sub color (set it in 4.5) — pushing in the mainline finish.`, 'warn');
                         trvPushLines.push({
                             item: { id: String(cd.netSuiteInternalId) }, quantity: c.qty, rate: 0, price: { id: '-1' },
-                            description: `${c.code} — ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,
+                            description: `${c.code} — ${cd.itemName || c.code} · ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,
                         });
                     });
                     ex.skipped.forEach(sk => addLog(`Traverse: ${sk}`, 'info'));
@@ -1499,7 +1515,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
 
             {trvCfg && (
                 <TraverseConfiguratorModal
-                    rules={trvRules} drive={trvCfg.drive} feet={trvCfg.feet} kitLabel={trvCfg.kitCode}
+                    rules={trvRules} drive={trvCfg.drive} feet={trvCfg.feet} trackCount={trvCfg.trackCount || 1} kitLabel={trvCfg.kitCode}
                     itemInfo={(id) => { const it = allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === id); const r = it && findClientPriceRow(it.clientPricing, custKeys); return it ? { name: it.itemName || id, sku: r?.clientSku || '' } : null; }}
                     priceOf={(id) => { const it = allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === id); return it ? rateFor(it) : 0; }}
                     onCancel={() => setTrvCfg(null)} onApply={applyTrvComponents}

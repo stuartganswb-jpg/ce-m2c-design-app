@@ -42,11 +42,30 @@ export function configuratorOffer({ rules, drive, feet }) {
         const cd = U(c.drive) || 'BOTH';
         return cd === 'BOTH' || cd === d;
     });
+    // A pick with a CHART row (the splice) is included per the chart AT THIS LENGTH — a 9ft set
+    // that wants a splice pays for it, an 11ft set gets it included because it is required
+    // (Stuart 2026-08-13). includedQty null = a plain included pick with no chart behind it.
+    const chartQty = (id) => { const r2 = (rules?.usage || []).find(u => U(u.itemId) === U(id)); return r2 ? usageAt(r2, ft) : null; };
     return {
         carrierStyles: styles,
-        picks: gated.filter(c => !c.billable).map(c => ({ itemId: U(c.itemId), fabSku: c.fabSku || '' })),
+        picks: gated.filter(c => !c.billable).map(c => ({ itemId: U(c.itemId), fabSku: c.fabSku || '', includedQty: chartQty(c.itemId) })),
         accessories: gated.filter(c => !!c.billable).map(c => ({ itemId: U(c.itemId), fabSku: c.fabSku || '' })),
     };
+}
+
+/**
+ * The selection the popup OPENS with — the defaults his spec names, not an empty form:
+ * end stops 2 PER TRACK, and chart-included picks (the splice) pre-set at the chart count for
+ * this length. Everything else starts unticked.
+ */
+export function defaultPicks({ rules, drive, feet, trackCount = 1 }) {
+    const offer = configuratorOffer({ rules, drive, feet });
+    const picks = {};
+    offer.picks.forEach(pk => {
+        if (/ENDSTOP/i.test(pk.itemId)) picks[pk.itemId] = 2 * Math.max(1, trackCount);
+        else if (pk.includedQty !== null && pk.includedQty > 0) picks[pk.itemId] = pk.includedQty;
+    });
+    return picks;
 }
 
 /**
@@ -76,8 +95,15 @@ export function configuratorLines({ rules, drive, feet, sel, priceOf }) {
     }
     Object.entries(sel?.picks || {}).forEach(([id, q]) => {
         const qty = Math.max(0, parseInt(q) || 0);
-        if (!qty || !offer.picks.some(p => p.itemId === U(id))) return;
-        lines.push({ code: U(id), qty, rate: 0, billable: false, why: 'included component' });
+        const pk = offer.picks.find(p2 => p2.itemId === U(id));
+        if (!qty || !pk) return;
+        if (pk.includedQty === null) { lines.push({ code: U(id), qty, rate: 0, billable: false, why: 'included component' }); return; }
+        // chart-governed pick: the chart count is included at this length, anything above bills —
+        // and when the chart says 0 (a splice on a 9ft set) the whole quantity bills.
+        const inc = Math.min(qty, pk.includedQty);
+        if (inc > 0) lines.push({ code: U(id), qty: inc, rate: 0, billable: false, why: `included at ${feet}ft per chart` });
+        const over = qty - pk.includedQty;
+        if (over > 0) lines.push({ code: U(id), qty: over, rate: price(id), billable: true, why: pk.includedQty > 0 ? `${over} above the ${pk.includedQty} the chart includes` : `not included at ${feet}ft — charged` });
     });
     Object.entries(sel?.accessories || {}).forEach(([id, q]) => {
         const qty = Math.max(0, parseInt(q) || 0);
