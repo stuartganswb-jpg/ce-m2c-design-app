@@ -133,7 +133,10 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               assemblyQty: parseInt(ci.qty) || 1,
               // Line-level sidemark ("Formal Living 1") — rides every line this cart item
               // produces and lands in NetSuite's line Tag (custcol3; Eric 2026-08-11).
-              sidemark: String(ci.sidemark || '').trim()
+              sidemark: String(ci.sidemark || '').trim(),
+              // Traverse components chosen in the checkout configurator — carriers, end stops,
+              // splices, accessories. Not flow steps, so the step walk never sees them.
+              trvComponents: Array.isArray(ci.trvComponents) ? ci.trvComponents : []
             }))
           : [{
               config: job.cpqData.configuration || {},
@@ -321,6 +324,23 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       result.unresolved.push({ stepTitle: `${step?.title || stepId} — wall mount`, partId: wmPair.partId });
                   }
               }
+          });
+
+          // TRAVERSE CONFIGURATOR COMPONENTS (Stuart 2026-08-13) — the checkout popup's lines:
+          // real items consumed with the order (carriers, end stops, splices, accessories).
+          // Included lines and billables both push as item lines; the estimate's scale-to-quoted
+          // rule already reconciles rates to the quoted total, so no second pricing path.
+          (cart.trvComponents || []).forEach(c => {
+              const part = matchPart(c.code);
+              if (!part) { result.unresolved.push({ stepTitle: `Traverse component — ${c.code}`, partId: c.code }); return; }
+              rawLines.push({
+                  stepId: `trvcfg:${part.id}`, masterPart: part,
+                  qty: (parseInt(c.qty) || 1) * cart.assemblyQty,
+                  nsId: part.netSuiteInternalId || part.legacyErpId || part.itemId || 'UNMAPPED',
+                  finishedErpId: '', finishUnmapped: '',
+                  partCategory: part.manufacturingSpecs?.partHandling || 'Small Parts', projection: '',
+                  ...(cart.sidemark ? { sidemark: cart.sidemark } : {}),
+              });
           });
       });
 

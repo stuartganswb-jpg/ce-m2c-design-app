@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
 import { setupAllows, driveAllows } from '../Shared/traverseTags';
+import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
+import { configuratorTotal } from '../Shared/traverseConfigurator';
 import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
 import { cutText } from '../Shared/configQty';
 import { db, storage, functions } from '../../firebase';
@@ -15,7 +17,7 @@ import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '
 import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
-import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
+import { customerKeys, clientPriceFor, findClientPriceRow } from '../Shared/clientPricing';
 
 const globalTextureCache = {};
 
@@ -587,6 +589,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const [engineFlags, setEngineFlags] = useState({ disabledSteps: [], warnings: [] });
   
   const [pricing, setPricing] = useState({ base: 0, finalPrice: 0 });
+  // TRAVERSE COMPONENTS AT CHECKOUT (Stuart 2026-08-13: required for both methods). The modal
+  // interposes on Add to Quote Cart for traverse flows; its lines ride the cart item.
+  const [trvCfgOpen, setTrvCfgOpen] = useState(false);
+  const [trvRules, setTrvRules] = useState(null);
+  const trvPendingRef = useRef(null);   // null = not asked yet; [] = skipped; [lines] = chosen
   const [pricingBreakdown, setPricingBreakdown] = useState([]);
   // Quote-display price level (Shared/priceLevels): Fabricut-data items price per the imported
   // sheet at FAB levels; everything else stays standard. Never drives NetSuite push rates.
@@ -697,6 +704,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // resolves a customer's discountCode (e.g. D20) to its percent at quote time.
       const unsubDiscounts = onSnapshot(doc(db, "system", "crm_discounts"), (snap) => setCrmDiscounts((snap.exists() && snap.data().list) || []));
       const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if(snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
+      const unsubTrvRules = onSnapshot(doc(db, "system", "traverse_rules_H1-2TRV"), (snap) => setTrvRules(snap.exists() ? snap.data() : null), () => {});
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
 
@@ -709,7 +717,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           setLiveCustomers(customers);
       });
 
-      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); unsubDiscounts(); unsubLogos(); };
+      return () => { unsubFlows(); unsubParts(); unsubLists(); unsubRules(); unsubDrafts(); unsubFinishes(); unsubOutsource(); unsubDynamic(); unsubCrm(); unsubDiscounts(); unsubLogos(); unsubTrvRules(); };
   }, [activeBrand]);
 
   // Brand isolation: the CPQ customer dropdown is ONLY this brand's crm_records
@@ -2185,6 +2193,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   };
 
   const handleAddToCart = async () => {
+      // TRAVERSE: the components configurator is part of checkout — ask ONCE per add. Skip is a
+      // deliberate answer ([]), not an unanswered one (null).
+      if (isTraverseFlow && trvRules && trvPendingRef.current === null) { setTrvCfgOpen(true); return; }
+      const trvComponents = trvPendingRef.current || [];
+      trvPendingRef.current = null;
       const activeDraft = previousDrafts.find(d => d.id === activeDraftId);
       const item = {
           id: Date.now().toString(),
@@ -2195,8 +2208,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           flowId: activeFlowId,
           qty: assemblyQty,
           priceLevel,
-          pricing: { ...pricing },
-          pricingBreakdown: [...pricingBreakdown],
+          // Configurator billables ADD to the configured price; included lines ride at $0 so the
+          // documents and the BOM show every component the order carries.
+          pricing: { ...pricing, finalPrice: (pricing.finalPrice || 0) + configuratorTotal(trvComponents) },
+          pricingBreakdown: [...pricingBreakdown, ...trvComponents.map(c => ({
+              name: `${c.code} — ${c.why}`, qty: c.qty, price: c.billable ? c.rate : 0,
+              total: c.billable ? c.rate * c.qty : 0, partHandling: 'Small Parts',
+              partId: c.code, legacyErpId: c.code,
+          }))],
+          trvComponents,
           dynamicConfigParams: { ...dynamicConfigParams },
           // THE FINISH, IN WORDS (Stuart 2026-08-03). It was always selected and always saved, but
           // the only thing that ever translated it was RTG at dispatch — so the floor knew the
@@ -2878,17 +2898,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       if (!lenStep) return;
       const trackStep = steps.find(s => s.stepRole === 'TRACK');
       const setupStep = steps.find(s => s.stepRole === 'TRV_SETUP');
+      // THE 4FT SET IS WHERE EVERYTHING STARTS (Stuart 2026-08-13: "for the main cpq we can leave
+      // the defaults of the included components and start everything at 4ft"). An untouched length
+      // step opens at 48" — a selection write, exactly like typing it; a resumed draft keeps its own.
+      if (!activeDraftId && !dimensionInputs[lenStep.id]?.length) {
+          setDimensionInputs(prev => prev[lenStep.id]?.length ? prev : ({ ...prev, [lenStep.id]: { ...(prev[lenStep.id] || { type: 'O2O', wallA: '', wallB: '', wallC: '' }), length: '48' } }));
+      }
       setStepQuantities(prev => {
-          const ft = parseInt(prev[lenStep.id]) || 0;
+          // Billing floors at the 4ft set — the operator may cut SHORTER than 48" (the typed length
+          // stands for the shop), but the charge never drops below the set ("that is the minimum
+          // charge"). Derived track/rail footage floors with it so every line agrees.
+          const ft = Math.max(parseInt(prev[lenStep.id]) || 0, 4);
           const next = { ...prev }; let changed = false;
           const put = (id, v) => { if (id && next[id] !== v) { next[id] = v; changed = true; } };
+          put(lenStep.id, ft);
           put(trackStep?.id, ft);
           // The setup step only bills a track on DOUBLE; on SINGLE its answer carries no part, so a
           // footage quantity there would just be a confusing number on a $0 line.
           if (setupStep) put(setupStep.id, trvSelection.setup === 'DOUBLE' ? ft : 1);
           return changed ? next : prev;
       });
-  }, [isTraverseFlow, activeFlow, trvSelection.setup, stepQuantities, setStepQuantities]);
+  }, [isTraverseFlow, activeFlow, trvSelection.setup, stepQuantities, setStepQuantities, activeDraftId, dimensionInputs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The single predicate a step's option list is judged by — the same one getOptionsForStep uses
   // for the dropdown. Keeping the reconcile below in step with the dropdown is the whole point: a
@@ -3122,8 +3152,36 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return [main, sub].flatMap(splitNodesLower);
   }, [debugHighlight, currentStep, dynamicConfigParams]);
 
+  // Traverse checkout modal inputs — resolved at render, outside the pricing memo's scope.
+  const trvModalProps = (() => {
+      if (!trvCfgOpen || !activeFlow) return null;
+      const steps = activeFlow.steps || [];
+      const lenStep = steps.find(st => st.stepRole === 'TRV_LENGTH');
+      const setupStep = steps.find(st => st.stepRole === 'TRV_SETUP');
+      const ringChosen = !!(setupStep && (setupStep.subOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[`${setupStep.id}__sub`])?.hidesStepRole);
+      const allParts = [...libraryParts, ...liveAssemblies];
+      const byCode = (c) => allParts.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase()) || null;
+      const custRec = combinedCustomers.find(c => c.id === jobData.customerId);
+      const keys = customerKeys(jobData.customerId, custRec);
+      return {
+          rules: trvRules,
+          drive: trvSelection.drive || 'MANUAL',
+          feet: Math.max(parseInt(lenStep ? stepQuantities[lenStep.id] : 4) || 4, 4),
+          trackCount: trvSelection.setup === 'DOUBLE' && !ringChosen ? 2 : 1,
+          kitLabel: activeFlow.name || 'traverse system',
+          itemInfo: (id) => { const it = byCode(id); const r = it && findClientPriceRow(it.clientPricing, keys); return it ? { name: it.itemName || id, sku: r?.clientSku || '' } : null; },
+          priceOf: (id) => { const it = byCode(id); if (!it) return 0; const v = clientPriceFor(it.clientPricing, keys); return v != null ? v : (parseFloat(it.manufacturingSpecs?.basePrice) || 0); },
+      };
+  })();
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', fontFamily: 'var(--sans)', backgroundColor: 'transparent', minHeight: '100vh' }}>
+      {trvModalProps && (
+          <TraverseConfiguratorModal {...trvModalProps}
+              onCancel={() => { trvPendingRef.current = []; setTrvCfgOpen(false); handleAddToCart(); }}
+              onApply={(lines) => { trvPendingRef.current = lines; setTrvCfgOpen(false); handleAddToCart(); }}
+          />
+      )}
       
       {/* HEADER */}
       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderRadius: '2px', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
