@@ -146,6 +146,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // (Stuart 2026-08-13: "Netsuite not going to accept an order without this stuff").
     const [ship, setShip] = useState({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
     const shipMethodRef = useRef(undefined); // undefined = not looked up; null = none found (same cache as ERPPushPull)
+    // NetSuite header fields (Stuart 2026-08-13, from the failed SO push — the exact alignment
+    // list): PO# → otherrefnum, sidemark → mainline memo + every line's Tag (custcol3), internal
+    // memo → custbody_bit_internalmemo. Form/class/status ride the payload, not fields here.
+    const [soExtras, setSoExtras] = useState({ po: '', sidemark: '', internalMemo: '' });
     const [quickQty, setQuickQty] = useState('');   // blank, like every other qty on this tab
     const [kb, setKb] = useState(EMPTY_KB);
     const [kitName, setKitName] = useState('');
@@ -783,7 +787,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // as guidance — the internal counter can still sell anything.
     const custCollections = (selectedCustomer?.portalCollections || []).map(c => String(c).toUpperCase());
 
-    const pushToNetSuite = async () => {
+    // asType: 'salesorder' | 'estimate' — the team wants BOTH doors (Stuart 2026-08-13: "a button
+    // next to the sales order button to push it in as a quote, so they have the option of either").
+    const pushToNetSuite = async (asType = 'salesorder') => {
+        const asLabel = asType === 'estimate' ? 'QUOTE (estimate)' : 'SALES ORDER';
         if (!customerId) return alert('Select a customer first.');
         if (cart.length === 0) return alert('Cart is empty.');
         // TRAVERSE ORDERS (Stuart 2026-08-13): the kit + feet lines never push as themselves —
@@ -796,13 +803,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         }
         const lines = pricedCart.filter(l => l.nsId);
         if (!lines.length && !trvOrder.length) return alert('No lines have a NetSuite item ID. Sync these items to NetSuite first.');
-        if (!window.confirm(`Create a NetSuite SALES ORDER for ${selectedCustomer?.name || customerId} with ${lines.length} stock line(s)${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?`)) return;
+        if (!window.confirm(`Create a NetSuite ${asLabel} for ${selectedCustomer?.name || customerId} with ${lines.length} stock line(s)${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?`)) return;
 
         setPushing(true);
         try {
             let nsCustomerId = customerId.startsWith('CUST-') ? customerId.replace('CUST-', '') : customerId;
             const brandMapping = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: "2", location: "17" };
-            const memoText = `Quick Ship${jobName ? ' - ' + jobName : ''}`.slice(0, 40);
+            // Mainline memo = the sidemark/job — ONE value (the CPQ push's rule), Quick Ship label
+            // only when neither is given.
+            const memoText = (String(soExtras.sidemark || '').trim() || String(jobName || '').trim() || 'Quick Ship').slice(0, 40);
 
             // ── traverse explosion ───────────────────────────────────────────────────────────
             const trvPushLines = [];
@@ -867,11 +876,19 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 else addLog(`⚠️ No active Ship Item in NetSuite — pushing WITHOUT the $${shipAmt.toFixed(2)} shipping charge; add it on the SO manually.`, 'warn');
             }
 
+            // Header alignment (Stuart's NetSuite list, 2026-08-13): CE Sales Order form 177 /
+            // CE Quote form 299 (proven by the CPQ estimate push) + Hardware class 2 — CE brand
+            // only, other brands keep NS defaults. orderstatus is omitted: NS defaults to Pending
+            // Fulfillment, exactly as specified.
+            const lineTag = String(soExtras.sidemark || '').trim().slice(0, 300);
             const payload = {
                 entity: { id: nsCustomerId },
                 subsidiary: { id: brandMapping.subsidiary },
                 location: { id: brandMapping.location },
+                ...(activeBrand === 'ce' ? { customForm: { id: asType === 'estimate' ? '299' : '177' }, class: { id: '2' } } : {}),
                 memo: memoText,
+                ...(String(soExtras.po || '').trim() ? { otherRefNum: String(soExtras.po).trim().slice(0, 40) } : {}),
+                ...(String(soExtras.internalMemo || '').trim() ? { custbody_bit_internalmemo: String(soExtras.internalMemo).trim().slice(0, 999) } : {}),
                 ...shippingPayload,
                 item: {
                     // PACKS never reach NetSuite: we stock and transmit EACH (2 × 7-pack = 14), and
@@ -884,17 +901,21 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         price: { id: "-1" },
                         // The customer ordered the alias code — name it first so the SO reads the way
                         // they ordered, while the LINE ITEM stays the real stocked part.
-                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`
-                    })).concat(trvPushLines)
+                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`,
+                        ...(lineTag ? { custcol3: lineTag } : {}),
+                    })).concat(trvPushLines.map(t => lineTag ? { ...t, custcol3: lineTag } : t))
                 }
             };
 
-            addLog(`Transmitting Sales Order (${lines.length + trvPushLines.length} lines) to NetSuite…`, 'info');
-            const response = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder`, method: 'POST', payload });
+            addLog(`Transmitting ${asLabel} (${lines.length + trvPushLines.length} lines) to NetSuite…`, 'info');
+            const response = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${asType}`, method: 'POST', payload });
             const result = await response.json();
             if (!response.ok) throw new Error(`API Rejected [${response.status}]: ${JSON.stringify(result)}`);
             const returnedId = result.id || result.recordId || `QS-${Date.now()}`;
-            addLog(`✅ Sales Order created (NS ID: ${returnedId})`, 'success');
+            addLog(`✅ ${asLabel} created (NS ID: ${returnedId})`, 'success');
+
+            // A QUOTE stops here — no pick/pack mirror (nothing to pull until it becomes an order).
+            if (asType === 'estimate') { alert(`✅ NetSuite quote created — internal id ${returnedId}.`); setPushing(false); return; }
 
             // Mirror to hq_sales_orders, tagged QUICKSHIP so pick/pack shows it in its own STOCK tab
             // (separate from custom orders, which arrive via fin_workorders).
@@ -1383,6 +1404,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         ))}
                     </div>
                     <div style={{ borderTop: '1px solid var(--line)', padding: '14px 20px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                            <div><span style={lbl}>Customer PO #</span><input value={soExtras.po} onChange={e => setSoExtras(p2 => ({ ...p2, po: e.target.value }))} placeholder="their PO number" style={{ ...inp, width: '100%' }} /></div>
+                            <div><span style={lbl}>Sidemark / job (memo + line tag)</span><input value={soExtras.sidemark} onChange={e => setSoExtras(p2 => ({ ...p2, sidemark: e.target.value }))} placeholder="e.g. SMITH RESIDENCE" style={{ ...inp, width: '100%' }} /></div>
+                            <div style={{ gridColumn: '1 / -1' }}><span style={lbl}>Internal memo (optional — never customer-facing)</span><input value={soExtras.internalMemo} onChange={e => setSoExtras(p2 => ({ ...p2, internalMemo: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
+                        </div>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
                             <span style={{ ...lbl, marginBottom: 0, flex: 1 }}>Shipping</span>
                             {[['SAVED', 'Saved address'], ['CUSTOM', 'Custom drop-ship']].map(([k, l2]) => (
@@ -1420,10 +1446,17 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Est. Total</span>
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>${cartTotal.toFixed(2)}</span>
                         </div>
-                        <button onClick={pushToNetSuite} disabled={pushing || cart.length === 0}
-                            style={{ ...btn(pushing ? 'var(--paper-2)' : 'var(--ink)', pushing ? 'var(--ink-soft)' : '#fff'), width: '100%', cursor: pushing ? 'wait' : 'pointer' }}>
-                            {pushing ? 'Transmitting…' : 'Create NetSuite Sales Order'}
-                        </button>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                            <button onClick={() => pushToNetSuite('salesorder')} disabled={pushing || cart.length === 0}
+                                style={{ ...btn(pushing ? 'var(--paper-2)' : 'var(--ink)', pushing ? 'var(--ink-soft)' : '#fff'), flex: 1.4, cursor: pushing ? 'wait' : 'pointer' }}>
+                                {pushing ? 'Transmitting…' : 'Create Sales Order'}
+                            </button>
+                            <button onClick={() => pushToNetSuite('estimate')} disabled={pushing || cart.length === 0}
+                                title="Same cart, same fields — pushed as a NetSuite QUOTE (estimate, CE Quote form) instead of a sales order. No pick/pack until it becomes an order."
+                                style={{ ...btn('transparent', pushing ? 'var(--ink-soft)' : 'var(--ink)'), flex: 1, border: '1px solid var(--ink)', cursor: pushing ? 'wait' : 'pointer' }}>
+                                {pushing ? '…' : 'Create Quote'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
