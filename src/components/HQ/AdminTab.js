@@ -13,6 +13,7 @@ import { printForm } from '../Shared/printForm';
 import { sizeFamilyOfParts, buildSizeSteps, SIZE_STEP_TYPE, SIZE_FAMILIES, sizeKeyOf } from '../Shared/sizeMatrix';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { joinNodes, splitNodes } from '../Shared/nodeList';
+import { normalizeLocation } from '../Shared/assemblyTags';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -1121,11 +1122,22 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           [...clusters].forEach(cl => {
               const clCat = catOf(cl);
               const list = pinsByCluster[cl.id] || [];
-              const movers = list.filter(p => p.catOverride && String(p.catOverride).toUpperCase() !== clCat);
+              // 🎯 AN INSIDE MOUNT IS AN END TREATMENT, WHEREVER IT WAS LOADED (Stuart 2026-08-14,
+              // H1-138: the IMs sat in the LEFT/RIGHT BRACKET sections tagged mount: INSIDE MOUNT,
+              // while H2-138 carries them in the END slots tagged INSIDE_MOUNT — and H2 is both the
+              // canonical spec ("finial slots hold ALL end-treatment choices", assemblyTags.js) and
+              // the arrangement that renders right). A BRACKET-pool pin whose mount: tag normalizes
+              // to END re-homes exactly like a cat: FINIAL override, stamped endTreatment
+              // INSIDE_MOUNT with the mount: tag dropped (it IS the end now — nothing to mount-
+              // filter). Every existing IM rule then fires for free: replaces that side's bracket,
+              // excludes the finial, keeps the long rod, flush-cuts in Vision. An explicit cat:
+              // override still wins over this rule.
+              const imMover = (p) => clCat === 'BRACKET' && !p.catOverride && normalizeLocation(p.mountType) === 'END';
+              const movers = list.filter(p => (p.catOverride && String(p.catOverride).toUpperCase() !== clCat) || imMover(p));
               if (!movers.length) return;
               pinsByCluster[cl.id] = list.filter(p => !movers.includes(p));
               movers.forEach((p, i) => {
-                  const cat = String(p.catOverride).toUpperCase();
+                  const cat = imMover(p) ? 'FINIAL' : String(p.catOverride).toUpperCase();
                   const nsId = `OVR-${cat}-${cl.id}-${i}`;
                   // A pin authored in a FINIAL slot carries finial-row artifacts — endTreatment
                   // 'FINIAL', collar fields — that POISON its new pool: an explicit endTreatment
@@ -1134,7 +1146,8 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   // 2026-07-26, H2-RBP right side). Strip END-only fields for non-FINIAL homes;
                   // the cluster's own name ("…RETURNS") then classifies the plate return-only,
                   // and the row's rtn-only checkbox (now shown for overridden rows) is explicit.
-                  const moved = cat === 'FINIAL' ? p : (({ endTreatment, isCollar, requiresCollar, ...rest }) => rest)(p);
+                  const moved = imMover(p) ? (({ mountType, ...rest }) => ({ ...rest, endTreatment: 'INSIDE_MOUNT' }))(p)
+                      : cat === 'FINIAL' ? p : (({ endTreatment, isCollar, requiresCollar, ...rest }) => rest)(p);
                   clusters.push({ ...cl, id: nsId, category: cat, nodes: [String(moved.choiceNode || '').trim()].filter(Boolean) });
                   pinsByCluster[nsId] = [moved];
                   pinByCluster[nsId] = moved;

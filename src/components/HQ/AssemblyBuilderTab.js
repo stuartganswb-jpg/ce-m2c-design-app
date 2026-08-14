@@ -1837,6 +1837,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                             {((dictLists && dictLists.bracketMounts) || []).map(m => <option key={m} value={String(m).toUpperCase()}>mount: {m}</option>)}
                                                         </select>
                                                     )}
+                                                    {/* An inside-mount bracket IS an end treatment (the H2-138 arrangement = canonical):
+                                                        the generator re-homes it into this side's End Treatment step on Regenerate. Say so. */}
+                                                    {normalizeCategory(c.catOverride || r.category) === 'BRACKET' && !c.isFee && normalizeLocation(c.mountType) === 'END' && (
+                                                        <span title="Inside mount = an END TREATMENT: on Regenerate this choice pools into this side's End Treatment step tagged INSIDE MOUNT — it replaces the bracket (no separate bracket pick), excludes the finial, and the long rod stays. Same behavior as loading it in the END slot (the H2-138 arrangement)." style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>→ end treatment</span>
+                                                    )}
                                                     <select value={c.catOverride || ''} title="CATEGORY OVERRIDE — re-homes this choice into another pool at generate: a return backplate the designer dropped into a FINIAL slot pools with the BACKPLATES once set. Blank = the cluster's own category. No re-upload needed." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { catOverride: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.catOverride ? '#d9534f' : 'var(--line)', color: c.catOverride ? '#d9534f' : 'var(--ink-soft)' }}>
                                                         <option value="">cat: cluster</option>
                                                         {['BRACKET', 'BACKPLATE', 'FINIAL', 'POLE', 'RING'].map(k => <option key={k} value={k}>cat: {k.toLowerCase()}</option>)}
@@ -2003,6 +2008,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                                 <option value="">mount: — any —</option>
                                                                 {((dictLists && dictLists.bracketMounts) || []).map(m => <option key={m} value={String(m).toUpperCase()}>mount: {m}</option>)}
                                                             </select>
+                                                        )}
+                                                        {normalizeCategory(c.catOverride || slot.category) === 'BRACKET' && !c.isFee && normalizeLocation(c.mountType) === 'END' && (
+                                                            <span title="Inside mount = an END TREATMENT: on Regenerate this choice pools into this side's End Treatment step tagged INSIDE MOUNT — it replaces the bracket, excludes the finial, and the long rod stays. Same as loading it in the END slot (the H2-138 arrangement)." style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>→ end treatment</span>
                                                         )}
                                                         <select value={c.catOverride || ''} title="CATEGORY OVERRIDE — re-homes this choice into another pool at generate (blank = the cluster's own category)." onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { catOverride: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.catOverride ? '#d9534f' : 'var(--line)', color: c.catOverride ? '#d9534f' : 'var(--ink-soft)' }}>
                                                             <option value="">cat: cluster</option>
