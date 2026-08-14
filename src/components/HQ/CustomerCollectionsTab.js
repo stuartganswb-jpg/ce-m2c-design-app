@@ -191,7 +191,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))));
         });
         const unsubMF = onSnapshot(doc(db, 'system', 'master_finishes'), s2 =>
-            setMasterFin(((s2.exists() && s2.data().finishes) || []).filter(f => f && f.code).map(f => ({ code: String(f.code).toUpperCase(), name: f.name || f.code, outsourced: false }))));
+            setMasterFin(((s2.exists() && s2.data().finishes) || []).filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false }))));
         const unsubFin = onSnapshot(collection(db, 'hq_outsource_finishes'), snap =>
             setOutsourceFinishes(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(f => f.code || f.name)));
         return () => { unsubItems(); unsubCust(); unsubFin(); unsubMF(); };
@@ -1425,7 +1425,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 // FINISH MATRIX (Stuart 2026-08-13): check off which finishes THIS kit
                                                 // may be ordered in — the CPQ-flow checkbox model, not code rules.
                                                 // Quick Ship's finish dropdown reads exactly this list.
-                                                const catalog = [...masterFin, ...outsourceFinishes.filter(f => f && f.code).map(f => ({ code: upper(f.code), name: f.name || f.code, outsourced: true }))];
+                                                // code falls back to NAME — the finishText convention. EP3–EP6 live in
+                                                // hq_outsource_finishes name-only, and filtering on f.code dropped them
+                                                // (Stuart 2026-08-13: "i do not see EP3, EP4, EP5, EP6").
+                                                const catalog = [...masterFin, ...outsourceFinishes.filter(f => f && (f.code || f.name)).map(f => ({ code: upper(f.code || f.name), name: f.name || f.code, outsourced: true }))];
                                                 const seen = new Set(); const cat = catalog.filter(f => !seen.has(f.code) && seen.add(f.code));
                                                 const nSel = Object.values(kitFinSel).filter(Boolean).length;
                                                 const kitMat = String(r.p.manufacturingSpecs?.kitAlign?.material || '').toUpperCase();
@@ -1449,7 +1452,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                             {cat.map(f => (
                                                                 <label key={f.code} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.84rem', color: theme.ink }}>
                                                                     <input type="checkbox" checked={!!kitFinSel[f.code]} onChange={e => setKitFinSel(prev => ({ ...prev, [f.code]: e.target.checked }))} style={{ cursor: 'pointer' }} />
-                                                                    <span style={{ fontFamily: theme.mono, fontSize: '11px', color: f.outsourced ? theme.blueDark : theme.ink }}>{f.code}</span>
+                                                                    <span style={{ fontFamily: theme.mono, fontSize: '12px', color: f.outsourced ? theme.blueDark : theme.ink }}>{f.code}</span>
                                                                     <span style={{ color: theme.inkSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                                                                 </label>
                                                             ))}

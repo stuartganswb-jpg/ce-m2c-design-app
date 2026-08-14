@@ -186,11 +186,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // one PATTERN kit + a color choice replaces one kit per finish.
         const unsubFin = onSnapshot(doc(db, "system", "master_finishes"), (s) => {
             const arr = (s.exists() && s.data().finishes) || [];
-            setFinishList(prev => [...arr.filter(f => f && f.code).map(f => ({ code: String(f.code).toUpperCase(), name: f.name || f.code, outsourced: false })), ...prev.filter(p => p.outsourced)]);
+            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false })), ...prev.filter(p => p.outsourced)]);
         }, e => console.warn('Quick Ship finishes listen failed', e));
         const unsubOut = onSnapshot(collection(db, "hq_outsource_finishes"), (s) => {
-            const arr = s.docs.map(d => d.data()).filter(f => f && f.code);
-            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code).toUpperCase(), name: f.name || f.code, outsourced: true }))]);
+            // code falls back to NAME (the finishText convention) — EP3–EP6 are stored name-only
+            const arr = s.docs.map(d => d.data()).filter(f => f && (f.code || f.name));
+            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: true }))]);
         }, e => console.warn('Quick Ship outsource finishes listen failed', e));
         // Rush fee menu (Mass Update 4.5 → RUSH FEE TYPES). The dollar amount rides in the entry.
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (s) => {
