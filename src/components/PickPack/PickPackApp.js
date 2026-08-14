@@ -2421,8 +2421,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // rebuild the packing-list payload from the shipped lines, any time after ship. Same shape the
     // ship-time print used, so the laser copy and the PDF both carry Finish + Returns-As columns.
     const shipmentPrintData = (g) => {
-        const lines = g.lines.map(l => ({ erpId: l.erpId, itemName: l.itemName || '', finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', platingBin: l.platingBin || '', woNum: l.woNum || '', qty: l.qty, rate: parseFloat(l.platingRate) || 0 }));
-        const total = g.lines.reduce((s, l) => s + (parseFloat(l.platingRate) || 0) * (parseInt(l.qty) || 0), 0);
+        // Unit cost per line, best available: the rate stamped at ship → the current Plating Fees
+        // rule for the item's product type → the item's Base Cost field (Stuart 2026-08-13).
+        const costOf = (l) => parseFloat(l.platingRate)
+            || platingBaseCost(l)
+            || parseFloat(hqParts.find(p => p.id === l.itemId || String(p.legacyErpId || p.itemId || '').toUpperCase() === String(l.erpId || '').toUpperCase())?.manufacturingSpecs?.cost)
+            || 0;
+        const lines = g.lines.map(l => ({ erpId: l.erpId, itemName: l.itemName || '', finishCode: l.finishCode || '', targetErpId: l.targetErpId || '', platingBin: l.platingBin || '', woNum: l.woNum || '', qty: l.qty, rate: costOf(l) }));
+        const total = g.lines.reduce((s, l) => s + costOf(l) * (parseInt(l.qty) || 0), 0);
         const shippedMs = g.lines.map(l => (l.shippedAt && l.shippedAt.seconds ? l.shippedAt.seconds * 1000 : 0)).find(Boolean);
         return {
             shipId: g.shipmentId,

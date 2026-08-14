@@ -34,7 +34,8 @@ export async function buildPlatingOrderPdf({ shipId, brand, vendor, poLabel, dat
     });
     y = my - 34;
 
-    const cols = [{ k: '#', x: M }, { k: 'Item', x: M + 22 }, { k: 'Description', x: M + 100 }, { k: 'Finish', x: M + 252 }, { k: 'Returns As', x: M + 296 }, { k: 'Bin', x: M + 396 }, { k: 'WO#', x: M + 448 }, { k: 'Qty', x: M + 492 }];
+    // Unit Cost + Amount after Qty (Stuart 2026-08-13) — what we pay the vendor per piece/line.
+    const cols = [{ k: '#', x: M }, { k: 'Item', x: M + 20 }, { k: 'Description', x: M + 92 }, { k: 'Finish', x: M + 212 }, { k: 'Returns As', x: M + 250 }, { k: 'Bin', x: M + 338 }, { k: 'WO#', x: M + 382 }, { k: 'Qty', x: M + 420 }, { k: 'Unit Cost', x: M + 448 }, { k: 'Amount', x: M + 494 }];
     const drawHeader = () => {
         page.drawRectangle({ x: M, y: y - 4, width: W - 2 * M, height: 16, color: rgb(0.93, 0.93, 0.93) });
         cols.forEach(c => text(c.k.toUpperCase(), c.x + 2, y, 7, bold, soft));
@@ -44,13 +45,16 @@ export async function buildPlatingOrderPdf({ shipId, brand, vendor, poLabel, dat
     lines.forEach((l, i) => {
         if (y < M + 70) { page = pdf.addPage([W, H]); y = H - M; drawHeader(); }
         text(String(i + 1), cols[0].x + 2, y, 8.5);
-        text(A(l.erpId).slice(0, 16), cols[1].x + 2, y, 8.5);
-        text(A(l.itemName).slice(0, 34), cols[2].x + 2, y, 8.5);
-        text(A(l.finishCode).slice(0, 8), cols[3].x + 2, y, 8.5);
-        text(A(l.targetErpId).slice(0, 18), cols[4].x + 2, y, 8.5);
-        text(A(l.platingBin).slice(0, 10), cols[5].x + 2, y, 8.5);
-        text(A(l.woNum).slice(0, 8), cols[6].x + 2, y, 8.5);
+        text(A(l.erpId).slice(0, 14), cols[1].x + 2, y, 8.5);
+        text(A(l.itemName).slice(0, 27), cols[2].x + 2, y, 8.5);
+        text(A(l.finishCode).slice(0, 7), cols[3].x + 2, y, 8.5);
+        text(A(l.targetErpId).slice(0, 17), cols[4].x + 2, y, 8.5);
+        text(A(l.platingBin).slice(0, 8), cols[5].x + 2, y, 8.5);
+        text(A(l.woNum).slice(0, 7), cols[6].x + 2, y, 8.5);
         text(String(parseInt(l.qty) || 0), cols[7].x + 2, y, 8.5);
+        const lineRate = parseFloat(l.rate) || 0;
+        text(lineRate ? `$${lineRate.toFixed(2)}` : '-', cols[8].x + 2, y, 8.5);
+        text(lineRate ? `$${(lineRate * (parseInt(l.qty) || 0)).toFixed(2)}` : '-', cols[9].x + 2, y, 8.5);
         y -= 14;
         page.drawLine({ start: { x: M, y: y + 4 }, end: { x: W - M, y: y + 4 }, thickness: 0.4, color: rgb(0.85, 0.85, 0.85) });
     });

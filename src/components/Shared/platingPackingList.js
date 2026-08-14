@@ -28,9 +28,11 @@ export const buildPlatingPoHtml = ({ shipId, brand, vendor, poLabel, dateStr, op
     const brandKey = String(brand || '').toLowerCase();
     const company = BRAND_NAMES[brandKey] || String(brand || 'Company');
     const contact = BRAND_CONTACT[brandKey] || {};
-    const hasRates = lines.some(l => (parseFloat(l.rate) || 0) > 0);
     const docName = `${String(vendor || 'Plater').trim()} ${String(poLabel || shipId || '').trim()}`.trim();
 
+    // UNIT COST = what we pay the vendor per piece (Stuart 2026-08-13: "add the price we pay to
+    // the vendor (base cost) to the far right after qty"). Always rendered — a missing rate reads
+    // '—' rather than the columns quietly disappearing on older shipments.
     const rows = lines.map((l, i) => {
         const qty = parseInt(l.qty) || 0;
         const rate = parseFloat(l.rate) || 0;
@@ -43,7 +45,8 @@ export const buildPlatingPoHtml = ({ shipId, brand, vendor, poLabel, dateStr, op
 <td class="c mono">${esc(l.platingBin || '')}</td>
 <td class="c mono">${esc(l.woNum || '')}</td>
 <td class="r">${qty}</td>
-${hasRates ? `<td class="r">${rate ? `$${rate.toFixed(2)}` : '—'}</td><td class="r">${rate ? `$${(rate * qty).toFixed(2)}` : '—'}</td>` : ''}
+<td class="r">${rate ? `$${rate.toFixed(2)}` : '—'}</td>
+<td class="r">${rate ? `$${(rate * qty).toFixed(2)}` : '—'}</td>
 </tr>`;
     }).join('');
 
@@ -108,7 +111,7 @@ tr{page-break-inside:avoid;}
   <div class="bc">${code128BSvg(shipId)}<div class="t">${esc(shipId)}</div></div>
 </div>
 <table>
-<thead><tr><th class="c">#</th><th>Item</th><th>Description</th><th class="c">Finish</th><th>Returns As</th><th class="c">Bin</th><th class="c">WO#</th><th class="r">Qty</th>${hasRates ? '<th class="r">Rate</th><th class="r">Amount</th>' : ''}</tr></thead>
+<thead><tr><th class="c">#</th><th>Item</th><th>Description</th><th class="c">Finish</th><th>Returns As</th><th class="c">Bin</th><th class="c">WO#</th><th class="r">Qty</th><th class="r">Unit Cost</th><th class="r">Amount</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>
 <div class="totals"><div class="box">
