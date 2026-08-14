@@ -190,17 +190,32 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         // so the search list isn't polluted with other brands' codes. Cache is keyed by brand.
         if (codeIndexRef.current?.brand === activeBrand) return codeIndexRef.current.index;
         const snap = await getDocs(collection(db, 'Approved_Designs'));
-        const parts = snap.docs.map(d => d.data())
-            .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)))
-            .map(x => ({ legacyErpId: x.legacyErpId, itemId: x.itemId, itemName: x.itemName }));
+        const raw = snap.docs.map(d => d.data())
+            .filter(x => !activeBrand || x.brandId === activeBrand || (Array.isArray(x.sharedBrands) && x.sharedBrands.includes(activeBrand)));
+        const parts = raw.map(x => ({ legacyErpId: x.legacyErpId, itemId: x.itemId, itemName: x.itemName }));
+        // FEE ENTITIES by every code they carry (Stuart 2026-08-14: "the fee items are not
+        // available from the dropdown"). Fees often have NO ERP Legacy ID — their stable
+        // reference is the itemId (CE-FEE-4594) — so the "real ERP codes only" picker filter
+        // silently dropped exactly the records a FEE choice needs to link for client pricing.
+        const feeCodes = new Set();
+        raw.forEach(x => { if (x.partClass === 'Fee') [x.legacyErpId, x.itemId].forEach(c => { if (c && c !== 'PENDING') feeCodes.add(String(c).toUpperCase()); }); });
         const index = buildCodeIndex(parts);
         // Normalized-code COLLISIONS are kept (H1-75BPR ring vs H1-75BP-R backplate both norm to
         // H175BPR) — byNorm maps norm → ARRAY of entries; exact-raw lookups pick within it.
         const byNorm = new Map(); index.forEach(e => { const a = byNorm.get(e.norm); if (a) a.push(e); else byNorm.set(e.norm, [e]); });
-        codeIndexRef.current = { brand: activeBrand, index, byNorm };
+        codeIndexRef.current = { brand: activeBrand, index, byNorm, feeCodes };
         return index;
     };
-    const optionsFromIndex = (index) => index.filter(e => e.code === e.erp && !/-\d{12,}/.test(e.code)).sort((a, b) => a.code.localeCompare(b.code)); // suggestions = real ERP codes only, never app-internal itemIds
+    // Suggestions = real ERP codes, never app-internal itemIds — PLUS fee entities under every
+    // code they carry (fees often have no ERP id; their itemId IS the reference the FEE choice
+    // links for client pricing — labeled "· FEE" so they read as charges in the picker).
+    const optionsFromIndex = (index) => {
+        const fees = codeIndexRef.current?.feeCodes || new Set();
+        return index
+            .filter(e => (e.code === e.erp || fees.has(String(e.code).toUpperCase())) && !/-\d{12,}/.test(e.code))
+            .map(e => fees.has(String(e.code).toUpperCase()) ? { ...e, name: `${e.name || ''} · FEE`.trim() } : e)
+            .sort((a, b) => a.code.localeCompare(b.code));
+    };
     // CRM customers for the per-choice CUSTOMER-ONLY gate (loaded with the code index refresh).
     const [custList, setCustList] = useState(null);
     const ensureCustomers = async () => {
