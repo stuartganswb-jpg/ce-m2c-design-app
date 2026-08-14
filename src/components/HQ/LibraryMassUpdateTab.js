@@ -188,8 +188,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     
     const [editingGlobalFinish, setEditingGlobalFinish] = useState(null);
     const [editingOutsourceFinish, setEditingOutsourceFinish] = useState(null);
-    const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [], bomSuffix: '' });
-    const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [] });
+    const [newFinishConfig, setNewFinishConfig] = useState({ name: '', code: '', type: '', textureUrl: '', clientMapping: [], bomSuffix: '', isSubFinish: false, subFinishCode: '' });
+    const [newOutsourceFinishConfig, setNewOutsourceFinishConfig] = useState({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [], subFinishCode: '' });
     const [newFinishClientMapping, setNewFinishClientMapping] = useState({ customerId: '', clientFinishName: '' });
     
     const [finishUploadProgress, setFinishUploadProgress] = useState(0);
@@ -886,15 +886,20 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 type: newFinishConfig.type.toUpperCase(),
                 textureUrl: newFinishConfig.textureUrl,
                 clientMapping: newFinishConfig.clientMapping || [],
-                bomSuffix
+                bomSuffix,
+                // TRACK SUB-FINISHES (Stuart 2026-08-13): isSubFinish marks the component colors
+                // themselves (Bronze, Champagne); subFinishCode on ANY finish names which sub color
+                // the track/components take when THIS finish is on the mainline.
+                isSubFinish: !!newFinishConfig.isSubFinish,
+                subFinishCode: String(newFinishConfig.subFinishCode || '').toUpperCase()
             } : f);
         } else {
-            const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [], bomSuffix };
+            const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [], bomSuffix, isSubFinish: !!newFinishConfig.isSubFinish, subFinishCode: String(newFinishConfig.subFinishCode || '').toUpperCase() };
             updatedFinishes = [...globalFinishes, newFinish];
         }
 
         await setDoc(doc(db, "system", "master_finishes"), { finishes: updatedFinishes }, { merge: true });
-        setNewFinishConfig({ name: '', code: '', type: '', textureUrl: '', clientMapping: [], bomSuffix: '' });
+        setNewFinishConfig({ name: '', code: '', type: '', textureUrl: '', clientMapping: [], bomSuffix: '', isSubFinish: false, subFinishCode: '' });
         setShowFinishForm(false);
         setEditingGlobalFinish(null);
     };
@@ -906,7 +911,9 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             type: finish.type || '',
             textureUrl: finish.textureUrl || '',
             clientMapping: finish.clientMapping || [],
-            bomSuffix: finish.bomSuffix || ''
+            bomSuffix: finish.bomSuffix || '',
+            isSubFinish: !!finish.isSubFinish,
+            subFinishCode: finish.subFinishCode || ''
         });
         setEditingGlobalFinish(finish.id);
         setShowFinishForm(true);
@@ -968,10 +975,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             vendor: newOutsourceFinishConfig.vendor || "",
             vendorCrmId: newOutsourceFinishConfig.vendorCrmId || "", // External Coop NS-synced vendor id ("VEND-{nsInternalId}") — keeps the plating PO linked to the real NetSuite vendor
             textureUrl: newOutsourceFinishConfig.textureUrl || "",
-            clientMapping: newOutsourceFinishConfig.clientMapping || []
+            clientMapping: newOutsourceFinishConfig.clientMapping || [],
+            subFinishCode: String(newOutsourceFinishConfig.subFinishCode || '').toUpperCase()
         }, { merge: true });
 
-        setNewOutsourceFinishConfig({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [] });
+        setNewOutsourceFinishConfig({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [], subFinishCode: '' });
         setShowOutsourceFinishForm(false);
         setEditingOutsourceFinish(null);
     };
@@ -985,7 +993,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             vendor: finish.vendor || '',
             vendorCrmId: finish.vendorCrmId || '',
             textureUrl: finish.textureUrl || '',
-            clientMapping: finish.clientMapping || []
+            clientMapping: finish.clientMapping || [],
+            subFinishCode: finish.subFinishCode || ''
         });
         setEditingOutsourceFinish(finish.id);
         setShowOutsourceFinishForm(true);
@@ -1520,6 +1529,16 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                                 <div><label style={labelStyle}>Finish ID / Code</label><input value={newFinishConfig.code} onChange={(e) => setNewFinishConfig({...newFinishConfig, code: e.target.value})} placeholder="e.g. MB" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
                                                 <div><label style={labelStyle}>BOM Species Suffix (optional)</label><input value={newFinishConfig.bomSuffix} onChange={(e) => setNewFinishConfig({...newFinishConfig, bomSuffix: e.target.value})} placeholder='e.g. -O (oak) / -W (walnut)' title='Wood/acrylic species finishes: when this finish is picked, the BOM consumes "<item#><suffix>" (e.g. H1-138WBF-O) — or the item&apos;s speciesMap entry — instead of a /P //EP variant. Leave blank for normal finishes.' style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', padding: '8px 0' }} title="Tick on the component colors themselves — Bronze, Champagne. These are what tracks and traverse components are finished in; they appear in the Aligned sub finish dropdown of every other finish.">
+                                                    <input type="checkbox" checked={!!newFinishConfig.isSubFinish} onChange={(e) => setNewFinishConfig({...newFinishConfig, isSubFinish: e.target.checked})} style={{ cursor: 'pointer', width: '15px', height: '15px' }} />
+                                                    <span style={{ fontSize: '0.88rem' }}>Track / component <b>sub finish</b> (e.g. Bronze, Champagne)</span>
+                                                </label>
+                                                <div><label style={labelStyle} title="When THIS finish is on the mainline (fascia/rod), tracks and components flagged 'takes sub finish' are pushed to the floor in the sub color named here — e.g. P01 aligns to C, so a P01 order's track comes in Champagne. Blank = components take the main finish.">Aligned sub finish (tracks/components)</label>
+                                                    <select value={newFinishConfig.subFinishCode || ''} onChange={(e) => setNewFinishConfig({...newFinishConfig, subFinishCode: e.target.value})} style={fieldStyle}>
+                                                        <option value="">— none (components take the main finish) —</option>
+                                                        {globalFinishes.filter(f => f.isSubFinish).map(f => <option key={f.id} value={String(f.code || f.name).toUpperCase()}>{String(f.code || f.name).toUpperCase()} — {f.name}</option>)}
+                                                    </select>
+                                                </div>
                                             </div>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                                 <div><label style={labelStyle}>Descriptive Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
@@ -1623,6 +1642,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                                 <div><label style={labelStyle}>Approved Vendor (NetSuite-synced)</label><select value={newOutsourceFinishConfig.vendorCrmId || ''} onChange={(e) => { const v = liveVendors.find(x => x.id === e.target.value); setNewOutsourceFinishConfig({...newOutsourceFinishConfig, vendorCrmId: e.target.value, vendor: v ? (v.name || '') : ''}); }} style={fieldStyle}><option value="">Select NetSuite vendor…</option>{liveVendors.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></div>
                                                 <div><label style={labelStyle}>Price Multiplier (x)</label><input type="number" step="0.1" value={newOutsourceFinishConfig.multiplier} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, multiplier: e.target.value})} style={fieldStyle} /></div>
+                                                <div><label style={labelStyle} title="When THIS plated finish is on the mainline, tracks and components flagged 'takes sub finish' push to the floor in the sub color named here (e.g. EP5 aligns to B — Bronze). Blank = components take the main finish.">Aligned sub finish (tracks/components)</label>
+                                                    <select value={newOutsourceFinishConfig.subFinishCode || ''} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, subFinishCode: e.target.value})} style={fieldStyle}>
+                                                        <option value="">— none (components take the main finish) —</option>
+                                                        {globalFinishes.filter(f => f.isSubFinish).map(f => <option key={f.id} value={String(f.code || f.name).toUpperCase()}>{String(f.code || f.name).toUpperCase()} — {f.name}</option>)}
+                                                    </select>
+                                                </div>
                                             </div>
                                             
                                             <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>

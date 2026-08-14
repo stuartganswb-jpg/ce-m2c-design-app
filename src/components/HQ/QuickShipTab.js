@@ -190,12 +190,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // one PATTERN kit + a color choice replaces one kit per finish.
         const unsubFin = onSnapshot(doc(db, "system", "master_finishes"), (s) => {
             const arr = (s.exists() && s.data().finishes) || [];
-            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false })), ...prev.filter(p => p.outsourced)]);
+            setFinishList(prev => [...arr.filter(f => f && (f.code || f.name)).map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: false, subFinishCode: String(f.subFinishCode || '').toUpperCase() })), ...prev.filter(p => p.outsourced)]);
         }, e => console.warn('Quick Ship finishes listen failed', e));
         const unsubOut = onSnapshot(collection(db, "hq_outsource_finishes"), (s) => {
             // code falls back to NAME (the finishText convention) — EP3–EP6 are stored name-only
             const arr = s.docs.map(d => d.data()).filter(f => f && (f.code || f.name));
-            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: true }))]);
+            setFinishList(prev => [...prev.filter(p => !p.outsourced), ...arr.map(f => ({ code: String(f.code || f.name).trim().toUpperCase(), name: f.name || f.code, outsourced: true, subFinishCode: String(f.subFinishCode || '').toUpperCase() }))]);
         }, e => console.warn('Quick Ship outsource finishes listen failed', e));
         // Rush fee menu (Mass Update 4.5 → RUSH FEE TYPES). The dollar amount rides in the entry.
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (s) => {
@@ -836,12 +836,21 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     if (!rulesDoc) { try { const snap = await getDoc(doc(db, 'system', `traverse_rules_${fam}`)); rulesDoc = snap.exists() ? snap.data() : null; } catch { rulesDoc = null; } }
                     if (!rulesDoc) addLog(`No traverse rules doc for ${fam} — bracket/splice counts fall back to defaults. Re-run the 4.6 kit sheet import.`, 'warn');
                     const ex = explodeTraverse({ family: fam, align: kitDoc?.manufacturingSpecs?.kitAlign, feet: l.trvFeet, motorItem: l.trvMotor, rules: rulesDoc });
+                    // SUB-FINISH ROUTING (Stuart 2026-08-13): an item marked usesSubFinish (the
+                    // tracks) goes to the floor in the SUB color the mainline finish aligns to —
+                    // P01 → C, EP5 → B — set per finish in the 4.5 editors. The "finish the track
+                    // to match the fascia" upgrade is a configurator add-on fee that will override
+                    // this per order when it lands.
+                    const finObj = finishList.find(f => f.code === String(l.trvFinish || '').toUpperCase());
                     ex.lines.forEach(c => {
                         const cd = byId(c.code);
                         if (!cd?.netSuiteInternalId) { addLog(`Component ${c.code} has no NetSuite ID — NOT consumed (${c.why}).`, 'warn'); return; }
+                        const takesSub = !!cd?.manufacturingSpecs?.usesSubFinish;
+                        const finShown = takesSub && finObj?.subFinishCode ? `${finObj.subFinishCode} (sub finish)` : (l.trvFinish || '');
+                        if (takesSub && !finObj?.subFinishCode) addLog(`${c.code} is marked for a SUB finish but ${l.trvFinish || 'the chosen finish'} has no aligned sub color (set it in 4.5) — pushing in the mainline finish.`, 'warn');
                         trvPushLines.push({
                             item: { id: String(cd.netSuiteInternalId) }, quantity: c.qty, rate: 0, price: { id: '-1' },
-                            description: `${c.code} — ${c.why} · ${l.trvFinish || ''} [consumed — $ in the traverse system line]`,
+                            description: `${c.code} — ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,
                         });
                     });
                     ex.skipped.forEach(sk => addLog(`Traverse: ${sk}`, 'info'));

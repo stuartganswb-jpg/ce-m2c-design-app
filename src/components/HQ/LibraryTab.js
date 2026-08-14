@@ -1823,6 +1823,18 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                      <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '6px' }}>Used by the Pick/Pack App to guide operators to the physical item location.</div>
                  </div>
 
+                 {/* TRACK SUB-FINISH MARK (Stuart 2026-08-13): tracks and traverse components are
+                     not sprayed in the mainline color — they come in the SUB finish the main finish
+                     aligns to (4.5 finish editors: P01 → C Champagne, EP5 → B Bronze…). Ticking this
+                     is what routes an item through that mapping on push; the "finish track to match
+                     the fascia" upgrade is a configurator add-on FEE that overrides it per order. */}
+                 <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', border: `1px solid ${editSpecs.usesSubFinish ? 'var(--brass)' : 'var(--line)'}`, background: editSpecs.usesSubFinish ? 'var(--paper-2)' : '#fff', padding: '14px 16px', marginBottom: '30px' }}>
+                     <input type="checkbox" checked={!!editSpecs.usesSubFinish} onChange={e => setEditSpecs(prev => ({ ...prev, usesSubFinish: e.target.checked }))} style={{ marginTop: '2px', width: '15px', height: '15px', cursor: 'pointer' }} />
+                     <span style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>Track / component — finishes in the aligned <b>SUB finish</b>
+                         <span style={{ display: 'block', fontSize: '0.83rem', color: 'var(--ink-soft)', marginTop: '3px' }}>On a traverse order this item goes to the floor in the sub color the mainline finish aligns to (set per finish in 4.5), not the mainline color itself. Tick on tracks and track components only.</span>
+                     </span>
+                 </label>
+
                  <div style={{ background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)' }}>
                     <h4 style={{ margin: '0 0 20px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '10px' }}>Client-Specific Pricing & SKUs</h4>
                     
