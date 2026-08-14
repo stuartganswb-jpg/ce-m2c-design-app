@@ -13,10 +13,11 @@ import { code128BSvg, printHtmlDocument } from './labelPrint.js';
 
 const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// Mirrors Shared/FormPreview's brand block (kept in sync by hand — it's four lines).
-const BRAND_NAMES = { m2c: 'M2C Studio', ce: 'Classical Elements', uniquity: 'Uniquity', leyla: 'Leyla' };
-const COMPANY_ADDRESS = '1200 Redding Dr · High Point, NC 27260';
-const BRAND_CONTACT = {
+// Mirrors Shared/FormPreview's brand block (kept in sync by hand — it's four lines). Exported so
+// the pdf-lib twin (platingOrderPdf) draws the identical company block.
+export const BRAND_NAMES = { m2c: 'M2C Studio', ce: 'Classical Elements', uniquity: 'Uniquity', leyla: 'Leyla' };
+export const COMPANY_ADDRESS = '1200 Redding Dr · High Point, NC 27260';
+export const BRAND_CONTACT = {
     ce: { web: 'www.classicalelements.com', phone: '1 (336) 967-3313' },
     m2c: { web: 'www.m2cstudio.com', phone: '910.805.8410' },
     uniquity: { web: 'www.uniquitystyle.com', phone: '1 (336) 290-5115' },
