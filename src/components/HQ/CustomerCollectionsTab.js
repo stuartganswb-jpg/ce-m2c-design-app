@@ -668,7 +668,14 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         if (!kitRow) return;
         const comps = kitEditRows.filter(r => r.partId && (parseInt(r.qty) || 0) > 0)
             .map(r => ({ partId: r.partId, qty: parseInt(r.qty) || 1 }));
-        if (!comps.length) return alert('A kit needs at least one component — delete the kit record in the Master Library if it is obsolete.');
+        // FLOW-ALIGNED kits (the imported traverse ones) carry ZERO components BY DESIGN — they are
+        // the customer-alias layer over a base identity (the id before the /, finish applied after),
+        // and the components come from the rules EXPLOSION at order time (Stuart 2026-08-13: "these
+        // are more like the customer alias's... only existing as references back to the main kits").
+        // Requiring contents here blocked saving their finish matrix. Only a HAND-BUILT kit — no
+        // kitAlign, so nothing can explode it — still needs at least one component.
+        const aligned = !!inventory.find(x => x.id === kitRow)?.manufacturingSpecs?.kitAlign;
+        if (!comps.length && !aligned) return alert('A kit needs at least one component — delete the kit record in the Master Library if it is obsolete.');
         try {
             await updateDoc(doc(db, 'Approved_Designs', kitRow), {
                 'manufacturingSpecs.kitComponents': comps,
@@ -1233,13 +1240,19 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                         )}
                                         {mode === 'KITS' && (() => {
                                             const comps = r.p.manufacturingSpecs?.kitComponents || [];
+                                            const aligned = !!r.p.manufacturingSpecs?.kitAlign;
+                                            const nFin = (r.p.manufacturingSpecs?.kitFinishOptions || []).length;
                                             const open = kitRow === r.p.id;
+                                            // Empty contents are NORMAL on a flow-aligned kit — its components come
+                                            // from the rules explosion. Only a hand-built kit with nothing inside is
+                                            // a problem worth painting red.
+                                            const bad = !comps.length && !aligned;
                                             return (
                                                 <td style={{ ...td, borderLeft: `2px solid ${theme.ink}`, whiteSpace: 'nowrap' }}>
                                                     <button onClick={() => { if (open) { setKitRow(null); setKitEditRows([]); setKitFinSel({}); } else { setKitEditRows(comps.map(c => ({ ...c }))); setKitSearch(''); setKitFinSel(Object.fromEntries((r.p.manufacturingSpecs?.kitFinishOptions || []).map(c => [String(c).toUpperCase(), true]))); setKitRow(r.p.id); } }}
-                                                        title="Open the component list — what ONE kit explodes to on shop documents"
-                                                        style={{ background: comps.length ? 'none' : 'rgba(176,45,32,.08)', border: `1px solid ${comps.length ? theme.line : theme.red}`, color: comps.length ? theme.inkSoft : theme.red, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', padding: '5px 9px' }}>
-                                                        {open ? '⚙ Close' : `⚙ ${comps.length} item${comps.length === 1 ? '' : 's'}`}
+                                                        title={aligned ? 'Flow-aligned kit — components explode from the traverse rules at order time. Open to set its FINISH matrix (and any extra fixed contents).' : 'Open the component list — what ONE kit explodes to on shop documents'}
+                                                        style={{ background: bad ? 'rgba(176,45,32,.08)' : 'none', border: `1px solid ${bad ? theme.red : theme.line}`, color: bad ? theme.red : theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', padding: '5px 9px' }}>
+                                                        {open ? '⚙ Close' : aligned ? `⚙ flow · ${nFin ? `${nFin} fin` : 'no fin'}` : `⚙ ${comps.length} item${comps.length === 1 ? '' : 's'}`}
                                                     </button>
                                                 </td>
                                             );
@@ -1420,6 +1433,11 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 <span style={{ fontFamily: theme.serif, fontSize: '1.15rem', color: theme.ink }}>Kit contents — {r.code}</span>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>what ONE kit explodes to · item metadata, shared by every customer</span>
                                             </div>
+                                            {!!(inventory.find(x => x.id === kitRow)?.manufacturingSpecs?.kitAlign) && (
+                                                <div style={{ fontSize: '0.82rem', color: theme.inkSoft, fontStyle: 'italic', marginBottom: '8px' }}>
+                                                    Flow-aligned kit — empty contents are correct: the order explodes from the traverse rules (fascia, track, brackets by length). Anything added here rides ON TOP of that explosion.
+                                                </div>
+                                            )}
                                             {kitContentsEditor(kitEditRows, setKitEditRows)}
                                             {(() => {
                                                 // FINISH MATRIX (Stuart 2026-08-13): check off which finishes THIS kit
