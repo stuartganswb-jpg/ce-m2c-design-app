@@ -942,7 +942,17 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const cl = (data.nodeClusters || []).find(x => x.id === r.clusterId) || {};
             let newCadUrl = null;
             if (cadUrl) {
+                // ⏳ PHASE FEEDBACK (Stuart 2026-08-14: the delete "appears to time out" — it never
+                // hung; the strip re-processes the ENTIRE merged .glb (download → parse → re-export →
+                // re-upload), minutes on a big file, with parse/export freezing the tab. He left, the
+                // writes landed in the background, and the UI never confirmed. Log every phase — with a
+                // paint yield before the sync freezes so the lines actually show — % during the upload,
+                // and an alert at the end = the confirmation that was missing.)
+                addLog(`⏳ Deleting "${r.clusterName}" — downloading the merged .glb… On a large assembly this takes a few minutes and the tab may briefly FREEZE mid-way. Stay on this tab until the confirmation pops up.`, 'info');
+                await new Promise(res => setTimeout(res, 60));
                 const buf = await (await fetch(cadUrl)).arrayBuffer();
+                addLog(`Parsing ${(buf.byteLength / 1048576).toFixed(1)} MB… (the tab may freeze for a moment)`, 'info');
+                await new Promise(res => setTimeout(res, 60));
                 const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
                 const scene = gltf.scene;
                 const nrm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -950,12 +960,17 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 if (!grp) { const wants = new Set([nrm((cl.nodes && cl.nodes[0]) || ''), nrm(cl.name || r.clusterName)].filter(Boolean)); scene.traverse(n => { if (!grp && !n.isMesh && wants.has(nrm(n.name))) grp = n; }); }
                 if (grp) {
                     grp.removeFromParent();
-                    addLog(`Re-exporting the .glb without "${r.clusterName}"…`, 'info');
+                    addLog(`Re-exporting the .glb without "${r.clusterName}"… (the tab may freeze for a moment)`, 'info');
+                    await new Promise(res => setTimeout(res, 60));
                     const glbBuffer = await new Promise((res, rej) => new GLTFExporter().parse(scene, out => res(out), e => rej(e), { binary: true }));
                     const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
                     const path = `assemblies/${activeBrand}_${String(data.itemName || 'asm').replace(/[^a-z0-9]/gi, '_')}_sectiondel_${Date.now()}.glb`;
                     const up = uploadBytesResumable(sRef(storage, path), blob);
-                    newCadUrl = await new Promise((res, rej) => up.on('state_changed', null, rej, async () => res(await getDownloadURL(up.snapshot.ref))));
+                    let lastPct = 0;
+                    newCadUrl = await new Promise((res, rej) => up.on('state_changed', (s) => {
+                        const pct = Math.round((s.bytesTransferred / s.totalBytes) * 100);
+                        if (pct - lastPct >= 25 || (pct === 100 && lastPct < 100)) { lastPct = pct; addLog(`Uploading the stripped .glb (${(s.totalBytes / 1048576).toFixed(1)} MB)… ${pct}%`, 'info'); }
+                    }, rej, async () => res(await getDownloadURL(up.snapshot.ref))));
                 } else {
                     addLog(`⚠ "${r.clusterName}" group not found in the .glb — records removed, geometry left in the file (Repair Node Names or the re-upload merge can strip it later).`, 'error');
                 }
@@ -968,6 +983,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', data.itemId || assignId), where('clusterId', '==', r.clusterId)));
             for (const d of pinsSnap.docs) await deleteDoc(d.ref);
             addLog(`🗑 Section "${r.clusterName}" deleted — ${pinsSnap.size} pin(s) removed${newCadUrl ? ', geometry stripped from the .glb (old kept as backup)' : ''}. REGENERATE the flow, then ➕ Extend with the replacement section.`, 'success');
+            // The explicit confirmation (matches deleteChoice) — before the choices reload, which
+            // re-downloads and re-parses the new .glb and is itself another long silent stretch.
+            alert(`🗑 Section "${r.clusterName}" deleted.\n\n• ${pinsSnap.size} pin(s) removed${newCadUrl ? '\n• Geometry stripped from the .glb — the file shrank (old .glb kept as backup on the record)' : '\n• ⚠ Group not found in the .glb — records removed, geometry left in the file'}\n\nNext: REGENERATE the flow, then ➕ Extend with the replacement section.\n\nOK reloads the choices list (downloads the new .glb — give it a moment).`);
             setAssignBusy(false);
             await handleLoadChoices();
             return;
@@ -987,6 +1005,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const cadUrl = data.manufacturingSpecs?.cadUrl;
             const clusters = data.nodeClusters || [];
             if (!cadUrl) throw new Error('This assembly has no .glb (cadUrl).');
+            addLog('⏳ Loading choices — downloading the .glb…', 'info');
+            await new Promise(res => setTimeout(res, 60));
             const buf = await (await fetch(cadUrl)).arrayBuffer();
             const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
             const scene = gltf.scene;
