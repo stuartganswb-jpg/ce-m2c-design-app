@@ -563,10 +563,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         setSheetBusy(false);
     };
     const handleCreateRegion = async (region2d) => {
-        const name = window.prompt('Name this section (it becomes the CPQ step title — e.g. METAL FRAME FINISH, TASSELS):', '');
-        if (!name || !name.trim()) return;
+        // No blocking prompt — the section lands as SECTION n and gets its real name in the
+        // rename box (header) the moment it's selected, which it is on create.
+        const n = ((activeAssembly?.nodeClusters || []).filter(c => c.region2d).length || 0) + 1;
         const id = `CLUSTER-${Date.now()}`;
-        const newCluster = { id, name: name.trim().toUpperCase(), nodes: [regionNodeId(id)], region2d };
+        const newCluster = { id, name: `SECTION ${n}`, nodes: [regionNodeId(id)], region2d };
         try {
             const ref = doc(db, "Approved_Designs", activeAssembly.id);
             const snap = await getDoc(ref);
@@ -999,10 +1000,22 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>2D tear sheet — drag to draw a section (hold SHIFT for a circle)</div>
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '4px' }}>Each section = a CPQ step + BOM slot. Drag inside a section to move it · corner handle resizes · double-click renames · Del is in the list on the right.</div>
                                 </div>
-                                <label style={{ flexShrink: 0, padding: '8px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: sheetBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                                    {sheetBusy ? '⏳ Importing…' : '⇪ Replace sheet'}
-                                    <input type="file" accept="image/*,application/pdf,.pdf" style={{ display: 'none' }} disabled={sheetBusy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) handleImportSheet(f); }} />
-                                </label>
+                                <div style={{ flexShrink: 0, display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    {(() => {
+                                        const selCl = (activeAssembly.nodeClusters || []).find(c => c.id === selRegionId && c.region2d);
+                                        return selCl ? (
+                                            <input key={selCl.id} defaultValue={selCl.name} placeholder="section name"
+                                                title="Rename the selected section (= its CPQ step title) — Enter or click away saves"
+                                                onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                                                onBlur={e => { const v = e.target.value.trim(); if (v && v.toUpperCase() !== selCl.name) setClusterField(selCl.id, { name: v.toUpperCase() }); }}
+                                                style={{ padding: '8px 10px', border: '1px solid var(--brass)', outline: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', width: '190px' }} />
+                                        ) : null;
+                                    })()}
+                                    <label style={{ padding: '8px 14px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: sheetBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>
+                                        {sheetBusy ? '⏳ Importing…' : '⇪ Replace sheet'}
+                                        <input type="file" accept="image/*,application/pdf,.pdf" style={{ display: 'none' }} disabled={sheetBusy} onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) handleImportSheet(f); }} />
+                                    </label>
+                                </div>
                             </div>
                             <div style={{ padding: '16px' }}>
                                 <Sheet2DRegionEditor
