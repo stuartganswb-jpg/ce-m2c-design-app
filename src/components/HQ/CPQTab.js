@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
 import { Sheet2DOverlay } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
+import { normalizeLocation } from '../Shared/assemblyTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { configuratorTotal } from '../Shared/traverseConfigurator';
 import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
@@ -875,7 +876,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
                       const mainOpt = step.styleOptions.find(o => (o.optId || o.partId) === next[step.id]);
                       const loc = mainOpt?.location;
-                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step, { isSub: true }));
+                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step, { isSub: true })).filter(mountPairGate(step.subOptions, mainOpt));
                       const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
                       const sid = defaultOptionFor(cands.length ? cands : pool0, step.subGeometryMap, step.defaultSubOptId);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
@@ -1014,6 +1015,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return (o) => (isSetupSelector || setupAllows(o, trvSelection.setup))
           && (isDriveSelector || driveAllows(o, trvSelection.drive))
           && attachOk(o);
+  };
+
+  // WALL IS THE DEFAULT MOUNT (Stuart 2026-08-15, H1-138: "all the wall brackets are left with no
+  // tag, as they are the default"). A backplate pool that MIXES mount: tags pairs by the chosen
+  // bracket's mount — ceiling arm → the mount:ceiling plates, untagged (wall) arm → the untagged
+  // plates. A pool carrying one mount throughout never filters, so every flow without mount tags
+  // is untouched. The mount vocabulary is the 4.5 Master-Dictionary one, normalized (WALL/OPEN →
+  // WALL, anything CEIL → CEILING, INSIDE/END → END) — blank reads as WALL on both sides.
+  const mountOf = (o) => normalizeLocation(o?.mountType) || 'WALL';
+  const mountPairGate = (pool, mainOpt) => {
+      if (!mainOpt || new Set((pool || []).map(mountOf)).size < 2) return () => true;
+      const want = mountOf(mainOpt);
+      return (o) => mountOf(o) === want;
   };
 
   const getOptionsForStep = (step) => {
@@ -2157,7 +2171,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           let changed = false; const next = { ...prev };
           (activeFlow.steps || []).forEach(st => {
               if (st.type !== 'STYLE_SWAP') return;
-              const check = (key, pool) => {
+              const check = (key, pool, extraGate) => {
                   if (!next[key]) return;
                   const o = (pool || []).find(x => (x.optId || x.partId) === next[key]);
                   if (!o) return;
@@ -2165,12 +2179,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   const oRtn = isReturnOption(o) || (o.returnOnly && oEt !== 'INSIDE_MOUNT') || /return|miter|mitre|french|\bbend\b/i.test(String(partOf(o)?.itemName || ''));
                   // trvAttachGate: switching the pole traverse ↔ standard (H1-138 mixed flow) must
                   // clear an attachment the new mode no longer offers, so the seeder re-picks from
-                  // the swapped pool instead of a hidden selection billing on.
-                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex)) || !optionProjAllowed(o, sizeSel) || !projTagOk(o) || !trvAttachGate(pool, trvSelection.trvPole)(o);
+                  // the swapped pool instead of a hidden selection billing on. extraGate = the
+                  // mount pairing on sub pools (a plate from the other mount clears the same way).
+                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex)) || !optionProjAllowed(o, sizeSel) || !projTagOk(o) || !trvAttachGate(pool, trvSelection.trvPole)(o) || (extraGate && !extraGate(o));
                   if (banned) { delete next[key]; changed = true; }
               };
               check(st.id, st.styleOptions);
-              check(`${st.id}__sub`, st.subOptions);
+              const mainSelOpt = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
+              check(`${st.id}__sub`, st.subOptions, mountPairGate(st.subOptions, mainSelOpt));
           });
           return changed ? next : prev;
       });
@@ -2189,7 +2205,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       if (step && Array.isArray(step.subOptions) && step.subOptions.length) {
           const mainOpt = (step.styleOptions || []).find(o => (o.optId || o.partId) === value);
           const loc = mainOpt?.location;
-          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step, { isSub: true }));
+          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step, { isSub: true })).filter(mountPairGate(step.subOptions, mainOpt));
           const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
           const pick = cands.find(o => o.targetNode) || cands[0];
           next[`${stepId}__sub`] = pick ? pick.optId : '';
@@ -3541,7 +3557,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                               // matching plates show (e.g. wall plates when a wall arm is selected).
                               const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
                               const selLoc = selMainOpt?.location;
-                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(trvOkFor(currentStep, { isSub: true })).filter(o => !selLoc || !o.location || o.location === selLoc);
+                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(trvOkFor(currentStep, { isSub: true })).filter(mountPairGate(currentStep.subOptions, selMainOpt)).filter(o => !selLoc || !o.location || o.location === selLoc);
                               // Return-aware scoping: the RETURN backplates show while this side's End
                               // Treatment is a return OR the selected bracket is flagged usesReturnPlates
                               // (e.g. In Line brackets share the return plates); regular plates otherwise —
