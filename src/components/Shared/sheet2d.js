@@ -103,6 +103,52 @@ export const Sheet2DOverlay = ({ sheet2d, regions = [], activeIds = [], litIds =
     );
 };
 
+// ── MATERIAL RAIL (CPQ hybrid viewer — Leyla 2026-08-14) ─────────────────────
+// The 3D render sits center-window; selections that the model can't show (tassel
+// colors, materials) appear as swatch cards down the RIGHT edge, each tied to the
+// fixture by a fine architect-style leader line: a dot on the model at the
+// region's height, a thin elbow line out to the card. The active step's card +
+// line are brass; answered steps' are hairline grey. Display-only (no pointer
+// events) — the pickers stay in the step panel.
+// items: [{ id, title, label, imageUrl, active, frac }] — frac = 0..1 vertical
+// anchor on the model (the generator ranks regions by their tear-sheet height).
+export const MaterialRail = ({ items = [] }) => {
+    if (!items.length) return null;
+    const W = 1000, H = 600;              // stretched viewBox; strokes are non-scaling
+    const AX = 520;                        // leader dot x — right shoulder of the centered model
+    const CARD_L = 795;                    // card left edge (viewBox units) — cards live right of this
+    return (
+        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+                {items.map((it, i) => {
+                    const cardY = ((i + 0.5) / items.length) * H;
+                    const ay = Math.max(0.04, Math.min(0.96, it.frac ?? 0.5)) * H;
+                    const col = it.active ? BRASS : '#a49c90';
+                    return (
+                        <g key={it.id} stroke={col} fill="none">
+                            {/* anchor dot (zero-length round-cap path = a dot that survives the stretch) */}
+                            <path d={`M ${AX} ${ay} l 0.01 0`} strokeLinecap="round" strokeWidth={it.active ? 7 : 5} vectorEffect="non-scaling-stroke" strokeOpacity={it.active ? 1 : 0.75} />
+                            <path d={`M ${AX + 6} ${ay} H ${(AX + CARD_L) / 2} L ${CARD_L - 14} ${cardY} H ${CARD_L - 2}`}
+                                strokeWidth={it.active ? 1.6 : 1} vectorEffect="non-scaling-stroke" strokeOpacity={it.active ? 0.95 : 0.6} />
+                        </g>
+                    );
+                })}
+            </svg>
+            {items.map((it, i) => (
+                <div key={it.id} style={{ position: 'absolute', right: '10px', top: `${((i + 0.5) / items.length) * 100}%`, transform: 'translateY(-50%)', width: '148px', background: 'rgba(255,255,255,0.96)', border: `1px solid ${it.active ? BRASS : 'rgba(0,0,0,0.16)'}`, borderRadius: '2px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                    {it.imageUrl
+                        ? <img src={it.imageUrl} alt={it.label} style={{ display: 'block', width: '100%', height: '76px', objectFit: 'cover' }} />
+                        : <div style={{ width: '100%', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', fontSize: '8px', letterSpacing: '.08em', color: '#a49c90', textTransform: 'uppercase' }}>{it.active ? 'choosing…' : 'no swatch'}</div>}
+                    <div style={{ padding: '5px 8px 6px' }}>
+                        <div style={{ fontFamily: 'monospace', fontSize: '7px', letterSpacing: '.1em', textTransform: 'uppercase', color: it.active ? BRASS : '#8b8578' }}>{String(it.title).slice(0, 26)}</div>
+                        <div style={{ fontFamily: 'monospace', fontSize: '9px', letterSpacing: '.04em', textTransform: 'uppercase', color: '#2f2b26', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</div>
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
 // ── REGION EDITOR (1.5 Node Grouping) ────────────────────────────────────────
 // Drag on the drawing = new oval region (SHIFT while dragging = circle). Drag
 // inside an existing region moves it; drag its SE handle resizes (SHIFT keeps

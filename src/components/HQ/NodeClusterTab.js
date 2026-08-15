@@ -583,6 +583,8 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
         if (!name || !name.trim()) return;
         setClusterField(clusterId, { name: name.trim().toUpperCase() });
     };
+    // Hybrid render mapping: assemblies (this brand) whose .glb can serve as the display model.
+    const mastersWithCad = useMemo(() => masterAssemblies.filter(a => a.manufacturingSpecs?.cadUrl && a.id !== activeAssembly?.id), [masterAssemblies, activeAssembly?.id]);
     const handleSetClusterHidden = (clusterId, hidden) => setClusterField(clusterId, { hidden });
 
     // Fix 1B — per-assembly LEFT/RIGHT flip (safety net for mirrored models). Persists on the
@@ -1000,7 +1002,21 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', letterSpacing: '.1em' }}>2D tear sheet — drag to draw a section (hold SHIFT for a circle)</div>
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '4px' }}>Each section = a CPQ step + BOM slot. Drag inside a section to move it · corner handle resizes · double-click renames · Del is in the list on the right.</div>
                                 </div>
-                                <div style={{ flexShrink: 0, display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <div style={{ flexShrink: 0, display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                    {/* HYBRID (Leyla 2026-08-14): borrow ONE display .glb (e.g. DAWN44's) for the CPQ's
+                                        center-window render — every size keeps its own tear sheet/BOM/flow. */}
+                                    <select
+                                        value={activeAssembly.manufacturingSpecs?.sheet2d?.renderGlbUrl || ''}
+                                        title="3D RENDER FILE (optional) — borrow another assembly's .glb as this fixture's display model. The CPQ then renders it center-window with the architect material rail; without it, the tear sheet + brass halo render instead. One file serves every size of the family. Regenerate the flow after changing."
+                                        onChange={async (e) => {
+                                            const url = e.target.value;
+                                            const src = mastersWithCad.find(a => (a.manufacturingSpecs?.cadUrl || '') === url);
+                                            try { await updateDoc(doc(db, "Approved_Designs", activeAssembly.id), { 'manufacturingSpecs.sheet2d.renderGlbUrl': url, 'manufacturingSpecs.sheet2d.renderGlbFrom': src ? (src.itemName || src.id) : '' }); } catch (err) { alert('Save failed: ' + (err.message || err)); }
+                                        }}
+                                        style={{ padding: '8px 10px', border: `1px solid ${activeAssembly.manufacturingSpecs?.sheet2d?.renderGlbUrl ? 'var(--brass)' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', maxWidth: '210px', color: activeAssembly.manufacturingSpecs?.sheet2d?.renderGlbUrl ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                                        <option value="">3d render: — tear sheet only —</option>
+                                        {mastersWithCad.map(a => <option key={a.id} value={a.manufacturingSpecs.cadUrl}>3d render: {a.itemName || a.id}</option>)}
+                                    </select>
                                     {(() => {
                                         const selCl = (activeAssembly.nodeClusters || []).find(c => c.id === selRegionId && c.region2d);
                                         return selCl ? (
@@ -1197,6 +1213,16 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                                         <button key={C} onClick={() => handleSetClusterCategory(cl.id, cl.category === C ? '' : C)} style={{ padding: '3px 8px', background: cl.category === C ? 'var(--ink)' : '#fff', color: cl.category === C ? '#fff' : 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{C}</button>
                                                     ))}
                                                 </div>
+                                                {/* HYBRID render mapping (Leyla): which display-.glb nodes this drawn section
+                                                    controls — the CPQ paints the step's finish onto them (frame/wood live). */}
+                                                {cl.region2d && isSheet2dAssembly(activeAssembly) && activeAssembly.manufacturingSpecs?.sheet2d?.renderGlbUrl && (
+                                                    <input key={`r3d-${cl.id}-${cl.render3dNodes || ''}`} defaultValue={cl.render3dNodes || ''}
+                                                        placeholder="3d: render-model node names (comma-sep) — finish paints these"
+                                                        title="HYBRID: node names in the display .glb this section controls (e.g. FRAME, WOODDISCS). The step's finish selection paints them live in the CPQ render — like DAWN44. Leave blank for rail-only sections (tassel colors point at their swatch instead). Regenerate the flow after changing."
+                                                        onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                                                        onBlur={e => { const v = e.target.value.trim(); if (v !== String(cl.render3dNodes || '')) setClusterField(cl.id, { render3dNodes: v }); }}
+                                                        style={{ width: '100%', marginTop: '6px', padding: '5px 8px', border: `1px solid ${cl.render3dNodes ? 'var(--brass)' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--mono)', fontSize: '9px', boxSizing: 'border-box' }} />
+                                                )}
                                                 <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
                                                     <button onClick={() => handleSetClusterHidden(cl.id, !cl.hidden)} title="Hidden accessory (e.g. bushing) — auto-included in the BOM when this position is used; never a customer choice/step" style={{ padding: '3px 8px', background: cl.hidden ? '#6b675e' : '#fff', color: cl.hidden ? '#fff' : 'var(--ink-soft)', border: `1px solid ${cl.hidden ? '#6b675e' : 'var(--line)'}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{cl.hidden ? '✓ Hidden — BOM only' : '⊘ Hidden component'}</button>
                                                     {String(cl.category || '').toUpperCase() === 'BACKPLATE' && (

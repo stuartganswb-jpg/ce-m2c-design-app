@@ -1027,7 +1027,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             ...prev,
             rows: prev.rows.map(r => r.clusterId === clusterId ? {
                 ...r,
-                choices: [...r.choices, { nodeName: sheet2dChoiceNode(clusterId, Date.now() % 1000000), label: '', itemNo: '', endTreatment: '', isFee: false, isHidden: false, parked: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, note: '', thumb: '' }],
+                choices: [...r.choices, { nodeName: sheet2dChoiceNode(clusterId, Date.now() % 1000000), label: '', itemNo: '', imgUrl: '', endTreatment: '', isFee: false, isHidden: false, parked: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: false, note: '', thumb: '' }],
             } : r),
         } : prev);
     };
@@ -1062,7 +1062,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             else if (pin.legacyErpId && !['N/A', 'PENDING'].includes(pin.legacyErpId) && pin.legacyErpId !== pin.partId) itemNo = pin.legacyErpId;
                             else if (!synthetic && pin.partId && !/-\d{12,}/.test(String(pin.partId))) itemNo = pin.partId;
                         }
-                        return { nodeName: pin.choiceNode, label: pin.partName || '', itemNo, endTreatment: '', isFee: !!pin.isFee, isHidden: !!pin.isHiddenPart && !pin.parked, parked: !!pin.parked, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: pin.customerIds || [], custNames: pin.customerNames || [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: !!pin.alwaysShown, note: pin.designerNote || '', thumb: '' };
+                        return { nodeName: pin.choiceNode, label: pin.partName || '', itemNo, imgUrl: pin.imageUrl || '', endTreatment: '', isFee: !!pin.isFee, isHidden: !!pin.isHiddenPart && !pin.parked, parked: !!pin.parked, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: pin.customerIds || [], custNames: pin.customerNames || [], traverseRole: '', driveType: '', trvSetup: '', alwaysShown: !!pin.alwaysShown, note: pin.designerNote || '', thumb: '' };
                     });
                     return { clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(), found: true, is2d: true, choices };
                 });
@@ -1548,7 +1548,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     ...(ch.isFee && String(ch.itemNo || '').trim() ? { feeItemNo: String(ch.itemNo).trim().toUpperCase() } : {}), ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}), ...(hasItem && !ch.isFee ? libLinkFields(ch.itemNo) : {}),
                     // 2D tear-sheet rows: the operator-typed choice NAME is the display name the CPQ
                     // option card shows — it must survive the libLink partName (= ERP code) overwrite.
-                    ...(r.is2d && String(ch.label || '').trim() ? { partName: String(ch.label).trim() } : {}) });
+                    ...(r.is2d && String(ch.label || '').trim() ? { partName: String(ch.label).trim() } : {}),
+                    // HYBRID material rail (Leyla): the choice's swatch image (m2cstudio materials URL).
+                    ...(r.is2d && String(ch.imgUrl || '').trim() ? { imageUrl: String(ch.imgUrl).trim() } : {}) });
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
@@ -1826,6 +1828,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                 <span style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
                                                 <input value={c.itemNo} list="ab-item-codes" onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} title={willPark ? 'No item # yet — on save this choice PARKS: the node hides from the model AND the flow until you assign the # (Load Choices keeps listing it). Perfect for parts IT hasn\'t set up yet.' : undefined} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds it to the BOM)' : (willPark ? '⏸ parks on save — no item # yet' : 'item # — type to search (blank = hardware)'))} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : (willPark ? 'var(--brass)' : 'var(--line)')), borderStyle: willPark ? 'dashed' : 'solid', opacity: c.isFee ? 0.5 : 1 }} />
                                                 <input value={c.note || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { note: e.target.value })} placeholder="designer note — what is it / where does it sit" maxLength={120} title="Typed at upload (or here) — saved on the pin, shown every time Load Choices lists this part." style={{ ...inp, padding: '3px 8px', fontSize: '0.72rem', fontStyle: 'italic', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.85 }} />
+                                                {r.is2d && (
+                                                    <input value={c.imgUrl || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { imgUrl: e.target.value })} placeholder="swatch image URL — the material photo the hybrid CPQ leader-lines to (m2cstudio materials page)" title="HYBRID material rail (Leyla): paste the material's image URL (e.g. the tassel color swatch from m2cstudio.com/materials). When this choice is selected in the CPQ, its swatch appears on the right with an architect leader line to the render." style={{ ...inp, padding: '3px 8px', fontSize: '0.7rem', fontFamily: 'var(--mono)', borderColor: c.imgUrl ? 'var(--brass)' : 'var(--line)', opacity: 0.9 }} />
+                                                )}
                                                 {/* ✗ REBIND (Brimar elbow, 2026-08-10): this row's recorded node matches NOTHING
                                                     in the loaded model — even by leaf name — so it can never render. Pick the
                                                     real scene node; Save writes it through pins AND the cluster record. */}

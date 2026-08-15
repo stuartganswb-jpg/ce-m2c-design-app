@@ -17,9 +17,23 @@ export function buildSheet2dFlow({ asm, pinsByCluster, ts }) {
     const regions = (asm.nodeClusters || []).filter(c => c.region2d && !c.hidden);
     if (!regions.length) return { error: 'No regions drawn on the tear sheet yet — draw them in 1.5 Node Grouping (drag = oval, SHIFT = circle), then add each region\'s choices in 1.6\'s Assign tool.' };
 
+    // HYBRID (Leyla 2026-08-14): when the assembly borrows a display .glb
+    // (sheet2d.renderGlbUrl — one render file serves every Dawn size), the CPQ renders the
+    // model center-window with an architect-style material rail on the right. Rail anchors:
+    // regions ranked by their tear-sheet height (the elevation IS the fixture's vertical
+    // order) → 0..1 fractions the leader-line dots sit at.
+    const renderUrl = String(sheet.renderGlbUrl || '').trim();
+    const rankById = {};
+    [...regions].sort((a, b) => (a.region2d.cy || 0) - (b.region2d.cy || 0))
+        .forEach((c, i, arr) => { rankById[c.id] = (i + 0.5) / arr.length; });
+
     const steps = []; let n = 0; const noChoice = [];
     regions.forEach(cl => {
         const node = regionNodeId(cl.id);
+        // With a display .glb, a region tagged with its model nodes (1.5 "3d:" input) routes the
+        // step's FINISH selection onto those nodes (the geometryMap is what the CPQ texture
+        // pipeline resolves) — frame/wood paint live, exactly like a native 3D flow.
+        const target = (renderUrl && String(cl.render3dNodes || '').trim()) ? String(cl.render3dNodes).trim() : node;
         const pins = pinsByCluster[cl.id] || [];
         // Hidden pins with a REAL item # = BOM-only hardware riding this region's step.
         const included = pins.filter(p => p.isHiddenPart && p.partId && !String(p.partId).startsWith('HIDDEN-'))
@@ -38,13 +52,14 @@ export function buildSheet2dFlow({ asm, pinsByCluster, ts }) {
                 optId: `OPT-2D-${clShort}-${pShort}${seen[k] > 1 ? `-${seen[k]}` : ''}`,
                 partId: pid,
                 partName: p.isFee ? `${p.partName || 'Charge'} (fee)` : (p.partName || pid),
-                position: '', location: '', targetNode: node, price: 0,
+                position: '', location: '', targetNode: target, price: 0,
+                ...(p.imageUrl ? { imageUrl: p.imageUrl } : {}),
                 ...(p.isFee ? { isFee: true } : {}),
                 ...(Array.isArray(p.customerIds) && p.customerIds.length ? { customerIds: p.customerIds, customerNames: p.customerNames || [] } : {}),
             };
         });
         if (!styleOptions.length) { noChoice.push(cl.name || cl.id); return; } // no options = no step; flagged in the alert
-        const gmap = {}; styleOptions.forEach(o => { gmap[o.optId] = node; });
+        const gmap = {}; styleOptions.forEach(o => { gmap[o.optId] = target; });
         steps.push({
             id: `STEP-${ts}-${++n}`,
             title: String(cl.name || 'Choice').replace(/[-_]+/g, ' ').trim(),
@@ -60,7 +75,8 @@ export function buildSheet2dFlow({ asm, pinsByCluster, ts }) {
         steps, noChoice,
         sheet2d: {
             url: sheet.url, w: sheet.w || 0, h: sheet.h || 0,
-            regions: regions.map(c => ({ id: c.id, name: c.name || '', ...c.region2d })),
+            regions: regions.map(c => ({ id: c.id, name: c.name || '', ...c.region2d, railFrac: rankById[c.id] })),
+            ...(renderUrl ? { render3d: { url: renderUrl, from: sheet.renderGlbFrom || '' } } : {}),
         },
     };
 }

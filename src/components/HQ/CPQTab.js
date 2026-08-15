@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
-import { Sheet2DOverlay } from '../Shared/sheet2d';
+import { Sheet2DOverlay, MaterialRail } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
 import { normalizeLocation } from '../Shared/assemblyTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
@@ -3213,6 +3213,36 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return { act, lit };
   }, [activeFlow, currentStep, dynamicConfigParams]);
 
+  // HYBRID MATERIAL RAIL (Leyla 2026-08-14): a sheet2d flow with a display .glb
+  // (sheet2d.render3d — one render file shared by every Dawn size) renders the model
+  // center-window; each answered step (and the one being answered) gets a swatch card on the
+  // right, tied to the fixture by a fine architect leader line at the region's height.
+  // Swatch = the selected option's imageUrl (the m2cstudio materials imagery, typed per
+  // choice in 1.6); steps whose regions are node-mapped (1.5 "3d:") also paint the model
+  // via the normal finish→texture pipeline, so frame/wood render live like DAWN44.
+  const sheetRail = useMemo(() => {
+      const sh = activeFlow?.sheet2d;
+      if (!sh?.render3d?.url) return [];
+      const regById = {};
+      (sh.regions || []).forEach(r => { regById[r.id] = r; });
+      const items = [];
+      (activeFlow.steps || []).forEach(s => {
+          if (!s.sheet2dClusterId) return;
+          const sel = dynamicConfigParams[s.id];
+          const opt = sel ? (s.styleOptions || []).find(o => (o.optId || o.partId) === sel) : null;
+          const isActive = !!(currentStep && s.id === currentStep.id);
+          if (!opt && !isActive) return; // untouched future steps stay off the rail
+          items.push({
+              id: s.id, title: s.title,
+              label: opt ? (opt.partName || '') : '— choose —',
+              imageUrl: opt?.imageUrl || '',
+              active: isActive,
+              frac: regById[s.sheet2dClusterId]?.railFrac ?? 0.5,
+          });
+      });
+      return items;
+  }, [activeFlow, currentStep, dynamicConfigParams]);
+
   // Traverse checkout modal inputs — resolved at render, outside the pricing memo's scope.
   const trvModalProps = (() => {
       if (!trvCfgOpen || !activeFlow) return null;
@@ -3863,8 +3893,30 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   
                   <div style={{ height: '440px', flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper-2)' }}>
                       {/* 2D TEAR-SHEET FLOW (M2C lighting): the flow doc carries the drawing + regions —
-                          render it regardless of viewMode/assembly state; the halos follow the steps. */}
+                          render it regardless of viewMode/assembly state; the halos follow the steps.
+                          HYBRID (Leyla): with a display .glb on the flow, the model renders center-window
+                          (finish chips paint node-mapped regions live) + the material rail leader-lines
+                          each selection's swatch off to the right. Visibility overrides stay EMPTY here —
+                          colorway choices never change geometry, the fixture always renders whole. */}
                       {activeFlow?.sheet2d?.url ? (
+                          activeFlow.sheet2d.render3d?.url ? (
+                              <>
+                                  <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}>
+                                      <StudioRig />
+                                      <OrbitControls makeDefault />
+                                      <Bounds fit clip margin={1.15}>
+                                          <DynamicModel
+                                              url={activeFlow.sheet2d.render3d.url}
+                                              textureOverrides={textureOverrides}
+                                              visibilityOverrides={{}}
+                                              cloneSpecs={[]}
+                                              highlightOverrides={{}}
+                                          />
+                                      </Bounds>
+                                  </Canvas>
+                                  <MaterialRail items={sheetRail} />
+                              </>
+                          ) : (
                           <div style={{ position: 'absolute', inset: '14px', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto' }}>
                               <Sheet2DOverlay
                                   sheet2d={activeFlow.sheet2d}
@@ -3874,6 +3926,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   style={{ width: '100%', maxWidth: `${Math.max(160, Math.round(412 * ((activeFlow.sheet2d.w || 1) / (activeFlow.sheet2d.h || 1))))}px` }}
                               />
                           </div>
+                          )
                       ) : !activeAssembly ? (
                           <div style={{ color: 'var(--ink-soft)', textAlign: 'center', zIndex: 1 }}>
                               <div style={{ fontSize: '2rem', marginBottom: '16px', opacity: 0.5 }}>⚙️</div>
