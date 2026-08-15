@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
 import { Sheet2DOverlay } from '../Shared/sheet2d';
-import { setupAllows, driveAllows } from '../Shared/traverseTags';
+import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { configuratorTotal } from '../Shared/traverseConfigurator';
 import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/finishLabel';
@@ -971,7 +971,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // one fascia, unlike a round H2 double which really is two poles). "Blank = suits both" is
   // exactly that rule, so nothing special is needed for it.
   const trvSelection = React.useMemo(() => {
-      let setup = '', drive = '';
+      let setup = '', drive = '', trvPole = false;
       (activeFlow?.steps || []).forEach(s => {
           if (s.stepRole === 'TRV_SETUP') {
               const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === dynamicConfigParams[s.id]);
@@ -985,8 +985,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               const o = (s.styleOptions || []).find(x => (x.optId || x.partId) === dynamicConfigParams[s.id]);
               if (o?.driveType) drive = String(o.driveType).toUpperCase();
           }
+          // MIXED FLOW (Stuart 2026-08-15, H1-138): the integrated traverse unit is a pole /
+          // material choice tagged trv:track (or fascia). Selecting it anywhere flips the order
+          // into traverse mode — the trv:bracket / trv:backplate attachments key off exactly this.
+          if (!trvPole && Array.isArray(s.styleOptions)) {
+              const o = s.styleOptions.find(x => (x.optId || x.partId) === dynamicConfigParams[s.id]);
+              if (o && isTrvPoleChoice(o)) trvPole = true;
+          }
       });
-      return { setup, drive };
+      return { setup, drive, trvPole };
   }, [activeFlow, dynamicConfigParams]);
 
   // A SELECTOR NEVER FILTERS ITSELF. The Single-or-Double step's own options carry trvSetup, and
@@ -999,8 +1006,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const trvOkFor = (step, { isSub = false } = {}) => {
       const isSetupSelector = !isSub && step?.stepRole === 'TRV_SETUP';
       const isDriveSelector = !isSub && step?.stepRole === 'TRV_DRIVE';
+      // MIXED POOL (Stuart 2026-08-15, H1-138): a pool offering trv:bracket / trv:backplate
+      // attachments BESIDE standard ones swaps on the pole answer — traverse unit selected → the
+      // trv-tagged options; standard rod → the untagged ones. A pool with no trv-tagged option
+      // never filters (H1-2TRV's brackets are untagged and must all stay).
+      const attachOk = trvAttachGate(isSub ? step?.subOptions : step?.styleOptions, trvSelection.trvPole);
       return (o) => (isSetupSelector || setupAllows(o, trvSelection.setup))
-          && (isDriveSelector || driveAllows(o, trvSelection.drive));
+          && (isDriveSelector || driveAllows(o, trvSelection.drive))
+          && attachOk(o);
   };
 
   const getOptionsForStep = (step) => {
@@ -2150,7 +2163,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   if (!o) return;
                   const oEt = String(o.endTreatment || '').toUpperCase();
                   const oRtn = isReturnOption(o) || (o.returnOnly && oEt !== 'INSIDE_MOUNT') || /return|miter|mitre|french|\bbend\b/i.test(String(partOf(o)?.itemName || ''));
-                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex)) || !optionProjAllowed(o, sizeSel) || !projTagOk(o);
+                  // trvAttachGate: switching the pole traverse ↔ standard (H1-138 mixed flow) must
+                  // clear an attachment the new mode no longer offers, so the seeder re-picks from
+                  // the swapped pool instead of a hidden selection billing on.
+                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex)) || !optionProjAllowed(o, sizeSel) || !projTagOk(o) || !trvAttachGate(pool, trvSelection.trvPole)(o);
                   if (banned) { delete next[key]; changed = true; }
               };
               check(st.id, st.styleOptions);
@@ -2158,7 +2174,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           });
           return changed ? next : prev;
       });
-  }, [dynamicConfigParams, activeFlow, libraryParts, liveAssemblies, sizeLabelIndex]);
+  }, [dynamicConfigParams, activeFlow, libraryParts, liveAssemblies, sizeLabelIndex, trvSelection]);
 
   // When a Style selection changes, drop any finish picked for the prior style: different
   // styles can scope different finish sets (e.g. a Wood rod offers wood-clear finishes, a

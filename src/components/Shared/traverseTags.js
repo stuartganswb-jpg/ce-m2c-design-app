@@ -14,13 +14,16 @@
 //             ends BECOME the answer to the Drive step, so picking one picks a real part.
 //   CARRIER   the pieces that ride inside. Never chosen, never changed, always present — they were
 //             being tagged HIDE, which is the opposite of what they need: hide means "never render".
+//   TRV_BRACKET / TRV_BACKPLATE   mixed-assembly attachments (Stuart 2026-08-15, H1-138): traverse-
+//             only brackets and backplates that swap in for the standard ones while the traverse
+//             unit is the selected pole. See the MIXED ASSEMBLY block below.
 //
 // DRIVE TYPE is the other axis. Some collections offer motorised AND manual; some are manual only.
 // When both exist the flow needs a step after the track to choose between them, and each choice
 // declares which drives it belongs to. A choice tagged for neither belongs to BOTH — the common
 // case (a fascia is a fascia however the track is driven), so the default costs nobody a tick.
 
-export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'TRV_END', 'FCLIP', 'CARRIER'];
+export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'TRV_END', 'FCLIP', 'CARRIER', 'TRV_BRACKET', 'TRV_BACKPLATE'];
 export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 
 // ── SINGLE vs DOUBLE (Stuart 2026-08-04) ────────────────────────────────────────────────────────
@@ -127,6 +130,27 @@ export const driveTypeOf = (choice) => {
     const d = up(choice && choice.driveType);
     return DRIVE_TYPES.includes(d) ? d : '';
 };
+
+// ── MIXED ASSEMBLY ATTACHMENTS (Stuart 2026-08-15, H1-138) ──────────────────────────────────────
+// H1-138 sells BOTH grammars in one assembly: standard rods with standard brackets, and an
+// integrated traverse unit with its own arms and backplates. "not sure how we could control their
+// visibility vs. the standard brackets" — these two roles are that control. They mark a bracket /
+// backplate choice as TRAVERSE-ONLY. The standard generator keeps the pole path (AdminTab's mixed
+// guard: attach markers + an untagged rod = never fork to buildTraverseFlow, which only offers
+// role-tagged poles), and CPQ swaps the pool on the pole answer instead: select the traverse unit
+// (a pole choice tagged FASCIA or TRACK) and the trv-tagged attachments are offered while the
+// untagged ones hide; select a standard rod and it swaps back.
+export const TRV_ATTACH_ROLES = ['TRV_BRACKET', 'TRV_BACKPLATE'];
+export const isTrvAttach = (choice) => TRV_ATTACH_ROLES.includes(traverseRoleOf(choice));
+// The pole / material choices that flip an order into traverse mode when selected.
+export const isTrvPoleChoice = (choice) => ['FASCIA', 'TRACK'].includes(traverseRoleOf(choice));
+// One rule for a step's option pool, shared by CPQ's live filter and its stale-selection sweep.
+// Only a pool that actually MIXES trv-tagged attachments with standard ones filters at all — a
+// pure traverse assembly's untagged brackets (H1-2TRV) are never touched by this gate.
+export function trvAttachGate(pool, trvPoleSelected) {
+    if (!(pool || []).some(isTrvAttach)) return () => true;
+    return (o) => isTrvAttach(o) === !!trvPoleSelected;
+}
 
 // ALWAYS SHOWN: present in every configuration, never an option, never swapped. It is a real part —
 // it bills and it renders — which is exactly why HIDE was the wrong tag for a carrier.

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { isRider } from '../Shared/traverseTags';
+import { isRider, isTrvAttach, traverseRoleOf } from '../Shared/traverseTags';
 import { isStreamVariantCode } from '../Shared/finishingTime';
 import { isTraverseAssembly, buildTraverseFlow } from '../Shared/traverseFlow';
 import { db, storage, functions } from '../../firebase';
@@ -1560,7 +1560,16 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // what order; the low-level helpers below (add / addPerPosition / addEndTreatment / geom) stay
       // shared because turning options into steps is the same job in both worlds.
       const allOpts = [...pole, ...finial, ...brackets, ...backplates, ...rings, ...riderPool, ...other];
-      const isTraverse = isTraverseAssembly(allOpts);
+      // MIXED ASSEMBLY GUARD (Stuart 2026-08-15, H1-138): trv:bracket / trv:backplate tags mark an
+      // assembly that sells BOTH grammars — standard rods beside an integrated traverse unit. That
+      // assembly must KEEP the pole path: forking would delete the standard rods, because
+      // buildTraverseFlow only ever offers role-tagged poles. The traverse side gates at runtime
+      // off the pole answer instead (CPQTab's trvOkFor — traverse unit selected → trv-tagged
+      // attachments; standard rod → standard ones). A pure traverse assembly (H1-2TRV: no attach
+      // markers, every rod option role-tagged) forks exactly as before.
+      const hasAttachMarkers = allOpts.some(isTrvAttach);
+      const hasUntaggedPole = pole.some(o => !traverseRoleOf(o));
+      const isTraverse = isTraverseAssembly(allOpts) && !(hasAttachMarkers && hasUntaggedPole);
       if (isTraverse) {
           const trv = buildTraverseFlow({
               pole, finial, brackets, backplates, rings, other,
