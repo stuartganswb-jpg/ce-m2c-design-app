@@ -997,6 +997,29 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         setAssignBusy(false);
     };
 
+    // ✎ RECLASSIFY A SECTION (Stuart 2026-08-15: "once selected at upload, i can't make a change
+    // there" — the wood-rod slots came in as POLE·SHARED with no way to make them the LEFT/RIGHT
+    // halves). Rewrites the cluster's category/position on the assembly record; the pins stay
+    // linked (they key by clusterId — the generator reads placement from the CLUSTER at generate
+    // time), so a flow Regenerate is all that's needed afterwards.
+    const reclassSection = async (r, patch) => {
+        if (!assignId) return;
+        const next = { category: patch.category !== undefined ? patch.category : (r.category || ''), position: patch.position !== undefined ? patch.position : (r.position || '') };
+        if (!window.confirm(`✎ Reclassify "${r.clusterName}"?\n\n${r.category || '—'} · ${r.position || 'shared'}  →  ${next.category || '—'} · ${next.position || 'shared'}\n\nThe section's ${r.choices.length} choice(s) and pins stay linked — REGENERATE the flow afterwards to apply.`)) return;
+        setAssignBusy(true);
+        try {
+            const dref = doc(db, 'Approved_Designs', assignId);
+            const data = (await getDoc(dref)).data() || {};
+            await updateDoc(dref, { nodeClusters: (data.nodeClusters || []).map(cl => cl.id === r.clusterId ? { ...cl, ...patch } : cl), updatedAt: Date.now() });
+            addLog(`✎ "${r.clusterName}" reclassified → ${next.category || '—'} · ${next.position || 'shared'}. REGENERATE the flow to apply.`, 'success');
+            await handleLoadChoices();
+        } catch (e) {
+            console.error('Reclassify failed:', e);
+            alert('Reclassify failed: ' + (e.message || e));
+        }
+        setAssignBusy(false);
+    };
+
     // 2D tear-sheet section: add a blank choice row (name + item # typed by the operator; the
     // synthetic 2D__ choiceNode is its stable id — pins/BOM/generator read it like any node name).
     const addChoice2d = (clusterId) => {
@@ -1777,6 +1800,15 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                         {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>{twinOf(r) && <button onClick={() => swapSides(r)} disabled={assignBusy} title="LEFT and RIGHT render on each other's ends? The clusters carry each other's nodes — this swaps the geometry records (clusters + pins) with the twin, then Regenerate." style={{ marginLeft: '10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>⇄ sides</button>}
                                         {r.is2d && <button onClick={() => addChoice2d(r.clusterId)} disabled={assignBusy} title="Add a choice to this tear-sheet section — type its display name (what the CPQ card shows) and its item #, then Save Assignments." style={{ marginLeft: '8px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>➕ choice</button>}
                                         <button onClick={() => deleteSection(r)} disabled={assignBusy} title="Delete this ENTIRE section: every choice + pin, and its geometry is stripped from the .glb so the file shrinks (old .glb kept as backup). For re-uploading a whole section via ➕ Extend." style={{ marginLeft: '8px', border: '1px solid #d9534f', background: '#fff', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>🗑 section</button>
+                                        {/* ✎ RECLASS — the slot's category/position were locked in at upload; these two
+                                            selects rewrite the CLUSTER record (pins ride along), then Regenerate. */}
+                                        {!r.is2d && <select value={String(r.category || '').toUpperCase()} disabled={assignBusy} title="RECLASSIFY CATEGORY — chosen at upload, editable here. Moves this whole section's choices into that pool (POLE = rod/material options, RING = the Rings step, …) on the next flow Regenerate. Pins stay linked." onChange={e => { if (e.target.value !== String(r.category || '').toUpperCase()) reclassSection(r, { category: e.target.value }); }} style={{ marginLeft: '8px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 4px', borderRadius: '2px' }}>
+                                            {[...new Set(['POLE', 'FINIAL', 'BRACKET', 'BACKPLATE', 'RING', 'OTHER', String(r.category || '').toUpperCase()])].filter(Boolean).map(cat => <option key={cat} value={cat}>{cat.toLowerCase()}</option>)}
+                                        </select>}
+                                        {!r.is2d && <select value={['LEFT', 'CENTER', 'RIGHT'].includes(String(r.position || '').toUpperCase()) ? String(r.position).toUpperCase() : ''} disabled={assignBusy} title="RECLASSIFY POSITION — chosen at upload, editable here. LEFT/RIGHT on a POLE section = that side's end-half (follows the End Treatment pick); shared/CENTER = the always-shown run (what the material step offers). On the next flow Regenerate. Pins stay linked." onChange={e => { const cur = ['LEFT', 'CENTER', 'RIGHT'].includes(String(r.position || '').toUpperCase()) ? String(r.position).toUpperCase() : ''; if (e.target.value !== cur) reclassSection(r, { position: e.target.value }); }} style={{ marginLeft: '4px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 4px', borderRadius: '2px' }}>
+                                            <option value="">shared</option>
+                                            {['LEFT', 'CENTER', 'RIGHT'].map(p => <option key={p} value={p}>{p.toLowerCase()}</option>)}
+                                        </select>}
                                     </div>
                                     <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(r.category) === 'FINIAL' ? '48px minmax(150px,230px) 220px 122px minmax(300px,1fr) 72px' : '48px minmax(150px,230px) 220px minmax(300px,1fr) 72px', gap: '6px 12px', alignItems: 'center' }}>
                                         {r.choices.map((c) => (
