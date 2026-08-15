@@ -1007,11 +1007,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const trvOkFor = (step, { isSub = false } = {}) => {
       const isSetupSelector = !isSub && step?.stepRole === 'TRV_SETUP';
       const isDriveSelector = !isSub && step?.stepRole === 'TRV_DRIVE';
-      // MIXED POOL (Stuart 2026-08-15, H1-138): a pool offering trv:bracket / trv:backplate
-      // attachments BESIDE standard ones swaps on the pole answer — traverse unit selected → the
-      // trv-tagged options; standard rod → the untagged ones. A pool with no trv-tagged option
-      // never filters (H1-2TRV's brackets are untagged and must all stay).
-      const attachOk = trvAttachGate(isSub ? step?.subOptions : step?.styleOptions, trvSelection.trvPole);
+      // MIXED POOL (Stuart 2026-08-15, H1-138): trv-tagged options are traverse-only everywhere.
+      // The pools that fully SWAP on the pole answer (standard half hides on the traverse rod) are
+      // the bracket steps and the backplate sub-pools — the traverse rod uses its own arms and
+      // plates. Other pools (End Treatment) only filter the trv-tagged options: a gem finial
+      // belongs on the decorative traverse front too, and must not vanish there.
+      const isMutualPool = isSub || step?.stepRole === 'BRACKET' || (/bracket/i.test(step?.title || '') && !/end treatment/i.test(step?.title || ''));
+      const attachOk = trvAttachGate(isSub ? step?.subOptions : step?.styleOptions, trvSelection.trvPole, { mutual: isMutualPool });
       return (o) => (isSetupSelector || setupAllows(o, trvSelection.setup))
           && (isDriveSelector || driveAllows(o, trvSelection.drive))
           && attachOk(o);
@@ -2181,12 +2183,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   // clear an attachment the new mode no longer offers, so the seeder re-picks from
                   // the swapped pool instead of a hidden selection billing on. extraGate = the
                   // mount pairing on sub pools (a plate from the other mount clears the same way).
-                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex)) || !optionProjAllowed(o, sizeSel) || !projTagOk(o) || !trvAttachGate(pool, trvSelection.trvPole)(o) || (extraGate && !extraGate(o));
+                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex)) || !optionProjAllowed(o, sizeSel) || !projTagOk(o) || (extraGate && !extraGate(o));
                   if (banned) { delete next[key]; changed = true; }
               };
-              check(st.id, st.styleOptions);
+              const mutualMain = st.stepRole === 'BRACKET' || (/bracket/i.test(st.title || '') && !/end treatment/i.test(st.title || ''));
+              check(st.id, st.styleOptions, trvAttachGate(st.styleOptions, trvSelection.trvPole, { mutual: mutualMain }));
               const mainSelOpt = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
-              check(`${st.id}__sub`, st.subOptions, mountPairGate(st.subOptions, mainSelOpt));
+              const subMount = mountPairGate(st.subOptions, mainSelOpt);
+              const subTrv = trvAttachGate(st.subOptions, trvSelection.trvPole, { mutual: true });
+              check(`${st.id}__sub`, st.subOptions, (o) => subMount(o) && subTrv(o));
           });
           return changed ? next : prev;
       });

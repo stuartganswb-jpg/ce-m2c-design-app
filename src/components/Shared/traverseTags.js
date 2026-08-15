@@ -23,7 +23,7 @@
 // declares which drives it belongs to. A choice tagged for neither belongs to BOTH — the common
 // case (a fascia is a fascia however the track is driven), so the default costs nobody a tick.
 
-export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'TRV_END', 'FCLIP', 'CARRIER', 'TRV_BRACKET', 'TRV_BACKPLATE'];
+export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'TRV_END', 'FCLIP', 'CARRIER', 'TRV_BRACKET', 'TRV_BACKPLATE', 'TRV_PART'];
 export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 
 // ── SINGLE vs DOUBLE (Stuart 2026-08-04) ────────────────────────────────────────────────────────
@@ -140,16 +140,29 @@ export const driveTypeOf = (choice) => {
 // role-tagged poles), and CPQ swaps the pool on the pole answer instead: select the traverse unit
 // (a pole choice tagged FASCIA or TRACK) and the trv-tagged attachments are offered while the
 // untagged ones hide; select a standard rod and it swaps back.
-export const TRV_ATTACH_ROLES = ['TRV_BRACKET', 'TRV_BACKPLATE'];
+// TRV_PART (H1-138 first test, 2026-08-15) = the generic "traverse-only" marker for choices that
+// are neither brackets nor backplates — e.g. the traverse track returns (138TRVFR / 138TRVMTR)
+// that were showing in the End Treatment picker with a standard rod selected.
+export const TRV_ATTACH_ROLES = ['TRV_BRACKET', 'TRV_BACKPLATE', 'TRV_PART'];
 export const isTrvAttach = (choice) => TRV_ATTACH_ROLES.includes(traverseRoleOf(choice));
 // The pole / material choices that flip an order into traverse mode when selected.
 export const isTrvPoleChoice = (choice) => ['FASCIA', 'TRACK'].includes(traverseRoleOf(choice));
 // One rule for a step's option pool, shared by CPQ's live filter and its stale-selection sweep.
-// Only a pool that actually MIXES trv-tagged attachments with standard ones filters at all — a
-// pure traverse assembly's untagged brackets (H1-2TRV) are never touched by this gate.
-export function trvAttachGate(pool, trvPoleSelected) {
-    if (!(pool || []).some(isTrvAttach)) return () => true;
-    return (o) => isTrvAttach(o) === !!trvPoleSelected;
+//
+// TWO STRENGTHS (H1-138 first test): trv-tagged choices are ALWAYS traverse-only. What happens to
+// the UNTAGGED half differs by pool:
+//  - mutual (bracket steps + backplate sub-pools): the pools swap — the traverse rod uses ITS OWN
+//    arms and plates, so the standard ones hide while it is selected. Activates only in a pool
+//    that MIXES tagged and untagged (a pure traverse assembly's untagged brackets — H1-2TRV —
+//    are never touched).
+//  - asymmetric (everything else, e.g. End Treatment): untagged choices stay put in BOTH modes —
+//    a gem finial belongs on the decorative traverse front exactly as on a standard rod. Hiding
+//    it there (the first cut of this gate) was wrong; only the trv-tagged returns filter.
+export function trvAttachGate(pool, trvPoleSelected, { mutual = true } = {}) {
+    const mixes = (pool || []).some(isTrvAttach);
+    return (o) => isTrvAttach(o)
+        ? !!trvPoleSelected
+        : !(mutual && mixes && trvPoleSelected);
 }
 
 // ALWAYS SHOWN: present in every configuration, never an option, never swapped. It is a real part —
