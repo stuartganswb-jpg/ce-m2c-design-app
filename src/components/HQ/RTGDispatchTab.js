@@ -109,7 +109,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     // Push an approved app PO into NetSuite. The vendor was ALIGNED AT CREATION (nsVendorId = the
     // synced VEND-<id> CRM record) and every line carries the NetSuite item internal id — so this
     // can't mis-resolve a vendor or item at push time; anything unaligned is blocked with a fix-it
-    // message instead. Same proven REST shape as the plating PO (subsidiary derives from the vendor).
+    // message instead. Same proven REST shape as the plating PO, plus an EXPLICIT subsidiary (our
+    // vendors are shared across subsidiaries, so NetSuite won't infer one) and the req date.
     const pushPoToNetSuite = async (po) => {
         if (!po.nsVendorId) return alert(`PO ${po.poId || po.id} has no NetSuite vendor id.\n\nVendor "${po.vendor || '?'}" must match a NetSuite-synced vendor — run 11.1 → Sync Active Vendors (or fix the vendor name on the items), then re-generate the PO from the Sales Snapshot.`);
         const missing = (po.items || []).filter(l => !l.nsItemId);
@@ -129,7 +130,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 method: 'POST',
                 payload: {
                     entity: { id: String(po.nsVendorId) },
+                    // SUBSIDIARY IS EXPLICIT (2026-08-15). The comment below used to say it derives
+                    // from the vendor — true only for a single-subsidiary vendor. Ours are shared
+                    // across CE / M2C / Unique, and NetSuite rejects the PO outright when it can't
+                    // pick one. It's the same brand map the location already comes from.
+                    ...(nsConfig.subsidiary ? { subsidiary: { id: String(nsConfig.subsidiary) } } : {}),
                     location: { id: nsConfig.location },
+                    // The date the PO is wanted. Without it NetSuite dates the whole PO today and
+                    // receiving has nothing to schedule against — the req date is already on the doc.
+                    ...(po.reqDate ? { dueDate: po.reqDate } : {}),
                     memo: `Stock replenishment ${po.poId || po.id} (Sales Snapshot)`,
                     item: { items: (po.items || []).map(l => ({ item: { id: String(l.nsItemId) }, quantity: parseInt(l.quantity) || 1, ...(parseFloat(l.rate) > 0 ? { rate: parseFloat(l.rate) } : {}), description: l.description || l.itemId })) }
                 },

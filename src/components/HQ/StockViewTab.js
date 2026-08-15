@@ -540,7 +540,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // Vendor aligned at creation (VEND-<nsid> CRM record) — same rule as the snapshot's
                 // per-vendor POs, so the RTG → NetSuite push can't mis-resolve the vendor.
                 const vendors = await loadNsVendors();
-                const rec = resolveVendorRec(vendors, activeVendor);
+                const rec = resolveVendorRec(vendors, activeVendor)
+                    || resolveVendorByNsId(vendors, consensusVendorNsId(directBuyLines.map(l => l.part)));
                 if (!rec) {
                     alert(`⚠️ Vendor "${activeVendor}" doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors) — PO not created. Fix the vendor name or sync vendors, then retry.`);
                 } else {
@@ -553,7 +554,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         itemId: part.legacyErpId || part.itemId,
                         nsItemId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null,
                         vendorPart: part.manufacturingSpecs?.vendorId || 'N/A',
-                        quantity: qty, rate: part.manufacturingSpecs?.cost || 0, description: part.itemName
+                        quantity: qty, rate: poRateOf(part),
+                        description: part.manufacturingSpecs?.purchaseDescription || part.itemName
                     }));
                     await setDoc(doc(db, "hq_purchase_orders", newPoId), {
                         id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
@@ -1227,6 +1229,29 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             || vendors.find(v => normVend(v.name).startsWith(n) || n.startsWith(normVend(v.name)))
             || null;
     };
+    // NAME MATCHING IS THE FALLBACK NOW, NOT THE MECHANISM (2026-08-15). The item sync carries the
+    // vendor's NetSuite internal id (`manufacturingSpecs.vendorNsId`, from the ItemVendor sublist),
+    // so a PO no longer depends on a library vendor name spelling its way to a CRM record — a
+    // near-miss used to produce NO PO at all. The name still wins when it resolves (an operator's
+    // vendor override is a deliberate choice); the id only rescues what the name drops.
+    const resolveVendorByNsId = (vendors, nsId) => {
+        const id = String(nsId || '').replace(/^VEND-/, '').trim();
+        if (!id) return null;
+        return vendors.find(v => String(v.id) === `VEND-${id}`) || null;
+    };
+    // The id most of the group's items agree on — one straggler with a stale vendor can't hijack it.
+    const consensusVendorNsId = (parts) => {
+        const tally = {};
+        parts.forEach(p => { const id = p?.manufacturingSpecs?.vendorNsId; if (id) tally[id] = (tally[id] || 0) + 1; });
+        return Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    };
+    // What the vendor actually charges, in the order NetSuite knows it: the vendor sublist's own
+    // purchase price, then the item's purchase price (Eric's `cost`), then average cost — which is
+    // a costing artefact and was silently rating every PO line until 2026-08-15.
+    const poRateOf = (part) => {
+        const s = part?.manufacturingSpecs || {};
+        return parseFloat(s.vendorPurchasePrice) || parseFloat(s.purchasePrice) || parseFloat(s.cost) || 0;
+    };
     // One app PO per vendor (same doc shape as the grid's PO builder — lands in RTG Dispatch, which
     // pushes it to NetSuite). Lines carry the NetSuite ITEM internal id; the doc carries the
     // NetSuite VENDOR internal id. Returns { made, unmatched }.
@@ -1243,7 +1268,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         });
         const made = [], unmatched = [];
         for (const [vendor, list] of byVendor.entries()) {
-            const rec = resolveVendorRec(vendors, vendor);
+            const rec = resolveVendorRec(vendors, vendor)
+                || resolveVendorByNsId(vendors, consensusVendorNsId(list.map(x => x.info.part)));
             if (!rec) { unmatched.push({ vendor, items: list.map(x => x.r.itemid) }); continue; }
             const nsVendorId = String(rec.id || '').replace(/^VEND-/, '');
             // Short human reference (PO-1042) as the id itself — unique via the atomic counter;
@@ -1255,8 +1281,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 itemId: info.part?.legacyErpId || info.part?.itemId || r.itemid,
                 nsItemId: String(r.internalId),   // NetSuite item internal id — the push builds real lines from this
                 vendorPart: info.part?.manufacturingSpecs?.vendorId || 'N/A',
-                quantity: qty, rate: info.part?.manufacturingSpecs?.cost || 0,
-                description: info.part?.itemName || r.itemid
+                quantity: qty, rate: poRateOf(info.part),
+                description: info.part?.manufacturingSpecs?.purchaseDescription || info.part?.itemName || r.itemid
             }));
             await setDoc(doc(db, "hq_purchase_orders", newPoId), {
                 id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
@@ -1268,7 +1294,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             addLog(`✅ PO ${newPoId} → ${rec.name || vendor} (NS vendor ${nsVendorId}, ${items.length} line${items.length === 1 ? '' : 's'}).`, 'success');
         }
         if (unmatched.length) {
-            alert(`⚠️ NO PO created for ${unmatched.length} vendor(s) — the name on the items doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors):\n\n${unmatched.map(u => `• "${u.vendor || '(blank)'}" — ${u.items.slice(0, 6).join(', ')}${u.items.length > 6 ? '…' : ''}`).join('\n')}\n\nFix the vendor name in the Master Library (or sync vendors), then re-generate those items.`);
+            alert(`⚠️ NO PO created for ${unmatched.length} vendor(s) — the name on the items doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors):\n\n${unmatched.map(u => `• "${u.vendor || '(blank)'}" — ${u.items.slice(0, 6).join(', ')}${u.items.length > 6 ? '…' : ''}`).join('\n')}\n\nTwo ways to fix it: re-run 11.1 → Sync Master Library (the item sync now carries the vendor's NetSuite internal id, which resolves these without the name matching at all), or correct the vendor name in the Master Library. Then re-generate those items.`);
         }
         return { made, unmatched };
     };

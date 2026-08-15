@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch, onSnapshot, updateDoc, query, orderBy, limit } from "firebase/firestore";
 import { parseFabricutWorkbook, buildFabricutPlan, buildPremiumTierRepairPlan } from '../Shared/fabricutImport';
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { buildNsItemBody } from "../Shared/nsItemFields";
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -62,8 +63,15 @@ const PULL_FIELDS = [
     { key: 'binLocation', label: 'Bin location' },
     { key: 'vendorName', label: 'Vendor name' },
     { key: 'vendorId', label: 'Vendor part #' },
+    { key: 'vendorNsId', label: 'Vendor internal id (PO alignment)' },
+    { key: 'vendorPurchasePrice', label: 'Vendor purchase price' },
+    { key: 'nsMirror', label: 'NS class / location / cost cat / descriptions' },
     { key: 'customData', label: 'NS collection / watchlist / projection' },
 ];
+// Fields from Eric's "New Inventory or Assembly Item" sheet that the app mirrors but doesn't
+// curate. They ride ONE pull checkbox (`nsMirror`) instead of a dozen — nobody wants to reason
+// about "should NetSuite own the tax schedule" as a separate decision from "the cost category".
+const NS_MIRROR_KEYS = ['purchasePrice', 'nsClass', 'nsLocation', 'costCategory', 'taxSchedule', 'finishDetail', 'partCategory', 'purchaseDescription', 'salesDescription', 'vendorNameText', 'useBins', 'trackLandedCost', 'sendToFicalora'];
 // The three NetSuite checkbox fields, and the app spec each one mirrors.
 const NS_FLAG_FIELDS = { isStocked: 'custitem27', isInHouse: 'custitem26', isRetired: 'custitem28' };
 const PUSH_FIELDS = [
@@ -149,6 +157,28 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         const data = await response.json();
         if (!response.ok) throw new Error(`NetSuite Error: ${JSON.stringify(data)}`);
         return data;
+    };
+
+    // COLUMN PROBE (2026-08-15). SuiteQL fails the WHOLE query on one unknown column, so every
+    // field added to the item sync used to risk breaking the entire catalog import if NetSuite
+    // spells it differently than we expect. Probe the candidates against a zero-row query first
+    // and keep only the ones that resolve: one batch call when they're all good (the normal case),
+    // falling back to per-column probes to find the specific offender. Returns the surviving
+    // "expr AS alias" list plus the aliases, so callers can guard their readers on what arrived.
+    const probeColumns = async (candidates, addLogFn) => {
+        if (!candidates.length) return { sql: '', aliases: new Set() };
+        const sel = (list) => list.map(c => `${c.expr} AS ${c.alias}`).join(', ');
+        try {
+            await executeSuiteQL(`SELECT ${sel(candidates)} FROM item WHERE item.id = 0`);
+            return { sql: candidates.map(c => `${c.expr} AS ${c.alias},`).join('\n                        '), aliases: new Set(candidates.map(c => c.alias)) };
+        } catch (batchErr) { /* one of them is wrong — find out which */ }
+        const good = [], bad = [];
+        for (const c of candidates) {
+            try { await executeSuiteQL(`SELECT ${sel([c])} FROM item WHERE item.id = 0`); good.push(c); }
+            catch (e) { bad.push(c); }
+        }
+        if (bad.length && addLogFn) addLogFn(`⚠ ${bad.length} NetSuite column(s) not available on this account — syncing without them: ${bad.map(c => c.expr).join(', ')}.`, 'warn');
+        return { sql: good.map(c => `${c.expr} AS ${c.alias},`).join('\n                        '), aliases: new Set(good.map(c => c.alias)) };
     };
 
     const handleSyncCustomers = async () => {
@@ -419,6 +449,38 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 addLog(`⏳ TEMP checkbox (custitem_app_temp) not found in NetSuite — syncing without it. Create the item checkbox field with that exact ID to enable temp-item tracking.`, 'info');
             }
 
+            // ---- ERIC'S FIELD SHEET (Items_NS, 2026-08-15) ---------------------------------------
+            // The item sync only ever read 17 of the 31 fields on the "New Inventory or Assembly
+            // Item" sheet, so the library could never mirror (or re-create) a NetSuite item. These
+            // are the rest. Every one is PROBED — an account that spells one differently just loses
+            // that field instead of failing the whole catalog import.
+            //
+            // The two that matter most to purchasing:
+            //   • ItemVendor.vendor      = the vendor's INTERNAL ID. Without it, PO creation had to
+            //     fuzzy-match the vendor NAME against the synced CRM records, and any near-miss
+            //     produced NO PO at all (Stuart 2026-08-15: "unable to create PO in the app").
+            //   • ItemVendor.purchaseprice = what the vendor actually charges. PO lines were rated
+            //     from `averagecost`, which is a costing artefact, not a price anyone agreed to.
+            const extraCols = await probeColumns([
+                { expr: 'ItemVendor.vendor', alias: 'vendor_internal_id' },
+                { expr: 'ItemVendor.purchaseprice', alias: 'vendor_purchase_price' },
+                { expr: 'item.cost', alias: 'purchase_price' },
+                { expr: 'item.vendorname', alias: 'vendor_name_text' },
+                { expr: 'BUILTIN.DF(item.class)', alias: 'ns_class' },
+                { expr: 'BUILTIN.DF(item.location)', alias: 'ns_location' },
+                { expr: 'BUILTIN.DF(item.costcategory)', alias: 'cost_category' },
+                { expr: 'BUILTIN.DF(item.taxschedule)', alias: 'tax_schedule' },
+                { expr: 'BUILTIN.DF(item.custitem2)', alias: 'finish_detail' },
+                { expr: 'BUILTIN.DF(item.custitem22)', alias: 'part_category' },
+                { expr: 'item.custitem20', alias: 'send_to_ficalora' },
+                { expr: 'item.usebins', alias: 'use_bins' },
+                { expr: 'item.tracklandedcost', alias: 'track_landed_cost' },
+                { expr: 'item.purchasedescription', alias: 'purchase_description' },
+                { expr: 'item.salesdescription', alias: 'sales_description' },
+            ], addLog);
+            const hasCol = (a) => extraCols.aliases.has(a);
+            addLog(`Item sync will read ${extraCols.aliases.size} additional NetSuite field(s) from Eric's field sheet${hasCol('vendor_internal_id') ? ' — including the vendor internal id (PO alignment)' : ''}.`, hasCol('vendor_internal_id') ? 'success' : 'warn');
+
             // HOW MANY SHOULD ARRIVE (Stuart 2026-08-04: "parts not syncing from netsuite even when
             // tagged"). The CUSTOMER sync has counted first and verified at the end since 2026-07 —
             // the item sync never did, so a run that stopped short reported success and the missing
@@ -470,6 +532,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         Vendor.companyname AS vendor_name,
                         ItemVendor.vendorcode AS vendor_part_number,
                         ItemVendor.preferredvendor,
+                        ${extraCols.sql}
                         Bin.binnumber,
                         bom.id AS bom_id,
                         bomrevision.name AS bom_revision,
@@ -536,6 +599,12 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             const uniqueRecordsMap = {};
             const nsInternalToLegacyMap = {}; // Lookup Dictionary for Live Batch
 
+            // NetSuite checkbox custom fields come back as 'T'/'F'. custitem27 = "Stocked" (held on the
+            // shelf, sold via Quick Ship); custitem26 = finished IN-HOUSE (needs a WO, not outsourced).
+            // Declared here because the de-duplication below reads `preferredvendor` with it.
+            const nsBool = (v) => v === true || v === 'T' || v === 't' || v === 'true' || v === 1 || v === '1';
+            const nsHasVal = (v) => v !== undefined && v !== null && v !== '';
+
             // 1. Group Duplicates, Aggregate BOM Components, and Build Lookup
             for (const row of allRawRecords) {
                 const itemId = row.id;
@@ -544,14 +613,30 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 nsInternalToLegacyMap[itemId] = legacySku;
 
                 if (!uniqueRecordsMap[itemId]) {
-                    uniqueRecordsMap[itemId] = { 
-                        ...row, 
+                    uniqueRecordsMap[itemId] = {
+                        ...row,
                         all_bins: new Set(),
                         bom_components: [],
                         bom_revision: row.bom_revision || ''
                     };
                 }
-                
+
+                // PREFERRED VENDOR WINS (2026-08-15). An item fans out to one row per ItemVendor
+                // entry, and the first row simply won — so a part carried by three vendors took
+                // whichever one NetSuite happened to list first, and the PO went to the wrong
+                // company. `preferredvendor` was already being selected and never read. Only the
+                // vendor columns are re-pointed; everything else on the row is item-level and
+                // identical across the fan-out.
+                if (nsBool(row.preferredvendor) && !nsBool(uniqueRecordsMap[itemId].preferredvendor)) {
+                    Object.assign(uniqueRecordsMap[itemId], {
+                        preferredvendor: row.preferredvendor,
+                        vendor_name: row.vendor_name,
+                        vendor_part_number: row.vendor_part_number,
+                        vendor_internal_id: row.vendor_internal_id,
+                        vendor_purchase_price: row.vendor_purchase_price,
+                    });
+                }
+
                 if (row.binnumber) uniqueRecordsMap[itemId].all_bins.add(row.binnumber);
                 
                 if (row.bom_revision && !uniqueRecordsMap[itemId].bom_revision) {
@@ -591,11 +676,6 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             }
             let successCount = 0;
             let stockedCount = 0, inHouseCount = 0, oldCount = 0, tempCount = 0;
-
-            // NetSuite checkbox custom fields come back as 'T'/'F'. custitem27 = "Stocked" (held on the
-            // shelf, sold via Quick Ship); custitem26 = finished IN-HOUSE (needs a WO, not outsourced).
-            const nsBool = (v) => v === true || v === 'T' || v === 't' || v === 'true' || v === 1 || v === '1';
-            const nsHasVal = (v) => v !== undefined && v !== null && v !== '';
 
             // 2. Process and Push to Firebase
             for (const item of records) {
@@ -690,14 +770,48 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     uom: item.uom || 'EA',
                     bomRevision: item.bom_revision || '',
                     binLocation: mergedBins,
-                    vendorName: item.vendor_name || '', 
-                    vendorId: item.vendor_part_number || '', 
+                    vendorName: item.vendor_name || '',
+                    vendorId: item.vendor_part_number || '',
                     customData: {
                         collection: item.collection || '',
                         watchlist: item.watchlist || '',
                         projection: item.projection || ''
                     }
                 };
+
+                // The vendor's NetSuite INTERNAL ID — what a purchase order actually needs. Stored
+                // alongside the name so PO creation can stop guessing (StockViewTab resolves this
+                // first and only falls back to name-matching for items synced before this existed).
+                if (hasCol('vendor_internal_id') && nsHasVal(item.vendor_internal_id)) newSpecs.vendorNsId = String(item.vendor_internal_id);
+                // Vendor purchase price ≠ average cost. PO line rates use this when NetSuite has it.
+                if (hasCol('vendor_purchase_price')) {
+                    const vpp = parseFloat(item.vendor_purchase_price);
+                    if (Number.isFinite(vpp) && vpp > 0) newSpecs.vendorPurchasePrice = vpp;
+                }
+                // Purchase price on the item itself (Eric's sheet maps this to `cost`) — the
+                // fallback rate when the vendor sublist carries no price.
+                if (hasCol('purchase_price')) {
+                    const pp = parseFloat(item.purchase_price);
+                    if (Number.isFinite(pp) && pp > 0) newSpecs.purchasePrice = pp;
+                }
+                // The remaining fields off Eric's sheet: carried so the library mirrors NetSuite and
+                // so item CREATION can round-trip them. Only written when NetSuite actually has a
+                // value, so a re-import can never blank a curated field back out.
+                const nsFields = {
+                    nsClass: hasCol('ns_class') ? item.ns_class : undefined,
+                    nsLocation: hasCol('ns_location') ? item.ns_location : undefined,
+                    costCategory: hasCol('cost_category') ? item.cost_category : undefined,
+                    taxSchedule: hasCol('tax_schedule') ? item.tax_schedule : undefined,
+                    finishDetail: hasCol('finish_detail') ? item.finish_detail : undefined,
+                    partCategory: hasCol('part_category') ? item.part_category : undefined,
+                    purchaseDescription: hasCol('purchase_description') ? item.purchase_description : undefined,
+                    salesDescription: hasCol('sales_description') ? item.sales_description : undefined,
+                    vendorNameText: hasCol('vendor_name_text') ? item.vendor_name_text : undefined,
+                };
+                Object.entries(nsFields).forEach(([k, v]) => { if (nsHasVal(v)) newSpecs[k] = String(v); });
+                if (hasCol('use_bins')) newSpecs.useBins = nsBool(item.use_bins);
+                if (hasCol('track_landed_cost')) newSpecs.trackLandedCost = nsBool(item.track_landed_cost);
+                if (hasCol('send_to_ficalora')) newSpecs.sendToFicalora = nsBool(item.send_to_ficalora);
 
                 // Sales price = NetSuite's standard "Base Price" price level (pricelevel 1). Only set it
                 // when NetSuite actually has a price, so a re-import never wipes a curated price back to 0
@@ -727,7 +841,10 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     // pull card, so the app's curated value survives this import untouched. Only
                     // EXISTING items are protected — a first import has nothing to overwrite.
                     const allowedSpecs = {};
-                    Object.entries(newSpecs).forEach(([k, v]) => { if (pullFlags[k] !== false) allowedSpecs[k] = v; });
+                    Object.entries(newSpecs).forEach(([k, v]) => {
+                        const gate = NS_MIRROR_KEYS.includes(k) ? 'nsMirror' : k;
+                        if (pullFlags[gate] !== false) allowedSpecs[k] = v;
+                    });
                     payload.manufacturingSpecs = {
                         ...existingSpecs,
                         ...allowedSpecs,
@@ -923,9 +1040,11 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     && !p.netSuiteInternalId
                     && p.legacyErpId && p.legacyErpId !== 'PENDING' && p.legacyErpId !== 'N/A')
                 .filter(p => scopeHit(p.legacyErpId, scopeTerms));   // a scoped run never creates items outside it
-            if (unmapped.length && window.confirm(`${unmapped.length} item(s) have an item # but NO NetSuite link.\n\nProcess them now? Exact item-id matches in NetSuite are LINKED (merged — never duplicated); the rest are CREATED as new NetSuite items (Inventory class only).`)) {
+            const unmappedAsm = unmapped.filter(p => p.partClass !== 'Inventory').length;
+            if (unmapped.length && window.confirm(`${unmapped.length} item(s) have an item # but NO NetSuite link.\n\nProcess them now? Exact item-id matches in NetSuite are LINKED (merged — never duplicated); the rest are CREATED as new NetSuite items carrying the full field set from Eric's sheet (form, class, location, costing, UOM, collection/watchlist/product type, vendor + pricing sublists, and custitem_sync_to_cpq so they sync back).${unmappedAsm ? `\n\n⚠ ${unmappedAsm} of them are ASSEMBLIES. They will be created as assembly items WITHOUT a bill of materials — NetSuite has no way to build them until someone adds the BOM there.` : ''}`)) {
                 let linked = 0, created = 0, skipped = 0, cfailed = 0;
                 const subId = BRAND_NETSUITE_MAP[activeBrand]?.subsidiary || '2';
+                const locId = BRAND_NETSUITE_MAP[activeBrand]?.location || '';
                 for (const p of unmapped) {
                     const code = String(p.legacyErpId).toUpperCase().replace(/'/g, "''");
                     const rows = await suiteqlQuery(`SELECT id, itemid FROM item WHERE UPPER(itemid) = '${code}'`);
@@ -935,23 +1054,41 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         linked++; addLog(`  ⛓ ${p.legacyErpId}: exists in NetSuite (id ${rows[0].id}) — LINKED, no duplicate.`, 'success');
                         continue;
                     }
-                    if (p.partClass !== 'Inventory') { skipped++; addLog(`  ○ ${p.legacyErpId}: not in NetSuite, but only Inventory-class items are auto-created (this is ${p.partClass || 'unclassified'}). Create it in NetSuite manually, then re-run to link.`, 'warn'); continue; }
-                    const specs = p.manufacturingSpecs || {};
-                    const body = { itemid: p.legacyErpId, displayname: p.itemName || p.legacyErpId, subsidiary: { items: [{ id: subId }] } };
-                    const bp = parseFloat(specs.basePrice); if (!isNaN(bp) && bp > 0) body.custitem9 = bp;
-                    let { ok, result } = await restPost('inventoryitem', body);
-                    // Common create blockers, retried tolerantly: mandatory tax schedule → default '1';
-                    // subsidiary shape variations → single-ref form.
-                    if (!ok && /taxschedule|tax schedule/i.test(JSON.stringify(result))) ({ ok, result } = await restPost('inventoryitem', { ...body, taxschedule: { id: '1' } }));
-                    if (!ok && /subsidiary/i.test(JSON.stringify(result))) ({ ok, result } = await restPost('inventoryitem', { ...body, taxschedule: { id: '1' }, subsidiary: { id: subId } }));
+                    // FULL FIELD SET (2026-08-15, Eric's Items_NS sheet). This used to post four
+                    // fields — itemid, displayname, subsidiary, custitem9 — which produced an item
+                    // NetSuite couldn't cost, locate, classify or buy, and which (missing
+                    // custitem_sync_to_cpq) never came back on any later sync.
+                    const recordType = (p.partClass === 'Inventory') ? 'inventoryitem' : 'assemblyitem';
+                    const built = buildNsItemBody(p, { recordType, subsidiary: subId, location: locId });
+                    let body = built.body;
+                    let { ok, result } = await restPost(recordType, body);
+                    // A create is all-or-nothing, so one field this account spells differently would
+                    // otherwise cost the item entirely. Peel the optional groups off in order and
+                    // say which one NetSuite refused — that message is the diagnosis.
+                    const dropped = [];
+                    let lastErr = result;   // the refusal that CAUSED each peel — `result` becomes the success body
+                    for (const block of built.blocks) {
+                        if (ok) break;
+                        const cur = body;
+                        if (!block.keys.some(k => k in cur)) continue;
+                        const next = { ...cur };
+                        block.keys.forEach(k => delete next[k]);
+                        body = next;
+                        dropped.push(block.name);
+                        lastErr = result;
+                        ({ ok, result } = await restPost(recordType, next));
+                    }
+                    // Last resort: the shape variation that has historically bitten this call.
+                    if (!ok && /subsidiary/i.test(JSON.stringify(result))) { lastErr = result; ({ ok, result } = await restPost(recordType, { ...body, subsidiary: { id: subId } })); }
+                    if (ok && dropped.length) addLog(`  ⚠ ${p.legacyErpId}: NetSuite refused ${dropped.join(', then ')} — item created WITHOUT ${dropped.length === 1 ? 'that' : 'those'}. Its complaint: ${nsErrDetail(JSON.stringify(lastErr)).slice(0, 200)}`, 'warn');
                     if (ok) {
                         // REST POST returns the new record; re-look up by itemid when the id isn't echoed.
                         let newId = result?.id;
                         if (!newId) { const back = await suiteqlQuery(`SELECT id FROM item WHERE UPPER(itemid) = '${code}'`); newId = back?.[0]?.id; }
-                        if (newId) await setDoc(doc(db, "Approved_Designs", p.id), { netSuiteInternalId: String(newId), netSuiteRecordType: 'inventoryitem' }, { merge: true });
-                        created++; addLog(`  ＋ ${p.legacyErpId}: CREATED in NetSuite${newId ? ` (id ${newId})` : ''}.`, 'success');
+                        if (newId) await setDoc(doc(db, "Approved_Designs", p.id), { netSuiteInternalId: String(newId), netSuiteRecordType: recordType }, { merge: true });
+                        created++; addLog(`  ＋ ${p.legacyErpId}: CREATED in NetSuite as ${recordType}${newId ? ` (id ${newId})` : ''}${recordType === 'assemblyitem' ? ' — no BOM; add its components in NetSuite' : ''}.`, 'success');
                     } else {
-                        cfailed++; addLog(`  ✗ ${p.legacyErpId}: create failed — ${JSON.stringify(result).slice(0, 200)}`, 'error');
+                        cfailed++; addLog(`  ✗ ${p.legacyErpId}: create failed even after dropping ${dropped.length ? dropped.join(', ') : 'nothing optional'} — ${nsErrDetail(JSON.stringify(result)).slice(0, 240)}`, 'error');
                     }
                 }
                 addLog(`✅ Merge-or-create done: ${linked} linked (existing), ${created} created, ${skipped} skipped, ${cfailed} failed.`, cfailed ? 'warn' : 'success');
