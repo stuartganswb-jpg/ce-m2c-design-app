@@ -3176,6 +3176,41 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return owners;
   }, [activeFlow, activeAssembly]);
 
+  // 👻 THE INVERSE AUDIT (Stuart 2026-08-16, H1-138: bracket-shaped meshes rendered with NO
+  // bracket selected — the ⚠ banner only catches mapped-but-missing names, never existing
+  // geometry that fell OUT of the maps, which renders in every configuration and poses as the
+  // wrong part). Lists, per section, the nodes that neither any step's geometry maps, nor
+  // targetNodes, nor the hidden lists control. Ancestor semantics mirror the engine's: a node
+  // whose name extends a controlled name past '__' rides its controlled ancestor.
+  const uncontrolledReport = useMemo(() => {
+      if (!activeFlow || !activeAssembly) return [];
+      const controlled = new Set();
+      (activeFlow.steps || []).forEach(step => {
+          Object.values(step.geometryMap || {}).forEach(csv => splitNodesLower(csv).forEach(t => controlled.add(t)));
+          Object.values(step.subGeometryMap || {}).forEach(csv => splitNodesLower(csv).forEach(t => controlled.add(t)));
+          splitNodesLower(step.targetNodes || '').forEach(t => controlled.add(t));
+      });
+      (activeFlow.hiddenNodes || []).forEach(n => { if (n) controlled.add(String(n).trim().toLowerCase().replace(/^=/, '')); });
+      const hiddenCl = new Set(activeFlow.hiddenClusters || []);
+      const ctrlList = [...controlled];
+      const isControlled = (raw) => {
+          const n = String(raw || '').trim().toLowerCase();
+          if (!n) return true;
+          if (controlled.has(n)) return true;
+          return ctrlList.some(c => n.startsWith(c + '__'));
+      };
+      const out = [];
+      (activeAssembly.nodeClusters || []).forEach(cl => {
+          if (hiddenCl.has(cl.id)) return;
+          const all = cl.nodes || [];
+          // the group wrapper (first entry) is a container, not geometry — skip it, and skip the
+          // FusionImport scene wrappers the converter emits.
+          const strays = all.slice(1).filter(n => !/fusionimport/i.test(n) && !isControlled(n));
+          if (strays.length) out.push(`${cl.name || cl.id} · ${cl.position || 'shared'} (${strays.length}: ${strays.slice(0, 2).map(s => String(s).split('__').pop()).join(', ')}${strays.length > 2 ? '…' : ''})`);
+      });
+      return out;
+  }, [activeFlow, activeAssembly]);
+
   // Steps flagged "clone along pole" (e.g. the center passing bracket) drive procedural cloning:
   // the selected option's meshes are cloned (qty) times and spaced down the pole in DynamicModel.
   const cloneSpecs = useMemo(() => {
@@ -4013,6 +4048,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                               <div style={{ marginTop: '8px', padding: '10px 14px', border: '1px solid #b00020', background: 'rgba(176,0,32,0.05)', fontFamily: 'var(--mono)', fontSize: '10px', color: '#b00020', lineHeight: 1.6 }}>
                                   ⚠ {visAudit.length} mapped node name{visAudit.length === 1 ? '' : 's'} not found in this model — by owner: {(() => { const g = {}; visAudit.forEach(t => { const o = visTokenOwners[t] || 'unattributed'; (g[o] = g[o] || []).push(t); }); return Object.entries(g).map(([o, ts]) => `${o} (${ts.length}: ${ts.slice(0, 2).join(', ')}${ts.length > 2 ? '…' : ''})`).join(' · '); })()}.
                                   The option(s) naming them will select and price but render nothing. Rendering model: {activeAssembly?.id || '?'} · {String(activeAssembly?.manufacturingSpecs?.cadUrl || '').split('/').pop().split('?')[0] || 'no cadUrl'} — if 1.6 Load Choices shows a DIFFERENT doc/file for this assembly name, the flow is linked to the wrong record (fix in flow settings), not a naming problem.
+                              </div>
+                          )}
+                          {!debugShowAll && uncontrolledReport.length > 0 && isSuperAdmin && (
+                              <div style={{ position: 'absolute', top: visAudit.length > 0 ? '96px' : '12px', left: '50%', transform: 'translateX(-50%)', maxWidth: '86%', background: 'rgba(255,250,240,0.96)', border: '1px solid #b8860b', color: '#8a6508', borderRadius: '2px', padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.03em', zIndex: 40, lineHeight: 1.5 }}>
+                                  👻 {uncontrolledReport.length} section(s) carry geometry NO step controls — it renders in EVERY configuration and can pose as the wrong part: {uncontrolledReport.slice(0, 6).join(' · ')}{uncontrolledReport.length > 6 ? ' · …' : ''}. Fix: give those nodes an owning choice in 1.6 (item #, HIDE, or ALWAYS), or 🗑/🧹 them, then Regenerate.
                               </div>
                           )}
                           {capturedViews && (
