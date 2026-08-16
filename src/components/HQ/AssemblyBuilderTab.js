@@ -957,8 +957,20 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
                 const scene = gltf.scene;
                 const nrm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-                let grp = scene.getObjectByName((cl.nodes && cl.nodes[0]) || cl.name || r.clusterName);
-                if (!grp) { const wants = new Set([nrm((cl.nodes && cl.nodes[0]) || ''), nrm(cl.name || r.clusterName)].filter(Boolean)); scene.traverse(n => { if (!grp && !n.isMesh && wants.has(nrm(n.name))) grp = n; }); }
+                // ⚠ SHARED-NAME GUARD (2026-08-16 incident, H1-138): a duplicate upload's cluster
+                // carried the SAME group/node names as the real finial pack — the strip resolved
+                // the name to the REAL pack's group and removed the wrong geometry. If any OTHER
+                // section still claims a name this one stores, the delete is RECORD-ONLY: never
+                // strip geometry a sibling section can still be pointing at.
+                const mineNames = new Set([...(cl.nodes || []), cl.name, r.clusterName].filter(Boolean).map(nrm));
+                const sharedWith = (data.nodeClusters || []).find(x => x.id !== r.clusterId && [...(x.nodes || []), x.name].filter(Boolean).some(n => mineNames.has(nrm(n))));
+                let grp = null;
+                if (sharedWith) {
+                    addLog(`⚠ "${sharedWith.name || 'another section'}" claims the same group/node name(s) — records removed, geometry left in place so the sibling keeps its meshes.`, 'error');
+                } else {
+                    grp = scene.getObjectByName((cl.nodes && cl.nodes[0]) || cl.name || r.clusterName);
+                    if (!grp) { const wants = new Set([nrm((cl.nodes && cl.nodes[0]) || ''), nrm(cl.name || r.clusterName)].filter(Boolean)); scene.traverse(n => { if (!grp && !n.isMesh && wants.has(nrm(n.name))) grp = n; }); }
+                }
                 if (grp) {
                     grp.removeFromParent();
                     addLog(`Re-exporting the .glb without "${r.clusterName}"… (the tab may freeze for a moment)`, 'info');
@@ -972,7 +984,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         const pct = Math.round((s.bytesTransferred / s.totalBytes) * 100);
                         if (pct - lastPct >= 25 || (pct === 100 && lastPct < 100)) { lastPct = pct; addLog(`Uploading the stripped .glb (${(s.totalBytes / 1048576).toFixed(1)} MB)… ${pct}%`, 'info'); }
                     }, rej, async () => res(await getDownloadURL(up.snapshot.ref))));
-                } else {
+                } else if (!sharedWith) {
                     addLog(`⚠ "${r.clusterName}" group not found in the .glb — records removed, geometry left in the file (Repair Node Names or the re-upload merge can strip it later).`, 'error');
                 }
             }
@@ -993,6 +1005,30 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         } catch (e) {
             console.error('Section delete failed:', e);
             alert('Section delete failed: ' + (e.message || e) + '\n\nNothing may be half-deleted — reload choices to see the current state.');
+        }
+        setAssignBusy(false);
+    };
+
+    // ↩ RESTORE THE PREVIOUS .GLB (2026-08-16 incident: a section-delete strip resolved a
+    // duplicate's shared group name to the REAL finial pack and removed the wrong geometry).
+    // Every strip stores the pre-strip file as cadUrlBackup — this swaps cadUrl ↔ cadUrlBackup
+    // (restore is itself undoable the same way). Cluster records and pins are untouched.
+    const restoreGlbBackup = async () => {
+        if (!assignId) return;
+        setAssignBusy(true);
+        try {
+            const dref = doc(db, 'Approved_Designs', assignId);
+            const data = (await getDoc(dref)).data() || {};
+            const cur = data.manufacturingSpecs?.cadUrl;
+            const bak = data.manufacturingSpecs?.cadUrlBackup;
+            if (!bak) { alert('No .glb backup on this record — nothing to restore.'); setAssignBusy(false); return; }
+            if (!window.confirm(`↩ Restore the previous .glb?\n\nThe model file goes back to the version saved before the last section-delete strip; the current (stripped) file becomes the new backup, so you can swap forward again. Cluster records and pins are NOT changed.\n\nOK reloads the choices from the restored file (give it a moment).`)) { setAssignBusy(false); return; }
+            await updateDoc(dref, { 'manufacturingSpecs.cadUrl': bak, 'manufacturingSpecs.cadUrlBackup': cur, updatedAt: Date.now() });
+            addLog('↩ Restored the previous .glb — the stripped file is now the backup. Reloading choices…', 'success');
+            await handleLoadChoices();
+        } catch (e) {
+            console.error('Restore failed:', e);
+            alert('Restore failed: ' + (e.message || e));
         }
         setAssignBusy(false);
     };
@@ -1783,6 +1819,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     </div>
                     <button onClick={handleLoadChoices} disabled={assignBusy || !assignId} style={{ padding: '11px 18px', background: assignBusy ? 'var(--paper-2)' : 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                         {assignBusy ? '⚙ Loading…' : 'Load Choices'}
+                    </button>
+                    <button onClick={restoreGlbBackup} disabled={assignBusy || !assignId} title="RESTORE THE PREVIOUS .GLB — every section-delete strip keeps the pre-strip file as a backup on the record. This swaps the model back to it (the current file becomes the new backup, so you can swap forward again). Cluster records and pins are NOT changed. Use when a strip removed geometry a surviving section still needed." style={{ padding: '11px 14px', background: '#fff', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                        ↩ Restore .glb backup
                     </button>
                 </div>
 
