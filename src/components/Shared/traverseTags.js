@@ -25,7 +25,7 @@ import { joinNodes, splitNodes } from './nodeList';
 // declares which drives it belongs to. A choice tagged for neither belongs to BOTH — the common
 // case (a fascia is a fascia however the track is driven), so the default costs nobody a tick.
 
-export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'TRV_END', 'FCLIP', 'CARRIER', 'TRV_BRACKET', 'TRV_BACKPLATE', 'TRV_PART'];
+export const TRAVERSE_ROLES = ['FASCIA', 'TRACK', 'TRV_END', 'FCLIP', 'CARRIER', 'TRV_BRACKET', 'TRV_BACKPLATE', 'TRV_PART', 'STD_ONLY'];
 export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 
 // ── SINGLE vs DOUBLE (Stuart 2026-08-04) ────────────────────────────────────────────────────────
@@ -164,11 +164,18 @@ export const isTrvPoleChoice = (choice) => ['FASCIA', 'TRACK'].includes(traverse
 //  - asymmetric (everything else, e.g. End Treatment): untagged choices stay put in BOTH modes —
 //    a gem finial belongs on the decorative traverse front exactly as on a standard rod. Hiding
 //    it there (the first cut of this gate) was wrong; only the trv-tagged returns filter.
+// STD_ONLY (Stuart 2026-08-16, "ring is showing and carriers — it's either or"): the inverse of
+// TRV_PART — a choice that exists ONLY while a standard (non-traverse) rod is selected. Rings are
+// the canonical case: carriers do their job on the traverse, so a ring on the track is wrong the
+// same way a track return on a steel rod was.
+export const isStdOnly = (choice) => traverseRoleOf(choice) === 'STD_ONLY';
 export function trvAttachGate(pool, trvPoleSelected, { mutual = true } = {}) {
     const mixes = (pool || []).some(isTrvAttach);
     return (o) => isTrvAttach(o)
         ? !!trvPoleSelected
-        : !(mutual && mixes && trvPoleSelected);
+        : isStdOnly(o)
+            ? !trvPoleSelected
+            : !(mutual && mixes && trvPoleSelected);
 }
 
 // ALWAYS SHOWN: present in every configuration, never an option, never swapped. It is a real part —
