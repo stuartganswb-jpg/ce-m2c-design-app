@@ -1066,17 +1066,22 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             // was invisible. Depth-first: descend into claimed groups, strip any group at any
             // depth whose subtree holds no claimed name, or that repeats an already-seen name
             // (the engine resolves names first-match, so the kept copy is the one it uses).
-            const seenNames = new Set();
+            // ⚠ DUP RULE IS SIBLING-SCOPED ONLY (2026-08-16 near-disaster: extend-merges nest
+            // wrapper groups all named after the assembly — a global seen-set treated the INNER
+            // wrapper holding ALL the real geometry as a stale twin of its own parent and
+            // stripped everything; ↩ Restore saved the day. A name repeated down the ancestor
+            // chain is structure; only a name repeated among siblings is a twin.)
             const orphans = [];
             const visit = (g) => {
+                const siblingsSeen = new Set();
                 [...g.children].forEach(ch => {
                     if (ch.isMesh) return; // a kept group's meshes belong to it
                     const names = [];
                     ch.traverse(n => { if (n.name) names.push(n.name); });
                     const isClaimed = names.some(n => claimed.has(n));
-                    const isDupe = ch.name && seenNames.has(ch.name);
+                    const isDupe = ch.name && siblingsSeen.has(ch.name);
                     if (!isClaimed || isDupe) { orphans.push(ch); return; }
-                    if (ch.name) seenNames.add(ch.name);
+                    if (ch.name) siblingsSeen.add(ch.name);
                     visit(ch);
                 });
             };
