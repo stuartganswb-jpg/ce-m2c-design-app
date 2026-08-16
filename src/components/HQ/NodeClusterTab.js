@@ -1216,12 +1216,21 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                                 {/* HYBRID render mapping (Leyla): which display-.glb nodes this drawn section
                                                     controls — the CPQ paints the step's finish onto them (frame/wood live). */}
                                                 {cl.region2d && isSheet2dAssembly(activeAssembly) && activeAssembly.manufacturingSpecs?.sheet2d?.renderGlbUrl && (
-                                                    <input key={`r3d-${cl.id}-${cl.render3dNodes || ''}`} defaultValue={cl.render3dNodes || ''}
-                                                        placeholder="3d: render-model node names (comma-sep) — finish paints these"
-                                                        title="HYBRID: node names in the display .glb this section controls (e.g. FRAME, WOODDISCS). The step's finish selection paints them live in the CPQ render — like DAWN44. Leave blank for rail-only sections (tassel colors point at their swatch instead). Regenerate the flow after changing."
-                                                        onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
-                                                        onBlur={e => { const v = e.target.value.trim(); if (v !== String(cl.render3dNodes || '')) setClusterField(cl.id, { render3dNodes: v }); }}
-                                                        style={{ width: '100%', marginTop: '6px', padding: '5px 8px', border: `1px solid ${cl.render3dNodes ? 'var(--brass)' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--mono)', fontSize: '9px', boxSizing: 'border-box' }} />
+                                                    <div style={{ display: 'flex', gap: '6px', marginTop: '6px', alignItems: 'center' }}>
+                                                        <input key={`r3d-${cl.id}-${cl.render3dNodes || ''}`} defaultValue={cl.render3dNodes || ''}
+                                                            placeholder="3d: render-model node names (comma-sep) — finish paints these"
+                                                            title="HYBRID: node names in the display .glb this section controls (e.g. FRAME, WOODDISCS). The step's finish selection paints them live in the CPQ render — like DAWN44. Leave blank for rail-only sections (tassel colors point at their swatch instead). Regenerate the flow after changing."
+                                                            onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                                                            onBlur={e => { const v = e.target.value.trim(); if (v !== String(cl.render3dNodes || '')) setClusterField(cl.id, { render3dNodes: v }); }}
+                                                            style={{ flex: 1, minWidth: 0, padding: '5px 8px', border: `1px solid ${cl.render3dNodes ? 'var(--brass)' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--mono)', fontSize: '9px', boxSizing: 'border-box' }} />
+                                                        {/* Which side of the render this section's card + leader line sit (Stuart:
+                                                            chain/frame/wood LEFT · tassels/diffuser RIGHT). AUTO alternates. */}
+                                                        <button onClick={() => setClusterField(cl.id, { railSide: cl.railSide === 'L' ? 'R' : cl.railSide === 'R' ? '' : 'L' })}
+                                                            title="HYBRID material-rail side for this section's swatch card + leader line. AUTO alternates for a balanced split; set LEFT/RIGHT to group deliberately (e.g. chain/frame/wood left, tassels/diffuser right). Regenerate the flow after changing."
+                                                            style={{ flexShrink: 0, padding: '5px 10px', background: cl.railSide ? 'var(--brass)' : '#fff', color: cl.railSide ? '#fff' : 'var(--ink-soft)', border: `1px solid ${cl.railSide ? 'var(--brass)' : 'var(--line)'}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                                            rail: {cl.railSide === 'L' ? 'left' : cl.railSide === 'R' ? 'right' : 'auto'}
+                                                        </button>
+                                                    </div>
                                                 )}
                                                 <div style={{ display: 'flex', gap: '5px', marginTop: '5px' }}>
                                                     <button onClick={() => handleSetClusterHidden(cl.id, !cl.hidden)} title="Hidden accessory (e.g. bushing) — auto-included in the BOM when this position is used; never a customer choice/step" style={{ padding: '3px 8px', background: cl.hidden ? '#6b675e' : '#fff', color: cl.hidden ? '#fff' : 'var(--ink-soft)', border: `1px solid ${cl.hidden ? '#6b675e' : 'var(--line)'}`, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em' }}>{cl.hidden ? '✓ Hidden — BOM only' : '⊘ Hidden component'}</button>

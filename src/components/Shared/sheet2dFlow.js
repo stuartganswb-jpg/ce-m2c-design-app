@@ -60,13 +60,23 @@ export function buildSheet2dFlow({ asm, pinsByCluster, ts }) {
         });
         if (!styleOptions.length) { noChoice.push(cl.name || cl.id); return; } // no options = no step; flagged in the alert
         const gmap = {}; styleOptions.forEach(o => { gmap[o.optId] = target; });
+        // Which side of the render this section's card + leader line sit on (Stuart 2026-08-15:
+        // one-sided cards stacked into each other — "split chain, brass and wood to left and
+        // the tassels and acrylic to the right"). Explicit railSide from the 1.5 toggle wins;
+        // auto alternates so any light gets a balanced split without setup.
+        const side = (cl.railSide === 'L' || cl.railSide === 'R') ? cl.railSide : (steps.length % 2 === 0 ? 'L' : 'R');
         steps.push({
             id: `STEP-${ts}-${++n}`,
             title: String(cl.name || 'Choice').replace(/[-_]+/g, ' ').trim(),
             type: 'STYLE_SWAP', partHandling: 'Small Parts', hideQty: true,
             required: styleOptions.length >= 2, // a single-choice region is informational, not a gate
-            finishDataSource: 'master_finishes', useClientPricing: true,
-            styleOptions, geometryMap: gmap, sheet2dClusterId: cl.id,
+            // ⛔ NO finishDataSource by default (Stuart 2026-08-15: the CE/Fabricut
+            // master-finishes chip grid bled into every M2C step — tassel colors are CHOICES,
+            // not finishes). Only a node-mapped hybrid region keeps the picker, so its finish
+            // can paint the display model once a node-named .glb exists.
+            ...(renderUrl && String(cl.render3dNodes || '').trim() ? { finishDataSource: 'master_finishes' } : {}),
+            useClientPricing: true,
+            styleOptions, geometryMap: gmap, sheet2dClusterId: cl.id, sheet2dRailSide: side,
             ...(included.length ? { includedParts: included } : {}),
         });
     });

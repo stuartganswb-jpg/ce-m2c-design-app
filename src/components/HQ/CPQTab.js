@@ -3239,6 +3239,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               chosen: !!opt,
               active: isActive,
               frac: regById[s.sheet2dClusterId]?.railFrac ?? 0.5,
+              // Rail side from the generator (1.5 toggle or auto-alternate); pre-split flows
+              // without the stamp alternate here so old flows still spread across both sides.
+              side: (s.sheet2dRailSide === 'L' || s.sheet2dRailSide === 'R') ? s.sheet2dRailSide : (items.length % 2 === 0 ? 'L' : 'R'),
           });
       });
       return items;
@@ -3902,7 +3905,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       {activeFlow?.sheet2d?.url ? (
                           activeFlow.sheet2d.render3d?.url ? (
                               <>
-                                  <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ position: 'absolute', left: 0, top: 0, width: 'calc(100% - 150px)', height: '100%' }}>{/* model sits LEFT of the material rail (Stuart 2026-08-15: 'move a little left to create more room for the images') */}
+                                  <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ position: 'absolute', left: '160px', top: 0, width: 'calc(100% - 320px)', height: '100%' }}>{/* model centers BETWEEN the split rails (Stuart 2026-08-15: cards on both sides) */}
                                       <StudioRig />
                                       <OrbitControls makeDefault />
                                       <Bounds fit clip margin={1.15}>

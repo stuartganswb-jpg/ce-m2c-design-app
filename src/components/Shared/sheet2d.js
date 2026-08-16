@@ -115,36 +115,50 @@ export const Sheet2DOverlay = ({ sheet2d, regions = [], activeIds = [], litIds =
 export const MaterialRail = ({ items = [] }) => {
     if (!items.length) return null;
     const W = 1000, H = 600;              // stretched viewBox; strokes are non-scaling
-    const AX = 440;                        // leader dot x — right shoulder of the model (canvas is left-shifted to clear the rail)
-    const CARD_L = 795;                    // card left edge (viewBox units) — cards live right of this
+    // TWO-SIDED (Stuart 2026-08-15: one-sided cards stacked into each other — chain/frame/wood
+    // left, tassels/diffuser right). The model renders centered between the rails; each side
+    // spreads its own cards over the full height, so 3 per side never collide.
+    const L = items.filter(i => i.side === 'L');
+    const R = items.filter(i => i.side !== 'L');
+    const GEO = { L: { ax: 400, dir: -1, card: 210 }, R: { ax: 600, dir: 1, card: 790 } };
+    const renderSide = (list, sk) => {
+        const g = GEO[sk];
+        const many = list.length > 4;
+        return list.map((it, i) => {
+            const topPct = ((i + 0.5) / list.length) * 100;
+            const cardY = ((i + 0.5) / list.length) * H;
+            const ay = Math.max(0.04, Math.min(0.96, it.frac ?? 0.5)) * H;
+            const col = it.active ? BRASS : '#a49c90';
+            return {
+                line: (
+                    <g key={it.id} stroke={col} fill="none">
+                        {/* anchor dot (zero-length round-cap path = a dot that survives the stretch) */}
+                        <path d={`M ${g.ax} ${ay} l 0.01 0`} strokeLinecap="round" strokeWidth={it.active ? 7 : 5} vectorEffect="non-scaling-stroke" strokeOpacity={it.active ? 1 : 0.75} />
+                        <path d={`M ${g.ax + 6 * g.dir} ${ay} H ${(g.ax + g.card) / 2} L ${g.card - 14 * g.dir} ${cardY} H ${g.card - 2 * g.dir}`}
+                            strokeWidth={it.active ? 1.6 : 1} vectorEffect="non-scaling-stroke" strokeOpacity={it.active ? 0.95 : 0.6} />
+                    </g>
+                ),
+                card: (
+                    <div key={it.id} style={{ position: 'absolute', [sk === 'L' ? 'left' : 'right']: '10px', top: `${topPct}%`, transform: 'translateY(-50%)', width: many ? '128px' : '148px', background: 'rgba(255,255,255,0.96)', border: `1px solid ${it.active ? BRASS : 'rgba(0,0,0,0.16)'}`, borderRadius: '2px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                        {it.imageUrl
+                            ? <img src={it.imageUrl} alt={it.label} style={{ display: 'block', width: '100%', height: many ? '38px' : '64px', objectFit: 'cover' }} />
+                            : <div style={{ width: '100%', height: many ? '22px' : '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', fontSize: '8px', letterSpacing: '.08em', color: '#a49c90', textTransform: 'uppercase' }}>{it.chosen ? 'no swatch on file' : 'choosing…'}</div>}
+                        <div style={{ padding: '5px 8px 6px' }}>
+                            <div style={{ fontFamily: 'monospace', fontSize: '7px', letterSpacing: '.1em', textTransform: 'uppercase', color: it.active ? BRASS : '#8b8578' }}>{String(it.title).slice(0, 26)}</div>
+                            <div style={{ fontFamily: 'monospace', fontSize: '9px', letterSpacing: '.04em', textTransform: 'uppercase', color: '#2f2b26', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</div>
+                        </div>
+                    </div>
+                ),
+            };
+        });
+    };
+    const parts = [...renderSide(L, 'L'), ...renderSide(R, 'R')];
     return (
         <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
             <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-                {items.map((it, i) => {
-                    const cardY = ((i + 0.5) / items.length) * H;
-                    const ay = Math.max(0.04, Math.min(0.96, it.frac ?? 0.5)) * H;
-                    const col = it.active ? BRASS : '#a49c90';
-                    return (
-                        <g key={it.id} stroke={col} fill="none">
-                            {/* anchor dot (zero-length round-cap path = a dot that survives the stretch) */}
-                            <path d={`M ${AX} ${ay} l 0.01 0`} strokeLinecap="round" strokeWidth={it.active ? 7 : 5} vectorEffect="non-scaling-stroke" strokeOpacity={it.active ? 1 : 0.75} />
-                            <path d={`M ${AX + 6} ${ay} H ${(AX + CARD_L) / 2} L ${CARD_L - 14} ${cardY} H ${CARD_L - 2}`}
-                                strokeWidth={it.active ? 1.6 : 1} vectorEffect="non-scaling-stroke" strokeOpacity={it.active ? 0.95 : 0.6} />
-                        </g>
-                    );
-                })}
+                {parts.map(p => p.line)}
             </svg>
-            {items.map((it, i) => (
-                <div key={it.id} style={{ position: 'absolute', right: '10px', top: `${((i + 0.5) / items.length) * 100}%`, transform: 'translateY(-50%)', width: items.length > 4 ? '128px' : '148px', background: 'rgba(255,255,255,0.96)', border: `1px solid ${it.active ? BRASS : 'rgba(0,0,0,0.16)'}`, borderRadius: '2px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
-                    {it.imageUrl
-                        ? <img src={it.imageUrl} alt={it.label} style={{ display: 'block', width: '100%', height: items.length > 4 ? '38px' : '76px', objectFit: 'cover' }} />
-                        : <div style={{ width: '100%', height: items.length > 4 ? '22px' : '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', fontSize: '8px', letterSpacing: '.08em', color: '#a49c90', textTransform: 'uppercase' }}>{it.chosen ? 'no swatch on file' : 'choosing…'}</div>}
-                    <div style={{ padding: '5px 8px 6px' }}>
-                        <div style={{ fontFamily: 'monospace', fontSize: '7px', letterSpacing: '.1em', textTransform: 'uppercase', color: it.active ? BRASS : '#8b8578' }}>{String(it.title).slice(0, 26)}</div>
-                        <div style={{ fontFamily: 'monospace', fontSize: '9px', letterSpacing: '.04em', textTransform: 'uppercase', color: '#2f2b26', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</div>
-                    </div>
-                </div>
-            ))}
+            {parts.map(p => p.card)}
         </div>
     );
 };
