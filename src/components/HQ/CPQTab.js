@@ -3236,6 +3236,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               id: s.id, title: s.title,
               label: opt ? (opt.partName || '') : '— choose —',
               imageUrl: opt?.imageUrl || '',
+              chosen: !!opt,
               active: isActive,
               frac: regById[s.sheet2dClusterId]?.railFrac ?? 0.5,
           });
@@ -3901,7 +3902,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       {activeFlow?.sheet2d?.url ? (
                           activeFlow.sheet2d.render3d?.url ? (
                               <>
-                                  <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}>
+                                  <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ position: 'absolute', left: 0, top: 0, width: 'calc(100% - 150px)', height: '100%' }}>{/* model sits LEFT of the material rail (Stuart 2026-08-15: 'move a little left to create more room for the images') */}
                                       <StudioRig />
                                       <OrbitControls makeDefault />
                                       <Bounds fit clip margin={1.15}>

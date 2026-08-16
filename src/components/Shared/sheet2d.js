@@ -115,7 +115,7 @@ export const Sheet2DOverlay = ({ sheet2d, regions = [], activeIds = [], litIds =
 export const MaterialRail = ({ items = [] }) => {
     if (!items.length) return null;
     const W = 1000, H = 600;              // stretched viewBox; strokes are non-scaling
-    const AX = 520;                        // leader dot x — right shoulder of the centered model
+    const AX = 440;                        // leader dot x — right shoulder of the model (canvas is left-shifted to clear the rail)
     const CARD_L = 795;                    // card left edge (viewBox units) — cards live right of this
     return (
         <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
@@ -138,7 +138,7 @@ export const MaterialRail = ({ items = [] }) => {
                 <div key={it.id} style={{ position: 'absolute', right: '10px', top: `${((i + 0.5) / items.length) * 100}%`, transform: 'translateY(-50%)', width: items.length > 4 ? '128px' : '148px', background: 'rgba(255,255,255,0.96)', border: `1px solid ${it.active ? BRASS : 'rgba(0,0,0,0.16)'}`, borderRadius: '2px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
                     {it.imageUrl
                         ? <img src={it.imageUrl} alt={it.label} style={{ display: 'block', width: '100%', height: items.length > 4 ? '38px' : '76px', objectFit: 'cover' }} />
-                        : <div style={{ width: '100%', height: items.length > 4 ? '22px' : '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', fontSize: '8px', letterSpacing: '.08em', color: '#a49c90', textTransform: 'uppercase' }}>{it.active ? 'choosing…' : 'no swatch'}</div>}
+                        : <div style={{ width: '100%', height: items.length > 4 ? '22px' : '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'monospace', fontSize: '8px', letterSpacing: '.08em', color: '#a49c90', textTransform: 'uppercase' }}>{it.chosen ? 'no swatch on file' : 'choosing…'}</div>}
                     <div style={{ padding: '5px 8px 6px' }}>
                         <div style={{ fontFamily: 'monospace', fontSize: '7px', letterSpacing: '.1em', textTransform: 'uppercase', color: it.active ? BRASS : '#8b8578' }}>{String(it.title).slice(0, 26)}</div>
                         <div style={{ fontFamily: 'monospace', fontSize: '9px', letterSpacing: '.04em', textTransform: 'uppercase', color: '#2f2b26', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.label}</div>
