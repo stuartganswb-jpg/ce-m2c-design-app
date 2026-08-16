@@ -686,7 +686,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 // cluster owns a distinct namespace, and renaming BEFORE export keeps the stored cluster
                 // node names in exact sync with the .glb. cluster.name stays the pretty label (display +
                 // generator fallback partId). topMap remaps each choice's top-level name for its pin.
-                const prefix = `S${slotOffset + slotIdx}-${pretty}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 44);
+                // UNIQUE ACROSS TIME (2026-08-16 incident: the prefix was just the section COUNT, so
+                // deleting sections let the next build re-mint the SAME S<n> name — her wood-rod
+                // upload collided with the orphaned geometry of an earlier attempt and with the
+                // acrylic slot minted at the same offset, and everything downstream matches by name).
+                const mint = Date.now().toString(36).slice(-5).toUpperCase();
+                const prefix = `S${slotOffset + slotIdx}${mint}-${pretty}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 44);
                 g.name = prefix;
                 // Map each CHOICE node's original name → its renamed name (choices may sit a level
                 // deeper than the group after auto-unwrap/split, so match by name set, not by parent).
@@ -1029,6 +1034,65 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         } catch (e) {
             console.error('Restore failed:', e);
             alert('Restore failed: ' + (e.message || e));
+        }
+        setAssignBusy(false);
+    };
+
+    // 🧹 STRIP UNCLAIMED GEOMETRY (2026-08-16): record-only section deletes and failed uploads
+    // leave groups in the .glb that NO section claims — and unclaimed nodes render PERMANENTLY in
+    // the CPQ (nothing controls them). Removes (a) top-level groups whose names no cluster stores,
+    // and (b) LATER duplicates of a name an earlier sibling already carries — the engine resolves
+    // names first-match, so the kept copy is exactly the one the engine already uses. Old .glb
+    // kept as backup (↩ restorable).
+    const stripOrphanGeometry = async () => {
+        if (!assignId) return;
+        setAssignBusy(true);
+        try {
+            const dref = doc(db, 'Approved_Designs', assignId);
+            const data = (await getDoc(dref)).data() || {};
+            const cadUrl = data.manufacturingSpecs?.cadUrl;
+            if (!cadUrl) { alert('No .glb on this record.'); setAssignBusy(false); return; }
+            const claimed = new Set();
+            (data.nodeClusters || []).forEach(cl => [cl.name, ...(cl.nodes || [])].filter(Boolean).forEach(n => claimed.add(String(n))));
+            addLog('🧹 Downloading the .glb to scan for unclaimed geometry… (large files take a few minutes; the tab may freeze)', 'info');
+            await new Promise(res => setTimeout(res, 60));
+            const buf = await (await fetch(cadUrl)).arrayBuffer();
+            const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
+            const scene = gltf.scene;
+            const root = (scene.children.length === 1 && !scene.children[0].isMesh) ? scene.children[0] : scene;
+            const seenNames = new Set();
+            const orphans = [];
+            [...root.children].forEach(g => {
+                const names = [];
+                g.traverse(n => { if (n.name) names.push(n.name); });
+                const isClaimed = names.some(n => claimed.has(n));
+                const isDupe = g.name && seenNames.has(g.name);
+                if (!isClaimed || isDupe) orphans.push(g);
+                else if (g.name) seenNames.add(g.name);
+            });
+            if (!orphans.length) { alert('🧹 Nothing to strip — every group in the .glb belongs to a section.'); setAssignBusy(false); return; }
+            if (!window.confirm(`🧹 Remove ${orphans.length} unclaimed/duplicate group(s) from the .glb?\n\n${orphans.slice(0, 12).map(o => '• ' + (o.name || '(unnamed)')).join('\n')}${orphans.length > 12 ? '\n…' : ''}\n\nThese belong to NO section (deleted records, failed uploads, or later same-named twins) — in the CPQ they render permanently because nothing controls them. The current .glb is kept as the backup (↩ restorable).`)) { setAssignBusy(false); return; }
+            orphans.forEach(o => o.removeFromParent());
+            addLog('Re-exporting the cleaned .glb… (the tab may freeze for a moment)', 'info');
+            await new Promise(res => setTimeout(res, 60));
+            const glbBuffer = await new Promise((res, rej) => new GLTFExporter().parse(scene, out => res(out), e => rej(e), { binary: true }));
+            const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
+            const path = `assemblies/${activeBrand}_${String(data.itemName || 'asm').replace(/[^a-z0-9]/gi, '_')}_orphanstrip_${Date.now()}.glb`;
+            const up = uploadBytesResumable(sRef(storage, path), blob);
+            let lastPct = 0;
+            const newCadUrl = await new Promise((res, rej) => up.on('state_changed', (s) => {
+                const pct = Math.round((s.bytesTransferred / s.totalBytes) * 100);
+                if (pct - lastPct >= 25 || (pct === 100 && lastPct < 100)) { lastPct = pct; addLog(`Uploading the cleaned .glb (${(s.totalBytes / 1048576).toFixed(1)} MB)… ${pct}%`, 'info'); }
+            }, rej, async () => res(await getDownloadURL(up.snapshot.ref))));
+            await updateDoc(dref, { 'manufacturingSpecs.cadUrl': newCadUrl, 'manufacturingSpecs.cadUrlBackup': cadUrl, updatedAt: Date.now() });
+            addLog(`🧹 Stripped ${orphans.length} unclaimed group(s) — the .glb is back to exactly what the sections claim. Reloading…`, 'success');
+            alert(`🧹 Stripped ${orphans.length} unclaimed/duplicate group(s).\n\nThe .glb now contains exactly what the sections claim (old file kept as backup — ↩ restorable).\n\nOK reloads the choices list.`);
+            setAssignBusy(false);
+            await handleLoadChoices();
+            return;
+        } catch (e) {
+            console.error('Orphan strip failed:', e);
+            alert('Orphan strip failed: ' + (e.message || e));
         }
         setAssignBusy(false);
     };
@@ -1822,6 +1886,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     </button>
                     <button onClick={restoreGlbBackup} disabled={assignBusy || !assignId} title="RESTORE THE PREVIOUS .GLB — every section-delete strip keeps the pre-strip file as a backup on the record. This swaps the model back to it (the current file becomes the new backup, so you can swap forward again). Cluster records and pins are NOT changed. Use when a strip removed geometry a surviving section still needed." style={{ padding: '11px 14px', background: '#fff', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                         ↩ Restore .glb backup
+                    </button>
+                    <button onClick={stripOrphanGeometry} disabled={assignBusy || !assignId} title="STRIP UNCLAIMED GEOMETRY — removes .glb groups that NO section claims (leftovers of record-only deletes and failed uploads) plus later same-named duplicate groups. Unclaimed nodes render PERMANENTLY in the CPQ, so run this after cleaning up sections. Old .glb kept as backup (↩ restorable)." style={{ padding: '11px 14px', background: '#fff', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                        🧹 Strip unclaimed
                     </button>
                 </div>
 
