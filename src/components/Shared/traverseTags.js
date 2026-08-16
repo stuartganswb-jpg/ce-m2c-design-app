@@ -108,10 +108,14 @@ export function dedupeByPart(choices) {
         if (!k) { out.push(c); return; }              // unidentifiable: never merged away
         const hit = byKey.get(k);
         if (!hit) { const copy = { ...c }; byKey.set(k, copy); out.push(copy); return; }
-        const nodes = [hit.targetNode, c.targetNode]
-            .flatMap(t => String(t || '').split(','))
-            .map(x => x.trim()).filter(Boolean);
-        hit.targetNode = [...new Set(nodes)].join(', ');
+        // ⚠ DELIMITER-AWARE (2026-08-16, H1-138: the merge split on ',' only — predating the
+        // ' | ' pipe migration in nodeList — so merging PIPE-joined pin lists and re-joining
+        // with commas produced mixed strings like "A | B, C". splitNodes then split those on
+        // the pipe into glued garbage tokens ("B, C"), the material options controlled nothing,
+        // and every rod rendered at once. The canonical join/split pair is the only safe way
+        // to merge node lists.)
+        const nodes = [hit.targetNode, c.targetNode].flatMap(t => splitNodes(t));
+        hit.targetNode = joinNodes([...new Set(nodes)]);
     });
     return out;
 }
@@ -119,6 +123,8 @@ export function dedupeByPart(choices) {
 // Parts that are never a customer choice: they ride along and get built. Excluding them is what
 // keeps an F-clip out of the Pole / Rod Material picker, where it was appearing.
 export const isRider = (choice) => ['FCLIP', 'CARRIER'].includes(traverseRoleOf(choice)) || isAlwaysShown(choice);
+
+import { joinNodes, splitNodes } from './nodeList';
 
 const up = (v) => String(v ?? '').trim().toUpperCase();
 
