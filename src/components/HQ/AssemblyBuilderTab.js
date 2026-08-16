@@ -1793,13 +1793,32 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 )}
                 {assignData && (
                     <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '10px', maxHeight: '46vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        {/* 2D sections start EMPTY (choices are added via ➕, not read from a scene) —
-                            hiding zero-choice rows would hide every fresh tear-sheet section. */}
-                        {assignData.rows.filter(r => r.choices.length > 0 || r.is2d).map((r) => {
+                        {/* 🧭 TROUBLESHOOTING ORDER (Stuart 2026-08-16: "group them all... all poles/rods
+                            come first, then all finials left, all finials right, all brackets left, all
+                            backplates left, all brackets center, all backplates center"). Display-only —
+                            pins, stored order and the generator are untouched.
+                            ZERO-CHOICE SECTIONS NOW SHOW (they were hidden, which is how the designer's
+                            new wood-rod slot "disappeared": its nodes weren't found in the current .glb
+                            — usually a name collision with an older copy of the same item — so it loaded
+                            with 0 choices and the old filter dropped it from the list entirely). */}
+                        {[...assignData.rows].sort((a, b) => {
+                            const rank = (r) => {
+                                const cat = normalizeCategory(r.category);
+                                const posRank = { LEFT: 0, CENTER: 1, RIGHT: 2 }[String(r.position || '').toUpperCase()] ?? 3;
+                                if (cat === 'POLE') return [0, 0, 0];
+                                if (cat === 'FINIAL') return [1, posRank, 0];
+                                if (cat === 'BRACKET') return [2, posRank, 0];
+                                if (cat === 'BACKPLATE') return [2, posRank, 1];
+                                if (cat === 'RING') return [3, 0, 0];
+                                return [4, 0, 0];
+                            };
+                            const ra = rank(a), rb = rank(b);
+                            return ra[0] - rb[0] || ra[1] - rb[1] || ra[2] - rb[2] || String(a.clusterName || '').localeCompare(String(b.clusterName || ''));
+                        }).map((r) => {
                             return (
                                 <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
-                                        {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>{twinOf(r) && <button onClick={() => swapSides(r)} disabled={assignBusy} title="LEFT and RIGHT render on each other's ends? The clusters carry each other's nodes — this swaps the geometry records (clusters + pins) with the twin, then Regenerate." style={{ marginLeft: '10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>⇄ sides</button>}
+                                        {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>{!r.is2d && r.choices.length === 0 && <span style={{ color: '#d9534f' }}> · ⚠ EMPTY — its nodes weren't found in the current .glb. Usual cause: a name collision with an OLDER section holding the same item (🗑 the stale twin, then re-upload this one via ➕ Extend).</span>}{twinOf(r) && <button onClick={() => swapSides(r)} disabled={assignBusy} title="LEFT and RIGHT render on each other's ends? The clusters carry each other's nodes — this swaps the geometry records (clusters + pins) with the twin, then Regenerate." style={{ marginLeft: '10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>⇄ sides</button>}
                                         {r.is2d && <button onClick={() => addChoice2d(r.clusterId)} disabled={assignBusy} title="Add a choice to this tear-sheet section — type its display name (what the CPQ card shows) and its item #, then Save Assignments." style={{ marginLeft: '8px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>➕ choice</button>}
                                         <button onClick={() => deleteSection(r)} disabled={assignBusy} title="Delete this ENTIRE section: every choice + pin, and its geometry is stripped from the .glb so the file shrinks (old .glb kept as backup). For re-uploading a whole section via ➕ Extend." style={{ marginLeft: '8px', border: '1px solid #d9534f', background: '#fff', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>🗑 section</button>
                                         {/* ✎ RECLASS — the slot's category/position were locked in at upload; these two
