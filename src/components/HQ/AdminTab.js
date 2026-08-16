@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { isRider, isTrvAttach, traverseRoleOf, dedupeByPart } from '../Shared/traverseTags';
+import { isRider, isTrvAttach, traverseRoleOf, dedupeByPart, isTrvPoleChoice } from '../Shared/traverseTags';
 import { isStreamVariantCode } from '../Shared/finishingTime';
 import { isTraverseAssembly, buildTraverseFlow } from '../Shared/traverseFlow';
 import { db, storage, functions } from '../../firebase';
@@ -1595,6 +1595,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           //  • a duplicate pin (the wood rod, twice) collapses into ONE option;
           //  • a material with no center pin (the acrylic rod) still becomes an option.
           const materials = dedupeByPart([...centerPole, ...endPole]);
+          // CARRIERS RIDE THE TRAVERSE ROD'S GEOMETRY (2026-08-16, the 👻 inverse audit's first
+          // catch: HTSLNTCAR was controlled by NO step and rendered on every material). In the
+          // mixed pole path the riders' meshes belong to the traverse unit — merge their nodes
+          // into each trv-tagged material option so they appear and disappear with their rod.
+          const riderNodes = riderPool.filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o))).flatMap(o => splitNodes(o.targetNode));
+          if (riderNodes.length) materials.forEach(m => { if (isTrvPoleChoice(m)) m.targetNode = joinNodes([...splitNodes(m.targetNode), ...riderNodes]); });
           const multiMat = materials.length > 1;
           if (multiMat) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: materials, geometryMap: geom(materials) });
           // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a

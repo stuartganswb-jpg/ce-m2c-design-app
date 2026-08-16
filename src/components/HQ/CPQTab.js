@@ -896,7 +896,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
                   // trvOkFor here is the fix for "selected but not in the list": the sub-seed below
                   // and the dropdown itself both filter by it, and only this line did not.
-                  if (!next[step.id]) { const id = defaultOptionFor((step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step)).filter(seedProjOk), step.geometryMap, step.defaultOptId); if (id) { next[step.id] = id; changed = true; } }
+                  // WALL FIRST (Stuart 2026-08-16: the seed picked the CEILING bracket — first
+                  // option with geometry — so the flow opened on stems pointing at the ceiling).
+                  // Stable sort: wall/untagged options ahead of ceiling/end-tagged ones; the
+                  // ordinary default heuristic then runs on that ordering.
+                  const wallFirst = (arr) => [...arr].sort((a, b) => (mountOf(a) === 'WALL' ? 0 : 1) - (mountOf(b) === 'WALL' ? 0 : 1));
+                  if (!next[step.id]) { const id = defaultOptionFor(wallFirst((step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step)).filter(seedProjOk)), step.geometryMap, step.defaultOptId); if (id) { next[step.id] = id; changed = true; } }
                   // Secondary chooser in the same step (e.g. the backplate paired with the bracket),
                   // seeded to a plate whose location matches the chosen bracket's mount.
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
@@ -2220,7 +2225,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       // bare positions). The rules that banned the old pick choose its successor:
                       // same pool, every gate applied, the ordinary default heuristic. No valid
                       // successor (e.g. basic bracket → no plate) still clears.
-                      const repl = defaultOptionFor((pool || []).filter(x => optCustomerOk(x) && trvOkFor(st, { isSub: !!isSub })(x) && gateOf(x)), isSub ? st.subGeometryMap : st.geometryMap, isSub ? st.defaultSubOptId : st.defaultOptId);
+                      const repl = defaultOptionFor([...(pool || []).filter(x => optCustomerOk(x) && trvOkFor(st, { isSub: !!isSub })(x) && gateOf(x))].sort((a, b) => (mountOf(a) === 'WALL' ? 0 : 1) - (mountOf(b) === 'WALL' ? 0 : 1)), isSub ? st.subGeometryMap : st.geometryMap, isSub ? st.defaultSubOptId : st.defaultOptId);
                       if (repl && repl !== next[key]) next[key] = repl; else delete next[key];
                       changed = true;
                   }
