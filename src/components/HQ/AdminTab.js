@@ -1599,7 +1599,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           // catch: HTSLNTCAR was controlled by NO step and rendered on every material). In the
           // mixed pole path the riders' meshes belong to the traverse unit — merge their nodes
           // into each trv-tagged material option so they appear and disappear with their rod.
-          const riderNodes = riderPool.filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o))).flatMap(o => splitNodes(o.targetNode));
+          // ⚠ include the OTHER pool: traverse carriers are pinned on OTHER clusters (the pool
+          // riderPool never sampled — the reason the first cut of this fix changed nothing).
+          const riderNodes = [...riderPool, ...other.filter(isRider)].filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o))).flatMap(o => splitNodes(o.targetNode));
           if (riderNodes.length) materials.forEach(m => { if (isTrvPoleChoice(m)) m.targetNode = joinNodes([...splitNodes(m.targetNode), ...riderNodes]); });
           const multiMat = materials.length > 1;
           if (multiMat) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: materials, geometryMap: geom(materials) });
