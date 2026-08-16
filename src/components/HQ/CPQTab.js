@@ -866,17 +866,43 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // cannot see is worse than a quote that pre-answers. Doing both needs the visibility model
           // to separate "not chosen yet" from "chosen as nothing", which is a real change, not a
           // gate on this loop.
+          // PROJECTION SEEDS FIRST (Stuart 2026-08-15, H1-138 first run: the flow opened "a mess" —
+          // no projection was seeded because PROJ_SELECT options carry no geometry, so every
+          // position seeded its first-with-geometry arm and its first plate from WHATEVER
+          // projection came first. Arms and plates from different projections sit on different
+          // wall planes, hence the detached floating plates.) Seed the question, then filter every
+          // other seed through it — the default build opens coherent: one projection throughout.
+          steps.forEach(step => {
+              if (step.type === 'PROJ_SELECT' && !next[step.id] && (step.styleOptions || []).length) {
+                  next[step.id] = step.defaultOptId || step.styleOptions[0].optId; changed = true;
+              }
+          });
+          // The freshly-seeded projection is not in flowProjSel yet (memo of the PREVIOUS params),
+          // so the seed gate reads it straight out of `next` — same math as projTagOk.
+          const projStep = steps.find(s => s.type === 'PROJ_SELECT');
+          const seedProjOpt = projStep ? (projStep.styleOptions || []).find(x => x.optId === next[projStep.id]) : null;
+          const seedProjF = parseFloat(String(seedProjOpt?.projInches ?? (projStep ? '' : (activeFlow?.impliedProjInches ?? ''))).replace(/[^0-9.]/g, ''));
+          const seedProj = Number.isFinite(seedProjF) ? seedProjF : null;
+          const seedProjOk = (o) => {
+              if (seedProj == null || !o?.projInches) return true;
+              const f = parseFloat(String(o.projInches).replace(/[^0-9.]/g, ''));
+              if (!Number.isFinite(f)) return true;
+              const et = String(o.endTreatment || '').toUpperCase();
+              const returnish = et === 'FRENCH_RETURN' || et === 'MITER_RETURN' || (o.isFee && /return|miter|mitre|french|bend/i.test(String(o.partName || '')));
+              if (returnish && !isTraverseFlow) return seedProj >= f - 0.01;
+              return Math.abs(f - seedProj) < 0.01;
+          };
           steps.forEach(step => {
               if (step.type === 'STYLE_SWAP' && Array.isArray(step.styleOptions) && step.styleOptions.length) {
                   // trvOkFor here is the fix for "selected but not in the list": the sub-seed below
                   // and the dropdown itself both filter by it, and only this line did not.
-                  if (!next[step.id]) { const id = defaultOptionFor((step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step)), step.geometryMap, step.defaultOptId); if (id) { next[step.id] = id; changed = true; } }
+                  if (!next[step.id]) { const id = defaultOptionFor((step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step)).filter(seedProjOk), step.geometryMap, step.defaultOptId); if (id) { next[step.id] = id; changed = true; } }
                   // Secondary chooser in the same step (e.g. the backplate paired with the bracket),
                   // seeded to a plate whose location matches the chosen bracket's mount.
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
                       const mainOpt = step.styleOptions.find(o => (o.optId || o.partId) === next[step.id]);
                       const loc = mainOpt?.location;
-                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step, { isSub: true })).filter(mountPairGate(step.subOptions, mainOpt));
+                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step, { isSub: true })).filter(mountPairGate(step.subOptions, mainOpt)).filter(seedProjOk);
                       const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
                       const sid = defaultOptionFor(cands.length ? cands : pool0, step.subGeometryMap, step.defaultSubOptId);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
@@ -2210,7 +2236,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       if (step && Array.isArray(step.subOptions) && step.subOptions.length) {
           const mainOpt = (step.styleOptions || []).find(o => (o.optId || o.partId) === value);
           const loc = mainOpt?.location;
-          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step, { isSub: true })).filter(mountPairGate(step.subOptions, mainOpt));
+          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step, { isSub: true })).filter(mountPairGate(step.subOptions, mainOpt)).filter(projTagOk);
           const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
           const pick = cands.find(o => o.targetNode) || cands[0];
           next[`${stepId}__sub`] = pick ? pick.optId : '';
