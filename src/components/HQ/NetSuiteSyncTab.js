@@ -360,6 +360,28 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         try {
             const targetBrand = Object.keys(BRAND_NETSUITE_MAP).find(key => BRAND_NETSUITE_MAP[key].subsidiary === nsSubsidiaryId?.toString()) || activeBrand;
 
+            // WHICH SUBSIDIARIES MAY BUY FROM THIS VENDOR (Eric, 2026-08-15). A PO is rejected when
+            // its subsidiary isn't one the vendor is assigned to — and ours sit opposite the company
+            // buying from them (The Generator's primary is M2C Studio, Dayton Grey's is Classical
+            // Elements). Capturing the assignment here lets PO creation say so in plain words instead
+            // of letting NetSuite answer with a field-value error about the location.
+            let vendorSubs = {};   // vendor id → [subsidiary ids]
+            try {
+                const rel = await executeSuiteQL('SELECT entity, subsidiary FROM vendorsubsidiaryrelationship');
+                (rel.items || []).forEach(r => {
+                    const k = String(r.entity);
+                    (vendorSubs[k] = vendorSubs[k] || []).push(String(r.subsidiary));
+                });
+                addLog(`Read subsidiary assignments for ${Object.keys(vendorSubs).length} vendor(s).`, 'info');
+            } catch (relErr) {
+                addLog(`⚠ Couldn't read vendorsubsidiaryrelationship (${relErr.message || relErr}) — falling back to each vendor's primary subsidiary only. A PO to a vendor shared across subsidiaries may still be flagged wrongly.`, 'warn');
+                vendorSubs = null;
+            }
+            // The primary subsidiary, which is also the one NetSuite auto-populates from the entity.
+            let hasVendorSub = true;
+            try { await executeSuiteQL('SELECT subsidiary FROM vendor WHERE id = 0'); }
+            catch (e) { hasVendorSub = false; }
+
             let allRecords = [];
             let lastId = 0;
             let hasMore = true;
@@ -367,7 +389,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
             while (hasMore) {
                 addLog(`Fetching vendor batch ${pageCount}...`, 'info');
-                const q = `SELECT id, companyname, email, phone, terms FROM vendor WHERE isinactive = 'F' AND id > ${lastId} ORDER BY id ASC`;
+                const q = `SELECT id, companyname, email, phone, terms${hasVendorSub ? ', subsidiary' : ''} FROM vendor WHERE isinactive = 'F' AND id > ${lastId} ORDER BY id ASC`;
                 const result = await executeSuiteQL(q);
                 const batch = result.items || [];
                 allRecords = allRecords.concat(batch);
@@ -395,6 +417,13 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     email: v.email || '',
                     phone: v.phone || '',
                     terms: v.terms || '',
+                    // Primary subsidiary + every subsidiary allowed to transact with this vendor.
+                    // `nsSubsidiaries` empty = unknown (the relationship table wasn't readable), which
+                    // PO creation treats as "don't warn" rather than "not allowed".
+                    nsSubsidiary: v.subsidiary != null ? String(v.subsidiary) : '',
+                    nsSubsidiaries: vendorSubs
+                        ? Array.from(new Set([...(vendorSubs[String(v.id)] || []), ...(v.subsidiary != null ? [String(v.subsidiary)] : [])]))
+                        : [],
                     notes: 'Imported from NetSuite',
                     status: 'ACTIVE',
                     brandId: targetBrand,

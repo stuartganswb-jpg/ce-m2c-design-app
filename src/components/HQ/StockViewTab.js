@@ -1245,6 +1245,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         parts.forEach(p => { const id = p?.manufacturingSpecs?.vendorNsId; if (id) tally[id] = (tally[id] || 0) + 1; });
         return Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
     };
+    // CAN THIS SUBSIDIARY BUY FROM THIS VENDOR? (Eric, 2026-08-15) A PO carries the BUYING company's
+    // subsidiary, but NetSuite only accepts a vendor assigned to it — and ours are routinely assigned
+    // the other way round (The Generator's primary subsidiary is M2C Studio, Dayton Grey's is
+    // Classical Elements). Unchecked, that surfaces at push time as a confusing complaint about the
+    // *location* field. An empty list means the vendor sync couldn't read the assignments, which is
+    // silence, not a denial — so it never warns on missing data.
+    const vendorSubsidiaryGap = (rec, subsidiaryId) => {
+        const subs = Array.isArray(rec?.nsSubsidiaries) ? rec.nsSubsidiaries.map(String) : [];
+        if (!subs.length || !subsidiaryId) return null;
+        return subs.includes(String(subsidiaryId)) ? null : subs;
+    };
     // What the vendor actually charges, in the order NetSuite knows it: the vendor sublist's own
     // purchase price, then the item's purchase price (Eric's `cost`), then average cost — which is
     // a costing artefact and was silently rating every PO line until 2026-08-15.
@@ -1266,7 +1277,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             if (!byVendor.has(v)) byVendor.set(v, []);
             byVendor.get(v).push(x);
         });
-        const made = [], unmatched = [];
+        const made = [], unmatched = [], wrongSub = [];
+        const poSubsidiary = (BRAND_NETSUITE_MAP[activeBrand] || {}).subsidiary || '';
         for (const [vendor, list] of byVendor.entries()) {
             const rec = resolveVendorRec(vendors, vendor)
                 || resolveVendorByNsId(vendors, consensusVendorNsId(list.map(x => x.info.part)));
@@ -1284,19 +1296,27 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 quantity: qty, rate: poRateOf(info.part),
                 description: info.part?.manufacturingSpecs?.purchaseDescription || info.part?.itemName || r.itemid
             }));
+            // The PO is still created — this is NetSuite master-data to fix, not a reason to lose the
+            // buy list. It's stamped so RTG can say the same thing before pushing.
+            const gap = vendorSubsidiaryGap(rec, poSubsidiary);
+            if (gap) wrongSub.push({ vendor: rec.name || vendor, has: gap, poId: newPoId });
             await setDoc(doc(db, "hq_purchase_orders", newPoId), {
                 id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
                 vendor: rec.name || vendor, nsVendorId, vendorCrmId: rec.id,
+                nsSubsidiary: poSubsidiary, vendorSubsidiaryGap: gap ? gap.join(',') : '',
                 items, source: 'SALES_SNAPSHOT',
                 reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], createdAt: Date.now(), createdBy: currentUser || ''
             });
             made.push({ vendor: rec.name || vendor, lines: items.length });
-            addLog(`✅ PO ${newPoId} → ${rec.name || vendor} (NS vendor ${nsVendorId}, ${items.length} line${items.length === 1 ? '' : 's'}).`, 'success');
+            addLog(`✅ PO ${newPoId} → ${rec.name || vendor} (NS vendor ${nsVendorId}, ${items.length} line${items.length === 1 ? '' : 's'})${gap ? ` ⚠ vendor is not assigned to subsidiary ${poSubsidiary}` : ''}.`, gap ? 'warn' : 'success');
         }
         if (unmatched.length) {
             alert(`⚠️ NO PO created for ${unmatched.length} vendor(s) — the name on the items doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors):\n\n${unmatched.map(u => `• "${u.vendor || '(blank)'}" — ${u.items.slice(0, 6).join(', ')}${u.items.length > 6 ? '…' : ''}`).join('\n')}\n\nTwo ways to fix it: re-run 11.1 → Sync Master Library (the item sync now carries the vendor's NetSuite internal id, which resolves these without the name matching at all), or correct the vendor name in the Master Library. Then re-generate those items.`);
         }
-        return { made, unmatched };
+        if (wrongSub.length) {
+            alert(`⚠️ ${wrongSub.length} PO(s) were created, but NetSuite will refuse them as they stand:\n\n${wrongSub.map(w => `• ${w.poId} — ${w.vendor} is assigned to subsidiary ${w.has.join(' / ')}, not ${poSubsidiary}`).join('\n')}\n\nThis PO is issued by subsidiary ${poSubsidiary}, and NetSuite only lets a subsidiary buy from a vendor assigned to it. NetSuite reports this as an "Invalid Field Value … for the following field: location" error, which is misleading — the location is fine.\n\nFix in NetSuite: add subsidiary ${poSubsidiary} to those vendor records, then re-run 11.1 → Sync Active Vendors and push.`);
+        }
+        return { made, unmatched, wrongSub };
     };
     // ONE snapshot filter predicate, shared by the Finished table, the Raw Cores rollup and the CSV
     // (Stuart 2026-07-28: "when i switch view to raw the filter no longer really filters" — the

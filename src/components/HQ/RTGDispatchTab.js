@@ -115,6 +115,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (!po.nsVendorId) return alert(`PO ${po.poId || po.id} has no NetSuite vendor id.\n\nVendor "${po.vendor || '?'}" must match a NetSuite-synced vendor — run 11.1 → Sync Active Vendors (or fix the vendor name on the items), then re-generate the PO from the Sales Snapshot.`);
         const missing = (po.items || []).filter(l => !l.nsItemId);
         if (missing.length) return alert(`${missing.length} line(s) have no NetSuite item id — sync those items (11.1 → Sync Master Library) and re-generate:\n\n${missing.slice(0, 10).map(l => `• ${l.itemId}`).join('\n')}`);
+        // Stamped at PO creation from the vendor's NetSuite subsidiary assignments. NetSuite reports
+        // this as an "Invalid Field Value <loc> for the following field: location" error, which sends
+        // everyone hunting the wrong field — so say what it actually is, before the push.
+        const subGap = String(po.vendorSubsidiaryGap || '');
+        if (subGap && !window.confirm(`⚠ ${po.vendor} is assigned to NetSuite subsidiary ${subGap.split(',').join(' / ')}, but this PO is issued by subsidiary ${po.nsSubsidiary || '?'}.\n\nNetSuite will almost certainly refuse it — and it will blame the LOCATION field, which is not the problem. Fix: add subsidiary ${po.nsSubsidiary || '?'} to that vendor record in NetSuite, then re-run 11.1 → Sync Active Vendors.\n\nPush anyway?`)) return;
         if (!window.confirm(`Queue PO ${po.poId || po.id} → NetSuite?\n\nVendor: ${po.vendor} (internal id ${po.nsVendorId})\n${(po.items || []).length} line(s), req ${po.reqDate || 'n/a'}.\n\nIt posts from the sync queue within ~a minute (11.1 → NetSuite Sync Queue shows status); the PO record picks up the NetSuite # automatically.`)) return;
         try {
             const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
@@ -130,12 +135,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 method: 'POST',
                 payload: {
                     entity: { id: String(po.nsVendorId) },
-                    // SUBSIDIARY IS EXPLICIT (2026-08-15). The comment below used to say it derives
-                    // from the vendor — true only for a single-subsidiary vendor. Ours are shared
-                    // across CE / M2C / Unique, and NetSuite rejects the PO outright when it can't
-                    // pick one. It's the same brand map the location already comes from.
-                    ...(nsConfig.subsidiary ? { subsidiary: { id: String(nsConfig.subsidiary) } } : {}),
-                    location: { id: nsConfig.location },
+                    // SUBSIDIARY MUST COME BEFORE LOCATION, AND NEITHER GOES ALONE (Eric, 2026-08-15).
+                    // Sending `location` with no `subsidiary` is what produced "Invalid Field Value 17
+                    // for the following field: location" on a CE PO — 17 IS the right CE location, but
+                    // setting the entity first auto-populates the VENDOR's primary subsidiary, and our
+                    // vendors sit opposite the company buying from them (The Generator's primary is
+                    // M2C; Dayton Grey's is CE). NetSuite then rejects a location belonging to the
+                    // subsidiary it just defaulted away from. Subsidiary first pins it; location
+                    // resolves against that. Keep this key order — it mirrors the order NetSuite
+                    // applies them in.
+                    ...(nsConfig.subsidiary
+                        ? { subsidiary: { id: String(nsConfig.subsidiary) }, location: { id: String(nsConfig.location) } }
+                        : {}),
                     // The date the PO is wanted. Without it NetSuite dates the whole PO today and
                     // receiving has nothing to schedule against — the req date is already on the doc.
                     ...(po.reqDate ? { dueDate: po.reqDate } : {}),

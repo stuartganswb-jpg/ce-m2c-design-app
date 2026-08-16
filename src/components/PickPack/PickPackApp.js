@@ -1797,8 +1797,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 payload: {
                     customForm: { id: "272" }, // "LG - Purchase Order Form" (matches the working manual PO)
                     entity: { id: nsVendorId }, // plater INTERNAL id from the finish's NS-synced vendor (NOT the entityid/vendor#); default 42036 (Dayton Grey)
-                    // subsidiary intentionally OMITTED — it derives from the (now-resolving) vendor, which is sub 2 (CE).
-                    location: { id: nsConfig.location }, // High Point - CE = 17 (subsidiary 2)
+                    // SUBSIDIARY IS EXPLICIT, AND MUST PRECEDE LOCATION (Eric, 2026-08-15). Omitting it
+                    // worked here only by luck: Dayton Grey's primary subsidiary happens to BE CE (2),
+                    // which matches location 17. Any plater whose primary sits in another subsidiary —
+                    // or any M2C plating run — hit "Invalid Field Value <loc> for the following field:
+                    // location", because setting the entity defaults the subsidiary to the VENDOR's,
+                    // and the location then belongs to the wrong one.
+                    ...(nsConfig.subsidiary
+                        ? { subsidiary: { id: String(nsConfig.subsidiary) }, location: { id: String(nsConfig.location) } }
+                        : {}),
                     memo: `Weekly Plating Shipment ${shipId}${finishSummary ? ` (${finishSummary})` : ''} — ${lines.length} items, ${pcs} pcs`,
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), description: lineDescription }] }
                 }
