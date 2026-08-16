@@ -1060,16 +1060,27 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             const gltf = await new Promise((res, rej) => loaderRef.current.parse(buf, '', res, rej));
             const scene = gltf.scene;
             const root = (scene.children.length === 1 && !scene.children[0].isMesh) ? scene.children[0] : scene;
+            // RECURSIVE (2026-08-16: the top-level-only walk reported "all clear" while two
+            // orphaned ghost rods sat one level DOWN — extend-merges nest earlier roots as
+            // wrapper groups, so an orphan inside a wrapper that also holds claimed geometry
+            // was invisible. Depth-first: descend into claimed groups, strip any group at any
+            // depth whose subtree holds no claimed name, or that repeats an already-seen name
+            // (the engine resolves names first-match, so the kept copy is the one it uses).
             const seenNames = new Set();
             const orphans = [];
-            [...root.children].forEach(g => {
-                const names = [];
-                g.traverse(n => { if (n.name) names.push(n.name); });
-                const isClaimed = names.some(n => claimed.has(n));
-                const isDupe = g.name && seenNames.has(g.name);
-                if (!isClaimed || isDupe) orphans.push(g);
-                else if (g.name) seenNames.add(g.name);
-            });
+            const visit = (g) => {
+                [...g.children].forEach(ch => {
+                    if (ch.isMesh) return; // a kept group's meshes belong to it
+                    const names = [];
+                    ch.traverse(n => { if (n.name) names.push(n.name); });
+                    const isClaimed = names.some(n => claimed.has(n));
+                    const isDupe = ch.name && seenNames.has(ch.name);
+                    if (!isClaimed || isDupe) { orphans.push(ch); return; }
+                    if (ch.name) seenNames.add(ch.name);
+                    visit(ch);
+                });
+            };
+            visit(root);
             if (!orphans.length) { alert('🧹 Nothing to strip — every group in the .glb belongs to a section.'); setAssignBusy(false); return; }
             if (!window.confirm(`🧹 Remove ${orphans.length} unclaimed/duplicate group(s) from the .glb?\n\n${orphans.slice(0, 12).map(o => '• ' + (o.name || '(unnamed)')).join('\n')}${orphans.length > 12 ? '\n…' : ''}\n\nThese belong to NO section (deleted records, failed uploads, or later same-named twins) — in the CPQ they render permanently because nothing controls them. The current .glb is kept as the backup (↩ restorable).`)) { setAssignBusy(false); return; }
             orphans.forEach(o => o.removeFromParent());
