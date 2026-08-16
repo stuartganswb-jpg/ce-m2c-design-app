@@ -2199,7 +2199,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           let changed = false; const next = { ...prev };
           (activeFlow.steps || []).forEach(st => {
               if (st.type !== 'STYLE_SWAP') return;
-              const check = (key, pool, extraGate) => {
+              const check = (key, pool, extraGate, isSub) => {
                   if (!next[key]) return;
                   const o = (pool || []).find(x => (x.optId || x.partId) === next[key]);
                   if (!o) return;
@@ -2209,15 +2209,28 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   // clear an attachment the new mode no longer offers, so the seeder re-picks from
                   // the swapped pool instead of a hidden selection billing on. extraGate = the
                   // mount pairing on sub pools (a plate from the other mount clears the same way).
-                  const banned = (!returnsOk && oRtn && oEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(o), sizeSel, sizeLabelIndex)) || !optionProjAllowed(o, sizeSel) || !projTagOk(o) || (extraGate && !extraGate(o));
-                  if (banned) { delete next[key]; changed = true; }
+                  const gateOf = (x) => {
+                      const xEt = String(x.endTreatment || '').toUpperCase();
+                      const xRtn = isReturnOption(x) || (x.returnOnly && xEt !== 'INSIDE_MOUNT') || /return|miter|mitre|french|\bbend\b/i.test(String(partOf(x)?.itemName || ''));
+                      return !((!returnsOk && xRtn && xEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(x), sizeSel, sizeLabelIndex)) || !optionProjAllowed(x, sizeSel) || !projTagOk(x) || (extraGate && !extraGate(x)));
+                  };
+                  if (!gateOf(o)) {
+                      // REPLACE, DON'T JUST CLEAR (Stuart 2026-08-16: "once i switch projections it
+                      // gets weird" — the banned arm/plate vanished and nothing re-picked, leaving
+                      // bare positions). The rules that banned the old pick choose its successor:
+                      // same pool, every gate applied, the ordinary default heuristic. No valid
+                      // successor (e.g. basic bracket → no plate) still clears.
+                      const repl = defaultOptionFor((pool || []).filter(x => optCustomerOk(x) && trvOkFor(st, { isSub: !!isSub })(x) && gateOf(x)), isSub ? st.subGeometryMap : st.geometryMap, isSub ? st.defaultSubOptId : st.defaultOptId);
+                      if (repl && repl !== next[key]) next[key] = repl; else delete next[key];
+                      changed = true;
+                  }
               };
               const mutualMain = st.stepRole === 'BRACKET' || (/bracket/i.test(st.title || '') && !/end treatment/i.test(st.title || ''));
               check(st.id, st.styleOptions, trvAttachGate(st.styleOptions, trvSelection.trvPole, { mutual: mutualMain }));
               const mainSelOpt = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
               const subMount = mountPairGate(st.subOptions, mainSelOpt);
               const subTrv = trvAttachGate(st.subOptions, trvSelection.trvPole, { mutual: true });
-              check(`${st.id}__sub`, st.subOptions, (o) => subMount(o) && subTrv(o));
+              check(`${st.id}__sub`, st.subOptions, (o) => subMount(o) && subTrv(o), true);
           });
           return changed ? next : prev;
       });

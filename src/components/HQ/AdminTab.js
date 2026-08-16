@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { isRider, isTrvAttach, traverseRoleOf } from '../Shared/traverseTags';
+import { isRider, isTrvAttach, traverseRoleOf, dedupeByPart } from '../Shared/traverseTags';
 import { isStreamVariantCode } from '../Shared/finishingTime';
 import { isTraverseAssembly, buildTraverseFlow } from '../Shared/traverseFlow';
 import { db, storage, functions } from '../../firebase';
@@ -1581,7 +1581,22 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
           // Step 1 = Pole/Rod MATERIAL chooser — ONLY when there's more than one material. With a single
           // material the choice is fixed, so it folds into the combined Length & Finish step below.
-          if (centerPole.length > 1) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: centerPole, geometryMap: geom(centerPole) });
+          //
+          // ONE MATERIAL, LISTED ONCE — THE TRAVERSE GENERATOR'S RULE, IMPORTED (Stuart 2026-08-16,
+          // H1-138 first multi-material pole flow: "H1-2TRV and H2 ... this one mostly follows the
+          // same rules"). The pole model pins every material SEVERAL times — short center rod +
+          // long LEFT/RIGHT halves, the wood rod on two center clusters, the acrylic rod on the
+          // halves only. The material question is per PART, not per pin: dedupe across ALL pole
+          // pins, each option owning every copy's nodes MERGED. That is what makes the swap work:
+          //  • picking a material lights its WHOLE rod — the End Treatment step lists every
+          //    material's long halves in one gmap, and the AND-visibility needs the material map
+          //    to veto the other materials' halves (without the merge, all four rods rendered
+          //    stacked and the "swap" appeared to do nothing);
+          //  • a duplicate pin (the wood rod, twice) collapses into ONE option;
+          //  • a material with no center pin (the acrylic rod) still becomes an option.
+          const materials = dedupeByPart([...centerPole, ...endPole]);
+          const multiMat = materials.length > 1;
+          if (multiMat) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: materials, geometryMap: geom(materials) });
           // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
           // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +
           // title follow the chosen bay configuration so the configurator math matches the flow's fabShape.
@@ -1593,7 +1608,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           // footage ONLY — no second finish chooser (type DIMENSIONS carries no dataSource and passes
           // the required-gate without a selection). Single-material keeps the combined Length & Finish
           // step exactly as before.
-          add(centerPole.length > 1
+          add(multiMat
               ? { title: bay.poleTitle.replace(/ & Finish/i, ''), type: 'DIMENSIONS', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(poleInc ? { includedParts: poleInc } : {}) }
               : { title: bay.poleTitle, type: 'VISUAL_DIMENSIONS', dataSource: 'master_finishes', partHandling: 'Custom', calculatorTemplate: bay.calc, qtyHelperText: bay.qtyHelper, required: true, useClientPricing: true, geometryMap: {}, targetNodes: poleNodes, ...(centerPole[0]?.partId ? { linkedItemId: centerPole[0].partId } : {}), ...(poleInc ? { includedParts: poleInc } : {}) });
           // End Treatment comes BEFORE the brackets on purpose: picking a return here can remove that end's
