@@ -1,3 +1,5 @@
+import { joinNodes, splitNodes } from './nodeList';
+
 // TRAVERSE (Stuart 2026-08-03). "TRV in the code stands for traverse — components that sit inside a
 // track and traverse back and forth inside the track rather than rings on top of the pole."
 //
@@ -123,8 +125,6 @@ export function dedupeByPart(choices) {
 // Parts that are never a customer choice: they ride along and get built. Excluding them is what
 // keeps an F-clip out of the Pole / Rod Material picker, where it was appearing.
 export const isRider = (choice) => ['FCLIP', 'CARRIER'].includes(traverseRoleOf(choice)) || isAlwaysShown(choice);
-
-import { joinNodes, splitNodes } from './nodeList';
 
 const up = (v) => String(v ?? '').trim().toUpperCase();
 
