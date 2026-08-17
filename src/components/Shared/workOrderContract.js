@@ -12,7 +12,13 @@ export const makeFullTasks = () => ({
     spinBake:  { status: 'Pending', assignedTo: null },
     poleSpray: { status: 'Pending', assignedTo: null },
     poleBake:  { status: 'Pending', assignedTo: null },
-    hand:      { status: 'Pending', assignedTo: null }
+    hand:      { status: 'Pending', assignedTo: null },
+    // POLES HAND-FINISH ON ITS OWN TASK (Grace 2026-08-11/17). `hand` belongs to the small-parts
+    // stream; a pole coat that is hand applied — her CP poles run DTM-7 → Champagne 587 → HAND →
+    // 30 sheen — had no task of its own, so the floor had nothing to start or stop for it. Sharing
+    // `hand` between the two streams would be worse than none: Rafa hand-finishing poles would mark
+    // the small parts' hand step done.
+    poleHand:  { status: 'Pending', assignedTo: null }
 });
 
 // §5: mirror a shop custom order's progress onto its sibling fin work order so the

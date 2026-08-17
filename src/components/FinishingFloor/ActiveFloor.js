@@ -186,6 +186,14 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   const poleRecipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, poleStreamOf(wo));
   const partsRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, partsStreamOf(wo));
   const poleRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, poleStreamOf(wo));
+  // The coat each stream is ON — the pole stream reads the POLE recipe, which is the entire point of
+  // the -P variant (Grace's CP: 4 pole coats against 2 for the small parts).
+  const partsStepOf = (wo) => { const r = partsRecipeOf(wo); const i = (wo && wo.currentStepIndex) || 0; return (r && r.steps && i < r.steps.length) ? r.steps[i] : null; };
+  const poleStepOf = (wo) => { const r = poleRecipeOf(wo); const i = poleIdxOf(wo); return (r && r.steps && i < r.steps.length) ? r.steps[i] : null; };
+  // Recipes author this through a dropdown ("Sprayed" / "Hand Applied" / "None"), but older and
+  // imported recipes spell it their own way — match on the word, so a hand step is never silently
+  // treated as a spray step, which is what leaves an operator with no control to press.
+  const isHandStep = (step) => !!step && /hand/i.test(String(step.app || ''));
 
   // ⛔ ZERO COATS IS NOT "FINISHED" (Stuart 2026-08-03, WO11374: "when the operator scanned it to
   // start, it immediately shows completed??").
@@ -255,6 +263,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           lastPoleCoatTime: Date.now(),
           "tasks.poleSpray.status": "Pending",
           "tasks.poleBake.status": "Pending",
+          "tasks.poleHand.status": "Pending",
       };
       if (next >= len && partsFinished) { updates.currentPhase = 'Complete'; updates.stepStatus = 'Complete'; updates.completedAt = Date.now(); }
       await updateDoc(doc(db,"fin_workorders", wo.id), updates);
@@ -344,6 +353,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           updates.poleStepIndex = poleRecipeLen(wo) || len || poleIdxOf(wo);
           updates["tasks.poleSpray.status"] = "Complete";
           updates["tasks.poleBake.status"] = "Complete";
+          updates["tasks.poleHand.status"] = "Complete";
       }
       // Same write as the completion — the trigger reads the after-state, so the stamp always wins.
       if (blockNsPost) updates.nsCompletionQueued = true;
@@ -561,7 +571,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (!len || idx >= len) return null; // parts done (order completes when poles catch up)
       const step = r.steps[idx];
       const t = wo.tasks || {};
-      if (step.app === 'Hand Applied') {
+      if (isHandStep(step)) {
           if (t.hand?.status === 'Running') return { key: 'hand', action: 'COMPLETE', label: '✓ Complete Hand Finish', running: t.hand };
           if (t.hand?.status !== 'Complete') return { key: 'hand', action: 'START', label: '▶ Start Hand Finish' };
           return { advance: true, label: idx + 1 >= len ? '✓ Final Coat Done — QC & Complete' : `→ Coat Done — Advance to Coat ${idx + 2}` };
@@ -580,6 +590,16 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const idx = poleIdxOf(wo);
       if (!len || idx >= len) return null;
       const t = wo.tasks || {};
+      // A HAND-APPLIED POLE COAT (Grace 2026-08-11: CP poles run DTM-7 → Champagne 587 → HAND →
+      // 30 sheen). This used to demand Pole Spray then Pole Bake on EVERY coat, so on the hand coat
+      // the floor was asked to spray something nobody sprays, and hand-finishing had nothing to
+      // start or stop at all. The pole stream reads its OWN recipe here — that is the whole reason
+      // -P variants exist.
+      if (isHandStep(poleStepOf(wo))) {
+          if (t.poleHand?.status === 'Running') return { key: 'poleHand', action: 'COMPLETE', label: '✓ Complete Pole Hand Finish', running: t.poleHand };
+          if (t.poleHand?.status !== 'Complete') return { key: 'poleHand', action: 'START', label: '▶ Start Pole Hand Finish' };
+          return { advance: true, label: idx + 1 >= len ? '✓ Poles Finished' : `→ Poles — Next Coat ${idx + 2}` };
+      }
       if (t.poleSpray?.status !== 'Complete') {
           if (t.poleSpray?.status === 'Running') return { key: 'poleSpray', action: 'COMPLETE', label: '✓ Complete Pole Spray', running: t.poleSpray };
           return { key: 'poleSpray', action: 'START', label: '▶ Start Pole Spray' };
@@ -646,7 +666,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       } else if (st === 'POLES') {
           activeWOs.filter(woHasPoles).forEach(wo => { pushT(wo, 'poleSpray', 'Pole Spray'); pushT(wo, 'poleBake', 'Pole Bake'); });
       } else if (st === 'HAND') {
-          activeWOs.forEach(wo => pushT(wo, 'hand', 'Hand Finish'));
+          // Both streams hand-finish. Poles were absent entirely, so an order hand-finishing its
+          // poles showed nothing at the hand station (Grace 2026-08-11).
+          activeWOs.forEach(wo => { pushT(wo, 'hand', 'Hand Finish'); if (woHasPoles(wo)) pushT(wo, 'poleHand', 'Pole Hand Finish'); });
       }
       return out;
   };
@@ -801,6 +823,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                 const step = len && idx < len ? r.steps[idx] : null;
                 const pAct = nextPartsAction(manualWo);
                 const poAct = nextPoleAction(manualWo);
+                // Poles are their own stream with their own recipe — never the small parts' numbers.
+                const poleLen = poleRecipeLen(manualWo);
+                const poleStep = poleStepOf(manualWo);
                 // (status chips + elapsed now live inside manualStepBtn, which also carries the controls)
                 return (
                     <div style={{ padding: '20px 30px' }}>
@@ -817,9 +842,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>Small parts</span>
                             {/* Every step of this coat, each with its own PIN'd Start / Stop — no
                                 waiting on the engine's single "next" guess. */}
-                            {step && step.app !== 'Hand Applied'
+                            {step && !isHandStep(step)
                                 ? [manualStepBtn(manualWo, 'spinSetup', 'Setup'), manualStepBtn(manualWo, 'spinSpray', 'Spray'), manualStepBtn(manualWo, 'spinBake', 'Bake')]
-                                : (step ? manualStepBtn(manualWo, 'hand', 'Hand') : null)}
+                                : (step ? manualStepBtn(manualWo, 'hand', 'Hand Finish') : null)}
                             <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
                                 {pAct && pAct.advance
                                     ? <button onClick={() => runManualAction(manualWo, pAct, 'parts')} style={{ padding: '12px 20px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{pAct.label}</button>
@@ -830,8 +855,14 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                         {woHasPoles(manualWo) && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>Poles</span>
-                                {manualStepBtn(manualWo, 'poleSpray', 'Spray')}{manualStepBtn(manualWo, 'poleBake', 'Bake')}
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>coat {Math.min(poleIdxOf(manualWo) + 1, len || 1)}/{len || 1}</span>
+                                {/* The pole coat's OWN steps. Spray+Bake were shown on every coat,
+                                    so a hand-applied pole coat offered nothing to press (Grace). */}
+                                {isHandStep(poleStep)
+                                    ? manualStepBtn(manualWo, 'poleHand', 'Hand Finish')
+                                    : [manualStepBtn(manualWo, 'poleSpray', 'Spray'), manualStepBtn(manualWo, 'poleBake', 'Bake')]}
+                                {/* …and the POLE recipe's length. This read the small-parts count,
+                                    so CP poles showed "coat 3/2" — 4 pole coats against 2 parts. */}
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }} title={poleStep ? `${poleStep.color || ''}${poleStep.app ? ` (${poleStep.app})` : ''}` : 'poles complete'}>coat {Math.min(poleIdxOf(manualWo) + 1, poleLen || 1)}/{poleLen || 1}{poleStep && poleStep.color ? ` · ${poleStep.color}` : ''}</span>
                                 <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
                                     {poAct && poAct.advance
                                         ? <button onClick={() => runManualAction(manualWo, poAct, 'poles')} style={{ padding: '12px 20px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{poAct.label}</button>

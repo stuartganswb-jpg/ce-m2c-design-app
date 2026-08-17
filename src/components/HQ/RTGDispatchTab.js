@@ -1312,6 +1312,42 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         </div>
     );
 
+    // ── REPAIR: the stock builds that went out with no NetSuite work order ────────────────────────
+    // Every order released before 2026-08-17 through the non-finPayload path missed Route A entirely
+    // (Eric: "no corresponding orders in NetSuite … treating them like the Just for Paint item").
+    // Fixing the release path does nothing for those — they are already on the floor. This finds
+    // them and queues the work order they should have had, without re-dispatching anything.
+    //
+    // Deliberately conservative: dispatched stock WOs only, never a paint run (which correctly has
+    // no assembly), and never one that already has or has queued an id. queueNsStockWorkOrder keeps
+    // its own stop mechanism, so running this twice cannot double-post.
+    const nsOrphans = [...woBoard.recent, ...woBoard.archived].filter(o =>
+        o.pushedToFinishing && o.paintOnly !== true && !o.nsWoId && !o.nsWoQueued);
+    const repairMissingNsWos = async () => {
+        if (!nsOrphans.length) return;
+        const names = nsOrphans.slice(0, 12).map(o => `• ${o.woDisplayId || o.woId || o.id}${o.partErpId || o.rootItem ? ` — ${o.partErpId || o.rootItem}` : ''} ×${o.totalParts || 0}`).join('\n');
+        if (!window.confirm(`Queue the missing NetSuite work orders for ${nsOrphans.length} dispatched stock build(s)?\n\n${names}${nsOrphans.length > 12 ? `\n…and ${nsOrphans.length - 12} more` : ''}\n\nThese were released before the NetSuite leg was queued for this path, so NetSuite never committed their components. This raises the work order they should have had — it does NOT re-dispatch them, and nothing on the floor changes.\n\nAn order that already has one is skipped.`)) return;
+        let queued = 0, skipped = 0;
+        for (const o of nsOrphans) {
+            try {
+                // The fin doc is the write-back target, so use the real one — its id differs by
+                // release path (parked payload vs the WO id itself).
+                const finId = (o.finPayload && o.finPayload.id) || o.id;
+                const finSnap = await getDoc(doc(db, 'fin_workorders', finId));
+                if (!finSnap.exists()) { skipped++; addLog(`○ ${o.woDisplayId || o.id}: no finishing job found (${finId}) — skipped.`, 'warn'); continue; }
+                const fin = { id: finId, ...finSnap.data() };
+                if (fin.nsWoId) { skipped++; addLog(`○ ${o.woDisplayId || o.id}: already has NetSuite WO ${fin.nsWoTran || fin.nsWoId} — skipped.`, 'info'); continue; }
+                const note = await queueNsStockWorkOrder(o, fin);
+                if (note.includes('📤')) queued++; else skipped++;
+            } catch (e) {
+                skipped++; addLog(`✗ ${o.woDisplayId || o.id}: ${e.message || e}`, 'error');
+            }
+        }
+        addLog(`🏭 Repair done — ${queued} NetSuite work order(s) queued, ${skipped} skipped.`, queued ? 'success' : 'warn');
+        alert(`${queued} NetSuite work order(s) queued, ${skipped} skipped.\n\nThey post from the sync queue over the next few minutes — watch 11.1 → NetSuite Sync Queue. Any skip is named in the log on this page.`);
+        loadRTGOrders();
+    };
+
     const dispatchedSection = (board, kind) => {
         if (!board.recent.length && !board.archived.length) return null;
         return (
@@ -1568,6 +1604,20 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     </div>
                                 </div>
                             ))}
+
+                            {nsOrphans.length > 0 && (
+                                <div style={{ marginTop: '14px', padding: '12px 14px', border: '1px solid #d9534f', background: '#fdf3f3' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700, marginBottom: '6px' }}>
+                                        ⚠ {nsOrphans.length} dispatched build{nsOrphans.length === 1 ? '' : 's'} with no NetSuite work order
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: 'var(--ink)', lineHeight: 1.5, marginBottom: '9px' }}>
+                                        Released before this path queued its NetSuite leg, so NetSuite never committed their components and no WO number came back. Raising the work orders now does not re-dispatch them or touch the floor.
+                                    </div>
+                                    <button onClick={repairMissingNsWos} style={{ ...btnStyle, background: '#d9534f', color: '#fff', border: 'none', width: '100%' }}>
+                                        🏭 Queue the missing NetSuite work orders
+                                    </button>
+                                </div>
+                            )}
 
                             {dispatchedSection(woBoard, 'stock')}
                         </div>
