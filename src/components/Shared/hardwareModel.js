@@ -44,6 +44,10 @@ export const ROLES = [
     'TRACK',        // traverse system: the extrusion behind the fascia
     'CARRIER',      // rides inside a track/traverse rod. never chosen, always built
     'FCLIP',        // attaches track to fascia. never chosen, always built
+    'TRV_END',      // the traverse end — a REAL part that differs by drive, so picking one picks
+                    // the drive. Kept as its own role because tagging it TRACK once put it in the
+                    // track picker beside the extrusion and left the drive as a label with no part
+                    // behind it: nothing to bill, nothing to render.
     'BRACKET',
     'BACKPLATE',
     'RING',
@@ -80,6 +84,7 @@ const DEFAULT_FITS = {
     RING: [SOLID],
     CARRIER: [TRAVERSE],
     FCLIP: [TRAVERSE],
+    TRV_END: [TRAVERSE],
 };
 
 // MOUNT IS A PROPERTY OF MOUNTING HARDWARE, AND BLANK MEANS WALL (Stuart 2026-08-15: "all the
@@ -135,6 +140,7 @@ export function normalizeChoice(input = {}) {
             : '',
         fits: fitsTag.length ? fitsTag : (DEFAULT_FITS[role] || [SOLID, TRAVERSE]),
         setup: U(input.setup),                       // '' = suits every setup
+        drive: U(input.drive),                       // '' = suits every drive (a fascia is a fascia)
         proj: measureOf(input.proj),                 // null = suits every projection
         // How this part reads its projection tag. Returns need a MINIMUM depth to be possible;
         // a bracket IS its projection. Defaulted by role, overridable by tag so a collection with
@@ -160,6 +166,9 @@ export function normalizeChoice(input = {}) {
 export const AXES = [
     { key: 'rodKind', label: 'Rod Type', tag: 'rodKind', order: 10, scope: 'rods' },
     { key: 'setup', label: 'Single or Double', tag: 'setup', order: 20, scope: 'admissible' },
+    // Motorised vs manual. Asked only where BOTH exist — a manual-only collection must not grow a
+    // question with one answer, which is exactly what discovery gives us for free.
+    { key: 'drive', label: 'Drive', tag: 'drive', order: 25, scope: 'admissible' },
     { key: 'mount', label: 'Mount', tag: 'mount', order: 30, scope: 'admissible' },
     { key: 'proj', label: 'Bracket Projection', tag: 'proj', order: 40, scope: 'admissible' },
 ];
@@ -240,6 +249,9 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     }
     if (!skip('setup') && ctx.setup && choice.setup && choice.setup !== ctx.setup) {
         return no('setup', `tagged ${choice.setup}, this order is ${ctx.setup}`);
+    }
+    if (!skip('drive') && ctx.drive && choice.drive && choice.drive !== ctx.drive) {
+        return no('drive', `tagged ${choice.drive}, this order is ${ctx.drive}`);
     }
     if (!skip('mount') && ctx.mount && choice.mount && choice.mount !== ctx.mount) {
         return no('mount', `tagged ${choice.mount}, this order is ${ctx.mount}`);
