@@ -719,6 +719,39 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // the finishing floor is already painting/baking (or done) has been OVERTAKEN — the queue must
     // say so instead of presenting it as ordinary waiting work. Derived from the SAME canonical
     // status module the chips use, so the two can never disagree.
+    // A CLOSED ORDER LEAVES THE PICK QUEUE (Sandra 2026-08-17: "esta orden fue reemplazada porque
+    // tenía el item incorrecto … ya la orden fue cerrada, así que debería desaparecer de la lista").
+    //
+    // She is right, and the queue below her was the only list that never checked. Closing from RTG
+    // clears sentToPickPack, which drops the job out of `jobs` entirely — but closing from Stock
+    // View's Open WOs or the finishing Setup Queue only stamped the PHASE, so the job stayed here
+    // for a pick nobody should do. Both of those now clear the pick fields as well; this guard is
+    // what heals the ones already sitting in the queue.
+    const isOpenPick = (j) => j.pickStatus === 'Pending'
+        && j.currentPhase !== 'Closed' && j.stepStatus !== 'Closed' && j.status !== 'Closed';
+
+    // The way out of a pole match that cannot be satisfied, for the order that has no poles. It is a
+    // STATEMENT, not a bypass: the reason is required, and it lands on the order and in the log next
+    // to the packer's name, so a box that closed without the match can always be accounted for.
+    const noPolesOnOrder = async () => {
+        const job = packJob;
+        if (!job) return;
+        const why = window.prompt(`This will let ${packRef(job)} be packed WITHOUT matching poles to it.\n\nUse it only when the order genuinely has no poles — for example the custom half was replaced or removed after the order was split.\n\nWhy does this order have no poles? (recorded against the order)`, '');
+        if (why === null) return;
+        const reason = String(why).trim();
+        if (!reason) return alert('A reason is needed — it is what makes this accountable. Nothing was changed.');
+        try {
+            await updateDoc(packDocOf(job), {
+                packCustomMatchWaived: true,
+                packCustomMatchWaivedBy: operator?.name || 'Packer',
+                packCustomMatchWaivedAt: Date.now(),
+                packCustomMatchWaivedReason: reason,
+            });
+            writeLog(`Pole match WAIVED on ${packRef(job)} — "${reason}"`, 'packing');
+            setPackCustomScan('');
+        } catch (e) { alert('Could not record that: ' + (e.message || e)); }
+    };
+
     const isOvertakenPick = (job) => {
         if (job.currentPhase === 'Complete') return true;
         const st = orderStatusOf(job);
@@ -892,9 +925,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // nothing re-checked them at the box, so one order's parts could ship with another's poles
         // and every screen would still read correct (Stuart 2026-08-03, WO-SO59176).
         const custMatch = normalizeKey(packCustomScan);
-        if (job.hasCustomSibling && !job.packCustomMatchedAt) {
+        if (job.hasCustomSibling && !job.packCustomMatchedAt && !job.packCustomMatchWaived) {
             if (!stagingScanMatches(job, custMatch)) {
-                return alert(`Scan the CUSTOM SHOP label on the poles first.\n\nThe poles for ${packRef(job)} came off the shop order — they are not on the parts list you just packed, so nothing here proves the right ones are in the box.`);
+                return alert(`Scan the CUSTOM SHOP label on the poles first.\n\nThe poles for ${packRef(job)} came off the shop order — they are not on the parts list you just packed, so nothing here proves the right ones are in the box.\n\nIf this order genuinely has no poles, use "This order has no poles" above and say why — it is recorded against the order.`);
             }
         }
         if (!window.confirm(confirmMsg)) return;
@@ -2832,7 +2865,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>Awaiting Pick (Small Parts)</div>
                             <div style={{ padding: '20px', overflowY: 'auto' }}>
-                                {jobs.filter(j => j.pickStatus === 'Pending').sort((a, b) => Number(isOvertakenPick(a)) - Number(isOvertakenPick(b))).map(job => {
+                                {jobs.filter(isOpenPick).sort((a, b) => Number(isOvertakenPick(a)) - Number(isOvertakenPick(b))).map(job => {
                                     const overtaken = isOvertakenPick(job);
                                     const so = soIndex[String(job.salesOrderId || '')] || soIndex[String(job.orderKey || '')] || null;
                                     const customer = job.customerName || job.clientName || so?.customer || '';
@@ -2933,7 +2966,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     </div>
                                     );
                                 })}
-                                {jobs.filter(j => j.pickStatus === 'Pending').length === 0 && (
+                                {jobs.filter(isOpenPick).length === 0 && (
                                     <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No orders currently require picking.</div>
                                 )}
                             </div>
@@ -3123,7 +3156,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     const isStockJob = !!(packJob && packJob.orderType === 'stock');
                     // A custom order's poles come off the SHOP order, not this parts list — so
                     // "every line packed" says nothing about whether the right poles are in the box.
-                    const needsPoleMatch = !!(packJob && packJob.hasCustomSibling && !packJob.packCustomMatchedAt);
+                    const needsPoleMatch = !!(packJob && packJob.hasCustomSibling && !packJob.packCustomMatchedAt && !packJob.packCustomMatchWaived);
                     const poleMatched = !needsPoleMatch || stagingScanMatches(packJob, packCustomScan);
                     const canComplete = packJob && toPack.length === 0 && poleMatched && (isStockJob ? !!putawayBin.trim() : photos.length > 0);
                     const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
@@ -3210,6 +3243,21 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <div style={{ fontFamily: theme.mono, fontSize: '10px', color: '#d9534f', marginTop: '8px' }}>
                                                     ✖ "{packCustomScan.trim()}" is a different order — these poles do NOT belong with these parts. Find the right ones.
                                                 </div>
+                                            )}
+                                            {/* THERE MAY BE NO POLES TO MATCH (Sandra 2026-08-17: "no permite completar
+                                                la operación de packing porque está pidiendo tubos y en este caso la orden
+                                                sólo lleva 3 anillos"). The demand rides `hasCustomSibling`, stamped when
+                                                the order was split — if the custom half was later replaced or removed,
+                                                the flag outlives it and the box can never close, with nothing on this
+                                                screen able to fix the record. So: an explicit way out that STATES what
+                                                happened, rather than a silent bypass. The reason is required and is
+                                                stored on the order and in the log. */}
+                                            {!poleMatched && (
+                                                <button onClick={noPolesOnOrder}
+                                                    title="Use this only when the order genuinely has no poles — it is recorded against the order with your name and reason."
+                                                    style={{ marginTop: '10px', padding: '9px 12px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                                    This order has no poles — say why &amp; continue
+                                                </button>
                                             )}
                                         </div>
                                     )}

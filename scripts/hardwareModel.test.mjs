@@ -530,6 +530,47 @@ const threePiece = [
     ok('an unselected clear part contributes nothing', !clearOf(['ROD', 'BALL']).includes('gem'));
 }
 
+// ── A PART LISTS EVERY PROJECTION IT IS MADE IN ───────────────────────────────────────────────
+// "the 1-3/8 diameter it is only available in 6 but a .75 pole is available in 4-5/8 … don't want
+//  it rule based, too easy to break down the line, tags are the way to go."
+{
+    const multi = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'A36', partId: 'A36', role: 'BRACKET', proj: '3-5/8', position: 'CENTER', nodes: ['a36'] }),
+        C({ id: 'A46-60', partId: 'A46', role: 'BRACKET', proj: '4-5/8,6', position: 'CENTER', nodes: ['a46'] }),
+        // the return this collection makes only at 6"
+        C({ id: 'RET6', partId: 'RT', role: 'RETURN', position: 'LEFT', proj: '6', nodes: ['ret6'] }),
+        // …and one made at both depths
+        C({ id: 'RET46', partId: 'RT2', role: 'RETURN', position: 'LEFT', proj: '4-5/8,6', nodes: ['ret46'] }),
+        C({ id: 'FIN', partId: 'F', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] }),
+    ];
+    const m = resolve({ choices: multi, answers: {} });
+    eq('the projections offered come from the BRACKETS, not the returns',
+        m.axes.find(a => a.key === 'proj').values, [3.625, 4.625, 6]);
+
+    const armsAt = (p) => resolve({ choices: multi, answers: { proj: p } }).slots.find(s => s.kind === 'BRACKET').options.map(o => o.id);
+    eq('a single-projection arm appears only at its own', armsAt(3.625), ['A36']);
+    eq('a two-projection arm appears at BOTH', armsAt(4.625), ['A46-60']);
+    eq('and at the other one', armsAt(6), ['A46-60']);
+
+    const endAt = (p) => resolve({ choices: multi, answers: { proj: p } }).slots.find(s => s.kind === 'END').options.map(o => o.id).sort();
+    eq('at 3-5/8 neither return is made', endAt(3.625), ['FIN']);
+    eq('at 4-5/8 only the one made there', endAt(4.625), ['FIN', 'RET46']);
+    eq('at 6 both are', endAt(6), ['FIN', 'RET46', 'RET6']);
+
+    // The refusal states availability rather than a minimum.
+    const why = resolve({ choices: multi, answers: { proj: 3.625 } })
+        .slots.find(s => s.kind === 'END').rejected.find(r => r.choice.id === 'RET6');
+    ok('and says what it IS made in', why && /made in 6"/.test(why.detail), why && why.detail);
+
+    // Spelling never matters: 3-5/8, 3 5/8 and 3.625 are one projection.
+    const spelled = [...multi, C({ id: 'ALT', partId: 'ALT', role: 'BRACKET', proj: '3 5/8;3.625', position: 'CENTER', nodes: ['alt'] })];
+    eq('mixed spellings collapse to one value',
+        resolve({ choices: spelled, answers: {} }).axes.find(a => a.key === 'proj').values, [3.625, 4.625, 6]);
+    ok('and it is offered there', resolve({ choices: spelled, answers: { proj: 3.625 } })
+        .slots.find(s => s.kind === 'BRACKET').options.some(o => o.id === 'ALT'));
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.

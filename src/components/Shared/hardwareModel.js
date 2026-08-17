@@ -178,6 +178,23 @@ export const measureOf = (v) => {
 };
 const sameMeasure = (a, b) => a != null && b != null && Math.abs(a - b) < 0.01;
 
+// A PART IS AVAILABLE AT SEVERAL PROJECTIONS (Stuart 2026-08-17): "can you make that one multi
+// select so we select all the ones it is available in — as in this case the 1-3/8 diameter it is
+// only available in 6 but a .75 pole is available in 4-5/8."
+//
+// This replaces the MINIMUM-depth rule that returns read their single tag by. That rule existed
+// only because availability could not be EXPRESSED: one value had to stand in for "this and
+// everything deeper". Now the designer lists exactly the projections a part is made in — more
+// precise, and in Stuart's words "not rule based, too easy to break down the line". Blank still
+// means every projection.
+export const measureList = (v) => {
+    if (v == null || v === '') return [];
+    const parts = Array.isArray(v) ? v : String(v).split(/[,;|]+/);
+    const out = [];
+    parts.forEach(x => { const n = measureOf(x); if (n != null && !out.some(y => sameMeasure(y, n))) out.push(n); });
+    return out.sort((a, b) => a - b);
+};
+
 // ── THE CHOICE ───────────────────────────────────────────────────────────────────────────────
 // One pinned part with its tags. Everything the engine knows comes from here; there is no second
 // source. `raw` keeps the original record so callers can price and BOM without a second lookup.
@@ -218,11 +235,7 @@ export function normalizeChoice(input = {}) {
         fitsExplicit: fitsTag.length > 0,
         setup: U(input.setup),                       // '' = suits every setup
         drive: U(input.drive),                       // '' = suits every drive (a fascia is a fascia)
-        proj: measureOf(input.proj),                 // null = suits every projection
-        // How this part reads its projection tag. Returns need a MINIMUM depth to be possible;
-        // a bracket IS its projection. Defaulted by role, overridable by tag so a collection with
-        // a different physical truth never needs a code change.
-        projRule: U(input.projRule) || (role === 'RETURN' ? 'MIN' : 'EXACT'),
+        projs: measureList(input.proj),              // [] = suits every projection
         // Blank on mounting hardware = WALL; blank on anything else = not filtered by mount.
         // ⚠ ONLY MOUNTING HARDWARE CARRIES A MOUNT (Stuart 2026-08-17: "when i switch to inside
         // mount or wall it reduces to only two, the wood and acrylic"). This line supplied a
@@ -280,7 +293,11 @@ export const AXES = [
     // question with one answer, which is exactly what discovery gives us for free.
     { key: 'drive', label: 'Drive', tag: 'drive', order: 25, scope: 'admissible' },
     { key: 'mount', label: 'Mount', tag: 'mount', order: 30, scope: 'admissible' },
-    { key: 'proj', label: 'Bracket Projection', tag: 'proj', order: 40, scope: 'admissible' },
+    // ⚠ WHICH PROJECTIONS EXIST IS A BRACKET QUESTION. Now that a part lists every projection it is
+    // made in, a RETURN tagged 4-5/8" would otherwise ADD 4-5/8" to the assembly's projections even
+    // where no bracket is made at that depth — inventing a configuration that cannot be built. The
+    // mounting hardware establishes the projections; everything else is filtered BY them.
+    { key: 'proj', label: 'Bracket Projection', tag: 'proj', order: 40, scope: 'admissible', roles: MOUNTED_ROLES },
 ];
 
 // A CONSTRAINT IS NOT AN OPTION. Only a part that IS a value votes for it; a part that merely
@@ -288,10 +305,12 @@ export const AXES = [
 // least this much depth" — counting it would offer a 4-5/8" projection on an assembly whose
 // brackets only come at 3-5/8", which is a projection you cannot actually build. (The old
 // generator learned this the same way: phantom projection cards conjured out of return minimums.)
-const axisValueOf = (choice, axis) => {
-    if (axis.key === 'rodKind') return choice.rodKind || '';
-    if (axis.key === 'proj') return (choice.proj == null || choice.projRule === 'MIN') ? '' : choice.proj;
-    return choice[axis.key] || '';
+// An axis reads one value from a choice — except projection, where a part may be made in SEVERAL
+// and every one of them is a projection this assembly can be built at.
+const axisValuesOf = (choice, axis) => {
+    if (axis.key === 'rodKind') return choice.rodKind ? [choice.rodKind] : [];
+    if (axis.key === 'proj') return choice.projs;
+    return choice[axis.key] ? [choice[axis.key]] : [];
 };
 
 /**
@@ -304,13 +323,16 @@ const axisValueOf = (choice, axis) => {
 export function axisValues(choices, axis, ctx = {}) {
     const pool = axis.scope === 'rods'
         ? choices.filter(c => ROD_ROLES.includes(c.role))
-        : choices.filter(c => !ROD_ROLES.includes(c.role) && !c.always && admits(c, ctx, { ignore: [axis.key] }).ok);
+        : choices.filter(c => !ROD_ROLES.includes(c.role) && !c.always
+            && (!axis.roles || axis.roles.includes(c.role))
+            && admits(c, ctx, { ignore: [axis.key] }).ok);
     const seen = new Map();
     pool.forEach(c => {
-        const v = axisValueOf(c, axis);
-        if (v === '' || v == null) return;
-        const key = typeof v === 'number' ? v.toFixed(3) : v;
-        if (!seen.has(key)) seen.set(key, v);
+        axisValuesOf(c, axis).forEach(v => {
+            if (v === '' || v == null) return;
+            const key = typeof v === 'number' ? v.toFixed(3) : v;
+            if (!seen.has(key)) seen.set(key, v);
+        });
     });
     return [...seen.values()].sort((a, b) => (typeof a === 'number' && typeof b === 'number') ? a - b : String(a).localeCompare(String(b)));
 }
@@ -368,13 +390,9 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     }
     // A rod has no projection either — the arm holding it does. (Setup and drive still apply: a
     // rear track genuinely is double-only.)
-    if (!skip('proj') && !ROD_ROLES.includes(choice.role) && ctx.proj != null && choice.proj != null) {
-        // A return needs AT LEAST its tagged depth; a bracket IS its projection.
-        const ok = choice.projRule === 'MIN' ? ctx.proj >= choice.proj - 0.01 : sameMeasure(choice.proj, ctx.proj);
-        if (!ok) {
-            return no('projection', choice.projRule === 'MIN'
-                ? `needs at least ${choice.proj}", this order is ${ctx.proj}"`
-                : `built for ${choice.proj}", this order is ${ctx.proj}"`);
+    if (!skip('proj') && !ROD_ROLES.includes(choice.role) && ctx.proj != null && choice.projs.length) {
+        if (!choice.projs.some(p => sameMeasure(p, ctx.proj))) {
+            return no('projection', `made in ${choice.projs.map(p => `${p}"`).join(', ')} — this order is ${ctx.proj}"`);
         }
     }
     if (!skip('position') && ctx.position && choice.position && choice.position !== ctx.position) {
@@ -598,7 +616,17 @@ export function slots(choices, answers = {}, selectedIds = []) {
     //  only shows backplates not tagged inline."
     // A pairing, not a filter: the plate pool follows the arm that was chosen, so the two can never
     // be a mismatched pair. Nothing is offered that would not physically fit.
-    const bracketAt = (pos) => choices.find(c => want.has(c.id) && c.role === 'BRACKET' && (c.position || '') === pos);
+    // ⚠ TOLERANT ON POSITION (Stuart 2026-08-17: "the wood brackets are clearly tagged as basic and
+    // still asking for a backplate"). A plate is pinned per position while the arm governing it may
+    // be pinned SHARED — or the reverse — so an exact match found no arm, and with no arm the pool
+    // is left untouched by design. Same position first, then a shared arm, then any chosen arm when
+    // the plate itself is shared.
+    const bracketAt = (pos) => {
+        const chosen = choices.filter(c => want.has(c.id) && c.role === 'BRACKET');
+        return chosen.find(c => (c.position || '') === pos)
+            || chosen.find(c => !c.position)
+            || (!pos ? chosen[0] : null) || null;
+    };
     bucket.forEach(slot => {
         if (slot.kind !== 'BACKPLATE') return;
         const arm = bracketAt(slot.position);
@@ -728,7 +756,14 @@ export function diagnose(model) {
     // for 4-5/8" passes every individual rule and sits on a different wall plane — which is exactly
     // what "not aligned" looks like, and why the flow can report itself healthy while the render is
     // visibly wrong. Detail axes only: the world axes cannot disagree, they are one answer.
-    ['proj', 'mount'].forEach(axis => {
+    // Projection compares SETS now: two parts disagree only when there is NO projection they are
+    // both made in. A 6"-only arm beside an arm made in 4-5/8" and 6" is not a mismatch.
+    const projSel = (model.selected || []).filter(c => c.projs && c.projs.length);
+    if (projSel.length > 1) {
+        const shared = projSel.reduce((acc, c) => acc.filter(p => c.projs.some(q => Math.abs(p - q) < 0.01)), projSel[0].projs.slice());
+        if (!shared.length) add('red', 'MISMATCH', `the chosen parts share no projection: ${projSel.map(c => `${c.name} (${c.projs.map(p => `${p}"`).join('/')})`).join(' vs ')} — they will not sit together.`);
+    }
+    ['mount'].forEach(axis => {
         const seen = new Map();
         (model.selected || []).forEach(c => {
             const v = c[axis];

@@ -2070,12 +2070,30 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         the choices to match"). A traverse RETURN ARM is tagged FINIAL — it sits in
                                                         the finial position — so the dropdown was hidden on exactly the rows whose
                                                         projection has to match the bracket's. Any tagged end treatment gets it. */}
-                                                    {/* BACKPLATES tag proj: too (Stuart 2026-08-14, H1-138: a backplate per bracket per projection). */}
+                                                    {/* BACKPLATES tag proj: too (Stuart 2026-08-14, H1-138: a backplate per bracket per projection).
+                                                        🎯 EVERY PROJECTION THIS PART IS MADE IN (Stuart 2026-08-17): "can you make that
+                                                        one multi select so we select all the ones it is available in — as in this case
+                                                        the 1-3/8 diameter it is only available in 6 but a .75 pole is available in
+                                                        4-5/8". This retires the MINIMUM-depth reading returns got from a single tag:
+                                                        that rule existed only because availability could not be STATED. Now it is.
+                                                        Tick none = made in every projection. Stored comma-joined, so a single existing
+                                                        value still reads correctly. */}
                                                     {(['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || r.category)) || !!String(c.endTreatment || '').trim()) && (
-                                                        <select value={c.projInches || ''} title="PROJECTION — the 4.5 Master-Dictionary list (BRACKET PROJECTIONS). Brackets: the exact projection this item IS (shows only at that projection). FRENCH/MITER RETURN choices: the MINIMUM projection (returns need depth — tag 4-5/8 and they show at 4-5/8 AND 6, hidden below). '— any —' = always offered." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { projInches: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.projInches ? 'var(--brass)' : 'var(--line)', color: c.projInches ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                            <option value="">proj: — any —</option>
-                                                            {((dictLists && dictLists.projections) || []).map(p => <option key={p} value={String(p).toUpperCase()}>proj: {p}"</option>)}
-                                                        </select>
+                                                        <span title="PROJECTIONS — tick EVERY projection this part is made in. A bracket ticked 6&quot; only appears at 6&quot;; a return ticked 4-5/8&quot; and 6&quot; appears at both. Nothing ticked = available at every projection. Replaces the old single-value tag and its minimum-depth rule for returns: availability is now stated, not inferred." style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center', border: `1px solid ${c.projInches ? 'var(--brass)' : 'var(--line)'}`, padding: '2px 4px' }}>
+                                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>proj:</span>
+                                                            {((dictLists && dictLists.projections) || []).map(pj => {
+                                                                const val = String(pj).toUpperCase();
+                                                                const on = String(c.projInches || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean).includes(val);
+                                                                return (
+                                                                    <button key={pj} type="button" onClick={() => {
+                                                                        const cur = String(c.projInches || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+                                                                        const next = on ? cur.filter(x => x !== val) : [...cur, val];
+                                                                        setChoicePatch(r.clusterId, c.nodeName, { projInches: next.join(',') });
+                                                                    }} style={{ fontFamily: 'var(--mono)', fontSize: '8px', padding: '1px 4px', cursor: 'pointer', background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}` }}>{pj}"</button>
+                                                                );
+                                                            })}
+                                                            {!String(c.projInches || '').trim() && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)' }}>any</span>}
+                                                        </span>
                                                     )}
                                                     {/* BACKPLATES tag mount: too (ceiling backplates — Stuart 2026-08-14). */}
                                                     {['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || r.category)) && !c.isFee && (

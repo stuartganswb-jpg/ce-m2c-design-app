@@ -236,7 +236,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           : '\n\n(App-side only — no NetSuite work order attached.)';
       if (!window.confirm(`✕ CLOSE work order ${wo.displayId || wo.id}?\n\n${wo.recipe || 'no recipe'} · ${wo.totalParts || 0} pcs · ${wo.customer || wo.clientName || ''}\n\nIt leaves every queue (the record is kept for history). This does not undo picking/staging already done.${nsNote}`)) return;
       try {
-          await updateDoc(doc(db, "fin_workorders", wo.id), { currentPhase: 'Closed', stepStatus: 'Closed', closedAt: Date.now(), closedBy: 'Setup Queue' });
+          // Clearing the PICK fields is part of closing — a job that only had its phase stamped
+          // stayed in the WMS pick queue afterwards (Sandra 2026-08-17). Same shape as RTG's close.
+          await updateDoc(doc(db, "fin_workorders", wo.id), { currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', closedAt: Date.now(), closedBy: 'Setup Queue' });
           if (wo.nsWoId && !wo.nsWoClosed && !wo.nsCompletionQueued) {
               try {
                   await enqueueNsWrite({

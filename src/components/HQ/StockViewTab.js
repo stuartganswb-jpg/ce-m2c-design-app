@@ -1202,7 +1202,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const nsNote = (fin && fin.nsWoId && !fin.nsWoClosed && !fin.nsWoCompletionPosted) ? `\n\nIts NetSuite work order (${fin.nsWoTran || fin.nsWoId}) gets a CLOSE queued too.` : '';
         if (!window.confirm(`✕ CLOSE ${ref}?\n\nIt leaves every queue (docs kept for history).${nsNote}`)) return;
         try {
-            if (fin) await updateDoc(doc(db, 'fin_workorders', fin.id), { currentPhase: 'Closed', stepStatus: 'Closed', closedAt: Date.now(), closedBy: currentUser || 'StockView' });
+            // Closing has to clear the PICK fields too, not just the phase — otherwise the job stays
+            // in the WMS pick queue for a pick nobody should do (Sandra 2026-08-17). RTG's
+            // close-everywhere has always done this; this one and the Setup Queue's did not.
+            if (fin) await updateDoc(doc(db, 'fin_workorders', fin.id), { currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', closedAt: Date.now(), closedBy: currentUser || 'StockView' });
             if (hq) await updateDoc(doc(db, 'hq_work_orders', hq.id), { status: 'Closed', closedAt: Date.now() }).catch(() => {});
             if (fin && fin.nsWoId && !fin.nsWoClosed && !fin.nsWoCompletionPosted) {
                 await enqueueNsWrite({
