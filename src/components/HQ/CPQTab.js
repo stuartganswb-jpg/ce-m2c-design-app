@@ -2258,12 +2258,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           let changed = false; const next = { ...prev };
           (activeFlow.steps || []).forEach(st => {
               if (st.type !== 'STYLE_SWAP') return;
+              // ── SEEDING IS AN INVARIANT, NOT AN EVENT (Stuart 2026-08-16, H2-138 1-3/8", found
+              // live) ──────────────────────────────────────────────────────────────────────────
+              // The Left Bracket step's pool is genuinely EMPTY at the 3-5/8" projection, so the
+              // load-time seeder correctly seeded nothing. Switch to 4-5/8" and it has THREE valid
+              // options — and it stayed empty, because the seeder only ever runs on flow/assembly
+              // load and this sweep bailed on its first line whenever a step had no selection.
+              // A step that failed to seed once could never seed again, however the configuration
+              // changed around it: the left brackets were simply gone from the render and from the
+              // quote, with a fully-populated picker sitting right there.
+              //
+              // So the rule is not "fix a pick that went bad" — it is "every answerable step has a
+              // valid answer", enforced continuously. Banned pick and no pick take the same path.
               const check = (key, pool, extraGate, isSub) => {
-                  if (!next[key]) return;
-                  const o = (pool || []).find(x => (x.optId || x.partId) === next[key]);
-                  if (!o) return;
-                  const oEt = String(o.endTreatment || '').toUpperCase();
-                  const oRtn = isReturnOption(o) || (o.returnOnly && oEt !== 'INSIDE_MOUNT') || /return|miter|mitre|french|\bbend\b/i.test(String(partOf(o)?.itemName || ''));
                   // trvAttachGate: switching the pole traverse ↔ standard (H1-138 mixed flow) must
                   // clear an attachment the new mode no longer offers, so the seeder re-picks from
                   // the swapped pool instead of a hidden selection billing on. extraGate = the
@@ -2273,17 +2280,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       const xRtn = isReturnOption(x) || (x.returnOnly && xEt !== 'INSIDE_MOUNT') || /return|miter|mitre|french|\bbend\b/i.test(String(partOf(x)?.itemName || ''));
                       return !((!returnsOk && xRtn && xEt !== 'INSIDE_MOUNT') || (sizeSel && !partAllowedAtSize(partOf(x), sizeSel, sizeLabelIndex)) || !optionProjAllowed(x, sizeSel) || !projTagOk(x) || (extraGate && !extraGate(x)));
                   };
-                  if (!gateOf(o)) {
-                      // REPLACE, DON'T JUST CLEAR (Stuart 2026-08-16: "once i switch projections it
-                      // gets weird" — the banned arm/plate vanished and nothing re-picked, leaving
-                      // bare positions). The rules that banned the old pick choose its successor:
-                      // same pool, every gate applied, the ordinary default heuristic. No valid
-                      // successor (e.g. basic bracket → no plate) still clears.
-                      const repl = defaultOptionFor([...(pool || []).filter(x => optCustomerOk(x) && trvOkFor(st, { isSub: !!isSub })(x) && gateOf(x))].sort((a, b) => (mountOf(a) === 'WALL' ? 0 : 1) - (mountOf(b) === 'WALL' ? 0 : 1)), isSub ? st.subGeometryMap : st.geometryMap, isSub ? st.defaultSubOptId : st.defaultOptId);
-                      if (repl && repl !== next[key]) next[key] = repl; else delete next[key];
-                      changed = true;
-                  }
+                  const o = next[key] ? (pool || []).find(x => (x.optId || x.partId) === next[key]) : null;
+                  // A selection that names an option this pool does not contain belongs to another
+                  // pool's bookkeeping — leave it exactly as it was (long-standing behaviour).
+                  if (next[key] && !o) return;
+                  if (o && gateOf(o)) return;                  // still valid: nothing to do
+                  // Either the pick is banned or the step has none. Both want the same answer: the
+                  // best option this configuration actually allows. No valid successor (e.g. a
+                  // basic bracket takes no plate) clears — and clearing an ALREADY-empty step is
+                  // not a change, so this can never loop.
+                  const repl = defaultOptionFor([...(pool || []).filter(x => optCustomerOk(x) && trvOkFor(st, { isSub: !!isSub })(x) && gateOf(x))].sort((a, b) => (mountOf(a) === 'WALL' ? 0 : 1) - (mountOf(b) === 'WALL' ? 0 : 1)), isSub ? st.subGeometryMap : st.geometryMap, isSub ? st.defaultSubOptId : st.defaultOptId);
+                  if (repl) { if (repl !== next[key]) { next[key] = repl; changed = true; } }
+                  else if (next[key]) { delete next[key]; changed = true; }
               };
+              // ⚠ A STEP THAT IS DELIBERATELY SWITCHED OFF MUST NOT BE FILLED IN. A return or an
+              // inside mount REPLACES that side's bracket, and a disabled step's part is meant to
+              // leave the price, the BOM and the render together — auto-answering it would bill a
+              // bracket the configuration does not have. Only genuinely answerable steps are kept
+              // answered.
+              if ((engineFlags.disabledSteps || []).includes(st.title) || returnLocksBracket(st) || armLocksEnd(st)) return;
               // Same rule as trvOkFor's isMutualPool: no standard grammar on a pure traverse flow,
               // so nothing swaps out there.
               const mutualMain = !isTraverseFlow && (st.stepRole === 'BRACKET' || (/bracket/i.test(st.title || '') && !/end treatment/i.test(st.title || '')));
