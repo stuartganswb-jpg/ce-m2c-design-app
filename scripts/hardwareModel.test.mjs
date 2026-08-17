@@ -172,9 +172,67 @@ const fasciaTrack = [
     eq('riders ride regardless of setup', double.riders.map(r => r.id).sort(), ['CARRIER', 'FCLIP']);
 }
 
+// ── FIXTURE 5: THE TARGET — one combined H1 holding both worlds (Stuart 2026-08-17) ───────────
+// "the H1-2TRV would ideally rest in a total H1 combined similar to the H2 combined… the only
+//  difference being a fascia appears in front of a track when used with track, or we turn off the
+//  track and use rings."
+// One assembly, one flow. The rod answer chooses the world: fascia+track+carriers+traverse arms, OR
+// solid rod + rings + standard arms. Finials are shared across both, and are tagged for neither.
+const combinedH1 = [
+    C({ id: 'ROD-STEEL', partId: 'H1-138', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+    C({ id: 'FASCIA', partId: 'FA', role: 'FASCIA', nodes: ['fascia'] }),
+    C({ id: 'TRACK-FRONT', partId: 'TF', role: 'TRACK', nodes: ['track-front'] }),
+    C({ id: 'TRACK-REAR', partId: 'TR', role: 'TRACK', setup: 'DOUBLE', nodes: ['track-rear'] }),
+    C({ id: 'CARRIER', partId: 'CA', role: 'CARRIER', nodes: ['carriers'] }),
+    C({ id: 'FCLIP', partId: 'FC', role: 'FCLIP', nodes: ['fclips'] }),
+    C({ id: 'RING', partId: 'RG', role: 'RING', nodes: ['rings'] }),
+    C({ id: 'BKT-STD', partId: 'BS', role: 'BRACKET', proj: '3-5/8', position: 'CENTER', nodes: ['bkt-std'] }),
+    C({ id: 'BKT-TRV', partId: 'BT', role: 'BRACKET', fits: ['TRAVERSE'], proj: '3-5/8', position: 'CENTER', nodes: ['bkt-trv'] }),
+    C({ id: 'FIN-L', partId: 'FN', role: 'FINIAL', position: 'LEFT', nodes: ['fin-l'] }),
+];
+
+{
+    const kinds = resolve({ choices: combinedH1, answers: {} }).axes.find(a => a.key === 'rodKind');
+    eq('the combined flow asks which world', kinds.values, ['SOLID', 'TRAVERSE']);
+
+    // SOLID: rod + rings + standard arms. No fascia question, no track question, no carriers.
+    const solid = resolve({ choices: combinedH1, answers: { rodKind: 'SOLID', proj: 3.625 } });
+    const solidSlots = solid.slots.filter(s => s.options.length).map(s => s.kind);
+    ok('solid world asks for a rod', solidSlots.includes('ROD'));
+    ok('solid world never asks for a fascia', !solidSlots.includes('FASCIA'));
+    ok('solid world never asks for a track', !solidSlots.includes('TRACK'));
+    eq('solid world offers rings', solid.slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING']);
+    eq('solid world uses the standard arm', solid.slots.find(s => s.kind === 'BRACKET').options.map(o => o.id), ['BKT-STD']);
+    eq('no riders on a solid rod', solid.riders.map(r => r.id), []);
+
+    // TRAVERSE: fascia AND track are both asked — the fascia sits in front of the track.
+    const trv = resolve({ choices: combinedH1, answers: { rodKind: 'TRAVERSE', setup: 'SINGLE', proj: 3.625 } });
+    const trvSlots = trv.slots.filter(s => s.options.length).map(s => s.kind);
+    ok('traverse world asks for a fascia', trvSlots.includes('FASCIA'));
+    ok('traverse world asks for a track', trvSlots.includes('TRACK'));
+    ok('traverse world never asks for a solid rod', !trvSlots.includes('ROD'));
+    eq('the track turns the rings off', trv.slots.find(s => s.kind === 'RING').options.map(o => o.id), []);
+    eq('traverse world uses its own arm', trv.slots.find(s => s.kind === 'BRACKET').options.map(o => o.id), ['BKT-TRV']);
+    eq('carriers and f-clips ride the track', trv.riders.map(r => r.id).sort(), ['CARRIER', 'FCLIP']);
+
+    // The finial is shared by BOTH worlds and tagged for neither — the designer's work is not redone.
+    const finSolid = solid.slots.find(s => s.kind === 'END' && s.position === 'LEFT');
+    const finTrv = trv.slots.find(s => s.kind === 'END' && s.position === 'LEFT');
+    eq('the same finial is offered on a solid rod', finSolid.options.map(o => o.id), ['FIN-L']);
+    eq('and on the traverse, untouched', finTrv.options.map(o => o.id), ['FIN-L']);
+
+    // Geometry: choosing one world never renders a scrap of the other.
+    const vSolid = resolve({ choices: combinedH1, answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: ['ROD-STEEL', 'RING', 'BKT-STD', 'FIN-L'] });
+    eq('solid renders no fascia, track or carriers', [...vSolid.visible].sort(), ['bkt-std', 'fin-l', 'ring'].sort().map(x => x === 'ring' ? 'rings' : x).sort().concat('rod').sort());
+    const vTrv = resolve({ choices: combinedH1, answers: { rodKind: 'TRAVERSE', setup: 'SINGLE', proj: 3.625 }, selectedIds: ['FASCIA', 'TRACK-FRONT', 'BKT-TRV', 'FIN-L'] });
+    ok('traverse renders fascia, track and riders', ['fascia', 'track-front', 'carriers', 'fclips', 'bkt-trv', 'fin-l'].every(n => vTrv.visible.has(n)));
+    ok('traverse renders no solid rod and no rings', !vTrv.visible.has('rod') && !vTrv.visible.has('rings'));
+    ok('a single renders no rear track', !vTrv.visible.has('track-rear'));
+}
+
 // ── INVARIANTS: the properties that must hold for EVERY combination ───────────────────────────
 {
-    const fixtures = { solidFamily, mixed, fasciaTrack };
+    const fixtures = { solidFamily, mixed, fasciaTrack, combinedH1 };
     let combos = 0;
     Object.entries(fixtures).forEach(([fxName, choices]) => {
         const m0 = resolve({ choices, answers: {} });

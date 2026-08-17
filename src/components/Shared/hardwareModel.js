@@ -220,8 +220,20 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     const skip = (k) => ignore.includes(k);
     const no = (rule, detail) => ({ ok: false, rule, detail });
 
-    // A rod is not gated by the rod answer — it IS the rod answer.
-    if (!ROD_ROLES.includes(choice.role)) {
+    // THE ROD ANSWER SWITCHES THE ROD SLOTS THEMSELVES (Stuart 2026-08-17, the target shape for a
+    // combined H1: "a fascia appears in front of a track when used with track, or we turn off the
+    // track and use rings"). A fascia and a track are two QUESTIONS that both belong to the
+    // traverse world; a solid rod is one question in the other. So once the world is chosen, the
+    // other world's rods stop being asked about — otherwise a combined family would ask for a
+    // fascia on a steel-rod-and-rings order.
+    //
+    // Discovery is deliberately exempt: axisValues() reads rod choices directly rather than through
+    // this gate, so the rod question can always see every world it could offer.
+    if (ROD_ROLES.includes(choice.role)) {
+        if (!skip('rodKind') && ctx.rodKind && choice.rodKind && choice.rodKind !== ctx.rodKind) {
+            return no('rod type', `this is a ${choice.rodKind} rod, the order is ${ctx.rodKind}`);
+        }
+    } else {
         if (!skip('rodKind') && ctx.rodKind && !choice.fits.includes(ctx.rodKind)) {
             return no('rod type', `fits ${choice.fits.join('/')}, the selected rod is ${ctx.rodKind}`);
         }
