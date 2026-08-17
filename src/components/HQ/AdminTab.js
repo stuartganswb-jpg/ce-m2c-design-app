@@ -2452,6 +2452,29 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                 </div>
                                 {flowSettings.linkedAssemblyId && (
                                     <div style={{ marginTop: '12px' }}>
+                                        {/* FINISH MODE — PER FLOW (Stuart 2026-08-17: "we should offer a button to select
+                                            one finish for the whole config or leave it open to select finish for every
+                                            step. we can set default up on tab 11 like we do with the older flows").
+                                            Most orders wear one finish and want one click; some genuinely mix. The flow
+                                            knows which its collection is, so it says so here once instead of every
+                                            operator deciding per quote. Read by the tag-driven configurator. */}
+                                        {(() => {
+                                            const af = cpqFlows.find(f => f.id === activeFlowId);
+                                            const perPart = af?.finishMode === 'PER_PART';
+                                            const setFin = async (mode) => {
+                                                try { await updateDoc(doc(db, 'cpq_flows', activeFlowId), { finishMode: mode }); }
+                                                catch (e) { alert('Finish mode save failed: ' + (e.message || e)); }
+                                            };
+                                            const btn = (on) => ({ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}`, background: on ? 'var(--brass)' : 'transparent', color: on ? '#fff' : 'var(--ink-soft)' });
+                                            return (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', padding: '10px 12px', border: '1px solid var(--line)', background: 'var(--paper)' }}>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Finish</span>
+                                                    <button onClick={() => setFin('GLOBAL')} style={btn(!perPart)} title="ONE finish for the whole configuration — every part wears it, one click. The common case. Parts tagged no-finish (clear/acrylic) stay clear either way.">One finish</button>
+                                                    <button onClick={() => setFin('PER_PART')} style={btn(perPart)} title="A finish PER PART: the swatch row sets them all, and each chosen part can then be overridden. For collections that genuinely mix finishes on one rod.">Finish per part</button>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginLeft: 'auto' }}>{perPart ? 'operators may mix finishes' : 'one finish across the configuration'}</span>
+                                                </div>
+                                            );
+                                        })()}
                                         {/* FLOW MODE — THE CLEAR SWITCH (Stuart 2026-08-08, the Brimar incident: "we need
                                             to put in place a clear system on the generator of whether this is single
                                             assembly flow or a combined… apparently it looks like it is being ignored").

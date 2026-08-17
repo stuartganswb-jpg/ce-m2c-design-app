@@ -5,6 +5,7 @@ import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
 import { resolve as resolveHardware, diagnose as diagnoseHardware } from './hardwareModel';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
+import { priceConfiguration, pricingWarnings } from './hardwarePricing';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THE MASTER TEMPLATE (Stuart 2026-08-17)
@@ -27,9 +28,17 @@ import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 //   • a seeding bug cannot leave a bare position, because nothing is seeded;
 //   • a stale bake cannot hide a corrected tag, because nothing is baked.
 //
-// WHAT IS DELIBERATELY NOT HERE YET: finishes/textures and pricing. This proves the two things that
-// have been wrong for a week — which parts are offered, and which geometry renders. Saying it is
-// finished when it is not is how the last version got trusted too early.
+// FINISH AND PRICE (added 2026-08-17, once the geometry was trusted).
+//
+// FINISH has two modes and the FLOW chooses which, in tab 11: ONE finish for the whole
+// configuration — the common case, one click — or a finish PER PART for orders that mix them.
+// Either way a part tagged no-finish never takes one: the clear top of a two-part acrylic finial
+// stays clear while its metal collar takes the finish, because that is what the parts are.
+//
+// PRICE is Shared/hardwarePricing, which COMPOSES the tiers in priceLevels and the per-customer
+// rows in clientPricing rather than re-deriving either. Order: authored override → price level →
+// customer row → item base. Every line says which rule set it, and a line no rule could price is
+// called out rather than quietly reading as free.
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' };
 
@@ -47,11 +56,18 @@ const slotLabel = (s) => {
     return s.position ? `${s.position.charAt(0)}${s.position.slice(1).toLowerCase()} ${kind}` : kind;
 };
 
-export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = false }) {
+export default function HardwareConfigurator({
+    assembly, pins, isSuperAdmin = false,
+    finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
+    outsourceCodes = [], finishMode = 'GLOBAL',
+}) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
     const [showDiag, setShowDiag] = useState(false);
     const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
+    const [globalFinish, setGlobalFinish] = useState('');
+    const [partFinish, setPartFinish] = useState({});   // choice id -> finish code (per-part mode)
+    const perPart = finishMode === 'PER_PART';
 
     const choices = useMemo(() => choicesFromAssembly(assembly, pins), [assembly, pins]);
     const modelNodes = useMemo(() => modelNodesOf(assembly), [assembly]);
@@ -85,6 +101,47 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
     // 🧊 The clear parts, from the TAG — never from a mesh name. Passing this switches the renderer
     // off its hardcoded acrylic item-code list entirely for this configurator.
     const clearList = useMemo(() => [...resolved.clear].map(n => String(n).toLowerCase()), [resolved]);
+
+    const finishByCode = useMemo(() => {
+        const m = new Map();
+        finishes.forEach(f => { const k = String(f.code || f.name || '').toUpperCase(); if (k) m.set(k, f); });
+        return m;
+    }, [finishes]);
+    const chosenList = useMemo(
+        () => [...resolved.choices.filter(c => Object.values(livePicks).includes(c.id)), ...resolved.riders, ...resolved.companions],
+        [resolved, livePicks]);
+    // What a given part is wearing: its own finish in per-part mode, the configuration's otherwise.
+    const finishFor = useCallback((c) => (perPart ? (partFinish[c.id] || globalFinish) : globalFinish), [perPart, partFinish, globalFinish]);
+
+    // NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
+    // the collar of a two-part finial takes the finish, the acrylic top never does.
+    const textureOverrides = useMemo(() => {
+        const out = {};
+        chosenList.forEach(c => {
+            if (c.noFinish) return;
+            const f = finishByCode.get(String(finishFor(c)).toUpperCase());
+            const url = f && (f.textureUrl || f.finalImageUrl);
+            if (!url) return;
+            c.nodes.forEach(n => { out[String(n).toLowerCase()] = url; });
+        });
+        return out;
+    }, [chosenList, finishByCode, finishFor]);
+
+    // ── PRICE ─────────────────────────────────────────────────────────────────────────────────
+    const partIndex = useMemo(() => {
+        const m = new Map();
+        parts.forEach(pt => [pt.id, pt.itemId, pt.legacyErpId].forEach(k => {
+            const kk = String(k || '').trim().toUpperCase();
+            if (kk && kk !== 'PENDING' && !m.has(kk)) m.set(kk, pt);
+        }));
+        return m;
+    }, [parts]);
+    const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
+    const priced = useMemo(() => priceConfiguration(resolved, {
+        customerId, customer, priceLevel, outsourceCodes,
+        finishCode: globalFinish, findPart, findByCode: findPart,
+    }), [resolved, customerId, customer, priceLevel, outsourceCodes, globalFinish, findPart]);
+    const priceWarnings = useMemo(() => pricingWarnings(priced), [priced]);
 
     const chosen = useMemo(() => {
         const ids = new Set(Object.values(livePicks));
@@ -127,6 +184,28 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
                     </div>
                 ))}
 
+                {/* FINISH — one for the whole configuration, or a default that each part may
+                    override. The FLOW decides which in tab 11; this obeys it. */}
+                {!!finishes.length && (
+                    <div>
+                        <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>
+                            Finish <span style={{ opacity: 0.6 }}>· {perPart ? 'per part' : 'whole configuration'}</span>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                            {finishes.map(f => {
+                                const code = String(f.code || f.name || '').toUpperCase();
+                                const on = String(globalFinish).toUpperCase() === code;
+                                const url = f.textureUrl || f.finalImageUrl;
+                                return (
+                                    <button key={code} onClick={() => setGlobalFinish(on ? '' : code)} title={f.name || code}
+                                        style={{ width: '28px', height: '28px', padding: 0, cursor: 'pointer', border: `2px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: url ? `url(${url}) center/cover` : '#ddd' }} />
+                                );
+                            })}
+                        </div>
+                        {perPart && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px' }}>Sets every part; override individually below.</div>}
+                    </div>
+                )}
+
                 {/* ONE DECISION PER PLACE. A slot with no options in this configuration is simply
                     not shown — on a solid rod there is no fascia question, and that is not an error
                     to report, it is a product that does not have one. */}
@@ -164,9 +243,27 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
                         )}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             {s.options.map(o => (
-                                <button key={o.id} onClick={() => setPick(s.key, o.id)} style={{ ...chip(livePicks[s.key] === o.id), fontSize: '9px', textTransform: 'none', letterSpacing: 0 }}>
-                                    {o.name}{o.partId ? ` · ${o.partId}` : ''}
-                                </button>
+                                <React.Fragment key={o.id}>
+                                    <button onClick={() => setPick(s.key, o.id)} style={{ ...chip(livePicks[s.key] === o.id), fontSize: '9px', textTransform: 'none', letterSpacing: 0 }}>
+                                        {o.name}{o.partId ? ` · ${o.partId}` : ''}{o.noFinish ? ' · clear' : ''}
+                                    </button>
+                                    {/* PER-PART FINISH — only where the flow asks for it, only on the
+                                        chosen part, and never on one that takes no finish. */}
+                                    {perPart && livePicks[s.key] === o.id && !o.noFinish && !!finishes.length && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', padding: '2px 0 4px 8px' }}>
+                                            {finishes.map(f => {
+                                                const code = String(f.code || f.name || '').toUpperCase();
+                                                const on = String(partFinish[o.id] || globalFinish).toUpperCase() === code;
+                                                const url = f.textureUrl || f.finalImageUrl;
+                                                return (
+                                                    <button key={code} title={f.name || code}
+                                                        onClick={() => setPartFinish(pf => ({ ...pf, [o.id]: on ? '' : code }))}
+                                                        style={{ width: '18px', height: '18px', padding: 0, cursor: 'pointer', border: `2px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: url ? `url(${url}) center/cover` : '#ddd' }} />
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </React.Fragment>
                             ))}
                         </div>
                     </div>
@@ -202,10 +299,10 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
                                     one you chose. */}
                                 <DynamicModel
                                     url={cadUrl}
-                                    textureOverrides={{}}
                                     visibilityOverrides={visibleOverrides}
                                     cloneSpecs={[]}
                                     highlightOverrides={[]}
+                                    textureOverrides={textureOverrides}
                                     defaultHidden
                                     clearNodes={clearList}
                                 />
@@ -221,13 +318,32 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
                     )}
                 </div>
                 <div style={{ marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', lineHeight: 1.7 }}>
-                    <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '4px' }}>Selected · {chosen.length} part(s) · {Object.keys(visibleOverrides).length} node(s) rendering</div>
-                    {chosen.map(c => (
-                        <div key={c.id} style={{ color: 'var(--ink)' }}>
-                            {c.name}{c.partId ? ` · ${c.partId}` : ''}{c.always ? ' · (rides along)' : ''}
+                    <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>{chosen.length} part(s) · {Object.keys(visibleOverrides).length} node(s) rendering</span>
+                        <span style={{ color: 'var(--ink)' }}>${priced.total.toFixed(2)}</span>
+                    </div>
+                    {priced.lines.map((l, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', color: 'var(--ink)' }}>
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {l.name}{l.partId ? ` · ${l.partId}` : ''}
+                                {/* THEIR part number, from the same 4.6 box as their price. */}
+                                {l.sku ? <span style={{ color: 'var(--brass)' }}> · {l.sku}</span> : null}
+                                {l.qty > 1 ? ` ×${l.qty}` : ''}
+                            </span>
+                            <span title={`${l.source}${l.detail ? ` — ${l.detail}` : ''}`} style={{ flexShrink: 0, color: l.unit ? 'var(--ink)' : 'var(--ink-soft)' }}>
+                                ${l.total.toFixed(2)}
+                            </span>
                         </div>
                     ))}
-                    {!chosen.length && <div style={{ color: 'var(--ink-soft)' }}>Nothing chosen yet.</div>}
+                    {!priced.lines.length && <div style={{ color: 'var(--ink-soft)' }}>Nothing chosen yet.</div>}
+                    {priceWarnings.map((w, i) => (
+                        <div key={i} style={{ color: '#b00020', fontSize: '9px', paddingTop: '3px' }}>● {w.msg}</div>
+                    ))}
+                    {!!priced.lines.length && (
+                        <div style={{ color: 'var(--ink-soft)', fontSize: '9px', paddingTop: '4px' }}>
+                            Hover a price for the rule that set it{priceLevel !== 'STANDARD' ? ` · ${priceLevel}` : ''}{customerId ? '' : ' · no customer selected, so no client pricing'}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

@@ -4442,7 +4442,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                  ID alone. Swapping it for a loading element — or keying it on an
                                  object that is rebuilt on every snapshot — remounts it and throws
                                  the customer's picks away. It shows its own empty state instead. */
-                              <HardwareConfigurator key={asmId} assembly={activeAssembly} pins={shadowPins} isSuperAdmin={isSuperAdmin} />
+                              <HardwareConfigurator
+                                  key={asmId}
+                                  assembly={activeAssembly}
+                                  pins={shadowPins}
+                                  isSuperAdmin={isSuperAdmin}
+                                  finishes={[...globalFinishes, ...outsourceFinishes]}
+                                  parts={[...libraryParts, ...liveAssemblies]}
+                                  customerId={jobData.customerId || ''}
+                                  customer={liveCustomers.find(c => c.id === jobData.customerId) || null}
+                                  priceLevel={priceLevel}
+                                  outsourceCodes={outsourceFinishes}
+                                  /* PER-FLOW SETTING, edited in tab 11: one finish for the whole
+                                     configuration, or one per part. GLOBAL is the common case. */
+                                  finishMode={activeFlow?.finishMode === 'PER_PART' ? 'PER_PART' : 'GLOBAL'}
+                              />
                           ) : (
                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Pick a flow with a linked assembly — the new engine reads the ASSEMBLY, not the flow.</div>
                           )}
