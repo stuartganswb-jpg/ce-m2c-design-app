@@ -318,6 +318,33 @@ const threePiece = [
         [...resolve({ choices: single, answers: {}, selectedIds: ['ROD'] }).visible], ['rod']);
 }
 
+// ── THE SAME RULE, ON THE FASCIA (Stuart 2026-08-17: "yes, same rule to fascia") ───────────────
+// The rule is written over ROD_ROLES, so a fascia pinned in three pieces behaves identically to a
+// pole pinned in three pieces — and a track alongside it groups by its OWN part, independently.
+// Asserted rather than assumed: "as long as they apply across the board" is the whole requirement.
+{
+    const trvThreePiece = [
+        C({ id: 'FAS-L', partId: 'H1-138TRV', role: 'FASCIA', position: 'LEFT', nodes: ['fas-left'] }),
+        C({ id: 'FAS-C', partId: 'H1-138TRV', role: 'FASCIA', position: 'CENTER', nodes: ['fas-center'] }),
+        C({ id: 'FAS-R', partId: 'H1-138TRV', role: 'FASCIA', position: 'RIGHT', nodes: ['fas-right'] }),
+        C({ id: 'TRK-C', partId: 'TRK', role: 'TRACK', position: 'CENTER', nodes: ['trk-center'] }),
+        C({ id: 'TRK-L', partId: 'TRK', role: 'TRACK', position: 'LEFT', nodes: ['trk-left'] }),
+        C({ id: 'FIN-L', partId: 'FN', role: 'FINIAL', position: 'LEFT', nodes: ['fin-l'] }),
+        C({ id: 'RET-R', partId: 'RT', role: 'RETURN', position: 'RIGHT', nodes: ['ret-r'] }),
+    ];
+    const m = resolve({ choices: trvThreePiece, answers: {} });
+    eq('a three-piece fascia asks ONE fascia question', m.slots.filter(s => s.kind === 'FASCIA').length, 1);
+    eq('offered once, not three times', m.slots.find(s => s.kind === 'FASCIA').options.length, 1);
+    eq('the track beside it is its own single question', m.slots.find(s => s.kind === 'TRACK').options.length, 1);
+
+    const vis = (sel) => [...resolve({ choices: trvThreePiece, answers: {}, selectedIds: sel }).visible].sort();
+    eq('fascia alone renders its short centre', vis(['FAS-C']), ['fas-center']);
+    eq('a finial extends the fascia on that side', vis(['FAS-C', 'FIN-L']), ['fas-center', 'fas-left', 'fin-l']);
+    eq('a return keeps that side short', vis(['FAS-C', 'FIN-L', 'RET-R']), ['fas-center', 'fas-left', 'fin-l', 'ret-r']);
+    eq('the track follows the same rule on its own part',
+        vis(['FAS-C', 'TRK-C', 'FIN-L']), ['fas-center', 'fas-left', 'fin-l', 'trk-center', 'trk-left']);
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.
