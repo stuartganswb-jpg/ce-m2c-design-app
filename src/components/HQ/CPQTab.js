@@ -665,6 +665,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   }, []);
   // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
   const [debugHighlight, setDebugHighlight] = useState(false);
+  const [showDoctor, setShowDoctor] = useState(false);
   // Production packet — captured Front/Back images of the configured model. captureFnRef is filled by
   // the in-Canvas <ViewCapturer/>; registerCapture is stable so its effect doesn't re-fire each render.
   const [capturedViews, setCapturedViews] = useState(null);
@@ -3218,48 +3219,163 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return owners;
   }, [activeFlow, activeAssembly]);
 
-  // 👻 THE INVERSE AUDIT (Stuart 2026-08-16, H1-138: bracket-shaped meshes rendered with NO
-  // bracket selected — the ⚠ banner only catches mapped-but-missing names, never existing
-  // geometry that fell OUT of the maps, which renders in every configuration and poses as the
-  // wrong part). Lists, per section, the nodes that neither any step's geometry maps, nor
-  // targetNodes, nor the hidden lists control. Ancestor semantics mirror the engine's: a node
-  // whose name extends a controlled name past '__' rides its controlled ancestor.
-  const uncontrolledReport = useMemo(() => {
-      if (!activeFlow || !activeAssembly) return [];
-      const controlled = new Set();
+  // ── 🩺 FLOW DOCTOR (Stuart 2026-08-16: "how can we systemically fix it all… i do not trust any
+  // of them") ─────────────────────────────────────────────────────────────────────────────────
+  // Every render failure so far has been ONE of a small set of conditions, and every one of them
+  // is decidable from the flow doc + the assembly's clusters + what is selected right now. Reading
+  // the render and guessing which it is has been the expensive part — an evening per flow. So the
+  // engine states its own diagnosis, live, for whichever flow is loaded:
+  //
+  //   UNSEEDED       a step owns geometry and has NO selection → hidden-until-chosen hides it all.
+  //   EMPTY POOL     a step's options all filtered away → nothing to pick, nothing to render.
+  //   CONFLICT       a node claimed by TWO steps that DISAGREE right now. Visibility is an AND
+  //                  across steps, so one "no" hides it however loudly the other says yes. This is
+  //                  the silent one: both steps look correctly answered and the part is gone.
+  //   NO SECTION     a whole cluster no step controls — renders in every configuration. CORRECT for
+  //                  an always-shown part, wrong for anything choosable.
+  //   STRAY          loose nodes inside an otherwise-controlled section.
+  //   BLIND OPTION   an option that controls no geometry — picking it can never change the render.
+  //
+  // Severity: RED = something is invisible or unpickable right now. AMBER = it will bite later.
+  const flowDoctor = useMemo(() => { try {
+      if (!activeFlow) return { red: 0, amber: 0, findings: [] };
+      // ⚠ disabledSteps holds step TITLES, not ids (see the cross-step rule engine above).
+      const off = new Set(engineFlags.disabledSteps || []);
+      const steps = (activeFlow.steps || []).filter(s => !off.has(s.title));
+      const findings = [];
+      const push = (sev, kind, msg) => findings.push({ sev, kind, msg });
+
+      // ── A STEP THAT IS SWITCHED OFF BY ANOTHER STEP'S ANSWER ──────────────────────────────────
+      // The loudest failure there is: a whole side's brackets are simply GONE from the render, the
+      // step is not in the list to notice missing, and nothing says why. Three mechanisms do this —
+      // an option flagged hidesBracket, a RETURN or INSIDE MOUNT at that end (returnLocksBracket:
+      // the return replaces the bracket), and an END RETURN ARM on the bracket step (armLocksEnd:
+      // the arm IS the end treatment). All three are legitimate; being silent about them is not.
       (activeFlow.steps || []).forEach(step => {
-          Object.values(step.geometryMap || {}).forEach(csv => splitNodesLower(csv).forEach(t => controlled.add(t)));
-          Object.values(step.subGeometryMap || {}).forEach(csv => splitNodesLower(csv).forEach(t => controlled.add(t)));
-          splitNodesLower(step.targetNodes || '').forEach(t => controlled.add(t));
+          const geo = Object.values(step.geometryMap || {}).some(Boolean);
+          if (!geo) return;
+          const why = off.has(step.title)
+              ? 'another step\'s answer disabled it (an option flagged "hides bracket", or a traverse setup-only step)'
+              : returnLocksBracket(step)
+                  ? `the ${(step.position || '').toLowerCase() || 'matching'} End Treatment is a RETURN or INSIDE MOUNT, which replaces the bracket`
+                  : armLocksEnd(step)
+                      ? `an END RETURN ARM is selected at ${(step.position || '').toLowerCase() || 'this position'} — the arm IS the end treatment`
+                      : null;
+          if (why) push('amber', 'SWITCHED OFF', `${step.title}: not asked and NOT RENDERED because ${why}. Intended? If the brackets belong on this configuration, that upstream answer is the thing to change.`);
       });
-      (activeFlow.hiddenNodes || []).forEach(n => { if (n) controlled.add(String(n).trim().toLowerCase().replace(/^=/, '')); });
-      const hiddenCl = new Set(activeFlow.hiddenClusters || []);
-      const ctrlList = [...controlled];
-      const isControlled = (raw) => {
-          const n = String(raw || '').trim().toLowerCase();
-          if (!n) return true;
-          if (controlled.has(n)) return true;
-          // DESCENDANT of a controlled node — rides its controlled ancestor.
-          if (ctrlList.some(c => n.startsWith(c + '__'))) return true;
-          // ⚠ AND THE OTHER DIRECTION (2026-08-16 false alarm — the H2-1 banner named all six
-          // sections). 1.6 stores every cluster as [slotPrefix, ...allNodeNames], and the slot
-          // PREFIX is the wrapper GROUP: it carries no geometry of its own, its meshes are the
-          // "<prefix>__n_…" children, and those ARE mapped. Flagging the wrapper made a fully
-          // controlled section read as a ghost — noise that sent a whole session chasing
-          // geometry that was never loose. A node whose descendants are controlled is controlled.
-          return ctrlList.some(c => c.startsWith(n + '__'));
-      };
-      const out = [];
-      (activeAssembly.nodeClusters || []).forEach(cl => {
-          if (hiddenCl.has(cl.id)) return;
-          const all = cl.nodes || [];
-          // the group wrapper (first entry) is a container, not geometry — skip it, and skip the
-          // FusionImport scene wrappers the converter emits.
-          const strays = all.slice(1).filter(n => !/fusionimport/i.test(n) && !isControlled(n));
-          if (strays.length) out.push(`${cl.name || cl.id} · ${cl.position || 'shared'} (${strays.length}: ${strays.slice(0, 2).map(s => String(s).split('__').pop()).join(', ')}${strays.length > 2 ? '…' : ''})`);
+
+      // ── Per-step: does it have something to pick, and has it picked? ──────────────────────────
+      steps.forEach(step => {
+          if (step.type !== 'STYLE_SWAP' || !Array.isArray(step.styleOptions) || !step.styleOptions.length) return;
+          const owns = Object.values(step.geometryMap || {}).some(Boolean);
+          const pool = getOptionsForStep(step) || [];
+          if (!pool.length) {
+              push('red', 'EMPTY POOL', `${step.title}: ${step.styleOptions.length} option(s) authored, none survive this configuration's filters — the step cannot be answered.`);
+          } else if (!dynamicConfigParams[step.id] && owns) {
+              push('red', 'UNSEEDED', `${step.title}: ${pool.length} option(s) offered, none selected — every mesh this step owns is hidden until one is.`);
+          }
+          // A sub-pool (backplate) that has emptied leaves the plate unpickable the same way.
+          if (Array.isArray(step.subOptions) && step.subOptions.length) {
+              const subOwns = Object.values(step.subGeometryMap || {}).some(Boolean);
+              if (subOwns && !dynamicConfigParams[`${step.id}__sub`]) {
+                  push('amber', 'UNSEEDED', `${step.title} · ${step.subLabel || 'sub-choice'}: nothing selected — its geometry is hidden.`);
+              }
+          }
+          // An option that owns no geometry is invisible feedback: the customer picks it and the
+          // model does not move. Legitimate for pure fees, so fees are exempt.
+          const blind = (step.styleOptions || []).filter(o => !o.isFee && !(step.geometryMap || {})[o.optId || o.partId]);
+          if (blind.length && owns) {
+              push('amber', 'BLIND OPTION', `${step.title}: ${blind.length} option(s) control no geometry (${blind.slice(0, 2).map(o => o.partName || o.optId).join(', ')}${blind.length > 2 ? '…' : ''}) — picking them cannot change the render.`);
+          }
       });
-      return out;
-  }, [activeFlow, activeAssembly]);
+
+      // ── Cross-step: who else claims this node, and do they agree RIGHT NOW? ───────────────────
+      // Rebuilt here rather than read off visibilityOverrides because the finding needs the OWNERS,
+      // not just the boolean the AND collapsed them into.
+      const claims = new Map();   // node -> [{ label, allowed }]
+      steps.forEach(step => {
+          const claim = (gmap, sel, suffix) => {
+              if (!gmap || !Object.keys(gmap).length) return;
+              Object.entries(gmap).forEach(([optId, csv]) => {
+                  if (!csv) return;
+                  splitNodesLower(csv).forEach(n => {
+                      const list = claims.get(n) || [];
+                      const at = list.find(x => x.label === step.title + suffix);
+                      if (at) { at.allowed = at.allowed || optId === sel; return; }
+                      list.push({ label: step.title + suffix, allowed: optId === sel });
+                      claims.set(n, list);
+                  });
+              });
+          };
+          claim(step.geometryMap, dynamicConfigParams[step.id], '');
+          claim(step.subGeometryMap, dynamicConfigParams[`${step.id}__sub`], ` · ${step.subLabel || 'sub'}`);
+      });
+      const conflicts = new Map();  // "ownerA ⊗ ownerB" -> node count
+      claims.forEach((list, node) => {
+          if (list.length < 2) return;
+          const yes = list.filter(x => x.allowed), no = list.filter(x => !x.allowed);
+          if (!yes.length || !no.length) return;   // unanimous: not a conflict
+          const key = `${yes[0].label}  ⊗  ${no[0].label}`;
+          const hit = conflicts.get(key) || { n: 0, sample: node };
+          hit.n++; conflicts.set(key, hit);
+      });
+      conflicts.forEach((v, key) => {
+          const [shows, hides] = key.split('  ⊗  ');
+          push('red', 'CONFLICT', `${v.n} node(s) are claimed by two steps that disagree: "${shows}" shows them, "${hides}" hides them — the AND wins, so they are INVISIBLE. e.g. ${String(v.sample).split('__').pop()}`);
+      });
+
+      // ── Sections with no owner at all vs. loose nodes inside an owned one ─────────────────────
+      // Same controlled-set semantics as the 👻 audit (which this replaces for reporting), but the
+      // two cases are told apart: a WHOLE unowned cluster is a missing step (or a correctly
+      // always-shown part); a few loose nodes inside an owned cluster are stray geometry.
+      if (activeAssembly) {
+          const controlled = new Set();
+          steps.forEach(step => {
+              Object.values(step.geometryMap || {}).forEach(csv => splitNodesLower(csv).forEach(t => controlled.add(t)));
+              Object.values(step.subGeometryMap || {}).forEach(csv => splitNodesLower(csv).forEach(t => controlled.add(t)));
+              splitNodesLower(step.targetNodes || '').forEach(t => controlled.add(t));
+          });
+          (activeFlow.hiddenNodes || []).forEach(n => { if (n) controlled.add(String(n).trim().toLowerCase().replace(/^=/, '')); });
+          const hiddenCl = new Set(activeFlow.hiddenClusters || []);
+          const ctrlList = [...controlled];
+          const isCtl = (raw) => {
+              const n = String(raw || '').trim().toLowerCase();
+              if (!n) return true;
+              if (controlled.has(n)) return true;
+              if (ctrlList.some(c => n.startsWith(c + '__'))) return true;   // descendant rides its ancestor
+              return ctrlList.some(c => c.startsWith(n + '__'));             // wrapper of controlled children
+          };
+          (activeAssembly.nodeClusters || []).forEach(cl => {
+              if (hiddenCl.has(cl.id)) return;
+              const geo = (cl.nodes || []).slice(1).filter(n => !/fusionimport/i.test(n));
+              if (!geo.length) return;
+              const loose = geo.filter(n => !isCtl(n));
+              if (!loose.length) return;
+              const where = `${cl.name || cl.id} · ${cl.position || 'shared'}`;
+              if (loose.length === geo.length) {
+                  push('amber', 'NO SECTION', `${where}: no step controls ANY of its ${geo.length} node(s) — it renders in every configuration. Correct only if this is an always-shown part.`);
+              } else {
+                  push('red', 'STRAY', `${where}: ${loose.length} of ${geo.length} node(s) have no owning choice — they render always and can pose as the wrong part (${loose.slice(0, 2).map(s => String(s).split('__').pop()).join(', ')}${loose.length > 2 ? '…' : ''}).`);
+              }
+          });
+      }
+
+      // Mapped names the model does not contain — the render already computed this; fold it in so
+      // one panel is the whole picture.
+      if (!debugShowAll && visAudit.length) {
+          const g = {};
+          visAudit.forEach(t => { const o = visTokenOwners[t] || 'unattributed'; (g[o] = g[o] || []).push(t); });
+          Object.entries(g).forEach(([owner, ts]) => push('red', 'DEAD MAP', `${owner}: ${ts.length} mapped name(s) match no mesh in this .glb — that option controls nothing (renamed, re-imported, or stripped geometry).`));
+      }
+
+      const order = { red: 0, amber: 1 };
+      findings.sort((a, b) => order[a.sev] - order[b.sev]);
+      return { red: findings.filter(f => f.sev === 'red').length, amber: findings.filter(f => f.sev === 'amber').length, findings };
+  } catch (e) {
+      // A diagnostic must never be able to break the tool it diagnoses.
+      console.error('Flow Doctor failed:', e);
+      return { red: 0, amber: 1, findings: [{ sev: 'amber', kind: 'DOCTOR', msg: `The check itself errored (${e.message || e}) — the configurator is unaffected. Console has the trace.` }] };
+  } }, [activeFlow, activeAssembly, dynamicConfigParams, engineFlags.disabledSteps, visAudit, visTokenOwners, debugShowAll]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Steps flagged "clone along pole" (e.g. the center passing bracket) drive procedural cloning:
   // the selected option's meshes are cloned (qty) times and spaced down the pole in DynamicModel.
@@ -4017,6 +4133,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                               Highlight
                           </label>
                           <button onClick={() => { const v = captureFnRef.current && captureFnRef.current(); if (v) setCapturedViews(v); else alert('Capture not ready — give the model a moment to load, then try again.'); }} title="Capture Front + Back images of this configuration for the production packet" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: capturedViews ? 'var(--brass)' : 'var(--ink)', background: 'transparent', border: '1px solid var(--line)', padding: '5px 10px' }}>📷 Capture Views</button>
+                          {isSuperAdmin && (
+                              <button onClick={() => setShowDoctor(v => !v)} title="FLOW DOCTOR — why this configuration renders the way it does: steps with nothing selected, steps whose options all filtered away, nodes two steps disagree about (invisible), sections no step controls, and mapped names the .glb does not contain. Live: it re-reads on every pick." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: flowDoctor.red ? '#a33' : flowDoctor.amber ? '#8a6508' : 'var(--ink-soft)', background: showDoctor ? 'var(--paper-2)' : 'transparent', border: `1px solid ${flowDoctor.red ? '#a33' : 'var(--line)'}`, padding: '5px 10px' }}>
+                                  🩺 {flowDoctor.red ? `${flowDoctor.red} critical` : flowDoctor.amber ? `${flowDoctor.amber} to review` : 'Healthy'}
+                              </button>
+                          )}
                           </>
                       )}
                       <div style={{ display: 'flex', border: '1px solid var(--line)', borderRadius: '2px', overflow: 'hidden', background: '#fff' }}>
@@ -4107,9 +4228,34 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   The option(s) naming them will select and price but render nothing. Rendering model: {activeAssembly?.id || '?'} · {String(activeAssembly?.manufacturingSpecs?.cadUrl || '').split('/').pop().split('?')[0] || 'no cadUrl'} — if 1.6 Load Choices shows a DIFFERENT doc/file for this assembly name, the flow is linked to the wrong record (fix in flow settings), not a naming problem.
                               </div>
                           )}
-                          {!debugShowAll && uncontrolledReport.length > 0 && isSuperAdmin && (
-                              <div style={{ position: 'absolute', top: visAudit.length > 0 ? '96px' : '12px', left: '50%', transform: 'translateX(-50%)', maxWidth: '86%', background: 'rgba(255,250,240,0.96)', border: '1px solid #b8860b', color: '#8a6508', borderRadius: '2px', padding: '8px 12px', fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.03em', zIndex: 40, lineHeight: 1.5 }}>
-                                  👻 {uncontrolledReport.length} section(s) carry geometry NO step controls — it renders in EVERY configuration and can pose as the wrong part: {uncontrolledReport.slice(0, 6).join(' · ')}{uncontrolledReport.length > 6 ? ' · …' : ''}. Fix: give those nodes an owning choice in 1.6 (item #, HIDE, or ALWAYS), or 🗑/🧹 them, then Regenerate.
+                          {/* 🩺 THE DOCTOR'S PANEL — replaces the 👻 banner, which could only say
+                              "something is loose" and could not tell a genuinely loose node from a
+                              wrapper group or a correctly always-shown section. Opens on demand so a
+                              healthy flow costs no screen space. */}
+                          {!debugShowAll && showDoctor && isSuperAdmin && (
+                              <div style={{ position: 'absolute', top: '12px', left: '50%', transform: 'translateX(-50%)', width: '86%', maxHeight: '400px', overflowY: 'auto', background: 'rgba(255,255,255,0.97)', border: '1px solid var(--ink)', borderRadius: '2px', padding: '12px 14px', fontFamily: 'var(--mono)', fontSize: '10px', zIndex: 60, lineHeight: 1.6, boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '6px' }}>
+                                      <span style={{ textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)' }}>
+                                          🩺 Flow Doctor · {activeFlow?.name || activeFlowId} · {flowDoctor.red} critical, {flowDoctor.amber} to review
+                                      </span>
+                                      <span onClick={() => setShowDoctor(false)} style={{ cursor: 'pointer', color: 'var(--ink-soft)', padding: '0 4px' }}>✕</span>
+                                  </div>
+                                  {!flowDoctor.findings.length && (
+                                      <div style={{ color: '#2a7', letterSpacing: '.03em' }}>
+                                          ✓ Every step has options and an answer, no two steps disagree about a node, every section is controlled, and every mapped name exists in the .glb. What you see is what this configuration is.
+                                      </div>
+                                  )}
+                                  {flowDoctor.findings.map((f, i) => (
+                                      <div key={i} style={{ display: 'flex', gap: '8px', padding: '4px 0', borderTop: i ? '1px solid var(--paper-2)' : 'none' }}>
+                                          <span style={{ flexShrink: 0, width: '84px', color: f.sev === 'red' ? '#b00020' : '#8a6508', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                                              {f.sev === 'red' ? '●' : '○'} {f.kind}
+                                          </span>
+                                          <span style={{ color: 'var(--ink)' }}>{f.msg}</span>
+                                      </div>
+                                  ))}
+                                  <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px solid var(--line)', color: 'var(--ink-soft)', fontSize: '9px' }}>
+                                      Model: {activeAssembly?.id || '?'} · {String(activeAssembly?.manufacturingSpecs?.cadUrl || '').split('/').pop().split('?')[0] || 'no cadUrl'}. CONFLICT and UNSEEDED are runtime — they change as you pick. NO SECTION / STRAY / BLIND OPTION are authoring, and need a 1.6 fix + Regenerate.
+                                  </div>
                               </div>
                           )}
                           {capturedViews && (
