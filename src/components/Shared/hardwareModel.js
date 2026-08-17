@@ -249,6 +249,8 @@ export function normalizeChoice(input = {}) {
         requiresCollar: U(input.requiresCollar),
         // A BASIC bracket takes no backplate; an IN-LINE bracket takes only in-line plates. Both are
         // facts about the part, tagged in 1.6, and both are pairing rules rather than filters.
+        // 🧊 Clear/acrylic: never takes the selected finish. A TAG, not a name — see clearNodes().
+        noFinish: input.noFinish === true,
         isBasic: input.isBasic === true,
         // ⚠ THE TWO SIDES OF "IN LINE" ARE DIFFERENT FIELDS, and 1.6 says so. On a BRACKET the flag
         // is `usesReturnPlates` — "this tag is how the system knows a bracket is In Line". On a
@@ -462,6 +464,33 @@ export function companionsFor(choices, selectedIds = []) {
 }
 
 /**
+ * The nodes that must render CLEAR — acrylic, glass, anything that never takes the finish.
+ *
+ * ⚠ THIS IS THE REPLACEMENT FOR A HARDCODED ITEM-CODE LIST (Stuart 2026-08-17: "why does the ball
+ * and acrylic pole show as clear (correct) and these finials do not?"). The renderer decided
+ * "acrylic" by matching MESH NAMES against fourteen item codes compiled into the render loop, so an
+ * acrylic ball whose mesh name happened to contain a listed code rendered clear while the acrylic
+ * gem and knob rendered as metal. A list that must be edited and deployed for every new part is not
+ * a rule.
+ *
+ * The rule is the tag. Only SELECTED parts contribute, so this is the clear geometry of the actual
+ * configuration — and a two-part acrylic finial works without any special case: the top is tagged
+ * no-finish and its collar is not, so the collar takes the finish and the top stays clear.
+ */
+export function clearNodes(choices, selectedIds = []) {
+    const want = new Set((selectedIds || []).filter(Boolean).map(String));
+    const on = new Set();
+    choices.forEach(c => {
+        if (!c.noFinish) return;
+        if (!want.has(c.id) && !c.always) return;
+        c.nodes.forEach(n => on.add(n));
+    });
+    // A required collar is metal by definition — it is the part that DOES take the finish — so a
+    // collar is never added here even if its finial is clear.
+    return on;
+}
+
+/**
  * WHAT RENDERS. The union of the geometry owned by the selected choices, plus the riders.
  *
  * `selectedIds` is whatever the customer has answered — one id per slot. Nothing else contributes,
@@ -642,6 +671,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const sl = slots(norm, answers, selectedIds);
     const riders = ridersFor(norm, answers, selectedIds);
     const companions = companionsFor(norm, selectedIds);
+    const clear = clearNodes(norm, selectedIds);
     const visible = visibleNodes(norm, answers, selectedIds);
     const ownership = nodeOwnership(norm, modelNodes);
     const selected = norm.filter(c => selectedIds.includes(c.id));
@@ -657,6 +687,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
         slots: sl,     // the per-place decisions, each with its live options + why the rest are out
         riders,        // built, never asked
         companions,    // collars pulled in by the part that requires them
+        clear,         // Set of node names that never take the finish (tagged, never name-matched)
         visible,       // Set of node names that render. Everything else is hidden.
         ownership,     // node -> owning choice; unowned nodes; mapped names the model lacks
         selected,      // the chosen parts themselves, for coherence checks

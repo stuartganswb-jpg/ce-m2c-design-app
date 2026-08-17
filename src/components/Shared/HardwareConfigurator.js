@@ -73,12 +73,17 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
         return out;
     }, [model, picks]);
 
+    const resolved = useMemo(
+        () => resolveHardware({ choices, answers, selectedIds: Object.values(livePicks), modelNodes }),
+        [choices, answers, livePicks, modelNodes]);
     const visibleOverrides = useMemo(() => {
-        const m = resolveHardware({ choices, answers, selectedIds: Object.values(livePicks), modelNodes });
         const o = {};
-        m.visible.forEach(n => { o[String(n).toLowerCase()] = true; });
+        resolved.visible.forEach(n => { o[String(n).toLowerCase()] = true; });
         return o;
-    }, [choices, answers, livePicks, modelNodes]);
+    }, [resolved]);
+    // 🧊 The clear parts, from the TAG — never from a mesh name. Passing this switches the renderer
+    // off its hardcoded acrylic item-code list entirely for this configurator.
+    const clearList = useMemo(() => [...resolved.clear].map(n => String(n).toLowerCase()), [resolved]);
 
     const chosen = useMemo(() => {
         const ids = new Set(Object.values(livePicks));
@@ -174,6 +179,7 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
                                     cloneSpecs={[]}
                                     highlightOverrides={[]}
                                     defaultHidden
+                                    clearNodes={clearList}
                                 />
                             </Bounds>
                         </Canvas>

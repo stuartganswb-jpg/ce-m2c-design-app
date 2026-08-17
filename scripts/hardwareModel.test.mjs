@@ -506,6 +506,30 @@ const threePiece = [
         !diagnose(resolve({ choices: arms, answers: {}, selectedIds: ['ROD', 'BASIC'] })).some(d => d.kind === 'NO OPTIONS'));
 }
 
+// ── CLEAR PARTS COME FROM A TAG, NEVER A NAME ─────────────────────────────────────────────────
+// "why does the ball and acrylic pole show as clear (correct) and these finials do not?" Because
+// the renderer matched MESH NAMES against fourteen item codes. This is the replacement.
+{
+    const clearFx = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'ACR-ROD', partId: 'AR', role: 'ROD', rodKind: 'SOLID', noFinish: true, nodes: ['acr-rod'] }),
+        C({ id: 'BALL', partId: 'BLF', role: 'FINIAL', position: 'LEFT', nodes: ['ball'] }),
+        // a two-part acrylic finial: the TOP takes no finish, the collar it requires does
+        C({ id: 'GEM', partId: 'ACGF', role: 'FINIAL', position: 'LEFT', noFinish: true, requiresCollar: 'AFC', nodes: ['gem'] }),
+        C({ id: 'COLLAR', partId: 'AFC', role: 'FINIAL', position: 'LEFT', isCollar: true, nodes: ['collar'] }),
+    ];
+    const clearOf = (sel) => [...resolve({ choices: clearFx, answers: {}, selectedIds: sel }).clear].sort();
+    eq('nothing chosen, nothing clear', clearOf([]), []);
+    eq('a metal finial is not clear', clearOf(['ROD', 'BALL']), []);
+    eq('the tagged gem IS clear — no item code anywhere', clearOf(['ROD', 'GEM']), ['gem']);
+    ok('and its collar is NOT — the collar is the part that takes the finish',
+        !clearOf(['ROD', 'GEM']).includes('collar'));
+    ok('the collar still renders with it',
+        [...resolve({ choices: clearFx, answers: {}, selectedIds: ['ROD', 'GEM'] }).visible].includes('collar'));
+    eq('a tagged acrylic ROD is clear too', clearOf(['ACR-ROD']), ['acr-rod']);
+    ok('an unselected clear part contributes nothing', !clearOf(['ROD', 'BALL']).includes('gem'));
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.

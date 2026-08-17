@@ -161,7 +161,7 @@ export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
     return kept.length ? kept : acc;
 }, Array.isArray(pool) ? pool : []);
 
-export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false, clearNodes = null }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -285,7 +285,15 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                     // take the AC texture through the standard path below. If NOTHING matched
                     // (AC chip missing / pre-AC flow), pin a synthetic clear so an acrylic part
                     // never renders as raw grey steel.
-                    if (isAcrylicKeep(child) && !(matchedTexUrl && texMap[matchedTexUrl])) {
+                    // 🧊 WHICH PARTS ARE CLEAR — BY TAG WHEN THE CALLER KNOWS (Stuart 2026-08-17).
+                    // `clearNodes` is the tag-derived set from the hardware model: pass it and the
+                    // item-code list below is not consulted at all, so a new acrylic finial is a
+                    // tick in 1.6 rather than a code change. Callers that pass nothing (the old
+                    // configurator) keep the legacy name matching exactly as it was.
+                    const isClear = clearNodes
+                        ? clearNodes.some(t => hitTarget(t))
+                        : isAcrylicKeep(child);
+                    if (isClear && !(matchedTexUrl && texMap[matchedTexUrl])) {
                         const mat = child.userData.originalMaterial.clone();
                         mat.map = null;
                         mat.color = new THREE.Color(0xe4edf2);
@@ -452,7 +460,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                 );
             }
         });
-    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, highlightOverridesString, defaultHidden]);
+    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, highlightOverridesString, defaultHidden, JSON.stringify(clearNodes)]);
 
     return <primitive object={clonedScene} />;
 };

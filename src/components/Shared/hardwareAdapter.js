@@ -126,6 +126,9 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         // — the assign tool reads `pin?.usesReturnPlates || cl.usesReturnPlates` for exactly this
         // reason — so a flag set on the section rather than the choice was invisible here and the
         // basic wood arms kept asking for a plate they do not take.
+        // 🧊 TAKES NO FINISH — the tag that replaces the renderer's hardcoded acrylic item-code
+        // list. Read from the pin or the cluster, like every other flag here.
+        noFinish: !!(pin.noFinish || cluster?.noFinish),
         isBasic: !!(pin.isBasic || cluster?.isBasic),
         usesReturnPlates: !!(pin.usesReturnPlates || cluster?.usesReturnPlates),
         inlineOnly: !!(pin.inlineOnly || cluster?.inlineOnly),
