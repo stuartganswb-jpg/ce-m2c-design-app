@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor } from './hardwareModel';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, pricingWarnings } from './hardwarePricing';
 
@@ -120,7 +120,10 @@ export default function HardwareConfigurator({
         chosenList.forEach(c => {
             if (c.noFinish) return;
             const f = finishByCode.get(String(finishFor(c)).toUpperCase());
-            const url = f && (f.textureUrl || f.finalImageUrl);
+            // The material gate, applied at the last moment: a global pick of a wood stain simply
+            // does not land on the steel brackets, and nothing lands on the acrylic.
+            if (!f || !finishesFor(c, [f]).length) return;
+            const url = f.textureUrl || f.finalImageUrl;
             if (!url) return;
             c.nodes.forEach(n => { out[String(n).toLowerCase()] = url; });
         });
@@ -192,7 +195,9 @@ export default function HardwareConfigurator({
                             Finish <span style={{ opacity: 0.6 }}>· {perPart ? 'per part' : 'whole configuration'}</span>
                         </div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                            {finishes.map(f => {
+                            {/* Only finishes SOMETHING here can wear. A collection with no wood
+                                parts never shows a stain, and it needs no rule to know that. */}
+                            {finishes.filter(f => !chosenList.length || chosenList.some(c => finishesFor(c, [f]).length)).map(f => {
                                 const code = String(f.code || f.name || '').toUpperCase();
                                 const on = String(globalFinish).toUpperCase() === code;
                                 const url = f.textureUrl || f.finalImageUrl;
@@ -251,7 +256,7 @@ export default function HardwareConfigurator({
                                         chosen part, and never on one that takes no finish. */}
                                     {perPart && livePicks[s.key] === o.id && !o.noFinish && !!finishes.length && (
                                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', padding: '2px 0 4px 8px' }}>
-                                            {finishes.map(f => {
+                                            {finishesFor(o, finishes).map(f => {
                                                 const code = String(f.code || f.name || '').toUpperCase();
                                                 const on = String(partFinish[o.id] || globalFinish).toUpperCase() === code;
                                                 const url = f.textureUrl || f.finalImageUrl;

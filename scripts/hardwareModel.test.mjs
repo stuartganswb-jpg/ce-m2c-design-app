@@ -9,7 +9,7 @@
 // projection on singles, a 3rd on doubles — which must pass with NO code change.
 
 import {
-    resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf,
+    resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor,
 } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
@@ -645,6 +645,37 @@ const threePiece = [
     const why = resolve({ choices: mixedPoles, answers: {}, selectedIds: ['P1'] })
         .slots.find(s => s.kind === 'END' && s.position === 'LEFT').rejected.find(r => r.choice.id === 'RET-L');
     ok('and names the pole that caused it', why && /single-piece pole/.test(why.detail), why && why.detail);
+}
+
+// ── A PART WEARS ONLY FINISHES OF A MATERIAL IT IS MADE IN ────────────────────────────────────
+// Stuart 2026-08-17: materials are the finish FAMILY. "the first choice and the default should be
+// metal, then there should be Wood, Clear (No Finish), there should also be the ability to add new
+// materials … this way we future proof the rules, materials and finishes."
+{
+    const FIN = [
+        { code: 'P01', material: 'METAL' },
+        { code: 'EP1', material: 'METAL' },
+        { code: 'S01', material: 'WOOD' },
+        { code: 'AC', material: 'CLEAR (NO FINISH)' },
+        { code: 'XX' },                                  // untagged finish reads as METAL
+    ];
+    const n = (o) => normalizeChoice(o);
+    const steel = n({ id: 'S', role: 'BRACKET' });                          // untagged → METAL
+    const wood = n({ id: 'W', role: 'ROD', materials: 'WOOD' });
+    const both = n({ id: 'B', role: 'FINIAL', materials: 'METAL,WOOD' });
+    const clear = n({ id: 'C', role: 'FINIAL', materials: 'CLEAR (NO FINISH)' });
+    const legacy = n({ id: 'L', role: 'FINIAL', noFinish: true });          // the old boolean
+
+    eq('an untagged part is METAL', steel.materials, ['METAL']);
+    eq('a metal part wears the metal finishes', finishesFor(steel, FIN).map(f => f.code), ['P01', 'EP1', 'XX']);
+    eq('a wood part wears only the stains', finishesFor(wood, FIN).map(f => f.code), ['S01']);
+    eq('a part made in both wears both', finishesFor(both, FIN).map(f => f.code), ['P01', 'EP1', 'S01', 'XX']);
+    eq('a clear part wears nothing at all', finishesFor(clear, FIN).map(f => f.code), []);
+    ok('and is still reported as no-finish, so the render stays clear', clear.noFinish === true);
+    ok('the old boolean still means clear', legacy.noFinish === true && !finishesFor(legacy, FIN).length);
+    eq('and reads as the clear material', legacy.materials, ['CLEAR (NO FINISH)']);
+    ok('a finish with no material of its own reads as METAL', takesFinish(steel, { code: 'ZZ' }));
+    ok('and therefore never lands on wood', !takesFinish(wood, { code: 'ZZ' }));
 }
 
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────

@@ -271,8 +271,19 @@ export function normalizeChoice(input = {}) {
         requiresCollar: U(input.requiresCollar),
         // A BASIC bracket takes no backplate; an IN-LINE bracket takes only in-line plates. Both are
         // facts about the part, tagged in 1.6, and both are pairing rules rather than filters.
-        // 🧊 Clear/acrylic: never takes the selected finish. A TAG, not a name — see clearNodes().
-        noFinish: input.noFinish === true,
+        // 🧪 WHAT THIS PART IS MADE IN. A part wears only finishes whose MATERIAL it is made in, so
+        // a wood stain never lands on a steel bracket and nothing lands on clear acrylic — without
+        // any rule naming a material. Blank reads as METAL, the overwhelming majority.
+        materials: (() => {
+            const list = String(input.materials || '').split(/[,;|]+/).map(x => x.trim().toUpperCase()).filter(Boolean);
+            if (list.length) return list;
+            return input.noFinish === true ? ['CLEAR (NO FINISH)'] : ['METAL'];
+        })(),
+        // Clear = made only in a material that takes no finish. The old boolean, now derived.
+        noFinish: input.noFinish === true
+            || (String(input.materials || '').trim()
+                ? String(input.materials).split(/[,;|]+/).every(x => /CLEAR|NO\s*FINISH/i.test(x.trim()))
+                : false),
         isBasic: input.isBasic === true,
         // ⚠ THE TWO SIDES OF "IN LINE" ARE DIFFERENT FIELDS, and 1.6 says so. On a BRACKET the flag
         // is `usesReturnPlates` — "this tag is how the system knows a bracket is In Line". On a
@@ -515,6 +526,18 @@ export function clearNodes(choices, selectedIds = []) {
     // A required collar is metal by definition — it is the part that DOES take the finish — so a
     // collar is never added here even if its finial is clear.
     return on;
+}
+
+/** Does this part wear this finish? A finish belongs to a material; a part is made in materials. */
+export function takesFinish(choice, finish) {
+    if (!choice || choice.noFinish) return false;
+    const fm = String((finish && (finish.material || finish.type)) || '').trim().toUpperCase() || 'METAL';
+    return choice.materials.some(m => m === fm);
+}
+
+/** The finishes a part can actually wear, out of those the flow offers. */
+export function finishesFor(choice, finishes = []) {
+    return finishes.filter(f => takesFinish(choice, f));
 }
 
 /**

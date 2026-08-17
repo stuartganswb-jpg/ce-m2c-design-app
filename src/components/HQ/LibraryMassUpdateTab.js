@@ -26,6 +26,12 @@ const LIST_LABELS = {
     partHandling: 'PART HANDLING & ROUTING', 
     inventoryTypes: 'RAW MATERIAL - INVENTORY ITEMS',
     projections: 'BRACKET PROJECTIONS',
+    // MATERIALS (Stuart 2026-08-17) — the finish FAMILY. Every finish belongs to one, every part
+    // declares which it is made in, and a part only ever wears a finish of a material it is made
+    // in. That is what lets a wood rod take wood stains, a metal bracket take plated finishes, and
+    // a clear acrylic top take nothing at all — without a rule naming any of them. Seeded METAL /
+    // WOOD / CLEAR (NO FINISH); add more here and they work everywhere immediately.
+    materials: 'MATERIALS (finish families — METAL, WOOD, CLEAR …)',
     bins: 'WAREHOUSE BIN LOCATIONS',
     bracketMounts: 'BRACKET MOUNT TYPES',
     feeTypes: 'SERVICE / FEE TYPES',
@@ -155,7 +161,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         prodTypes: [], uom: [], watchLists: [], assemblyTypes: [], inventoryTypes: [], 
         partHandling: [], collections: [], vendors: [], outsourceActions: [],
         pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [],
-        projections: [], cpqRoutingTypes: [], customers: [], bins: [],
+        projections: [], cpqRoutingTypes: [], customers: [], bins: [], materials: [],
         bracketMounts: [], feeTypes: [], backplateOrientations: [],
         quickShipUom: [], rushFeeTypes: []
     });
@@ -826,6 +832,37 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         await setDoc(doc(db, "system", "master_schema"), { inventoryFields: customSchema.filter(f => f.key !== keyToRemove) }, { merge: true });
     };
 
+    // ── SEED THE MATERIAL ON EVERY FINISH, FROM ITS CODE (Stuart 2026-08-17) ───────────────────
+    // "you can go ahead and seed with all P0, EP, and MEP finishes being tagged as metal, all S0
+    //  finishes being tagged as wood, all AC finish tagged as clear, and all finishes with random
+    //  two letters or letters and a # — CP, SG, N34 — tag as metal. this way we future proof the
+    //  rules, materials and finishes."
+    //
+    // The code carries the family, so the existing library can be tagged in one pass rather than
+    // by hand. Deliberately NOT a permanent rule: it writes a real value onto each finish and then
+    // never runs again unless asked, so a finish that does not follow the convention is corrected
+    // once in the editor instead of fighting a regex forever. Only fills BLANKS — an existing tag
+    // is never overwritten.
+    const materialFromCode = (code) => {
+        const c = String(code || '').trim().toUpperCase();
+        if (/^AC/.test(c)) return 'CLEAR';        // acrylic / clear
+        if (/^S\d/.test(c)) return 'WOOD';        // S01, S02 … stains
+        return 'METAL';                           // P0n, EPn, MEPn, and short codes: CP, SG, N34
+    };
+    const handleSeedFinishMaterials = async () => {
+        const blanks = globalFinishes.filter(f => !String(f.material || '').trim());
+        if (!blanks.length) return alert('Every finish already carries a material — nothing to seed.');
+        const preview = blanks.slice(0, 12).map(f => `  ${String(f.code || f.name).toUpperCase()} → ${materialFromCode(f.code || f.name)}`).join('\n');
+        if (!window.confirm(`Tag ${blanks.length} finish(es) that have no material yet?\n\n${preview}${blanks.length > 12 ? '\n  …' : ''}\n\nAC… → CLEAR · S0… → WOOD · everything else → METAL.\nFinishes that already carry a material are left alone.`)) return;
+        const updated = globalFinishes.map(f => String(f.material || '').trim() ? f : { ...f, material: materialFromCode(f.code || f.name) });
+        await setDoc(doc(db, "system", "master_finishes"), { finishes: updated }, { merge: true });
+        // …and make sure the three families exist in the dictionary the editor reads.
+        const have = new Set((globalLists.materials || []).map(m => String(m).toUpperCase()));
+        const need = ['METAL', 'WOOD', 'CLEAR (NO FINISH)'].filter(m => !have.has(m));
+        if (need.length) await setDoc(doc(db, "system", "master_lists"), { materials: [...(globalLists.materials || []), ...need] }, { merge: true });
+        alert(`Tagged ${blanks.length} finish(es).`);
+    };
+
     const handleSyncFloorRecipes = async () => {
         if (!window.confirm("Sync finishes with the Finishing Floor?\n\n• Floor recipes missing here import to HQ\n• HQ finishes with NO floor recipe (new from sales) PUSH to the floor as NEEDS-RECIPE stubs — Grace builds the recipe there, or deletes it\n• -S/-P stream variants are skipped both ways (floor routing detail)")) return;
         let currentFinishes = [...globalFinishes]; let addedCount = 0;
@@ -891,10 +928,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 // themselves (Bronze, Champagne); subFinishCode on ANY finish names which sub color
                 // the track/components take when THIS finish is on the mainline.
                 isSubFinish: !!newFinishConfig.isSubFinish,
-                subFinishCode: String(newFinishConfig.subFinishCode || '').toUpperCase()
+                subFinishCode: String(newFinishConfig.subFinishCode || '').toUpperCase(),
+                material: String(newFinishConfig.material || '').toUpperCase()
             } : f);
         } else {
-            const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [], bomSuffix, isSubFinish: !!newFinishConfig.isSubFinish, subFinishCode: String(newFinishConfig.subFinishCode || '').toUpperCase() };
+            const newFinish = { id: `FIN-${Date.now()}`, name: newFinishConfig.name.toUpperCase(), code: newFinishConfig.code.toUpperCase(), type: newFinishConfig.type.toUpperCase(), textureUrl: newFinishConfig.textureUrl, status: 'Working', clientMapping: newFinishConfig.clientMapping || [], bomSuffix, isSubFinish: !!newFinishConfig.isSubFinish, subFinishCode: String(newFinishConfig.subFinishCode || '').toUpperCase(), material: String(newFinishConfig.material || '').toUpperCase() };
             updatedFinishes = [...globalFinishes, newFinish];
         }
 
@@ -1516,6 +1554,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 <div style={{ padding: '24px', background: theme.paper2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${theme.line}` }}>
                                     <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: theme.ink }}>In-House Master Finishes</span>
                                     <div style={{ display: 'flex', gap: '12px' }}>
+                                        <button onClick={handleSeedFinishMaterials} title="Tag every finish that has no MATERIAL yet, from its code: AC… → CLEAR, S0… → WOOD, everything else → METAL. Finishes that already carry a material are left alone, so this is safe to run more than once." style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Seed Materials</button>
                                         <button onClick={handleSyncFloorRecipes} style={{ background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Sync Floor Recipes</button>
                                         <button onClick={() => { setShowFinishForm(!showFinishForm); setEditingGlobalFinish(null); setNewFinishConfig({name: '', code: '', type: '', textureUrl: '', clientMapping: []}); }} style={{ background: theme.ink, color: '#fff', border: 'none', padding: '8px 16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{showFinishForm && !editingGlobalFinish ? 'Close' : 'Add Finish'}</button>
                                     </div>
@@ -1543,6 +1582,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                                 <div><label style={labelStyle}>Descriptive Name</label><input value={newFinishConfig.name} onChange={(e) => setNewFinishConfig({...newFinishConfig, name: e.target.value})} placeholder="e.g. Matte Brass" style={fieldStyle} /></div>
                                                 <div><label style={labelStyle}>Category / Type</label><input value={newFinishConfig.type} onChange={(e) => setNewFinishConfig({...newFinishConfig, type: e.target.value})} placeholder="e.g. METAL, WOOD" style={{ ...fieldStyle, textTransform: 'uppercase' }} /></div>
+                                                <div><label style={labelStyle} title="MATERIAL — the finish family this finish belongs to. A part only wears a finish whose material the part is made in, so a wood stain never lands on a steel bracket and nothing lands on clear acrylic. The list is the MATERIALS Master Dictionary above.">Material</label>
+                                                    <select value={newFinishConfig.material || ''} onChange={(e) => setNewFinishConfig({...newFinishConfig, material: e.target.value})} style={fieldStyle}>
+                                                        <option value="">— unset (reads as METAL) —</option>
+                                                        {(globalLists.materials || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
+                                                    </select>
+                                                </div>
                                             </div>
                                             <div style={{ background: '#fff', padding: '16px', border: `1px solid ${theme.line}` }}>
                                                 <label style={labelStyle}>Seamless Texture Map (JPG/PNG)</label>

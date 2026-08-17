@@ -128,6 +128,9 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         // basic wood arms kept asking for a plate they do not take.
         // 🧊 TAKES NO FINISH — the tag that replaces the renderer's hardcoded acrylic item-code
         // list. Read from the pin or the cluster, like every other flag here.
+        // 🧪 MATERIALS — everything the part is made in. Blank reads as METAL. The no-finish flag
+        // survives as the shorthand it always was: a part made ONLY in a clear material.
+        materials: String(pin.materials || cluster?.materials || '').toUpperCase(),
         noFinish: !!(pin.noFinish || cluster?.noFinish),
         isBasic: !!(pin.isBasic || cluster?.isBasic),
         usesReturnPlates: !!(pin.usesReturnPlates || cluster?.usesReturnPlates),
