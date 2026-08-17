@@ -666,6 +666,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
   const [debugHighlight, setDebugHighlight] = useState(false);
   const [showDoctor, setShowDoctor] = useState(false);
+  // Steps this configuration has already tried to auto-fill (see the sweep below). A Set that also
+  // carries the configuration signature it belongs to, so a new configuration starts clean.
+  const autoFilledRef = useRef(new Set());
   // Production packet — captured Front/Back images of the configured model. captureFnRef is filled by
   // the in-Canvas <ViewCapturer/>; registerCapture is stable so its effect doesn't re-fire each render.
   const [capturedViews, setCapturedViews] = useState(null);
@@ -2251,6 +2254,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // or implied) — the sweep must still clear selections the projection no longer offers.
       if (!sizeSel && flowProjSel == null) return;
       const returnsOk = returnsAllowedFor(sizeSel);
+      // What this configuration IS, for the one-attempt-per-configuration fill guard below.
+      // Change the diameter, the projection, or traverse-vs-standard and every pool is a different
+      // question, so each earns a fresh attempt; ticking around inside one does not.
+      const sig = JSON.stringify([activeFlowId, sizeSel, flowProjSel, trvSelection.trvPole]);
+      if (autoFilledRef.current.sig !== sig) { autoFilledRef.current = new Set(); autoFilledRef.current.sig = sig; }
       const allParts = [...libraryParts, ...liveAssemblies];
       const partOf = (o) => allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
           || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName)));
@@ -2285,10 +2293,24 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   // pool's bookkeeping — leave it exactly as it was (long-standing behaviour).
                   if (next[key] && !o) return;
                   if (o && gateOf(o)) return;                  // still valid: nothing to do
-                  // Either the pick is banned or the step has none. Both want the same answer: the
-                  // best option this configuration actually allows. No valid successor (e.g. a
-                  // basic bracket takes no plate) clears — and clearing an ALREADY-empty step is
-                  // not a change, so this can never loop.
+                  // ⚠ ONE ATTEMPT PER CONFIGURATION (Stuart 2026-08-16: "unresponsive if i switch
+                  // from 3-5/8 to 4-5/8"). Filling an EMPTY step is not self-limiting the way
+                  // replacing a bad pick is, and it deadlocked against the disabled-step sweep:
+                  // engineFlags is recomputed in its own effect and therefore lags a render, so
+                  // fill → flags recompute → step disabled → its selection cleared → fill again,
+                  // forever, and the tab locks up. (That sweep's comment says it cannot loop
+                  // because re-clearing is idempotent — true until something started re-ADDING.)
+                  // A ref remembers what this configuration already tried to fill, so the fill
+                  // happens once and whoever clears it afterwards gets the last word. Replacing a
+                  // BANNED pick stays unconditional: its successor passes the same gate, so the
+                  // next pass returns early and it converges on its own.
+                  if (!next[key]) {
+                      const fillKey = `${sig}|${key}`;
+                      if (autoFilledRef.current.has(fillKey)) return;
+                      autoFilledRef.current.add(fillKey);
+                  }
+                  // The rules that govern the pool choose the answer. No valid successor (e.g. a
+                  // basic bracket takes no plate) clears.
                   const repl = defaultOptionFor([...(pool || []).filter(x => optCustomerOk(x) && trvOkFor(st, { isSub: !!isSub })(x) && gateOf(x))].sort((a, b) => (mountOf(a) === 'WALL' ? 0 : 1) - (mountOf(b) === 'WALL' ? 0 : 1)), isSub ? st.subGeometryMap : st.geometryMap, isSub ? st.defaultSubOptId : st.defaultOptId);
                   if (repl) { if (repl !== next[key]) { next[key] = repl; changed = true; } }
                   else if (next[key]) { delete next[key]; changed = true; }
