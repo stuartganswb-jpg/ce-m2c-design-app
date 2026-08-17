@@ -32,8 +32,23 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
     // repeat it. Typed once, read by the configurator to recommend a bracket count.
     const [spanMap, setSpanMap] = useState({});
     const [draft, setDraft] = useState({});
-    useEffect(() => onSnapshot(doc(db, 'system', 'bracket_span_map'),
-        d => setSpanMap((d.exists() && d.data().map) || {}), () => setSpanMap({})), []);
+    // ── THE HOUSE CAPS ARE EDITABLE (Stuart 2026-08-17: "i can't edit the values you entered, can
+    // you give me an edit mode for both span in stud and not in stud"). Fair — the numbers in the
+    // module are DEFAULTS, not the authority. A house maximum is a commercial judgement that moves
+    // with warranty experience and installer feedback, and it must never need a release.
+    const [caps, setCaps] = useState({});
+    const [editSpans, setEditSpans] = useState(false);
+    useEffect(() => onSnapshot(doc(db, 'system', 'bracket_span_map'), d => {
+        setSpanMap((d.exists() && d.data().map) || {});
+        setCaps((d.exists() && d.data().caps) || {});
+    }, () => { setSpanMap({}); setCaps({}); }), []);
+    const saveCap = async (rodId, field, value) => {
+        const n = parseFloat(value);
+        const next = { ...(caps[rodId] || {}) };
+        if (Number.isFinite(n) && n > 0) next[field] = n; else delete next[field];
+        try { await setDoc(doc(db, 'system', 'bracket_span_map'), { caps: { ...caps, [rodId]: next } }, { merge: true }); }
+        catch (e) { alert('Could not save the span: ' + (e.message || e)); }
+    };
     const saveCodes = async (rodId, value) => {
         try { await setDoc(doc(db, 'system', 'bracket_span_map'), { map: { ...spanMap, [rodId]: value } }, { merge: true }); }
         catch (e) { alert('Could not save the item codes: ' + (e.message || e)); }
@@ -50,8 +65,8 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
     const mine = useMemo(() => rodCollectionsFor(null, activeBrand), [activeBrand]);
     const mineIds = useMemo(() => new Set(mine.map(c => c.id)), [mine]);
     const rows = useMemo(
-        () => (drop > 0 ? spanTable(fabricId, drop, collectionId).filter(r => mineIds.has(r.collection)) : []),
-        [fabricId, drop, collectionId, mineIds]
+        () => (drop > 0 ? spanTable(fabricId, drop, collectionId, caps).filter(r => mineIds.has(r.collection)) : []),
+        [fabricId, drop, collectionId, mineIds, caps]
     );
     const rodInches = parseFloat(rodLen) > 0 ? parseFloat(rodLen) : null;
 
@@ -104,11 +119,18 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                     <div style={{ marginTop: '7px' }}>
                         <b style={{ color: theme.ink, fontWeight: 500 }}>Not in a stud</b> is the tighter span for a bracket on a drywall
                         anchor — a different failure from sag, so it is a flat cap rather than a calculation.
-                        <span style={{ color: theme.brass }}> Those figures are provisional; confirm them before a quote leans on them.</span>
+                        <span style={{ color: theme.brass }}> Those figures are provisional — use <b>✎ Edit spans</b> to set your own.</span>
+                        <div style={{ marginTop: '5px' }}>An edited cap is shown in brass and can be cleared to return to the house default. The
+                        engineered span still binds underneath: raise a cap past what the beam carries and the physics takes over, and the row
+                        will say <i>limited by fabric weight</i> instead.</div>
                     </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <button onClick={() => setEditSpans(v => !v)} title="Edit the HOUSE caps — the maximum span we will publish, in a stud and not in a stud. The engineered span still binds underneath: raise a cap past what the beam carries and the physics takes over, and the row will say so."
+                        style={{ padding: '8px 14px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', marginRight: '6px', border: `1px solid ${editSpans ? theme.brass : theme.line}`, background: editSpans ? theme.brass : 'transparent', color: editSpans ? '#fff' : theme.inkSoft }}>
+                        {editSpans ? '✓ Editing spans' : '✎ Edit spans'}
+                    </button>
                     {(mine.length > 1 ? [{ id: '', label: 'All rods' }, ...mine] : []).map(c => (
                         <button key={c.id || 'ALL'} onClick={() => setCollectionId(c.id)}
                             style={{
@@ -158,8 +180,15 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                                                 style={{ ...inp, padding: '6px 8px', fontFamily: 'var(--mono)', fontSize: '0.75rem', minWidth: '160px', borderColor: (spanMap[r.id] || '').trim() ? theme.brass : theme.line }} />
                                         </td>
                                         <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.ink }}>
-                                            <strong style={{ fontWeight: 600 }}>{ftIn(r.spanInches)}</strong>
-                                            <span style={{ color: theme.inkSoft, fontSize: '0.78rem', marginLeft: '8px' }}>{r.spanInches}"</span>
+                                            {editSpans ? (
+                                                <input type="number" min="1" defaultValue={(caps[r.id] || {}).maxSpan ?? r.houseMaxSpan ?? ''}
+                                                    onBlur={e => saveCap(r.id, 'maxSpan', e.target.value)}
+                                                    title={`House cap, inches. Default ${r.houseMaxSpan}". Clear to return to it.`}
+                                                    style={{ ...inp, width: '76px', padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)', borderColor: (caps[r.id] || {}).maxSpan ? theme.brass : theme.line }} />
+                                            ) : (<>
+                                                <strong style={{ fontWeight: 600 }}>{ftIn(r.spanInches)}</strong>
+                                                <span style={{ color: theme.inkSoft, fontSize: '0.78rem', marginLeft: '8px' }}>{r.spanInches}"</span>
+                                            </>)}
                                             {/* Which constraint bound it — "why is this 6 ft?" has two very
                                                 different answers and the operator should know which. */}
                                             <div style={{ fontSize: '9px', letterSpacing: '.06em', color: r.limitedBy === 'LOAD' ? theme.brass : theme.inkSoft }}>
@@ -170,11 +199,18 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                                             not the tube. Tighter, and worth quoting when the installer
                                             cannot find framing. */}
                                         <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.ink }}>
-                                            <strong style={{ fontWeight: 600 }}>{ftIn(r.noStudInches)}</strong>
-                                            <span style={{ color: theme.inkSoft, fontSize: '0.78rem', marginLeft: '8px' }}>{r.noStudInches}"</span>
-                                            <div style={{ fontSize: '9px', letterSpacing: '.06em', color: theme.inkSoft }}>
-                                                {r.noStudInches === r.spanInches ? 'a stud buys nothing here' : 'drywall anchor'}
-                                            </div>
+                                            {editSpans ? (
+                                                <input type="number" min="1" defaultValue={(caps[r.id] || {}).noStud ?? r.houseNoStud ?? ''}
+                                                    onBlur={e => saveCap(r.id, 'noStud', e.target.value)}
+                                                    title={`Drywall-anchor cap, inches. Default ${r.houseNoStud}". Clear to return to it.`}
+                                                    style={{ ...inp, width: '76px', padding: '6px 8px', textAlign: 'right', fontFamily: 'var(--mono)', borderColor: (caps[r.id] || {}).noStud ? theme.brass : theme.line }} />
+                                            ) : (<>
+                                                <strong style={{ fontWeight: 600 }}>{ftIn(r.noStudInches)}</strong>
+                                                <span style={{ color: theme.inkSoft, fontSize: '0.78rem', marginLeft: '8px' }}>{r.noStudInches}"</span>
+                                                <div style={{ fontSize: '9px', letterSpacing: '.06em', color: theme.inkSoft }}>
+                                                    {r.noStudInches === r.spanInches ? 'a stud buys nothing here' : 'drywall anchor'}
+                                                </div>
+                                            </>)}
                                         </td>
                                         {rodInches && (
                                             <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.brass, fontWeight: 600 }}>

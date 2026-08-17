@@ -61,7 +61,7 @@ const slotLabel = (s) => {
 export default function HardwareConfigurator({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], finishMode = 'GLOBAL', spanMap = {},
+    outsourceCodes = [], finishMode = 'GLOBAL', spanMap = {}, spanCaps = {},
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -169,8 +169,8 @@ export default function HardwareConfigurator({
     const advice = useMemo(() => {
         const rod = chosenList.find(c => ['ROD', 'FASCIA', 'TRACK'].includes(c.role));
         if (!rod || !lengthInches) return null;
-        return bracketAdviceFor({ itemCode: rod.partId, map: spanMap, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
-    }, [chosenList, lengthInches, spanMap, fabricId]);
+        return bracketAdviceFor({ itemCode: rod.partId, map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
+    }, [chosenList, lengthInches, spanMap, spanCaps, fabricId]);
 
     const chosen = useMemo(() => {
         const ids = new Set(Object.values(livePicks));
@@ -380,7 +380,9 @@ export default function HardwareConfigurator({
                         <div style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Recommendation</div>
                         <div style={{ fontSize: '12.5px', lineHeight: 1.45, marginTop: '2px' }}>
                             A support every <b>{ftIn(advice.spanInches)}</b> on this rod at this fabric weight — {advice.why}.
-                            Your {lengthInches}" pole wants <b>{advice.brackets} bracket{advice.brackets === 1 ? '' : 's'}</b>.
+                            Your {lengthInches}" pole wants <b>{advice.brackets} bracket{advice.brackets === 1 ? '' : 's'}</b>
+                            {advice.bracketsNoStud && advice.bracketsNoStud !== advice.brackets
+                                ? <> — <b>{advice.bracketsNoStud}</b> if they will not land in studs.</> : '.'}
                         </div>
                     </div>
                 )}

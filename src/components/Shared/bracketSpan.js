@@ -213,12 +213,28 @@ export function safeSpanInches(rod, loadLbPerFt) {
 
 // Whole table for a fabric class + curtain length. Spans are rounded DOWN to the inch — a guide
 // that over-promises by a fraction of an inch is worse than one that quietly under-promises.
-export function spanTable(fabricId, curtainLengthFt, collectionId) {
+/**
+ * @param caps  optional per-rod overrides — { [rodId]: { maxSpan, noStud } } — edited in 6.5 and
+ *              stored on system/bracket_span_map. The constants in this file are the DEFAULTS, not
+ *              the authority: house numbers are a commercial judgement that changes with warranty
+ *              experience, and they must be changeable without a release.
+ *
+ *              An override can only decide where the HOUSE cap sits. The engineered span still
+ *              binds underneath it — raise a cap past what the beam carries and the physics simply
+ *              takes over, and the row says so ("limited by fabric weight"). That is the one part
+ *              nobody should be able to type past.
+ */
+export function spanTable(fabricId, curtainLengthFt, collectionId, caps) {
     const fab = fabricClass(fabricId);
     const load = loadPerFoot(fab.areal, curtainLengthFt);
+    const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) && n > 0 ? n : null; };
     return RODS
         .filter(r => !collectionId || r.collection === collectionId)
-        .map(r => {
+        .map(r0 => {
+            const ov = (caps && caps[r0.id]) || {};
+            const r = { ...r0, maxSpan: num(ov.maxSpan) || r0.maxSpan, noStudSpan: num(ov.noStud) || r0.noStudSpan,
+                        overridden: !!(num(ov.maxSpan) || num(ov.noStud)),
+                        houseMaxSpan: r0.maxSpan, houseNoStud: r0.noStudSpan };
             const eng = engineeredSpanInches(r, load);
             const capped = eng === null ? null : Math.min(eng, r.maxSpan || Infinity);
             // The no-stud figure is the SMALLER of the engineered span and the anchor cap — a
@@ -301,15 +317,18 @@ export function rodForItemCode(code, map) {
  * Returns the span this rod carries, how many brackets the length needs, and WHY the span is what
  * it is — because "why is this 3?" deserves an answer at the point of quoting, not a trip to 6.5.
  */
-export function bracketAdviceFor({ itemCode, map, rodInches, fabricId, dropFt }) {
+export function bracketAdviceFor({ itemCode, map, rodInches, fabricId, dropFt, caps }) {
     const rod = rodForItemCode(itemCode, map);
     if (!rod || !(rodInches > 0)) return null;
     const drop = Number(dropFt) > 0 ? Number(dropFt) : DEFAULT_DROP_FT;
-    const row = spanTable(fabricId, drop, rod.collection).find(r => r.id === rod.id);
+    const row = spanTable(fabricId, drop, rod.collection, caps).find(r => r.id === rod.id);
     if (!row || !row.spanInches) return null;
     return {
         rod, spanInches: row.spanInches, limitedBy: row.limitedBy,
+        noStudInches: row.noStudInches,
         brackets: bracketsFor(rodInches, row.spanInches),
+        // The installer's real question: what if there is no framing where the bracket lands.
+        bracketsNoStud: row.noStudInches ? bracketsFor(rodInches, row.noStudInches) : null,
         why: row.limitedBy === 'LOAD' ? 'limited by fabric weight' : 'our maximum span',
     };
 }
