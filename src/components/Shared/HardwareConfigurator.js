@@ -101,7 +101,9 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: '16px', alignItems: 'start' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div style={{ ...mono, color: 'var(--brass)', borderBottom: '1px solid var(--line)', paddingBottom: '6px' }}>
-                    Tag-driven · {model.choices.length} choices · nothing pre-answered
+                    {pins?.length
+                        ? `Tag-driven · ${model.choices.length} choices · nothing pre-answered`
+                        : 'Loading this assembly\u2019s pins\u2026'}
                 </div>
 
                 {/* THE QUESTIONS THE ASSEMBLY ACTUALLY ASKS — discovered, never enumerated. An axis

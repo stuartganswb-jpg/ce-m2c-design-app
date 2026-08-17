@@ -142,7 +142,12 @@ const mixed = [
     eq('traverse rod gets its own bracket only', trv.slots.find(s => s.kind === 'BRACKET').options.map(o => o.id), ['BKT-TRV']);
     eq('traverse rod gets its own backplate only', trv.slots.find(s => s.kind === 'BACKPLATE').options.map(o => o.id), ['BP-TRV']);
     eq('rings do not follow a traverse rod', trv.slots.find(s => s.kind === 'RING').options.map(o => o.id), []);
-    eq('carriers ride the traverse rod automatically', trv.riders.map(r => r.id), ['CARRIER']);
+    // Riders arrive WITH the rod, not before it — nothing rides a rod nobody chose.
+    eq('no carriers until a rod is actually chosen', trv.riders.map(r => r.id), []);
+    eq('carriers ride the traverse rod once it is picked',
+        resolve({ choices: mixed, answers: { rodKind: 'TRAVERSE', proj: 3.625 }, selectedIds: ['ROD-TRV'] }).riders.map(r => r.id), ['CARRIER']);
+    eq('and never ride a chosen SOLID rod',
+        resolve({ choices: mixed, answers: { rodKind: 'SOLID', proj: 3.625 }, selectedIds: ['ROD-SOLID'] }).riders.map(r => r.id), []);
     const endT = trv.slots.find(s => s.kind === 'END' && s.position === 'LEFT');
     eq('traverse end keeps the SHARED finial and adds its return', endT.options.map(o => o.id).sort(), ['FIN-SHARED', 'RET-TRV']);
 
@@ -172,7 +177,8 @@ const fasciaTrack = [
     eq('a double offers both tracks', double.slots.find(s => s.kind === 'TRACK').options.map(o => o.id), ['TRACK-FRONT', 'TRACK-REAR']);
     eq('a double offers only the double bracket', double.slots.find(s => s.kind === 'BRACKET').options.map(o => o.id), ['BKT-DOUBLE']);
     ok('fascia is shared across setups', double.slots.find(s => s.kind === 'FASCIA').options.length === 1);
-    eq('riders ride regardless of setup', double.riders.map(r => r.id).sort(), ['CARRIER', 'FCLIP']);
+    eq('riders ride regardless of setup, once a track is chosen',
+        resolve({ choices: fasciaTrack, answers: { setup: 'DOUBLE' }, selectedIds: ['TRACK-FRONT'] }).riders.map(r => r.id).sort(), ['CARRIER', 'FCLIP']);
 }
 
 // ── FIXTURE 5: THE TARGET — one combined H1 holding both worlds (Stuart 2026-08-17) ───────────
@@ -218,7 +224,8 @@ const combinedH1 = [
     ok('traverse world never asks for a solid rod', !trvSlots.includes('ROD'));
     eq('the track turns the rings off', trv.slots.find(s => s.kind === 'RING').options.map(o => o.id), []);
     eq('traverse world uses its own arm', trv.slots.find(s => s.kind === 'BRACKET').options.map(o => o.id), ['BKT-TRV']);
-    eq('carriers and f-clips ride the track', trv.riders.map(r => r.id).sort(), ['CARRIER', 'FCLIP']);
+    eq('carriers and f-clips ride the track once it is chosen',
+        resolve({ choices: combinedH1, answers: { rodKind: 'TRAVERSE', setup: 'SINGLE', proj: 3.625 }, selectedIds: ['TRACK-FRONT'] }).riders.map(r => r.id).sort(), ['CARRIER', 'FCLIP']);
 
     // The finial is shared by BOTH worlds and tagged for neither — the designer's work is not redone.
     const finSolid = solid.slots.find(s => s.kind === 'END' && s.position === 'LEFT');
@@ -269,6 +276,17 @@ const combinedH1 = [
         resolve({ choices: drawn, answers: { rodKind: 'SOLID' } }).slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING']);
 }
 
+// ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
+// "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
+// With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.
+{
+    [['solidFamily', solidFamily], ['mixed', mixed], ['fasciaTrack', fasciaTrack], ['combinedH1', combinedH1]].forEach(([name, fx]) => {
+        const m = resolve({ choices: fx, answers: {} });
+        eq(`[${name}] nothing selected renders nothing`, [...m.visible], []);
+        eq(`[${name}] and nothing rides either`, m.riders.map(r => r.id), []);
+    });
+}
+
 // ── INVARIANTS: the properties that must hold for EVERY combination ───────────────────────────
 {
     const fixtures = { solidFamily, mixed, fasciaTrack, combinedH1 };
@@ -303,8 +321,9 @@ const combinedH1 = [
                 // never anything belonging to an unselected alternative.
                 const picks = m.slots.map(s => s.options[0]).filter(Boolean);
                 const sel = picks.map(p => p.id);
-                const vis = resolve({ choices, answers, selectedIds: sel }).visible;
-                const owned = new Set(picks.flatMap(p => p.nodes).concat(m.riders.flatMap(r => r.nodes)));
+                const withSel = resolve({ choices, answers, selectedIds: sel });
+                const vis = withSel.visible;
+                const owned = new Set(picks.flatMap(p => p.nodes).concat(withSel.riders.flatMap(r => r.nodes)));
                 ok(`[${fxName}] visible == union of selected + riders`,
                     [...vis].sort().join(',') === [...owned].sort().join(','));
 

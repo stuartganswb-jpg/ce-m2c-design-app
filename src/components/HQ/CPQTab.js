@@ -3358,14 +3358,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   //   BLIND OPTION   an option that controls no geometry — picking it can never change the render.
   //
   // Severity: RED = something is invisible or unpickable right now. AMBER = it will bite later.
+  const asmId = activeAssembly?.id || '';
   useEffect(() => {
-      if ((!showDoctor && !newEngine) || !activeAssembly?.id) { setShadowPins([]); return; }
+      // ⚠ KEYED ON THE ID, NOT THE OBJECT (Stuart 2026-08-17: "rod selection made does not matter
+      // which pole i select, nothing renders"). setActiveAssembly re-runs on EVERY Approved_Designs
+      // snapshot — a live query over 3,000+ docs — so activeAssembly's identity changes constantly
+      // while nothing about it actually changed. Depending on the object tore this subscription
+      // down every time, cleared the pins, and swapped the configurator out for its loading state,
+      // which UNMOUNTED it and wiped every pick within a moment of clicking. The id is stable.
+      if ((!showDoctor && !newEngine) || !asmId) { setShadowPins([]); return; }
       const unsub = onSnapshot(
-          query(collection(db, 'assembly_pins'), where('assemblyId', '==', activeAssembly.id)),
+          query(collection(db, 'assembly_pins'), where('assemblyId', '==', asmId)),
           (snap) => setShadowPins(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
           () => setShadowPins([]));
       return () => unsub();
-  }, [showDoctor, newEngine, activeAssembly]);
+  }, [showDoctor, newEngine, asmId]);
 
   // What the NEW engine makes of this same configuration, and where it differs from the old one.
   // Never touches state, never renders geometry — it only has an opinion.
@@ -4423,9 +4430,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   {newEngine && isSuperAdmin ? (
                       <div style={{ padding: '16px', background: '#fff', borderTop: '1px solid var(--line)' }}>
                           {activeAssembly ? (
-                              shadowPins.length
-                                  ? <HardwareConfigurator assembly={activeAssembly} pins={shadowPins} isSuperAdmin={isSuperAdmin} />
-                                  : <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Loading this assembly's pins…</div>
+                              /* Mounted for as long as the engine is on, and keyed on the assembly
+                                 ID alone. Swapping it for a loading element — or keying it on an
+                                 object that is rebuilt on every snapshot — remounts it and throws
+                                 the customer's picks away. It shows its own empty state instead. */
+                              <HardwareConfigurator key={asmId} assembly={activeAssembly} pins={shadowPins} isSuperAdmin={isSuperAdmin} />
                           ) : (
                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Pick a flow with a linked assembly — the new engine reads the ASSEMBLY, not the flow.</div>
                           )}

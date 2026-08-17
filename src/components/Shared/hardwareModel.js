@@ -342,10 +342,28 @@ export function judge(choices, answers = {}, { position } = {}) {
     return { ctx, in: inn.map(x => x.choice), out };
 }
 
-/** Riders: never asked, always built, whenever their rod kind is the one in play. */
-export function ridersFor(choices, answers = {}) {
+/**
+ * Riders: never asked, always built — but only once a rod they belong to is actually CHOSEN.
+ *
+ * ⚠ Stuart 2026-08-17, first run of the new configurator: "screen loads with traverse carriers
+ * visible, they should [be] tagged always but only with Traverse rod." He is right, and "always"
+ * was doing too much work. A carrier rides INSIDE a track; with no rod chosen there is nothing for
+ * it to ride, so on a blank screen it must not be there. Reading `always` as "present from the
+ * first frame" reintroduced exactly the thing additive rendering exists to prevent — geometry on
+ * screen that nobody picked.
+ *
+ * So a rider rides when a SELECTED rod admits it. That is purely additive: nothing chosen, nothing
+ * rendered; choose the traverse rod and its carriers arrive with it; choose a solid rod and they
+ * stay away because a carrier does not fit a solid rod.
+ */
+export function ridersFor(choices, answers = {}, selectedIds = []) {
     const ctx = contextOf(choices, answers);
-    return choices.filter(c => c.always && admits(c, ctx).ok);
+    const want = new Set((selectedIds || []).filter(Boolean).map(String));
+    const chosenWorlds = new Set(choices
+        .filter(c => want.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind)
+        .map(c => c.rodKind));
+    if (!chosenWorlds.size) return [];
+    return choices.filter(c => c.always && admits(c, ctx).ok && c.fits.some(f => chosenWorlds.has(f)));
 }
 
 /**
@@ -361,7 +379,7 @@ export function visibleNodes(choices, answers = {}, selectedIds = []) {
     const on = new Set();
     const take = (c) => c.nodes.forEach(n => on.add(n));
     choices.forEach(c => { if (want.has(c.id)) take(c); });
-    ridersFor(choices, answers).forEach(take);
+    ridersFor(choices, answers, selectedIds).forEach(take);
     return on;
 }
 
@@ -429,7 +447,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const axes = activeAxes(norm, answers);
     const ctx = contextOf(norm, answers);
     const sl = slots(norm, answers);
-    const riders = ridersFor(norm, answers);
+    const riders = ridersFor(norm, answers, selectedIds);
     const visible = visibleNodes(norm, answers, selectedIds);
     const ownership = nodeOwnership(norm, modelNodes);
     const selected = norm.filter(c => selectedIds.includes(c.id));
