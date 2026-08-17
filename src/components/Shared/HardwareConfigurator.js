@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel } from '../HQ/CPQTab';
@@ -7,6 +7,7 @@ import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor }
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, pricingWarnings } from './hardwarePricing';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
+import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THE MASTER TEMPLATE (Stuart 2026-08-17)
@@ -70,6 +71,7 @@ export default function HardwareConfigurator({
     const [poleIn, setPoleIn] = useState('');            // finished length, whole inches
     const [poleFrac, setPoleFrac] = useState('');        // …and the fraction
     const [fabricId, setFabricId] = useState('PRINT');   // drives the span, so it is asked here
+    const [thumbs, setThumbs] = useState({});            // choice id → data URL
     const [partFinish, setPartFinish] = useState({});   // choice id -> finish code (per-part mode)
     const perPart = finishMode === 'PER_PART';
 
@@ -181,6 +183,29 @@ export default function HardwareConfigurator({
     const diagnosis = useMemo(() => diagnoseHardware(model), [model]);
     const cadUrl = assembly?.manufacturingSpecs?.cadUrl;
 
+    // ── THUMBNAILS, PHOTOGRAPHED FROM THIS ASSEMBLY'S OWN .GLB ───────────────────────────────
+    // Only for the options ON SCREEN, and only the ones not already taken. A step of twenty costs
+    // twenty single frames, once, and revisiting it costs nothing — so this can never become a
+    // per-interaction tax the way the Doctor briefly did.
+    const onScreen = useMemo(() => {
+        const seen = new Set(); const out = [];
+        model.slots.forEach(sl => sl.options.forEach(o => {
+            if (seen.has(o.id) || !o.nodes.length) return;
+            seen.add(o.id); out.push({ key: o.id, nodes: o.nodes });
+        }));
+        return out;
+    }, [model]);
+    useEffect(() => {
+        if (!cadUrl || !onScreen.length) return;
+        let live = true;
+        // Anything already cached paints on the first pass; the rest arrive one frame at a time.
+        const seed = {};
+        onScreen.forEach(g => { const c = cachedThumb(cadUrl, g.nodes); if (c !== undefined) seed[g.key] = c; });
+        if (Object.keys(seed).length) setThumbs(t => ({ ...seed, ...t }));
+        renderThumbnails(cadUrl, onScreen, (k, data) => { if (live) setThumbs(t => (t[k] === data ? t : { ...t, [k]: data })); });
+        return () => { live = false; };
+    }, [cadUrl, onScreen]);
+
     const chip = (active, disabled) => ({
         ...mono, padding: '8px 12px', cursor: disabled ? 'not-allowed' : 'pointer',
         background: active ? 'var(--ink)' : '#fff', color: active ? '#fff' : (disabled ? 'var(--ink-soft)' : 'var(--ink)'),
@@ -273,8 +298,22 @@ export default function HardwareConfigurator({
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             {s.options.map(o => (
                                 <React.Fragment key={o.id}>
-                                    <button onClick={() => setPick(s.key, o.id)} style={{ ...chip(livePicks[s.key] === o.id), fontSize: '9px', textTransform: 'none', letterSpacing: 0 }}>
-                                        {o.name}{o.partId ? ` · ${o.partId}` : ''}{o.noFinish ? ' · clear' : ''}
+                                    <button onClick={() => setPick(s.key, o.id)} style={{
+                                        ...chip(livePicks[s.key] === o.id), display: 'flex', alignItems: 'center', gap: '9px',
+                                        fontSize: '10px', textTransform: 'none', letterSpacing: 0, padding: '7px 9px', textAlign: 'left',
+                                    }}>
+                                        {/* The part, photographed from the model it will actually render from. */}
+                                        <span style={{ width: '44px', height: '33px', flexShrink: 0, background: livePicks[s.key] === o.id ? 'rgba(255,255,255,.12)' : 'var(--paper-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                                            {thumbs[o.id]
+                                                ? <img src={thumbs[o.id]} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                                : <span style={{ fontFamily: 'var(--mono)', fontSize: '7px', color: 'var(--ink-faint)' }}>{thumbs[o.id] === null ? 'no geo' : '···'}</span>}
+                                        </span>
+                                        <span style={{ display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 }}>
+                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.name}</span>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', opacity: .7 }}>
+                                                {o.partId}{o.noFinish ? ' · clear' : ''}
+                                            </span>
+                                        </span>
                                     </button>
                                     {/* PER-PART FINISH — only where the flow asks for it, only on the
                                         chosen part, and never on one that takes no finish. */}
