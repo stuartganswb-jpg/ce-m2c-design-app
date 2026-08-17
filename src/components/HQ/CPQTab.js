@@ -155,9 +155,22 @@ export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
     return kept.length ? kept : acc;
 }, Array.isArray(pool) ? pool : []);
 
-export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
+
+    // WHAT THE .GLB ACTUALLY CONTAINS (2026-08-17). Every check until now compared the flow against
+    // the assembly's stored CLUSTER RECORDS, which is a comparison of one record against another —
+    // and H2-138 is exactly where that stops being enough: the records list the acrylic finial
+    // nodes (so the tag-driven engine sees no problem) while the render finds no mesh by those
+    // names. Only the loaded scene can settle which is right, so it now says so out loud, once per
+    // model.
+    useEffect(() => {
+        if (typeof onSceneNames !== 'function') return;
+        const names = [];
+        clonedScene.traverse(n => { if (n.name) names.push(n.name); });
+        onSceneNames(names);
+    }, [clonedScene, onSceneNames]);
 
     const textureOverridesString = JSON.stringify(textureOverrides);
     const visibilityOverridesString = JSON.stringify(visibilityOverrides);
@@ -664,6 +677,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const [visAudit, setVisAudit] = useState([]);
   const handleVisAudit = useCallback((arr) => {
       setVisAudit(prev => (prev.length === arr.length && prev.every((v, i) => v === arr[i])) ? prev : arr);
+  }, []);
+  // Every node name in the loaded .glb — the only witness that can settle a records-vs-model
+  // argument. Identity-stable and change-guarded: this feeds a memo, and a new array every render
+  // is how a diagnostic becomes a render loop (twice tonight already).
+  const [sceneNames, setSceneNames] = useState([]);
+  const handleSceneNames = useCallback((arr) => {
+      setSceneNames(prev => (prev.length === arr.length && prev.every((v, i) => v === arr[i])) ? prev : arr);
   }, []);
   // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
   const [debugHighlight, setDebugHighlight] = useState(false);
@@ -3355,11 +3375,58 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
           const onlyOld = [...oldParts].filter(p => !newParts.has(p));
           const onlyNew = [...newParts].filter(p => !oldParts.has(p));
-          return { model, diagnosis: diagnoseHardware(model), onlyOld, onlyNew, answers, choiceCount: choices.length };
+
+          // ── RECORDS vs THE ACTUAL .GLB ──────────────────────────────────────────────────────
+          // The argument H2-138 raised: the cluster records list the acrylic finial nodes (so a
+          // records-only check sees nothing wrong) while the render finds no mesh by those names.
+          // Only the loaded scene can say which is right, so compare against it directly.
+          const scene = new Set(sceneNames.map(n => String(n).toLowerCase()));
+          const recorded = new Set(modelNodesOf(activeAssembly).map(n => String(n).toLowerCase()));
+          const claimedByTag = new Set(choices.flatMap(c => c.nodes).map(n => String(n).toLowerCase()));
+          const ghostRecords = sceneNames.length ? [...recorded].filter(n => !scene.has(n)) : [];
+          const untaggedMeshes = sceneNames.length ? [...scene].filter(n => !claimedByTag.has(n) && !/fusionimport/i.test(n)) : [];
+
+          // ── WOULD THE TWO ENGINES DRAW THE SAME PICTURE? ────────────────────────────────────
+          // Join the old engine's selections onto the new engine's choices by part number AND
+          // position — the only honest join, since the ids are minted differently on each side.
+          const selected = [];
+          (activeFlow?.steps || []).forEach(st => {
+              if (st.type !== 'STYLE_SWAP') return;
+              const pos = String(st.position || '').toUpperCase();
+              const pick = (key, pool) => {
+                  const sel = dynamicConfigParams[key];
+                  const opt = sel && (pool || []).find(o => (o.optId || o.partId) === sel);
+                  if (!opt?.partId) return;
+                  const hit = choices.find(c => String(c.partId).toUpperCase() === String(opt.partId).toUpperCase()
+                      && (!pos || !c.position || c.position === pos));
+                  if (hit) selected.push(hit.id);
+              };
+              pick(st.id, st.styleOptions);
+              pick(`${st.id}__sub`, st.subOptions);
+          });
+          const newVis = resolveHardware({ choices, answers, selectedIds: selected }).visible;
+          const newVisLower = new Set([...newVis].map(n => String(n).toLowerCase()));
+          // The old engine's verdict for the same mesh: an explicit override if one names it,
+          // otherwise VISIBLE — that default is the ghost mechanism, and this is where it shows up.
+          const oldShowsNewHides = [], newShowsOldHides = [];
+          scene.forEach(n => {
+              if (/fusionimport/i.test(n)) return;
+              const key = Object.prototype.hasOwnProperty.call(visibilityOverrides, exactNode(n)) ? exactNode(n) : null;
+              const oldOn = key ? visibilityOverrides[key] !== false : true;
+              const newOn = newVisLower.has(n);
+              if (oldOn && !newOn) oldShowsNewHides.push(n);
+              if (!oldOn && newOn) newShowsOldHides.push(n);
+          });
+
+          return {
+              model, diagnosis: diagnoseHardware(model), onlyOld, onlyNew, answers,
+              choiceCount: choices.length, sceneCount: sceneNames.length,
+              ghostRecords, untaggedMeshes, oldShowsNewHides, newShowsOldHides, selectedCount: selected.length,
+          };
       } catch (e) {
           return { error: e.message || String(e) };
       }
-  }, [showDoctor, activeAssembly, shadowPins, activeFlow, dynamicConfigParams, trvSelection, flowProjSel]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [showDoctor, activeAssembly, shadowPins, activeFlow, dynamicConfigParams, trvSelection, flowProjSel, sceneNames, visibilityOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flowDoctor = useMemo(() => { try {
       // ⚠ ONLY WHEN ASKED (Stuart 2026-08-16, second machine freeze — on H2-138, the biggest flow).
@@ -4379,6 +4446,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                           cloneSpecs={cloneSpecs}
                                           highlightOverrides={highlightOverrides}
                                           onVisAudit={handleVisAudit}
+                                          onSceneNames={handleSceneNames}
                                       />
                                   </group>
                               </Bounds>
@@ -4444,6 +4512,34 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                                   {shadow.onlyNew.length > 0 && (
                                                       <div style={{ padding: '3px 0' }}>
                                                           <span style={{ color: '#8a6508' }}>NEW ONLY ({shadow.onlyNew.length})</span> — the tags say yes, the old engine hides it: {shadow.onlyNew.slice(0, 8).join(', ')}{shadow.onlyNew.length > 8 ? '…' : ''}
+                                                      </div>
+                                                  )}
+                                                  {/* Records vs the actual .glb — the only check that can settle H2-138's acrylics. */}
+                                                  {shadow.sceneCount > 0 && (
+                                                      <div style={{ padding: '3px 0', borderTop: '1px dotted var(--line)', marginTop: '3px' }}>
+                                                          <span style={{ color: 'var(--ink-soft)' }}>.glb holds {shadow.sceneCount} named nodes.</span>
+                                                          {shadow.ghostRecords.length > 0 && (
+                                                              <div style={{ color: '#b00020' }}>
+                                                                  ● {shadow.ghostRecords.length} name(s) the CLUSTER RECORDS list are NOT in the model: {shadow.ghostRecords.slice(0, 4).join(', ')}{shadow.ghostRecords.length > 4 ? '…' : ''} — 1.6 shows them because 1.6 reads the records. The model is the one that decides what can render.
+                                                              </div>
+                                                          )}
+                                                          {!shadow.ghostRecords.length && <span style={{ color: '#2a7' }}> Every recorded node exists in it.</span>}
+                                                          {shadow.untaggedMeshes.length > 0 && (
+                                                              <div style={{ color: '#8a6508' }}>
+                                                                  ○ {shadow.untaggedMeshes.length} mesh(es) in the model that NO tag claims: {shadow.untaggedMeshes.slice(0, 4).join(', ')}{shadow.untaggedMeshes.length > 4 ? '…' : ''} — under the new engine these simply never render.
+                                                              </div>
+                                                          )}
+                                                      </div>
+                                                  )}
+                                                  {/* Would the two engines draw the same picture? */}
+                                                  {shadow.sceneCount > 0 && (
+                                                      <div style={{ padding: '3px 0' }}>
+                                                          {!shadow.oldShowsNewHides.length && !shadow.newShowsOldHides.length
+                                                              ? <span style={{ color: '#2a7' }}>✓ Both engines would render the same geometry ({shadow.selectedCount} selections matched).</span>
+                                                              : (<>
+                                                                  {shadow.oldShowsNewHides.length > 0 && <div><span style={{ color: '#8a6508' }}>OLD SHOWS, NEW HIDES ({shadow.oldShowsNewHides.length})</span> — mostly the ghosts default-visible allowed: {shadow.oldShowsNewHides.slice(0, 4).join(', ')}{shadow.oldShowsNewHides.length > 4 ? '…' : ''}</div>}
+                                                                  {shadow.newShowsOldHides.length > 0 && <div><span style={{ color: '#8a6508' }}>NEW SHOWS, OLD HIDES ({shadow.newShowsOldHides.length})</span> — geometry the tags own that the old AND vetoed: {shadow.newShowsOldHides.slice(0, 4).join(', ')}{shadow.newShowsOldHides.length > 4 ? '…' : ''}</div>}
+                                                              </>)}
                                                       </div>
                                                   )}
                                                   {(shadow.diagnosis || []).slice(0, 6).map((d, i) => (
