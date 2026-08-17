@@ -1102,6 +1102,53 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return (o) => mountOf(o) === want;
   };
 
+  // ── THE STYLE_SWAP GATES, AS NAMED STAGES (Stuart 2026-08-16) ────────────────────────────────
+  // "5 option(s) authored, none survive this configuration's filters" is a true statement and a
+  // useless one: it says a pool emptied without saying WHICH rule emptied it, which is the only
+  // thing that tells you whether to fix a tag, a projection, or the item. The gates run here in
+  // one place, each one NAMED and its survivor count recorded, so the picker takes the final
+  // list and the Doctor can say "all 5 were eliminated by <this rule>". Same predicates, same
+  // order, same result — the size block is simply split into the three distinct rules it always
+  // contained instead of one anonymous filter.
+  const styleOptionStages = (step) => {
+      const authored = (step?.styleOptions || []).length;
+      const stages = [];
+      let opts = step?.styleOptions || [];
+      const stage = (label, fn) => { opts = opts.filter(fn); stages.push({ label, kept: opts.length }); };
+      stage('customer scoping (this option belongs to another customer)', optCustomerOk);
+      stage('traverse mode (trv: tags vs the selected rod)', trvOkFor(step));
+      // 🎯 Per-assembly flows have NO size steps, so the size block below never runs for them —
+      // the projection-tag gate (PROJ_SELECT pick / implied projection vs the option's proj: tag,
+      // min-semantics for returns) must apply UNCONDITIONALLY.
+      stage('bracket projection (the option\'s proj: tag ≠ the chosen projection)', projTagOk);
+      // Size-matrix rules (Fabricut H1): french/miter returns aren't made at the 3-5/8"
+      // projection (finials + inside mounts stay); size-native extras (1-3/8" wood/acrylic
+      // rods, finials, wood brackets) show only at their own diameter.
+      const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
+      if (sizeSel) {
+          const allParts = [...libraryParts, ...liveAssemblies];
+          const baseOf = (o) => allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
+              || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName)));
+          // Returns banned at this projection: catch modeled/fee returns (isReturnOption),
+          // return-scoped options (returnOnly — but never INSIDE_MOUNT, which shares the
+          // flag), and parts whose LIBRARY name says return (option partName is often just
+          // the bare code, e.g. H2-RBP "Mounting Base for French Return").
+          stage('returns are not made at this projection', (o) => {
+              if (returnsAllowedFor(sizeSel)) return true;
+              const et = String(o.endTreatment || '').toUpperCase();
+              const rtn = isReturnOption(o)
+                  || (o.returnOnly && et !== 'INSIDE_MOUNT')
+                  || /return|miter|mitre|french|\bbend\b/i.test(String(baseOf(o)?.itemName || ''));
+              return !(rtn && et !== 'INSIDE_MOUNT');
+          });
+          // Explicit bracket projection (1.6 proj: select, dictionary inches — legacy letters
+          // honored): the option shows only at its own projection.
+          stage('projection (size-matrix): the option is built for a different projection', (o) => optionProjAllowed(o, sizeSel));
+          stage('rod diameter: this item is not made at the selected size', (o) => partAllowedAtSize(baseOf(o), sizeSel, sizeLabelIndex));
+      }
+      return { opts, stages, authored };
+  };
+
   const getOptionsForStep = (step) => {
       // Tag-driven Mount selector: options are the distinct Location tags on the linked assembly's
       // clusters (Wall / Ceiling / Inside-End). Picking one hides the off-mount end regions.
@@ -1116,39 +1163,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // Identify each option by optId (unique per instance) so a part repeated at
           // multiple positions stays distinct; fall back to partId for legacy flows. Also resolve the
           // underlying part's human description so the choice shows more than the bare ERP id.
-          let opts = (step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step));
-          // 🎯 Per-assembly flows have NO size steps, so the size-matrix block below never runs
-          // for them — the projection-tag gate (PROJ_SELECT pick / implied projection vs the
-          // option's proj: tag, min-semantics for returns) must apply UNCONDITIONALLY.
-          opts = opts.filter(projTagOk);
-          // Size-matrix rules (Fabricut H1): french/miter returns aren't made at the 3-5/8"
-          // projection (finials + inside mounts stay); size-native extras (1-3/8" wood/acrylic
-          // rods, finials, wood brackets) show only at their own diameter.
-          const sizeSel = sizeSelectionsOf(activeFlow, dynamicConfigParams);
-          if (sizeSel) {
-              const allParts = [...libraryParts, ...liveAssemblies];
-              opts = opts.filter(o => {
-                  const base = allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
-                      || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName)));
-                  // Returns banned at this projection: catch modeled/fee returns (isReturnOption),
-                  // return-scoped options (returnOnly — but never INSIDE_MOUNT, which shares the
-                  // flag), and parts whose LIBRARY name says return (option partName is often just
-                  // the bare code, e.g. H2-RBP "Mounting Base for French Return").
-                  if (!returnsAllowedFor(sizeSel)) {
-                      const et = String(o.endTreatment || '').toUpperCase();
-                      const rtn = isReturnOption(o)
-                          || (o.returnOnly && et !== 'INSIDE_MOUNT')
-                          || /return|miter|mitre|french|\bbend\b/i.test(String(base?.itemName || ''));
-                      if (rtn && et !== 'INSIDE_MOUNT') return false;
-                  }
-                  // Explicit bracket projection (1.6 proj: select, dictionary inches — legacy
-                  // letters honored): the option shows only at its own projection. (projTagOk
-                  // already applied unconditionally above — it must not live in this size-only block.)
-                  if (!optionProjAllowed(o, sizeSel)) return false;
-                  return partAllowedAtSize(base, sizeSel, sizeLabelIndex);
-              });
-          }
-          return opts.map(o => {
+          return styleOptionStages(step).opts.map(o => {
               const d = optionDisplayFor(o);
               return { id: o.optId || o.partId, itemName: d.name, desc: d.desc, price: o.price };
           });
@@ -3268,9 +3283,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       steps.forEach(step => {
           if (step.type !== 'STYLE_SWAP' || !Array.isArray(step.styleOptions) || !step.styleOptions.length) return;
           const owns = Object.values(step.geometryMap || {}).some(Boolean);
-          const pool = getOptionsForStep(step) || [];
+          const { opts: pool, stages, authored } = styleOptionStages(step);
           if (!pool.length) {
-              push('red', 'EMPTY POOL', `${step.title}: ${step.styleOptions.length} option(s) authored, none survive this configuration's filters — the step cannot be answered.`);
+              // Name the rule that did it: the first stage whose survivor count hit zero, and how
+              // many it took out. That is the difference between "something is wrong" and "the
+              // left brackets are tagged for a different projection than the one selected".
+              let culprit = null, before = authored;
+              for (const s of stages) { if (s.kept === 0) { culprit = { label: s.label, took: before }; break; } before = s.kept; }
+              push('red', 'EMPTY POOL', culprit
+                  ? `${step.title}: all ${authored} option(s) eliminated by — ${culprit.label}. ${culprit.took} option(s) reached that rule and none passed it. Either the tag on those options is wrong, or this configuration genuinely has no part for that slot.`
+                  : `${step.title}: ${authored} option(s) authored, none survive this configuration's filters — the step cannot be answered.`);
           } else if (!dynamicConfigParams[step.id] && owns) {
               push('red', 'UNSEEDED', `${step.title}: ${pool.length} option(s) offered, none selected — every mesh this step owns is hidden until one is.`);
           }
