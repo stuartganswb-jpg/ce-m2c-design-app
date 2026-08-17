@@ -214,7 +214,17 @@ export function normalizeChoice(input = {}) {
         // Blank on mounting hardware = WALL; blank on anything else = not filtered by mount.
         mount: U(input.mount) || (MOUNTED_ROLES.includes(role) ? 'WALL' : ''),
         position: U(input.position),                 // '' = shared across positions
-        always: input.always === true || RIDER_ROLES.includes(role),
+        // ⚠ A ROD IS NEVER A RIDER (Stuart 2026-08-17: "when solid pole is selected i am getting
+        // offered only two choices of acrylic and wood, not metal"). The metal rod's centre piece
+        // is tagged ALWAYS SHOWN — a fossil of the old engine, where the short centre rod was
+        // permanently visible and hiding was done by other steps. Read literally, `always` made it
+        // a rider, and riders are never offered — so the metal rod vanished from its own picker
+        // and only the untagged wood and acrylic remained.
+        //
+        // Under the segment rule that tag is already redundant: the centre piece renders whenever
+        // the rod is chosen, which is exactly what "always shown" was trying to say. So a rod is
+        // always a CHOICE, whatever it is tagged, and no retagging is needed to fix this.
+        always: (input.always === true || RIDER_ROLES.includes(role)) && !ROD_ROLES.includes(role),
         qty: Number(input.qty) > 0 ? Number(input.qty) : 1,
         price: Number(input.price) || 0,
         raw: input.raw !== undefined ? input.raw : input,
@@ -456,8 +466,27 @@ const POSITION_ORDER = ['LEFT', 'CENTER', 'RIGHT', 'FRONT', 'BACK', ''];
  */
 const SLOT_OF_ROLE = (role) => (['FINIAL', 'INSIDE_MOUNT', 'RETURN'].includes(role) ? 'END' : role);
 
-export function slots(choices, answers = {}) {
+// AN END TREATMENT THAT REPLACES THE BRACKET (Stuart 2026-08-17) ──────────────────────────────
+// "on inside mount, once that is selected there can be no other end choices, and not left and
+//  right bracket choices. inside mount rules are nearly the same as returns. returns can have no
+//  other end choice and no left or right brackets and use the smaller pole, inside mounts have
+//  same rules but use the longer poles."
+//
+// A return and an inside mount are both END TREATMENTS THAT ARE ALSO THE MOUNT — they carry the
+// rod at that end themselves, so that end's bracket is not merely unnecessary, it does not exist
+// on the product. The two differ in ONE respect and it is geometric, not structural: a return
+// bends back and needs the SHORT pole, an inside mount runs the full length and keeps the LONG one.
+// That difference is already expressed by the segment rule (only RETURN drops the end piece), so
+// nothing extra is needed for it here.
+const BRACKET_REPLACING_ROLES = ['RETURN', 'INSIDE_MOUNT'];
+
+export function slots(choices, answers = {}, selectedIds = []) {
     const ctx = contextOf(choices, answers);
+    const want = new Set((selectedIds || []).filter(Boolean).map(String));
+    // Which ends have chosen a treatment that IS the mount.
+    const replaced = new Set(choices
+        .filter(c => want.has(c.id) && BRACKET_REPLACING_ROLES.includes(c.role) && c.position)
+        .map(c => c.position));
     const bucket = new Map();
     choices.forEach(c => {
         if (c.always) return;                       // riders are never a question
@@ -472,6 +501,18 @@ export function slots(choices, answers = {}) {
         slot.all.push(c);
         const v = admits(c, { ...ctx, position: pos ? pos : undefined });
         if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });
+    });
+    // An end that mounts itself takes its bracket and backplate off the table — with the reason
+    // attached, so nothing downstream mistakes it for an empty pool that needs fixing.
+    bucket.forEach(slot => {
+        if (!['BRACKET', 'BACKPLATE'].includes(slot.kind) || !slot.position) return;
+        if (!replaced.has(slot.position)) return;
+        const by = choices.find(c => want.has(c.id) && BRACKET_REPLACING_ROLES.includes(c.role) && c.position === slot.position);
+        slot.suppressedBy = by ? by.name : 'the end treatment';
+        slot.suppressedReason = by && by.role === 'RETURN'
+            ? 'a return carries the rod at that end'
+            : 'an inside mount carries the rod at that end';
+        slot.options = [];
     });
     // …and offered once per PART, however many pieces it is pinned as.
     bucket.forEach(slot => {
@@ -499,7 +540,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const norm = applyFitsDefaults(choices.map(normalizeChoice).filter(c => c.role));
     const axes = activeAxes(norm, answers);
     const ctx = contextOf(norm, answers);
-    const sl = slots(norm, answers);
+    const sl = slots(norm, answers, selectedIds);
     const riders = ridersFor(norm, answers, selectedIds);
     const visible = visibleNodes(norm, answers, selectedIds);
     const ownership = nodeOwnership(norm, modelNodes);
@@ -538,6 +579,7 @@ export function diagnose(model) {
     model.slots.forEach(s => {
         const where = `${s.kind}${s.position ? ` · ${s.position}` : ''}`;
         if (!s.options.length && s.all.length) {
+            if (s.suppressedBy) return;                                       // replaced by design
             if (s.rejected.every(r => WORLD_RULES.includes(r.rule))) return;  // absent by design
             const byRule = {};
             s.rejected.forEach(r => { byRule[r.rule] = (byRule[r.rule] || 0) + 1; });

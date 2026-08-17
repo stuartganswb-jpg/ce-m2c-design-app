@@ -345,6 +345,59 @@ const threePiece = [
         vis(['FAS-C', 'TRK-C', 'FIN-L']), ['fas-center', 'fas-left', 'fin-l', 'trk-center', 'trk-left']);
 }
 
+// ── A ROD IS NEVER A RIDER, WHATEVER IT IS TAGGED ─────────────────────────────────────────────
+// "when solid pole is selected i am getting offered only two choices of acrylic and wood, not
+//  metal" — the metal rod's centre piece carries the legacy ALWAYS SHOWN tag, which made it a
+//  rider, and riders are never offered.
+{
+    const withLegacyTag = [
+        C({ id: 'ROD-METAL-C', partId: 'METAL', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', always: true, nodes: ['metal-c'] }),
+        C({ id: 'ROD-METAL-L', partId: 'METAL', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['metal-l'] }),
+        C({ id: 'ROD-WOOD', partId: 'WOOD', role: 'ROD', rodKind: 'SOLID', nodes: ['wood'] }),
+        C({ id: 'ROD-ACRYL', partId: 'ACRYL', role: 'ROD', rodKind: 'SOLID', nodes: ['acryl'] }),
+    ];
+    const m = resolve({ choices: withLegacyTag, answers: { rodKind: 'SOLID' } });
+    eq('all three materials are offered, including the always-tagged metal',
+        m.slots.find(s => s.kind === 'ROD').options.map(o => o.partId).sort(), ['ACRYL', 'METAL', 'WOOD']);
+    eq('and the tagged rod does not ride along uninvited', m.riders.map(r => r.id), []);
+    eq('choosing it still renders its centre piece',
+        [...resolve({ choices: withLegacyTag, answers: { rodKind: 'SOLID' }, selectedIds: ['ROD-METAL-C'] }).visible], ['metal-c']);
+}
+
+// ── A RETURN OR INSIDE MOUNT IS ALSO THE MOUNT ────────────────────────────────────────────────
+// "returns can have no other end choice and no left or right brackets and use the smaller pole,
+//  inside mounts have same rules but use the longer poles."
+{
+    const withBrackets = [
+        C({ id: 'ROD-C', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rod-c'] }),
+        C({ id: 'ROD-L', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rod-l'] }),
+        C({ id: 'ROD-R', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'RIGHT', nodes: ['rod-r'] }),
+        C({ id: 'BKT-L', partId: 'BL', role: 'BRACKET', position: 'LEFT', nodes: ['bkt-l'] }),
+        C({ id: 'BP-L', partId: 'PL', role: 'BACKPLATE', position: 'LEFT', nodes: ['bp-l'] }),
+        C({ id: 'BKT-R', partId: 'BR', role: 'BRACKET', position: 'RIGHT', nodes: ['bkt-r'] }),
+        C({ id: 'FIN-L', partId: 'F', role: 'FINIAL', position: 'LEFT', nodes: ['fin-l'] }),
+        C({ id: 'IM-L', partId: 'IM', role: 'INSIDE_MOUNT', position: 'LEFT', nodes: ['im-l'] }),
+        C({ id: 'RET-L', partId: 'RT', role: 'RETURN', position: 'LEFT', nodes: ['ret-l'] }),
+    ];
+    const slotsFor = (sel) => resolve({ choices: withBrackets, answers: {}, selectedIds: sel }).slots;
+    const bktL = (sel) => slotsFor(sel).find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
+    const bpL = (sel) => slotsFor(sel).find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT');
+
+    ok('with a finial the left bracket is offered', bktL(['ROD-C', 'FIN-L']).options.length === 1);
+    eq('a RETURN takes the left bracket off the table', bktL(['ROD-C', 'RET-L']).options.map(o => o.id), []);
+    eq('and its backplate with it', bpL(['ROD-C', 'RET-L']).options.map(o => o.id), []);
+    eq('an INSIDE MOUNT does the same', bktL(['ROD-C', 'IM-L']).options.map(o => o.id), []);
+    ok('and says why', /inside mount carries the rod/.test(bktL(['ROD-C', 'IM-L']).suppressedReason || ''));
+    ok('the OTHER end is untouched', slotsFor(['ROD-C', 'IM-L']).find(s => s.kind === 'BRACKET' && s.position === 'RIGHT').options.length === 1);
+    ok('a replaced slot is never reported as a fault',
+        !diagnose(resolve({ choices: withBrackets, answers: {}, selectedIds: ['ROD-C', 'RET-L'] })).some(d => d.kind === 'NO OPTIONS'));
+
+    // The one difference between them, and it is geometric: the pole length.
+    const vis = (sel) => [...resolve({ choices: withBrackets, answers: {}, selectedIds: sel }).visible].sort();
+    ok('a RETURN uses the shorter pole — the left piece drops', !vis(['ROD-C', 'RET-L']).includes('rod-l'));
+    ok('an INSIDE MOUNT keeps the longer pole', vis(['ROD-C', 'IM-L']).includes('rod-l'));
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.
