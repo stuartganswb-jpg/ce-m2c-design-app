@@ -172,9 +172,14 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
     // model.
     useEffect(() => {
         if (typeof onSceneNames !== 'function') return;
-        const names = [];
-        clonedScene.traverse(n => { if (n.name) names.push(n.name); });
-        onSceneNames(names);
+        // MESHES are what render; GROUPS are scaffolding that draws nothing. Reporting one list
+        // conflated them, and the visibility diff then counted every wrapper the old engine left
+        // "visible" as a disagreement — 366 of 444 on H1-138, almost all of it groups that draw
+        // no pixels. Records are matched against ALL names (clusters legitimately store the
+        // wrapper); anything about RENDERING is matched against meshes only.
+        const all = [], meshes = [];
+        clonedScene.traverse(n => { if (!n.name) return; all.push(n.name); if (n.isMesh) meshes.push(n.name); });
+        onSceneNames({ all, meshes });
     }, [clonedScene, onSceneNames]);
 
     const textureOverridesString = JSON.stringify(textureOverrides);
@@ -686,9 +691,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // Every node name in the loaded .glb — the only witness that can settle a records-vs-model
   // argument. Identity-stable and change-guarded: this feeds a memo, and a new array every render
   // is how a diagnostic becomes a render loop (twice tonight already).
-  const [sceneNames, setSceneNames] = useState([]);
-  const handleSceneNames = useCallback((arr) => {
-      setSceneNames(prev => (prev.length === arr.length && prev.every((v, i) => v === arr[i])) ? prev : arr);
+  const [sceneNames, setSceneNames] = useState({ all: [], meshes: [] });
+  const handleSceneNames = useCallback((next) => {
+      setSceneNames(prev => (prev.all.join('|') === next.all.join('|')) ? prev : next);
   }, []);
   // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
   const [debugHighlight, setDebugHighlight] = useState(false);
@@ -3363,7 +3368,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               ...(trvSelection.drive ? { drive: trvSelection.drive } : {}),
               ...(flowProjSel != null ? { proj: flowProjSel } : {}),
           };
-          const model = resolveHardware({ choices, answers, modelNodes: modelNodesOf(activeAssembly) });
+          // Selections are resolved BEFORE the model, because a model that does not know what is
+          // chosen cannot check whether the choices agree with each other — which is exactly why
+          // MISMATCH stayed silent on H1-138's misaligned backplates.
+          const selected = [];
+          (activeFlow?.steps || []).forEach(st => {
+              if (st.type !== 'STYLE_SWAP') return;
+              const pos = String(st.position || '').toUpperCase();
+              const pick = (key, pool) => {
+                  const sel = dynamicConfigParams[key];
+                  const opt = sel && (pool || []).find(o => (o.optId || o.partId) === sel);
+                  if (!opt?.partId) return;
+                  const hit = choices.find(c => String(c.partId).toUpperCase() === String(opt.partId).toUpperCase()
+                      && (!pos || !c.position || c.position === pos));
+                  if (hit) selected.push(hit.id);
+              };
+              pick(st.id, st.styleOptions);
+              pick(`${st.id}__sub`, st.subOptions);
+          });
+          const model = resolveHardware({ choices, answers, selectedIds: selected, modelNodes: modelNodesOf(activeAssembly) });
 
           // COMPARE WHAT IS OFFERED, joined on the part — the ids differ by construction (the old
           // engine numbers options per flow, the new one per pin), but a part number is a part
@@ -3385,36 +3408,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // The argument H2-138 raised: the cluster records list the acrylic finial nodes (so a
           // records-only check sees nothing wrong) while the render finds no mesh by those names.
           // Only the loaded scene can say which is right, so compare against it directly.
-          const scene = new Set(sceneNames.map(n => String(n).toLowerCase()));
+          const allNames = new Set((sceneNames.all || []).map(n => String(n).toLowerCase()));
+          const meshNames = new Set((sceneNames.meshes || []).map(n => String(n).toLowerCase()));
+          const haveScene = allNames.size > 0;
           const recorded = new Set(modelNodesOf(activeAssembly).map(n => String(n).toLowerCase()));
+          // A cluster legitimately records its wrapper group, so records match against ALL names.
+          const ghostRecords = haveScene ? [...recorded].filter(n => !allNames.has(n)) : [];
+          // Anything about RENDERING matches meshes only — a group draws no pixels, and counting
+          // wrappers as disagreements is what made this comparison unreadable.
           const claimedByTag = new Set(choices.flatMap(c => c.nodes).map(n => String(n).toLowerCase()));
-          const ghostRecords = sceneNames.length ? [...recorded].filter(n => !scene.has(n)) : [];
-          const untaggedMeshes = sceneNames.length ? [...scene].filter(n => !claimedByTag.has(n) && !EXPORTER_RX.test(n)) : [];
+          const untaggedMeshes = haveScene ? [...meshNames].filter(n => !claimedByTag.has(n) && !EXPORTER_RX.test(n)) : [];
 
           // ── WOULD THE TWO ENGINES DRAW THE SAME PICTURE? ────────────────────────────────────
-          // Join the old engine's selections onto the new engine's choices by part number AND
-          // position — the only honest join, since the ids are minted differently on each side.
-          const selected = [];
-          (activeFlow?.steps || []).forEach(st => {
-              if (st.type !== 'STYLE_SWAP') return;
-              const pos = String(st.position || '').toUpperCase();
-              const pick = (key, pool) => {
-                  const sel = dynamicConfigParams[key];
-                  const opt = sel && (pool || []).find(o => (o.optId || o.partId) === sel);
-                  if (!opt?.partId) return;
-                  const hit = choices.find(c => String(c.partId).toUpperCase() === String(opt.partId).toUpperCase()
-                      && (!pos || !c.position || c.position === pos));
-                  if (hit) selected.push(hit.id);
-              };
-              pick(st.id, st.styleOptions);
-              pick(`${st.id}__sub`, st.subOptions);
-          });
-          const newVis = resolveHardware({ choices, answers, selectedIds: selected }).visible;
-          const newVisLower = new Set([...newVis].map(n => String(n).toLowerCase()));
+          const newVisLower = new Set([...model.visible].map(n => String(n).toLowerCase()));
           // The old engine's verdict for the same mesh: an explicit override if one names it,
           // otherwise VISIBLE — that default is the ghost mechanism, and this is where it shows up.
           const oldShowsNewHides = [], newShowsOldHides = [];
-          scene.forEach(n => {
+          meshNames.forEach(n => {
               if (EXPORTER_RX.test(n)) return;
               const key = Object.prototype.hasOwnProperty.call(visibilityOverrides, exactNode(n)) ? exactNode(n) : null;
               const oldOn = key ? visibilityOverrides[key] !== false : true;
@@ -3425,7 +3435,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
           return {
               model, diagnosis: diagnoseHardware(model), onlyOld, onlyNew, answers,
-              choiceCount: choices.length, sceneCount: sceneNames.length,
+              choiceCount: choices.length, sceneCount: allNames.size, meshCount: meshNames.size,
               ghostRecords, untaggedMeshes, oldShowsNewHides, newShowsOldHides, selectedCount: selected.length,
           };
       } catch (e) {
@@ -4522,7 +4532,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                                   {/* Records vs the actual .glb — the only check that can settle H2-138's acrylics. */}
                                                   {shadow.sceneCount > 0 && (
                                                       <div style={{ padding: '3px 0', borderTop: '1px dotted var(--line)', marginTop: '3px' }}>
-                                                          <span style={{ color: 'var(--ink-soft)' }}>.glb holds {shadow.sceneCount} named nodes.</span>
+                                                          <span style={{ color: 'var(--ink-soft)' }}>.glb holds {shadow.sceneCount} named nodes, {shadow.meshCount} of them meshes that can actually render.</span>
                                                           {shadow.ghostRecords.length > 0 && (
                                                               <div style={{ color: '#b00020' }}>
                                                                   ● {shadow.ghostRecords.length} name(s) the CLUSTER RECORDS list are NOT in the model: {shadow.ghostRecords.slice(0, 4).join(', ')}{shadow.ghostRecords.length > 4 ? '…' : ''} — 1.6 shows them because 1.6 reads the records. The model is the one that decides what can render.
