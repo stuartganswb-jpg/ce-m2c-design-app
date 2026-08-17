@@ -212,6 +212,15 @@ export function normalizeChoice(input = {}) {
     // One rule, in tags that already exist, rather than moving pins by hand.
     const mountTag = U(input.mount);
     if (/INSIDE|^END$/.test(mountTag) && (role === 'BRACKET' || role === 'BACKPLATE')) role = 'INSIDE_MOUNT';
+    // ⚠ BASIC MEANS ONE PIECE (Stuart 2026-08-17): "by nature a basic bracket (tagged) means it is
+    // one piece — arm and backplate are combined into one simple piece, so that basic tag needs to
+    // be watched, not whether it is an arm or a base."
+    //
+    // So it is not an arm that happens to skip its plate: the plate IS the part. Whatever cluster it
+    // was filed under, a one-piece mounting part is the BRACKET decision — otherwise a basic tagged
+    // on a backplate cluster would sit in the plate picker, offering the customer a plate to go with
+    // the plate. The tag is watched; the category is not.
+    if (input.isBasic === true && (role === 'BACKPLATE' || role === 'BRACKET')) role = 'BRACKET';
     const fitsTag = []
         .concat(input.fits || [])
         .map(U)
@@ -629,14 +638,18 @@ export function slots(choices, answers = {}, selectedIds = []) {
     };
     bucket.forEach(slot => {
         if (slot.kind !== 'BACKPLATE') return;
-        const arm = bracketAt(slot.position);
-        if (!arm) return;                            // no arm chosen yet — the pool is untouched
-        if (arm.isBasic) {
-            slot.suppressedBy = arm.name;
-            slot.suppressedReason = 'a basic bracket takes no backplate';
+        // The BASIC tag is watched wherever it sits — on anything chosen for this position — because
+        // a one-piece part carries its own plate and there is nothing left to choose.
+        const basic = choices.find(c => want.has(c.id) && c.isBasic
+            && ((c.position || '') === slot.position || !c.position || !slot.position));
+        if (basic) {
+            slot.suppressedBy = basic.name;
+            slot.suppressedReason = 'it is one piece — the arm and backplate are the same part';
             slot.options = [];
             return;
         }
+        const arm = bracketAt(slot.position);
+        if (!arm) return;                            // no arm chosen yet — the pool is untouched
         // THREE PLATE POOLS, one live at a time — they occupy the same spot on the wall:
         //   in-line arm → the in-line copies, falling back to the RETURN copies where a collection
         //                 has no in-line ones (1.6: "flows without inl-only plates fall back to

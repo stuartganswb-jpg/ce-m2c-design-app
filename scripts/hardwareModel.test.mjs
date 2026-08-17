@@ -501,7 +501,24 @@ const threePiece = [
     eq('an in-line arm falls back to the RETURN plate where no in-line copy exists',
         resolve({ choices: noInline, answers: {}, selectedIds: ['ROD', 'INLINE'] })
             .slots.find(s => s.kind === 'BACKPLATE').options.map(o => o.id), ['BP-RTN']);
-    ok('and says why', /basic bracket takes no backplate/.test(plates(['ROD', 'BASIC']).suppressedReason || ''));
+    ok('and says why', /one piece/.test(plates(['ROD', 'BASIC']).suppressedReason || ''));
+
+    // BASIC MEANS ONE PIECE, and the tag is watched wherever it sits. A one-piece part filed under
+    // a BACKPLATE cluster is still the bracket decision — otherwise it would sit in the plate
+    // picker, offering a plate to go with the plate.
+    const filedAsPlate = [
+        C({ id: 'ROD2', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'ONEPIECE', partId: 'OP', role: 'BACKPLATE', position: 'CENTER', isBasic: true, nodes: ['op'] }),
+        C({ id: 'PLATE', partId: 'P', role: 'BACKPLATE', position: 'CENTER', nodes: ['p'] }),
+    ];
+    const fm = resolve({ choices: filedAsPlate, answers: {} });
+    eq('a one-piece part filed as a backplate is offered as the BRACKET',
+        fm.slots.find(s => s.kind === 'BRACKET').options.map(o => o.id), ['ONEPIECE']);
+    ok('and is not offered as a plate',
+        !fm.slots.find(s => s.kind === 'BACKPLATE').options.some(o => o.id === 'ONEPIECE'));
+    eq('choosing it leaves no plate to choose',
+        resolve({ choices: filedAsPlate, answers: {}, selectedIds: ['ROD2', 'ONEPIECE'] })
+            .slots.find(s => s.kind === 'BACKPLATE').options, []);
     ok('a suppressed plate pool is never reported as a fault',
         !diagnose(resolve({ choices: arms, answers: {}, selectedIds: ['ROD', 'BASIC'] })).some(d => d.kind === 'NO OPTIONS'));
 }
