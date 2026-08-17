@@ -109,6 +109,13 @@ function HardwareConfiguratorInner({
     const [fabricId, setFabricId] = useState('PRINT');   // drives the span, so it is asked here
     const [thumbs, setThumbs] = useState({});            // choice id → data URL
     const [partFinish, setPartFinish] = useState({});   // choice id -> finish code (per-part mode)
+    // ⚠ DECLARED HERE, WITH THE REST OF THE STATE, AND NOT WHERE THEY ARE USED. Both of these are
+    // read by memos near the top of the component; sitting further down next to the JSX that edits
+    // them put them in the temporal dead zone, and `const` in a TDZ is a ReferenceError, not
+    // undefined — which React answers by unmounting the whole tree. That is the white screen from
+    // 2026-08-17: "once i hit new engine … goes full blank on me". Every hook lives in this block.
+    const [stepNotes, setStepNotes] = useState({});   // step key → note, stamped with the step
+    const [extras, setExtras] = useState([]);         // [{ code, qty, note }] — added by hand
     const perPart = finishMode === 'PER_PART';
 
     const choices = useMemo(() => choicesFromAssembly(assembly, pins), [assembly, pins]);
@@ -309,9 +316,7 @@ function HardwareConfiguratorInner({
     // NOTES BELONG TO THE STEP THE OPERATOR IS ON (Stuart 2026-08-17). A note typed while deciding
     // the right bracket is about the right bracket; filing them all into one box loses which
     // decision they were about, which is the only thing that makes them useful downstream.
-    const [stepNotes, setStepNotes] = useState({});   // step key → note
     // EXTRAS — basic items added by hand: a splice, an extra ring, whatever the flow does not model.
-    const [extras, setExtras] = useState([]);         // [{ code, qty, note }]
     const [saved, setSaved] = useState([]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;
