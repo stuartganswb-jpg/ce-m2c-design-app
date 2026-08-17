@@ -58,7 +58,43 @@ const slotLabel = (s) => {
     return s.position ? `${s.position.charAt(0)}${s.position.slice(1).toLowerCase()} ${kind}` : kind;
 };
 
-export default function HardwareConfigurator({
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE ENGINE FAILS ALONE (Stuart 2026-08-17: "once i hit new engine … goes full blank on me")
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// React unmounts the WHOLE tree when a render throws and nothing catches it — so one bad tag, one
+// unexpected field shape, one part that isn't in the library takes the entire CPQ tab to a white
+// screen. That is the worst possible failure for a tool being tested against real collections,
+// because a white screen says nothing: it cannot be told from a hang, a bad deploy, or a lost
+// session, and the one fact that would fix it in a minute — the error — is buried in a console
+// nobody has open.
+//
+// So the engine is fenced. If it throws, it prints WHAT threw and WHERE, the rest of the tab keeps
+// working, and Retry re-mounts it once the underlying data changes. This is a permanent fixture,
+// not scaffolding: the whole premise of the rebuild is that a tag can be wrong, and a wrong tag
+// must produce a message, never a blank page.
+class EngineBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { err: null, info: null }; }
+    static getDerivedStateFromError(err) { return { err }; }
+    componentDidCatch(err, info) { this.setState({ info }); console.error('[hardware engine]', err, info); }
+    render() {
+        if (!this.state.err) return this.props.children;
+        const e = this.state.err;
+        const where = String(this.state.info?.componentStack || '').split('\n').filter(Boolean).slice(0, 4).join('\n');
+        return (
+            <div style={{ border: '1px solid #b00020', background: '#fff', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', color: '#b00020', lineHeight: 1.6 }}>
+                <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: '8px' }}>The new engine stopped — the rest of the tab is fine</div>
+                <div style={{ color: 'var(--ink)', fontSize: '12px', marginBottom: '10px' }}>{e.name}: {e.message}</div>
+                {where && <pre style={{ color: 'var(--ink-soft)', fontSize: '9.5px', whiteSpace: 'pre-wrap', margin: '0 0 10px' }}>{where}</pre>}
+                {e.stack && <details><summary style={{ cursor: 'pointer', color: 'var(--ink-soft)', fontSize: '9.5px' }}>Full stack</summary>
+                    <pre style={{ color: 'var(--ink-faint)', fontSize: '9px', whiteSpace: 'pre-wrap' }}>{e.stack}</pre></details>}
+                <button onClick={() => this.setState({ err: null, info: null })}
+                    style={{ marginTop: '10px', padding: '6px 12px', border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)' }}>Retry</button>
+            </div>
+        );
+    }
+}
+
+function HardwareConfiguratorInner({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
     outsourceCodes = [], finishMode = 'GLOBAL', spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
@@ -343,7 +379,7 @@ export default function HardwareConfigurator({
     const clientFinishName = useCallback((f) => {
         if (!customerId && !customer) return '';
         const keys = new Set([customerId, customer?.name, customer?.companyName].filter(Boolean).map(v => String(v).trim().toUpperCase()));
-        const hit = (f.clientMapping || []).find(m => keys.has(String(m.customerId || '').trim().toUpperCase()));
+        const hit = (Array.isArray(f.clientMapping) ? f.clientMapping : []).find(m => keys.has(String(m.customerId || '').trim().toUpperCase()));
         return hit?.clientFinishName || '';
     }, [customerId, customer]);
     const swatchRow = (list, sel, pick) => (
@@ -727,4 +763,9 @@ export default function HardwareConfigurator({
           </div>
         </div>
     );
+}
+
+// The exported component is the fenced one — there is no way to mount the engine unprotected.
+export default function HardwareConfigurator(props) {
+    return <EngineBoundary><HardwareConfiguratorInner {...props} /></EngineBoundary>;
 }
