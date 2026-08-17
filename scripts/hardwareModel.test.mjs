@@ -398,6 +398,56 @@ const threePiece = [
     ok('an INSIDE MOUNT keeps the longer pole', vis(['ROD-C', 'IM-L']).includes('rod-l'));
 }
 
+// ── NOTHING GATES A ROD BUT ITS ROD TYPE ──────────────────────────────────────────────────────
+// "when i switch to inside mount or wall it reduces to only two, the wood and acrylic … no rod
+//  should [be filtered], the only rule should be if traverse is selected all other pole options
+//  are removed." A rod inherits its CLUSTER's location as a mount tag, which filtered the steel
+//  rod out the moment Wall was chosen.
+{
+    const rods = [
+        // the steel rod's cluster happens to be tagged ceiling — a fact about the cluster, not the rod
+        C({ id: 'STEEL', partId: 'STEEL', role: 'ROD', rodKind: 'SOLID', mount: 'CEILING', proj: '6', nodes: ['steel'] }),
+        C({ id: 'WOOD', partId: 'WOOD', role: 'ROD', rodKind: 'SOLID', nodes: ['wood'] }),
+        C({ id: 'ACRYL', partId: 'ACRYL', role: 'ROD', rodKind: 'SOLID', nodes: ['acryl'] }),
+        C({ id: 'TRV', partId: 'TRV', role: 'ROD', rodKind: 'TRAVERSE', nodes: ['trv'] }),
+        C({ id: 'BKT-W', partId: 'BW', role: 'BRACKET', position: 'CENTER', nodes: ['bw'] }),
+        C({ id: 'BKT-C', partId: 'BC', role: 'BRACKET', mount: 'CEILING', position: 'CENTER', nodes: ['bc'] }),
+    ];
+    const rodOpts = (ans) => resolve({ choices: rods, answers: ans }).slots.find(s => s.kind === 'ROD').options.map(o => o.partId).sort();
+    eq('all three solid rods on a WALL order', rodOpts({ rodKind: 'SOLID', mount: 'WALL' }), ['ACRYL', 'STEEL', 'WOOD']);
+    eq('all three on a CEILING order too', rodOpts({ rodKind: 'SOLID', mount: 'CEILING' }), ['ACRYL', 'STEEL', 'WOOD']);
+    eq('and a projection never filters a rod', rodOpts({ rodKind: 'SOLID', proj: 3.625 }), ['ACRYL', 'STEEL', 'WOOD']);
+    eq('the ONLY rule that removes a pole is the rod type', rodOpts({ rodKind: 'TRAVERSE' }), ['TRV']);
+    // …while the brackets, which DO mount, still pair correctly.
+    eq('brackets still follow the mount', resolve({ choices: rods, answers: { rodKind: 'SOLID', mount: 'CEILING' } })
+        .slots.find(s => s.kind === 'BRACKET').options.map(o => o.partId), ['BC']);
+}
+
+// ── AN INSIDE MOUNT IS AN END TREATMENT, NOT A MOUNT ──────────────────────────────────────────
+// "you either need to move inside mounts to the left end treatment section or ideally leave it
+//  with brackets but once selected (per end) hide the other left end treatments."
+{
+    const im = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'BKT-W', partId: 'BW', role: 'BRACKET', position: 'LEFT', nodes: ['bw'] }),
+        C({ id: 'BKT-C', partId: 'BC', role: 'BRACKET', mount: 'CEILING', position: 'LEFT', nodes: ['bc'] }),
+        // tagged as a bracket for an INSIDE mount — which is what it physically is
+        C({ id: 'IM', partId: 'IM', role: 'BRACKET', mount: 'INSIDE MOUNT', position: 'LEFT', nodes: ['im'] }),
+        C({ id: 'FIN', partId: 'F', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] }),
+    ];
+    const m = resolve({ choices: im, answers: {} });
+    eq('the mount axis is Wall and Ceiling only', (m.axes.find(a => a.key === 'mount') || {}).values, ['CEILING', 'WALL']);
+    const end = m.slots.find(s => s.kind === 'END' && s.position === 'LEFT');
+    eq('the inside mount sits with the finials, not the brackets',
+        end.options.map(o => o.partId).sort(), ['F', 'IM']);
+    ok('and is no longer offered as a bracket',
+        !m.slots.find(s => s.kind === 'BRACKET').options.some(o => o.partId === 'IM'));
+    // Choosing it is the whole end: one pick per slot, and that end's bracket goes.
+    const chosen = resolve({ choices: im, answers: {}, selectedIds: ['ROD', 'IM'] });
+    eq('choosing it removes that end\u2019s bracket',
+        chosen.slots.find(s => s.kind === 'BRACKET' && s.position === 'LEFT').options, []);
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.

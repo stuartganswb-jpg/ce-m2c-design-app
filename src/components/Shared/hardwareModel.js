@@ -182,7 +182,19 @@ const sameMeasure = (a, b) => a != null && b != null && Math.abs(a - b) < 0.01;
 // One pinned part with its tags. Everything the engine knows comes from here; there is no second
 // source. `raw` keeps the original record so callers can price and BOM without a second lookup.
 export function normalizeChoice(input = {}) {
-    const role = ROLES.includes(U(input.role)) ? U(input.role) : '';
+    let role = ROLES.includes(U(input.role)) ? U(input.role) : '';
+    // AN INSIDE MOUNT IS AN END TREATMENT, NOT A MOUNT (Stuart 2026-08-17). It was appearing as a
+    // value on the global Mount axis beside Wall and Ceiling, because that is how it is tagged —
+    // but a bracket that mounts INSIDE the window carries the rod at that end and rules out every
+    // other treatment there. It belongs beside the finials and returns, where the one-pick rule
+    // already gives "no other end choice for that side" for free and the bracket-replacing rule
+    // already removes that end's bracket.
+    //
+    // So a bracket or backplate tagged for an inside/end mount is READ as an inside mount and stops
+    // voting on the mount axis, leaving Wall and Ceiling — the two ways a bracket actually attaches.
+    // One rule, in tags that already exist, rather than moving pins by hand.
+    const mountTag = U(input.mount);
+    if (/INSIDE|^END$/.test(mountTag) && (role === 'BRACKET' || role === 'BACKPLATE')) role = 'INSIDE_MOUNT';
     const fitsTag = []
         .concat(input.fits || [])
         .map(U)
@@ -212,7 +224,12 @@ export function normalizeChoice(input = {}) {
         // a different physical truth never needs a code change.
         projRule: U(input.projRule) || (role === 'RETURN' ? 'MIN' : 'EXACT'),
         // Blank on mounting hardware = WALL; blank on anything else = not filtered by mount.
-        mount: U(input.mount) || (MOUNTED_ROLES.includes(role) ? 'WALL' : ''),
+        // ⚠ ONLY MOUNTING HARDWARE CARRIES A MOUNT (Stuart 2026-08-17: "when i switch to inside
+        // mount or wall it reduces to only two, the wood and acrylic"). This line supplied a
+        // DEFAULT of WALL for brackets — but it never CLEARED the tag on anything else, and a rod
+        // inherits its cluster's location. The steel rod, whose cluster is tagged ceiling, was duly
+        // filtered out the moment Wall was chosen. A pole is not built for a wall or a ceiling.
+        mount: MOUNTED_ROLES.includes(role) ? (mountTag || 'WALL') : '',
         position: U(input.position),                 // '' = shared across positions
         // ⚠ A ROD IS NEVER A RIDER (Stuart 2026-08-17: "when solid pole is selected i am getting
         // offered only two choices of acrylic and wood, not metal"). The metal rod's centre piece
@@ -331,7 +348,9 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     if (!skip('mount') && ctx.mount && choice.mount && choice.mount !== ctx.mount) {
         return no('mount', `tagged ${choice.mount}, this order is ${ctx.mount}`);
     }
-    if (!skip('proj') && ctx.proj != null && choice.proj != null) {
+    // A rod has no projection either — the arm holding it does. (Setup and drive still apply: a
+    // rear track genuinely is double-only.)
+    if (!skip('proj') && !ROD_ROLES.includes(choice.role) && ctx.proj != null && choice.proj != null) {
         // A return needs AT LEAST its tagged depth; a bracket IS its projection.
         const ok = choice.projRule === 'MIN' ? ctx.proj >= choice.proj - 0.01 : sameMeasure(choice.proj, ctx.proj);
         if (!ok) {
