@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
 import { Sheet2DOverlay, MaterialRail } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
+import { choicesFromAssembly, modelNodesOf } from '../Shared/hardwareAdapter';
+import { resolve as resolveHardware, diagnose as diagnoseHardware } from '../Shared/hardwareModel';
 import { normalizeLocation } from '../Shared/assemblyTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { configuratorTotal } from '../Shared/traverseConfigurator';
@@ -669,6 +671,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // Steps this configuration has already tried to auto-fill (see the sweep below). A Set that also
   // carries the configuration signature it belongs to, so a new configuration starts clean.
   const autoFilledRef = useRef(new Set());
+  // ── SHADOW MODE (Stuart 2026-08-17) ────────────────────────────────────────────────────────
+  // The new tag-driven engine runs BESIDE the old one and renders nothing. The old engine still
+  // drives every pixel and every price; this only reports where the two disagree, which is how the
+  // four real collections become the test set without a single render at risk.
+  // Pins load ONLY while the Doctor is open — the same rule that stopped the Doctor being a tax on
+  // every click, applied before it can become one again.
+  const [shadowPins, setShadowPins] = useState([]);
   // Production packet — captured Front/Back images of the configured model. captureFnRef is filled by
   // the in-Canvas <ViewCapturer/>; registerCapture is stable so its effect doesn't re-fire each render.
   const [capturedViews, setCapturedViews] = useState(null);
@@ -3306,6 +3315,52 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   //   BLIND OPTION   an option that controls no geometry — picking it can never change the render.
   //
   // Severity: RED = something is invisible or unpickable right now. AMBER = it will bite later.
+  useEffect(() => {
+      if (!showDoctor || !activeAssembly?.id) { setShadowPins([]); return; }
+      const unsub = onSnapshot(
+          query(collection(db, 'assembly_pins'), where('assemblyId', '==', activeAssembly.id)),
+          (snap) => setShadowPins(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+          () => setShadowPins([]));
+      return () => unsub();
+  }, [showDoctor, activeAssembly]);
+
+  // What the NEW engine makes of this same configuration, and where it differs from the old one.
+  // Never touches state, never renders geometry — it only has an opinion.
+  const shadow = useMemo(() => {
+      if (!showDoctor || !activeAssembly || !shadowPins.length) return null;
+      try {
+          const choices = choicesFromAssembly(activeAssembly, shadowPins);
+          if (!choices.length) return { note: 'No pins resolved to tagged choices for this assembly.' };
+          // The old engine's answers, expressed in the new engine's axes.
+          const answers = {
+              rodKind: trvSelection.trvPole ? 'TRAVERSE' : 'SOLID',
+              ...(trvSelection.setup ? { setup: trvSelection.setup } : {}),
+              ...(trvSelection.drive ? { drive: trvSelection.drive } : {}),
+              ...(flowProjSel != null ? { proj: flowProjSel } : {}),
+          };
+          const model = resolveHardware({ choices, answers, modelNodes: modelNodesOf(activeAssembly) });
+
+          // COMPARE WHAT IS OFFERED, joined on the part — the ids differ by construction (the old
+          // engine numbers options per flow, the new one per pin), but a part number is a part
+          // number. This is the question that matters: does the customer see the same choices?
+          const oldParts = new Set();
+          (activeFlow?.steps || []).forEach(st => {
+              if (st.type !== 'STYLE_SWAP') return;
+              try { styleOptionStages(st).opts.forEach(o => { if (o.partId) oldParts.add(String(o.partId).toUpperCase()); }); } catch (e) { /* pool unavailable */ }
+              (st.subOptions || []).forEach(o => { try { if (o.partId && trvOkFor(st, { isSub: true })(o) && projTagOk(o)) oldParts.add(String(o.partId).toUpperCase()); } catch (e) { /* ignore */ } });
+          });
+          const newParts = new Set();
+          model.slots.forEach(s => s.options.forEach(o => { if (o.partId) newParts.add(String(o.partId).toUpperCase()); }));
+          model.riders.forEach(r => { if (r.partId) newParts.add(String(r.partId).toUpperCase()); });
+
+          const onlyOld = [...oldParts].filter(p => !newParts.has(p));
+          const onlyNew = [...newParts].filter(p => !oldParts.has(p));
+          return { model, diagnosis: diagnoseHardware(model), onlyOld, onlyNew, answers, choiceCount: choices.length };
+      } catch (e) {
+          return { error: e.message || String(e) };
+      }
+  }, [showDoctor, activeAssembly, shadowPins, activeFlow, dynamicConfigParams, trvSelection, flowProjSel]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const flowDoctor = useMemo(() => { try {
       // ⚠ ONLY WHEN ASKED (Stuart 2026-08-16, second machine freeze — on H2-138, the biggest flow).
       // This walks EVERY step and resolves EVERY option against the full parts list (3,000+
@@ -4368,6 +4423,41 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                           <span style={{ color: 'var(--ink)' }}>{f.msg}</span>
                                       </div>
                                   ))}
+                                  {/* ── SHADOW: the new tag-driven engine's opinion, rendering nothing ── */}
+                                  {shadow && (
+                                      <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid var(--ink)' }}>
+                                          <div style={{ textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', marginBottom: '4px' }}>
+                                              ◐ Shadow · new tag engine {shadow.choiceCount ? `· ${shadow.choiceCount} tagged choices` : ''}
+                                          </div>
+                                          {shadow.error && <div style={{ color: '#b00020' }}>Shadow failed: {shadow.error} (the live configurator is unaffected).</div>}
+                                          {shadow.note && <div style={{ color: 'var(--ink-soft)' }}>{shadow.note}</div>}
+                                          {!shadow.error && !shadow.note && (
+                                              <>
+                                                  {!shadow.onlyOld.length && !shadow.onlyNew.length && (
+                                                      <div style={{ color: '#2a7' }}>✓ Both engines offer exactly the same parts here — this configuration is ready to flip.</div>
+                                                  )}
+                                                  {shadow.onlyOld.length > 0 && (
+                                                      <div style={{ padding: '3px 0' }}>
+                                                          <span style={{ color: '#8a6508' }}>OLD ONLY ({shadow.onlyOld.length})</span> — offered now, the tags say no: {shadow.onlyOld.slice(0, 8).join(', ')}{shadow.onlyOld.length > 8 ? '…' : ''}
+                                                      </div>
+                                                  )}
+                                                  {shadow.onlyNew.length > 0 && (
+                                                      <div style={{ padding: '3px 0' }}>
+                                                          <span style={{ color: '#8a6508' }}>NEW ONLY ({shadow.onlyNew.length})</span> — the tags say yes, the old engine hides it: {shadow.onlyNew.slice(0, 8).join(', ')}{shadow.onlyNew.length > 8 ? '…' : ''}
+                                                      </div>
+                                                  )}
+                                                  {(shadow.diagnosis || []).slice(0, 6).map((d, i) => (
+                                                      <div key={i} style={{ padding: '2px 0', color: d.sev === 'red' ? '#b00020' : 'var(--ink-soft)' }}>
+                                                          {d.sev === 'red' ? '●' : '○'} {d.kind} — {d.msg}
+                                                      </div>
+                                                  ))}
+                                                  <div style={{ color: 'var(--ink-soft)', fontSize: '9px', marginTop: '3px' }}>
+                                                      Answers read as {JSON.stringify(shadow.answers)}. A difference is either a tag to fix or the OLD engine being wrong — the new one bakes nothing, so it cannot be stale.
+                                                  </div>
+                                              </>
+                                          )}
+                                      </div>
+                                  )}
                                   <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px solid var(--line)', color: 'var(--ink-soft)', fontSize: '9px' }}>
                                       Model: {activeAssembly?.id || '?'} · {String(activeAssembly?.manufacturingSpecs?.cadUrl || '').split('/').pop().split('?')[0] || 'no cadUrl'}. CONFLICT and UNSEEDED are runtime — they change as you pick. NO SECTION / STRAY / BLIND OPTION are authoring, and need a 1.6 fix + Regenerate.
                                   </div>
