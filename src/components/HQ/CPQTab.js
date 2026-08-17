@@ -2255,10 +2255,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       if (!sizeSel && flowProjSel == null) return;
       const returnsOk = returnsAllowedFor(sizeSel);
       // What this configuration IS, for the one-attempt-per-configuration fill guard below.
-      // Change the diameter, the projection, or traverse-vs-standard and every pool is a different
-      // question, so each earns a fresh attempt; ticking around inside one does not.
-      const sig = JSON.stringify([activeFlowId, sizeSel, flowProjSel, trvSelection.trvPole]);
-      if (autoFilledRef.current.sig !== sig) { autoFilledRef.current = new Set(); autoFilledRef.current.sig = sig; }
+      //
+      // ⚠ EVERY TERM HERE MUST BE SOMETHING THIS SWEEP CANNOT CHANGE (2026-08-16, second lockup —
+      // it took Stuart's machine down). The first version included trvSelection.trvPole, which is
+      // DERIVED FROM SELECTIONS THIS SWEEP WRITES: a fill that lands on a fascia/track pole flips
+      // trvPole, the signature changes, the guard resets, and the fill is unbounded again — the
+      // exact failure the guard existed to prevent. A guard keyed on a value the guarded code can
+      // move is not a guard.
+      //
+      // Flow id, size selection and projection are all driven by step types this sweep never
+      // touches (it only writes STYLE_SWAP; size steps and PROJ_SELECT are neither), so the
+      // signature is a fixed point across any number of passes. Traverse-vs-standard no longer
+      // earns a fresh attempt — the banned-pick REPLACEMENT path already handles that swap, since
+      // it replaces rather than clears.
+      const sig = JSON.stringify([activeFlowId, sizeSel, flowProjSel]);
+      if (autoFilledRef.current.sig !== sig) { autoFilledRef.current = new Set(); autoFilledRef.current.sig = sig; autoFilledRef.current.fills = 0; }
+      // Belt and braces: a hard ceiling on fills per configuration. Whatever else is ever wired
+      // into this loop, it stops. A tab that renders a stale default is recoverable; a tab that
+      // pegs the CPU is not — it took a machine down tonight.
+      const FILL_CEILING = 40;
       const allParts = [...libraryParts, ...liveAssemblies];
       const partOf = (o) => allParts.find(x => x.id === o.partId || x.itemId === o.partId || x.legacyErpId === o.partId
           || (o.partName && (x.itemName === o.partName || x.legacyErpId === o.partName || x.itemId === o.partName)));
@@ -2307,7 +2322,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   if (!next[key]) {
                       const fillKey = `${sig}|${key}`;
                       if (autoFilledRef.current.has(fillKey)) return;
+                      if ((autoFilledRef.current.fills || 0) >= FILL_CEILING) return;
                       autoFilledRef.current.add(fillKey);
+                      autoFilledRef.current.fills = (autoFilledRef.current.fills || 0) + 1;
                   }
                   // The rules that govern the pool choose the answer. No valid successor (e.g. a
                   // basic bracket takes no plate) clears.
