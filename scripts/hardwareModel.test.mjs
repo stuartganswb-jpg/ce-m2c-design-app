@@ -617,6 +617,36 @@ const threePiece = [
             .slots.find(s => s.kind === 'BACKPLATE').options.map(o => o.id).sort(), ['BP36', 'BP60', 'BPANY']);
 }
 
+// ── A RETURN NEEDS AN END SEGMENT TO REPLACE ──────────────────────────────────────────────────
+// "whenever there is not 3 poles — left, center and right — then there is no french return."
+// Derived from the same pins that build the three-piece geometry, so it cannot drift from it.
+{
+    const mixedPoles = [
+        // a three-piece pole…
+        C({ id: 'P3-L', partId: 'THREE', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['3l'] }),
+        C({ id: 'P3-C', partId: 'THREE', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['3c'] }),
+        C({ id: 'P3-R', partId: 'THREE', role: 'ROD', rodKind: 'SOLID', position: 'RIGHT', nodes: ['3r'] }),
+        // …and a single long rod beside it
+        C({ id: 'P1', partId: 'ONE', role: 'ROD', rodKind: 'SOLID', nodes: ['1'] }),
+        C({ id: 'FIN-L', partId: 'F', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] }),
+        C({ id: 'IM-L', partId: 'IM', role: 'INSIDE_MOUNT', position: 'LEFT', nodes: ['im'] }),
+        C({ id: 'RET-L', partId: 'RT', role: 'RETURN', position: 'LEFT', nodes: ['ret'] }),
+    ];
+    const endL = (sel) => resolve({ choices: mixedPoles, answers: {}, selectedIds: sel })
+        .slots.find(s => s.kind === 'END' && s.position === 'LEFT').options.map(o => o.id).sort();
+
+    eq('before a rod is chosen every end treatment is on the table', endL([]), ['FIN-L', 'IM-L', 'RET-L']);
+    eq('the three-piece pole keeps its return', endL(['P3-C']), ['FIN-L', 'IM-L', 'RET-L']);
+    eq('the single long rod has no return — nothing to replace', endL(['P1']), ['FIN-L', 'IM-L']);
+    ok('and an inside mount survives, because it does NOT shorten the pole',
+        endL(['P1']).includes('IM-L'));
+
+    // The exclusion explains itself in the same place as every other one.
+    const why = resolve({ choices: mixedPoles, answers: {}, selectedIds: ['P1'] })
+        .slots.find(s => s.kind === 'END' && s.position === 'LEFT').rejected.find(r => r.choice.id === 'RET-L');
+    ok('and names the pole that caused it', why && /single-piece pole/.test(why.detail), why && why.detail);
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.

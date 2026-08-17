@@ -619,6 +619,35 @@ export function slots(choices, answers = {}, selectedIds = []) {
         const v = admits(c, { ...ctx, position: pos ? pos : undefined });
         if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });
     });
+    // ── A RETURN NEEDS AN END SEGMENT TO REPLACE (Stuart 2026-08-17) ────────────────────────
+    // "whenever there is not 3 poles — left, center and right — then there is no french return."
+    //
+    // True, and it does not need a rule OR a tag, because it is already in the data. A return works
+    // by dropping that end's long piece so the short centre carries the length; a rod pinned as ONE
+    // piece has no end piece to drop, so the return has nothing to do and cannot be built. The same
+    // pins that decide the three-piece geometry decide this — which is why it cannot fluctuate: it
+    // is not a statement ABOUT the product, it is the product.
+    //
+    // Only applies once a rod is chosen. Before that the engine does not know which pole it is, and
+    // guessing would hide a legitimate choice.
+    const chosenRods = choices.filter(c => want.has(c.id) && ROD_ROLES.includes(c.role));
+    if (chosenRods.length) {
+        const segmentsAt = (pos) => choices.some(c => ROD_ROLES.includes(c.role)
+            && chosenRods.some(r => r.partId && r.partId === c.partId)
+            && (c.position === pos));
+        bucket.forEach(slot => {
+            if (slot.kind !== 'END' || !slot.position) return;
+            if (segmentsAt(slot.position)) return;                  // a piece exists here — returns are possible
+            const dropped = slot.options.filter(o => o.role === 'RETURN');
+            if (!dropped.length) return;
+            slot.options = slot.options.filter(o => o.role !== 'RETURN');
+            slot.rejected = [...slot.rejected, ...dropped.map(choice => ({
+                choice, ok: false, rule: 'pole construction',
+                detail: `${chosenRods[0].name} is a single-piece pole — a return replaces an end SEGMENT, and there is none to replace`,
+            }))];
+        });
+    }
+
     // ── WHICH BACKPLATE GOES WITH WHICH BRACKET (Stuart 2026-08-17) ─────────────────────────
     // "any bracket tagged as basic gets no backplate option. any bracket tagged inline only shows
     //  the backplate options tagged as inline, and any other bracket not tagged as inline or basic
