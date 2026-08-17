@@ -650,6 +650,28 @@ export function slots(choices, answers = {}, selectedIds = []) {
         }
         const arm = bracketAt(slot.position);
         if (!arm) return;                            // no arm chosen yet — the pool is untouched
+        // ── PROJECTION IS A PAIRING TAG TOO (Stuart 2026-08-17: "the backplate/coverplates and the
+        // bracket arms are tagged to match via projection as well as the style (inline), so the
+        // projection is a pairing tag as well on both these parts").
+        //
+        // It was only an AXIS filter: both parts were gated against the CHOSEN projection, which
+        // produces matched pairs as a side-effect — but only once that question has been answered.
+        // Before it is, ctx.proj is undefined, nothing filters, and a 3-5/8" arm can be paired with
+        // a 6" plate. That is the arm-floating-above-its-plate symptom, and the coherence check
+        // could only report it AFTER the fact. As a pairing it cannot happen: the plate pool is
+        // narrowed to plates that share a projection with the arm actually chosen, answered or not.
+        // A plate tagged for no projection fits them all and always passes.
+        if (arm.projs && arm.projs.length) {
+            const paired = slot.options.filter(o => !o.projs.length || o.projs.some(p => arm.projs.some(q => sameMeasure(p, q))));
+            if (paired.length) slot.options = paired;
+            else {
+                slot.suppressedBy = arm.name;
+                slot.suppressedReason = `no backplate here is made in ${arm.projs.map(p => `${p}"`).join(' or ')}`;
+                slot.options = [];
+                return;
+            }
+        }
+
         // THREE PLATE POOLS, one live at a time — they occupy the same spot on the wall:
         //   in-line arm → the in-line copies, falling back to the RETURN copies where a collection
         //                 has no in-line ones (1.6: "flows without inl-only plates fall back to

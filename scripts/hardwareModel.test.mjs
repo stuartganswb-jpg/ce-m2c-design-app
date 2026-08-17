@@ -588,6 +588,35 @@ const threePiece = [
         .slots.find(s => s.kind === 'BRACKET').options.some(o => o.id === 'ALT'));
 }
 
+// ── PROJECTION PAIRS THE PLATE TO THE ARM, ANSWERED OR NOT ────────────────────────────────────
+// "the backplate/coverplates and the bracket arms are tagged to match via projection as well as the
+//  style (inline), so the projection is a pairing tag as well on both these parts."
+{
+    const paired = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'ARM36', partId: 'A36', role: 'BRACKET', proj: '3-5/8', position: 'CENTER', nodes: ['a36'] }),
+        C({ id: 'ARM60', partId: 'A60', role: 'BRACKET', proj: '6', position: 'CENTER', nodes: ['a60'] }),
+        C({ id: 'BP36', partId: 'P36', role: 'BACKPLATE', proj: '3-5/8', position: 'CENTER', nodes: ['p36'] }),
+        C({ id: 'BP60', partId: 'P60', role: 'BACKPLATE', proj: '6', position: 'CENTER', nodes: ['p60'] }),
+        C({ id: 'BPANY', partId: 'PANY', role: 'BACKPLATE', position: 'CENTER', nodes: ['pany'] }),
+    ];
+    const plates = (sel, ans = {}) => resolve({ choices: paired, answers: ans, selectedIds: sel })
+        .slots.find(s => s.kind === 'BACKPLATE').options.map(o => o.id).sort();
+
+    // THE GAP THIS CLOSES: with the projection question UNANSWERED, nothing used to filter.
+    eq('an arm pairs its plate even before the projection is answered', plates(['ROD', 'ARM36']), ['BP36', 'BPANY']);
+    eq('and the other arm pairs the other plate', plates(['ROD', 'ARM60']), ['BP60', 'BPANY']);
+    eq('with no arm chosen the pool is whole', plates(['ROD']), ['BP36', 'BP60', 'BPANY']);
+    // With the axis answered the two agree — the pairing is not fighting the filter.
+    eq('answered projection agrees with the pairing', plates(['ROD', 'ARM60'], { proj: 6 }), ['BP60', 'BPANY']);
+
+    // A multi-projection arm pairs with anything it shares a projection with.
+    const wide = [...paired, C({ id: 'ARMW', partId: 'AW', role: 'BRACKET', proj: '3-5/8,6', position: 'CENTER', nodes: ['aw'] })];
+    eq('an arm made in two projections pairs with both plates',
+        resolve({ choices: wide, answers: {}, selectedIds: ['ROD', 'ARMW'] })
+            .slots.find(s => s.kind === 'BACKPLATE').options.map(o => o.id).sort(), ['BP36', 'BP60', 'BPANY']);
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.
