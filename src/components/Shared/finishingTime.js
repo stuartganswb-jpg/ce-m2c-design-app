@@ -150,6 +150,51 @@ export function recipeStepCount(recipes, key) {
   return (r && Array.isArray(r.steps) && r.steps.length) || 0;
 }
 
+// ── THE FINISH CODE AN ORDER ACTUALLY RUNS (Stuart 2026-08-17) ────────────────────────────────
+// "these are coming up with pending recipe on the pending set up. but they all have proper recipes?"
+//
+// They do. The recipes were never the problem — the ORDER never carried a finish code to match them
+// with. `recipe` is stamped at dispatch, but three stock-build paths write an hq_work_orders doc
+// with no `recipe` field at all (the Master Library make-up cascade and its direct build, and the
+// Stock View WO push). RTG's release then falls back to `hqOrder.recipe || 'PENDING-RECIPE'`, and a
+// whole batch lands on the floor labelled PENDING-RECIPE even though the finish is sitting right
+// there in the item code — HCUMB410/BS is a BS order.
+//
+// Deriving it here heals orders already on the floor (they are picked and staged; nobody should have
+// to re-raise them) and makes the gap self-correcting. The writers stamp it properly too, so this is
+// a safety net rather than the mechanism.
+export const PENDING_RECIPE = 'PENDING-RECIPE';
+export const isPendingRecipe = (v) => {
+  const s = String(v == null ? '' : v).trim();
+  return !s || /^(PENDING[-\s]?RECIPE|PENDING|N\/A|NONE|[-—])$/i.test(s);
+};
+// The finish suffix of an item code: HCUMB410/BS → BS. The '-' split drops ring-pack suffixes
+// (BASE/SG-EA, BASE/BS-7) so a pack and its single batch together, exactly as Stock View reads them.
+//
+// '/P' is excluded on purpose: it is the PHOSPHATED core an in-house finish is sprayed onto, not a
+// finish of its own. Deriving "P" would invent a spray recipe nobody wrote and batch cores under it;
+// leaving it blank keeps the order honestly un-finished, which is what a /P core is.
+export function finishCodeFromErp(erpId) {
+  const s = String(erpId == null ? '' : erpId).trim();
+  const i = s.lastIndexOf('/');
+  if (i <= 0) return '';
+  const code = s.slice(i + 1).split('-')[0].trim().toUpperCase();
+  return code === 'P' ? '' : code;
+}
+export function woRecipeCode(wo) {
+  if (!wo) return '';
+  const stamped = String(wo.recipe || wo.color || '').trim();
+  if (!isPendingRecipe(stamped)) return stamped;
+  // `type` is last and guarded: some paths put the item code there, others a display name.
+  const looksLikeCode = (v) => /^[A-Za-z0-9][A-Za-z0-9\-/.]*$/.test(String(v || '').trim());
+  const sources = [wo.stockErpId, wo.variantErpId, wo.partErpId, wo.rootItem, looksLikeCode(wo.type) ? wo.type : ''];
+  for (const src of sources) {
+    const code = finishCodeFromErp(src);
+    if (code) return code;
+  }
+  return stamped || PENDING_RECIPE;
+}
+
 // ── STREAM RECIPE VARIANTS (Stuart & Grace 2026-08-11) ─────────────────────────────────────────
 // ONE customer color code, TWO internal routings. CPQ, the quote and the work order all say `CP`;
 // the floor runs `CP-S` on the small parts and `CP-P` on the poles WHENEVER those recipe docs

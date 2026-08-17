@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { buildStockFinPayload } from '../Shared/stockRun';
+import { finishCodeFromErp } from '../Shared/finishingTime';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
 import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
@@ -1057,6 +1058,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       const stamp = Date.now().toString().slice(-6);
       const safeErp = String(part.legacyErpId).replace(/[^A-Za-z0-9]+/g, '-');
       const newWoId = `WO-${safeErp}-${stamp}`;
+      // THE FINISH CODE TRAVELS WITH THE ORDER (Stuart 2026-08-17). This wrote no `recipe` at all,
+      // so RTG's release fell through to PENDING-RECIPE and the finishing floor grouped a whole
+      // batch as un-runnable work — while the finish was right there in the item code all along
+      // (HCUMB410/BS is a BS order). A raw part with no finish suffix still has none, and is still
+      // shop work rather than a finishing job.
+      const recipe = finishCodeFromErp(part.legacyErpId);
       // Source numbers only (2026-07-17): app id until the NetSuite WO posts, then nsWoTran.
       await setDoc(doc(db, "hq_work_orders", newWoId), {
           id: newWoId, woId: newWoId,
@@ -1064,6 +1071,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           brand: activeBrand, status: "Approved", customer: "Internal Stock",
           hqJobId: part.id, totalParts: Number(qty),
           reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+          ...(recipe ? { recipe } : {}),
+          ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
           type: "Stock Build", createdAt: Date.now()
       });
       return newWoId;

@@ -5,6 +5,7 @@ import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, dele
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks } from '../Shared/workOrderContract';
+import { woRecipeCode } from '../Shared/finishingTime';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
@@ -940,7 +941,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 customerName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
                 customer: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
                 clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
-                recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (hqOrder.recipe || "PENDING-RECIPE"),
+                // LAST CHANCE TO STATE THE FINISH (2026-08-17). Neither the CPQ lookup nor the WO doc
+                // has it for a stock build raised outside the snapshot — but the item code does, and
+                // an order that reaches the floor labelled PENDING-RECIPE cannot be batched or
+                // advanced. woRecipeCode reads it off the code and leaves a real recipe untouched.
+                recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : woRecipeCode(hqOrder),
                 reqDate: hqOrder.reqDate || "",
                 type: hqOrder.type || "Mixed",
                 totalParts: Number(hqOrder.totalParts) || 1,

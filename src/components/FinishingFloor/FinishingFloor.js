@@ -13,6 +13,7 @@ import Recipes from './Recipes';
 import Supplies from './Supplies';
 import Summary from './Summary';
 import { MixModal, QcModal } from './Modals';
+import { woRecipeCode, isPendingRecipe } from '../Shared/finishingTime';
 
 // 🚀 SHARED APPS
 import FloorAssetViewer from './FloorAssetViewer';
@@ -36,9 +37,23 @@ const FinishingFloor = () => {
   // orders WITHOUT a brand stamp (legacy) stay visible under every division — never hide work.
   const [floorBrand, setFloorBrand] = useState(() => { try { return localStorage.getItem('ff_brand') || 'all'; } catch (e) { return 'all'; } });
   const pickFloorBrand = (b) => { setFloorBrand(b); try { localStorage.setItem('ff_brand', b); } catch (e) { /* storage unavailable */ } };
-  const workOrders = floorBrand === 'all'
+  // ONE PLACE THE FINISH CODE IS SETTLED (Stuart 2026-08-17: "these are coming up with pending
+  // recipe … but they all have proper recipes?"). Some stock-build paths released orders carrying no
+  // `recipe` at all, so a whole batch grouped under PENDING-RECIPE while the finish sat plainly in
+  // the item code (HCUMB410/BS is a BS order). Settling it HERE means every tab below — the setup
+  // batches, the floor's coat resolution, the schedule planner, production times — reads the same
+  // answer, instead of thirty call sites each deciding for themselves.
+  const withRecipe = (w) => {
+    const code = woRecipeCode(w);
+    if (!code || code === w.recipe) return w;
+    // `recipeDerived` marks the ones the app worked out rather than was told, so the floor can see
+    // the difference between a stated finish and a rescued one.
+    return { ...w, recipe: code, recipeDerived: isPendingRecipe(w.recipe) };
+  };
+  const workOrders = (floorBrand === 'all'
     ? workOrdersRaw
-    : workOrdersRaw.filter(w => { const b = String(w?.brand || w?.brandId || '').toLowerCase(); return !b || b === floorBrand; });
+    : workOrdersRaw.filter(w => { const b = String(w?.brand || w?.brandId || '').toLowerCase(); return !b || b === floorBrand; })
+  ).map(withRecipe);
   const [recipes, setRecipes] = useState({});
   const [paintProfiles, setPaintProfiles] = useState({});
   const [activePots, setActivePots] = useState({});

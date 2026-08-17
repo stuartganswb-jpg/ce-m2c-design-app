@@ -5,7 +5,7 @@ import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { SOURCING, sourcingOf } from '../Shared/sourcing';
 import { makeFullTasks } from '../Shared/workOrderContract';
-import { SIZE_CAPACITY, lookupCapacity } from '../Shared/finishingTime';
+import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
@@ -618,6 +618,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     totalParts: Number(qty),
                     reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
                     type: "Stock Build",
+                    // The finish the floor batches on. Omitted here until 2026-08-17, which left
+                    // RTG's release to fall through to PENDING-RECIPE — the finish was in the item
+                    // code the whole time. Raw and /P codes have no finish suffix and stay unset.
+                    ...(finishCodeFromErp(erpId) ? { recipe: finishCodeFromErp(erpId) } : {}),
+                    ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
                     // Scheduler keys for the finishing time matrix (recipe × paintSize × productType).
                     // Carried downstream by RTGDispatch.pushToFinishing onto the fin_workorder.
                     paintSize: (part.manufacturingSpecs?.paintSize || '').toUpperCase() || null,
