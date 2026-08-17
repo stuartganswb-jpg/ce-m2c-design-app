@@ -101,6 +101,11 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                     covers and the CPQ will recommend a bracket count on the pole step — "a support every 6 ft at 1-3/8&quot;;
                     your 96&quot; pole wants 3". Finish suffixes are ignored, so <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem' }}>H1-138R</span> also
                     covers <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem' }}>H1-138R/P</span>.
+                    <div style={{ marginTop: '7px' }}>
+                        <b style={{ color: theme.ink, fontWeight: 500 }}>Not in a stud</b> is the tighter span for a bracket on a drywall
+                        anchor — a different failure from sag, so it is a flat cap rather than a calculation.
+                        <span style={{ color: theme.brass }}> Those figures are provisional; confirm them before a quote leans on them.</span>
+                    </div>
                 </div>
 
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
@@ -122,8 +127,8 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
                         <thead>
                             <tr style={{ background: theme.paper2 }}>
-                                {['Rod', 'Collection', 'Rod item codes (CPQ)', 'Max bracket span', rodInches ? 'Brackets needed' : ''].filter(Boolean).map(h => (
-                                    <th key={h} style={{ textAlign: h === 'Max bracket span' || h === 'Brackets needed' ? 'right' : 'left', padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>
+                                {['Rod', 'Collection', 'Rod item codes (CPQ)', 'Span — in a stud', 'Span — not in a stud', rodInches ? 'Brackets needed' : ''].filter(Boolean).map(h => (
+                                    <th key={h} style={{ textAlign: h.startsWith('Span') || h === 'Brackets needed' ? 'right' : 'left', padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>
                                 ))}
                             </tr>
                         </thead>
@@ -161,8 +166,21 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                                                 {r.limitedBy === 'LOAD' ? 'limited by fabric weight' : 'our maximum'}
                                             </div>
                                         </td>
+                                        {/* NOT IN A STUD — a different failure entirely: the anchor,
+                                            not the tube. Tighter, and worth quoting when the installer
+                                            cannot find framing. */}
+                                        <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.ink }}>
+                                            <strong style={{ fontWeight: 600 }}>{ftIn(r.noStudInches)}</strong>
+                                            <span style={{ color: theme.inkSoft, fontSize: '0.78rem', marginLeft: '8px' }}>{r.noStudInches}"</span>
+                                            <div style={{ fontSize: '9px', letterSpacing: '.06em', color: theme.inkSoft }}>
+                                                {r.noStudInches === r.spanInches ? 'a stud buys nothing here' : 'drywall anchor'}
+                                            </div>
+                                        </td>
                                         {rodInches && (
-                                            <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.brass, fontWeight: 600 }}>{n}</td>
+                                            <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.brass, fontWeight: 600 }}>
+                                                {n}
+                                                <div style={{ fontSize: '9px', color: theme.inkSoft, fontWeight: 400 }}>{bracketsFor(rodInches, r.noStudInches)} without studs</div>
+                                            </td>
                                         )}
                                     </tr>
                                 );

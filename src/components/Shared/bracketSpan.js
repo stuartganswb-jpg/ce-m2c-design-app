@@ -19,6 +19,10 @@
 // ---- Engineering constants (workbook "Inputs" sheet) ---------------------------------------
 const STEEL = { E: 29000000, yield: 54000 };   // psi · 1018 cold-drawn
 const ALUM = { E: 10000000, yield: 16000 };    // psi · 6063-T5
+// Cast acrylic (PMMA). An order of magnitude less stiff than steel and it CREEPS — it keeps
+// deflecting under a load it has already carried — so the published cap matters more here than the
+// beam figure does.
+const ACRYLIC = { E: 420000, yield: 10000 };   // psi · cast PMMA
 const FS = 2;            // safety factor on yield
 // SAG LIMIT — tightened from the workbook's L/180 to L/360 (Stuart 2026-07-28: "those spans are
 // way too long, let's set it industry best practice"). L/180 is a structural limit borrowed from
@@ -80,12 +84,25 @@ const rectSection = (h, b, t) => {
 // 16 ga is the H2 Simple Elegance pole. The 2" rectangular aluminium is H1 ONLY and is offered
 // ONLY in the strong (2" vertical) orientation — we do not sell it the weak way, so the weak-axis
 // row from the workbook is deliberately absent rather than hidden.
+// noStud = the span when the bracket lands in drywall on a toggle rather than in a stud. It is a
+// DIFFERENT failure: nothing to do with the tube, everything to do with what the anchor will hold
+// and how it loosens as the curtain is drawn. So it is a flat house cap, not a calculation.
+//
+// ⚠ THESE NO-STUD FIGURES ARE PROVISIONAL — conservative starting points, not engineering Stuart
+// has signed off. They are in one editable place for exactly that reason; confirm them before any
+// quote leans on them.
 const ROUND_SIZES = [
-    { od: 0.5, label: '1/2"', maxSpan: 36 },
-    { od: 0.75, label: '3/4"', maxSpan: 48 },
-    { od: 1, label: '1"', maxSpan: 60 },
-    { od: 1.375, label: '1-3/8"', maxSpan: 72 },
+    { od: 0.5, label: '1/2"', maxSpan: 36, noStud: 24 },
+    { od: 0.75, label: '3/4"', maxSpan: 48, noStud: 32 },
+    { od: 1, label: '1"', maxSpan: 60, noStud: 36 },
+    { od: 1.375, label: '1-3/8"', maxSpan: 72, noStud: 42 },
 ];
+
+// SOLID round — an acrylic rod is not a tube. I = π d⁴ / 64.
+const solidRoundSection = (d) => {
+    const I = (Math.PI * Math.pow(d, 4)) / 64;
+    return { I, c: d / 2, S: I / (d / 2) };
+};
 
 // HOUSE MAXIMUM SPAN — the cap that applies no matter what the beam math says.
 //
@@ -98,6 +115,12 @@ const ROUND_SIZES = [
 // These are OUR house numbers, deliberately in one editable place. Change here, re-copy to
 // portal/src/shared/bracketSpan.js.
 const ALUM_MAX_SPAN = 72;
+const ALUM_NO_STUD = 42;
+// ACRYLIC — Stuart 2026-08-17: "acrylic will sag very easy and the limit is 36\" whether brackets
+// are in a stud or not." The same figure both ways because the binding constraint is the material
+// creeping, not the anchor: a stud does not stop a plastic rod from bowing under its own weight
+// over time, so there is nothing for the better fixing to buy.
+const ACRYLIC_MAX_SPAN = 36;
 // Flat Iron carries the same 72" cap as the 1-3/8" round: its stiffness (I ≈ 0.0613 in⁴) sits just
 // ABOVE the 1-3/8" 16 ga round (0.0575), so a tighter cap here would be inconsistent rather than
 // cautious. Same one-number lever as the others if that judgement should change.
@@ -132,11 +155,19 @@ export function rodCollectionsFor(allowedNames, brandId) {
 export const RODS = [
     ...ROUND_SIZES.map(s => ({
         id: `H1-${s.od}`, collection: 'H1', label: `${s.label} round`, material: 'Steel',
-        section: roundSection(s.od, GAUGE_WALL[14]), metal: STEEL, maxSpan: s.maxSpan,
+        section: roundSection(s.od, GAUGE_WALL[14]), metal: STEEL, maxSpan: s.maxSpan, noStudSpan: s.noStud,
     })),
+    // The acrylic rod is its own row, not a variant of the steel one — same diameter, a twentieth
+    // of the stiffness.
+    {
+        id: 'H1-ACR-1.375', collection: 'H1', label: '1-3/8" acrylic', material: 'Acrylic',
+        section: solidRoundSection(1.375), metal: ACRYLIC,
+        maxSpan: ACRYLIC_MAX_SPAN, noStudSpan: ACRYLIC_MAX_SPAN,
+        note: 'Acrylic creeps under load — 36" whether or not the bracket lands in a stud.',
+    },
     ...ROUND_SIZES.map(s => ({
         id: `H2-${s.od}`, collection: 'H2', label: `${s.label} round`, material: 'Steel',
-        section: roundSection(s.od, GAUGE_WALL[16]), metal: STEEL, maxSpan: s.maxSpan,
+        section: roundSection(s.od, GAUGE_WALL[16]), metal: STEEL, maxSpan: s.maxSpan, noStudSpan: s.noStud,
     })),
     {
         id: 'H1-ALU2', collection: 'H1', label: '2" rectangular', material: 'Aluminium',
@@ -190,10 +221,15 @@ export function spanTable(fabricId, curtainLengthFt, collectionId) {
         .map(r => {
             const eng = engineeredSpanInches(r, load);
             const capped = eng === null ? null : Math.min(eng, r.maxSpan || Infinity);
+            // The no-stud figure is the SMALLER of the engineered span and the anchor cap — a
+            // toggle in drywall never buys more than the beam allows, and usually a good deal less.
+            const noStudCap = r.noStudSpan || ALUM_NO_STUD;
+            const noStud = eng === null ? null : Math.min(eng, r.maxSpan || Infinity, noStudCap);
             return {
                 ...r,
                 spanInches: capped === null ? null : Math.floor(capped),
                 spanFeet: capped === null ? null : Math.floor(capped) / 12,
+                noStudInches: noStud === null ? null : Math.floor(noStud),
                 // 'MAX'  = our house limit is the binding constraint (a longer curtain won't shorten it)
                 // 'LOAD' = the fabric weight is (a heavier or longer curtain WILL shorten it)
                 limitedBy: capped === null ? null : (eng > (r.maxSpan || Infinity) ? 'MAX' : 'LOAD'),
@@ -222,7 +258,9 @@ export const STUD_NOTE = 'All measurements assume brackets are mounted into the 
 // What the numbers assume — shown to staff, not to customers.
 export const ASSUMPTIONS = [
     `Fullness ${FULLNESS}× · sag limit L/${DEFLECTION_N} ("no visible sag") · safety factor ${FS} on yield`,
-    `House max span caps the engineered figure: ${ROUND_SIZES.map(s => `${s.label} ${s.maxSpan}"`).join(' · ')} · 2" alum ${ALUM_MAX_SPAN}" · flat iron ${FLAT_IRON_MAX_SPAN}"`,
+    `House max span caps the engineered figure: ${ROUND_SIZES.map(s => `${s.label} ${s.maxSpan}"`).join(' · ')} · 2" alum ${ALUM_MAX_SPAN}" · flat iron ${FLAT_IRON_MAX_SPAN}" · 1-3/8" acrylic ${ACRYLIC_MAX_SPAN}"`,
+    `NOT IN A STUD — a separate, tighter cap, because the anchor fails before the tube does: ${ROUND_SIZES.map(s => `${s.label} ${s.noStud}"`).join(' · ')} · alum ${ALUM_NO_STUD}". PROVISIONAL house numbers, to be confirmed.`,
+    `Acrylic ${ACRYLIC_MAX_SPAN}" in a stud or not — cast PMMA at E ${(ACRYLIC.E / 1000).toFixed(0)} ksi creeps under sustained load, so a better fixing buys nothing`,
     `Flat Iron (M2C): ${FLAT_IRON_PROFILE.h}" × ${FLAT_IRON_PROFILE.w}" × ${FLAT_IRON_PROFILE.t}" wall 16 ga mild steel, strong axis (1.5" vertical) only`,
     `Traverse (H1 + H2): ${TRAVERSE_PROFILE.od}" round aluminium, ${TRAVERSE_PROFILE.wall}" wall, held to L/${TRAVERSE_DEFLECTION_N} (not L/${DEFLECTION_N}) and capped at ${TRAVERSE_MAX_SPAN}" — the internal track has to stay true or the carriers bind`,
     `Steel E ${(STEEL.E / 1e6).toFixed(0)} Msi, yield ${STEEL.yield.toLocaleString()} psi (1018 cold-drawn) · 14 ga wall ${GAUGE_WALL[14]}", 16 ga wall ${GAUGE_WALL[16]}"`,
