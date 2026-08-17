@@ -3888,7 +3888,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
           
-          <div style={{ width: '400px', display: 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
+          <div style={{ width: newEngine && isSuperAdmin ? '320px' : '400px', display: 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
               
               {/* QUEUED LINES PANEL */}
               {activeMasterQuoteId && previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).length > 0 && (
@@ -3975,8 +3975,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                  </div>
               </div>
 
+              {/* ⚠ THE OLD STEP COLUMN IS NOT A SECOND OPINION. With the new engine on it would
+                  sit beside the real configurator answering the same questions from the baked flow
+                  — two panels, two answers, one of them wrong. Stuart 2026-08-17: "replace the
+                  entire old bar section to the left that feeds the old engine with the finishes."
+                  Hidden, not unmounted: the engine is a toggle, and turning it back off must return
+                  the operator to exactly the step they were on. */}
               {activeFlow && currentStep && (
-                  <div style={{ background: '#fff', border: '1px solid var(--brass)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', flex: 1 }}>
+                  <div style={{ background: '#fff', border: '1px solid var(--brass)', display: newEngine && isSuperAdmin ? 'none' : 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', flex: 1 }}>
                       <div style={{ padding: '20px 24px', background: 'var(--paper)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Step {currentStepIndex + 1} of {activeFlow.steps.length}: {currentStep.title}</span>
                           {(currentStep.basePrice !== undefined && currentStep.basePrice !== null && currentStep.basePrice !== '') && (
@@ -4465,6 +4471,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   finishMode={activeFlow?.finishMode === 'PER_PART' ? 'PER_PART' : 'GLOBAL'}
                                   spanMap={spanMap}
                                   spanCaps={spanCaps}
+                                  /* ADD-BY-HAND ITEMS for this flow (splices, extra rings …), set
+                                     in tab 11. A new one is a row there, never a release. */
+                                  extraItems={Array.isArray(activeFlow?.extraItems) ? activeFlow.extraItems : []}
+                                  /* The finishes THIS collection offers, also tab 11. Empty = all. */
+                                  flowFinishes={Array.isArray(activeFlow?.flowFinishes) ? activeFlow.flowFinishes : []}
                               />
                           ) : (
                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Pick a flow with a linked assembly — the new engine reads the ASSEMBLY, not the flow.</div>
@@ -4680,7 +4691,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   )}
               </div>
 
-              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '28px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+              {/* Priced from the OLD engine's selections, which the new one does not make. Showing
+                  both is showing two different totals for one order. The engine carries its own. */}
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: newEngine && isSuperAdmin ? 'none' : 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '28px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                   {activeDraftId && (() => {
                       const d = previousDrafts.find(x => x.id === activeDraftId);
                       const n = d?.specs?.engineeringNotes;

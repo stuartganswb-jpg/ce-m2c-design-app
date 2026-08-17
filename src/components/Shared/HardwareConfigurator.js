@@ -5,7 +5,7 @@ import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
 import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor } from './hardwareModel';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
-import { priceConfiguration, pricingWarnings } from './hardwarePricing';
+import { priceConfiguration, priceChoice, pricingWarnings } from './hardwarePricing';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 
@@ -61,7 +61,7 @@ const slotLabel = (s) => {
 export default function HardwareConfigurator({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], finishMode = 'GLOBAL', spanMap = {}, spanCaps = {},
+    outsourceCodes = [], finishMode = 'GLOBAL', spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -146,11 +146,23 @@ export default function HardwareConfigurator({
         return m;
     }, [parts]);
     const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
-    const priced = useMemo(() => priceConfiguration(resolved, {
+    const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel, outsourceCodes,
         finishCode: globalFinish, findPart, findByCode: findPart,
-    }), [resolved, customerId, customer, priceLevel, outsourceCodes, globalFinish, findPart]);
+    }), [customerId, customer, priceLevel, outsourceCodes, globalFinish, findPart]);
+    const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
     const priceWarnings = useMemo(() => pricingWarnings(priced), [priced]);
+    // Added by hand — priced by the SAME chain as everything else (override → price level → client
+    // row → base). A splice a customer negotiated is still that customer's price; nothing about it
+    // being typed in rather than resolved changes what they pay for it.
+    const extraLines = useMemo(() => extras.filter(x => x.code).map(x => {
+        const part = findPart(x.code);
+        const qty = Number(x.qty) > 0 ? Number(x.qty) : 1;
+        const p = priceChoice({ partId: x.code }, part, priceCtx);
+        return { partId: x.code, name: part?.itemName || x.code, qty, unit: p.price, total: p.price * qty,
+                 sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true };
+    }), [extras, findPart, priceCtx]);
+    const grandTotal = priced.total + extraLines.reduce((s2, l) => s2 + l.total, 0);
 
     // ── LENGTH, AND WHAT IT IMPLIES ──────────────────────────────────────────────────────────
     // Typed the way an installer measures — whole inches and a fraction — and the FOOT figure is
@@ -163,7 +175,12 @@ export default function HardwareConfigurator({
         const total = (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(frac) ? frac : 0);
         return total > 0 ? total : null;
     }, [poleIn, poleFrac]);
-    const lengthFeet = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
+    // ⚠ WE BILL IN FULL FEET, ROUNDED UP (Stuart 2026-08-17: "even if .25\" over we bill next foot
+    // size"). A pole is cut from stock in whole feet, so 90 1/2" is eight feet of material however
+    // the arithmetic reads. Showing the exact figure beside it keeps the operator honest about what
+    // was measured versus what is being charged.
+    const lengthFeetExact = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
+    const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
 
     // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
     const advice = useMemo(() => {
@@ -253,11 +270,18 @@ export default function HardwareConfigurator({
     // A room is a configuration; a job is several. Each is finished, memo'd and added, and the
     // strip is where you see what is already in and what it came to.
     const [configMemo, setConfigMemo] = useState('');
+    // NOTES BELONG TO THE STEP THE OPERATOR IS ON (Stuart 2026-08-17). A note typed while deciding
+    // the right bracket is about the right bracket; filing them all into one box loses which
+    // decision they were about, which is the only thing that makes them useful downstream.
+    const [stepNotes, setStepNotes] = useState({});   // step key → note
+    // EXTRAS — basic items added by hand: a splice, an extra ring, whatever the flow does not model.
+    const [extras, setExtras] = useState([]);         // [{ code, qty, note }]
     const [saved, setSaved] = useState([]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;
-        setSaved(s => [...s, { memo: configMemo || `Configuration ${s.length + 1}`, total: priced.total, lines: priced.lines.length }]);
-        setConfigMemo(''); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac(''); setStepIx(0);
+        setSaved(s => [...s, { memo: configMemo || `Configuration ${s.length + 1}`, total: grandTotal, lines: priced.lines.length }]);
+        setConfigMemo(''); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
+        setStepNotes({}); setExtras([]); setStepIx(0);
     };
 
     const railCell = (st, i) => {
@@ -279,8 +303,13 @@ export default function HardwareConfigurator({
     };
 
     // One option card: the part, photographed, named three ways — description, our number, theirs.
+    // ONE OPTION, NAMED THE WAY THE TRADE NAMES IT (Stuart 2026-08-17): our pattern id first, the
+    // customer's own alias immediately beside it, and OUR DESCRIPTION underneath. The app's internal
+    // record id was there before and means nothing to anybody on a phone call.
     const optionCard = (o, on, onClick) => {
         const line = priced.lines.find(l => String(l.partId).toUpperCase() === String(o.partId).toUpperCase());
+        const part = findPart(o.partId);
+        const desc = part?.itemName || o.name;
         return (
             <button key={o.id} onClick={onClick} style={{
                 display: 'flex', flexDirection: 'column', gap: '5px', alignItems: 'stretch', textAlign: 'left',
@@ -292,9 +321,11 @@ export default function HardwareConfigurator({
                         ? <img src={thumbs[o.id]} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                         : <span style={{ ...mono, fontSize: '7px', color: 'var(--ink-faint)' }}>{thumbs[o.id] === null ? 'no geometry' : '···'}</span>}
                 </span>
-                <span style={{ fontSize: '10.5px', lineHeight: 1.25, color: 'var(--ink)' }}>{o.name}</span>
-                <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink-soft)' }}>{o.partId}</span>
-                {line?.sku && <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--brass)' }}>{line.sku}</span>}
+                <span style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' }}>
+                    <span style={{ ...mono, fontSize: '9.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)' }}>{o.partId}</span>
+                    {line?.sku && <span style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--brass)' }}>{line.sku}</span>}
+                </span>
+                <span style={{ fontSize: '10.5px', lineHeight: 1.25, color: 'var(--ink-soft)' }}>{desc}</span>
                 {o.noFinish && <span style={{ ...mono, fontSize: '7.5px', color: 'var(--ink-faint)' }}>clear · takes no finish</span>}
             </button>
         );
@@ -306,20 +337,45 @@ export default function HardwareConfigurator({
         </div>
     );
     const boxStyle = { background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', minHeight: '230px' };
+    // A FINISH IS NAMED, NOT JUST COLOURED (Stuart 2026-08-17: "make the finish chips bigger and
+    // place the name under each one, our code along with customer name"). The customer's own word
+    // for it comes from the finish's client mapping — it is what they will say on the phone.
+    const clientFinishName = useCallback((f) => {
+        if (!customerId && !customer) return '';
+        const keys = new Set([customerId, customer?.name, customer?.companyName].filter(Boolean).map(v => String(v).trim().toUpperCase()));
+        const hit = (f.clientMapping || []).find(m => keys.has(String(m.customerId || '').trim().toUpperCase()));
+        return hit?.clientFinishName || '';
+    }, [customerId, customer]);
     const swatchRow = (list, sel, pick) => (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(26px,1fr))', gap: '4px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(66px,1fr))', gap: '7px' }}>
             {list.map(f => {
                 const code = String(f.code || f.name || '').toUpperCase();
                 const url = f.textureUrl || f.finalImageUrl;
                 const on = String(sel).toUpperCase() === code;
-                return <button key={code} title={f.name || code} onClick={() => pick(on ? '' : code)}
-                    style={{ aspectRatio: '1', padding: 0, cursor: 'pointer', border: `1px solid var(--line)`, outline: on ? '2px solid var(--ink)' : 'none', outlineOffset: '1px', background: url ? `url(${url}) center/cover` : '#ddd' }} />;
+                const theirs = clientFinishName(f);
+                return (
+                    <button key={code} title={`${code}${f.name && f.name !== code ? ` — ${f.name}` : ''}${theirs ? ` · ${theirs}` : ''}`}
+                        onClick={() => pick(on ? '' : code)}
+                        style={{ padding: 0, cursor: 'pointer', border: `1px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: '#fff', display: 'flex', flexDirection: 'column', textAlign: 'left', outline: on ? '2px solid var(--ink)' : 'none', outlineOffset: '1px' }}>
+                        <span style={{ height: '46px', background: url ? `url(${url}) center/cover` : '#ddd' }} />
+                        <span style={{ padding: '3px 4px 4px', display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                            <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)' }}>{code}</span>
+                            {theirs && <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{theirs}</span>}
+                        </span>
+                    </button>
+                );
             })}
         </div>
     );
     // Material first, then where it is done — in-house and outsourced price and lead differently.
     const finishGroups = useMemo(() => {
-        const usable = finishes.filter(f => !chosenList.length || chosenList.some(c => finishesFor(c, [f]).length));
+        // WHAT THIS FLOW OFFERS comes first, set in tab 11. An empty list means the flow has never
+        // been narrowed, so every finish stands — the behaviour every flow had before the control
+        // existed. Then the parts have their say: a finish no chosen part can wear is not offered.
+        const inFlow = flowFinishes.length
+            ? finishes.filter(f => flowFinishes.includes(f.code || f.finishCode || f.name || f.id))
+            : finishes;
+        const usable = inFlow.filter(f => !chosenList.length || chosenList.some(c => finishesFor(c, [f]).length));
         const byMat = new Map();
         usable.forEach(f => {
             const m = String(f.material || f.type || 'METAL').toUpperCase();
@@ -327,10 +383,44 @@ export default function HardwareConfigurator({
             (f.multiplier !== undefined || f.vendor ? byMat.get(m).out : byMat.get(m).inHouse).push(f);
         });
         return [...byMat.entries()];
-    }, [finishes, chosenList]);
+    }, [finishes, flowFinishes, chosenList]);
+
+    const finishPanel = (
+        <div style={{ ...boxStyle, minHeight: '0', position: 'sticky', top: '12px' }}>
+            {boxHead('Finish', perPart ? 'Per part' : 'Whole configuration')}
+            <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', maxHeight: 'calc(100vh - 160px)' }}>
+                {!finishGroups.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Choose a part to see its finishes.</span>}
+                {finishGroups.map(([mat, g]) => (
+                    <div key={mat} style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                        <span style={{ ...mono, fontSize: '9px' }}>{mat} <span style={{ color: 'var(--ink-faint)' }}>· {g.inHouse.length + g.out.length}</span></span>
+                        {!!g.inHouse.length && (<div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>In house · {g.inHouse.length}</span>
+                            {swatchRow(g.inHouse, globalFinish, setGlobalFinish)}
+                        </div>)}
+                        {!!g.out.length && (<div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                            <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>Outsourced · {g.out.length}</span>
+                            {swatchRow(g.out, globalFinish, setGlobalFinish)}
+                        </div>)}
+                    </div>
+                ))}
+                {perPart && step?.kind === 'SLOT' && livePicks[step.slot?.key] && (() => {
+                    const o = step.slot.options.find(x => x.id === livePicks[step.slot.key]);
+                    if (!o || o.noFinish) return null;
+                    return (
+                        <div style={{ borderTop: '1px solid var(--line)', paddingTop: '9px' }}>
+                            <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Just this part · {o.partId}</span>
+                            {swatchRow(finishesFor(o, finishes), partFinish[o.id] || globalFinish, (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
+                        </div>
+                    );
+                })()}
+            </div>
+        </div>
+    );
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 300px) 1fr', gap: '14px', alignItems: 'start' }}>
+          {finishPanel}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
             {/* CONFIGURATIONS — a job is several rooms. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', background: '#fff', border: '1px solid var(--line)', padding: '10px 14px' }}>
@@ -341,7 +431,7 @@ export default function HardwareConfigurator({
                     </span>
                 ))}
                 <span style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--ink)', background: 'var(--ink)', color: '#fff' }}>
-                    {configMemo || 'This configuration'} <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '5px' }}>${priced.total.toFixed(2)}</b>
+                    {configMemo || 'This configuration'} <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '5px' }}>${grandTotal.toFixed(2)}</b>
                 </span>
                 <button onClick={addConfiguration} disabled={!priced.lines.length}
                     style={{ ...mono, marginLeft: 'auto', padding: '7px 12px', cursor: priced.lines.length ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
@@ -444,7 +534,7 @@ export default function HardwareConfigurator({
                                             style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: 'var(--paper-2)', color: 'var(--ink)' }} />
                                     </label>
                                 </div>
-                                {lengthInches && <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', marginTop: '5px' }}>{lengthInches}" ÷ 12 = {lengthFeet} ft — the foot figure is what prices.</div>}
+                                {lengthInches && <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', marginTop: '5px' }}>{lengthInches}" ÷ 12 = {lengthFeetExact} ft → billed at <b>{lengthFeet} full feet</b>, rounded up.</div>}
                             </div>
                             <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
                                 <span style={{ ...mono, color: 'var(--ink-soft)' }}>Fabric weight</span>
@@ -454,6 +544,42 @@ export default function HardwareConfigurator({
                                 </select>
                             </label>
                         </>)}
+
+                        {/* ADDED BY HAND — a splice, an extra ring, anything the flow does not
+                            model. Which items are OFFERED here is set per flow in tab 11, so the
+                            list grows without a release; the qty and the note are per order.
+                            Stuart 2026-08-17: "the splice should say default is center (add in
+                            exact location if different)". */}
+                        {step?.kind === 'LENGTH' && (
+                            <div>
+                                <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>Add an item</div>
+                                {!extraItems.length && <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>Nothing configured for this flow — add them in tab 11.</div>}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                                    {extras.map((x, i) => (
+                                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 56px auto', gap: '5px', alignItems: 'start' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                <select value={x.code} onChange={e => setExtras(a => a.map((y, j) => j === i ? { ...y, code: e.target.value } : y))}
+                                                    style={{ padding: '6px', border: '1px solid var(--line)', fontSize: '12px', background: '#fff', color: 'var(--ink)' }}>
+                                                    <option value="">— choose —</option>
+                                                    {extraItems.map(it => <option key={it.code} value={it.code}>{it.label || it.code}</option>)}
+                                                </select>
+                                                <input value={x.note} onChange={e => setExtras(a => a.map((y, j) => j === i ? { ...y, note: e.target.value } : y))}
+                                                    placeholder={(extraItems.find(it => it.code === x.code)?.notePlaceholder) || 'Default is centre — give the exact location if different'}
+                                                    style={{ padding: '6px', border: '1px solid var(--line)', fontSize: '11.5px', background: '#fff', color: 'var(--ink)' }} />
+                                            </div>
+                                            <input value={x.qty} onChange={e => setExtras(a => a.map((y, j) => j === i ? { ...y, qty: e.target.value } : y))}
+                                                inputMode="numeric" style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '12px', textAlign: 'center', background: '#fff', color: 'var(--ink)' }} />
+                                            <button onClick={() => setExtras(a => a.filter((_, j) => j !== i))} title="Remove"
+                                                style={{ ...mono, padding: '6px 8px', border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', color: 'var(--ink-soft)' }}>×</button>
+                                        </div>
+                                    ))}
+                                    {!!extraItems.length && (
+                                        <button onClick={() => setExtras(a => [...a, { code: '', qty: '1', note: '' }])}
+                                            style={{ ...chip(false), fontSize: '9px' }}>+ Add item</button>
+                                    )}
+                                </div>
+                            </div>
+                        )}
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', paddingTop: '3px' }}>
                             <button onClick={() => setStepIx(Math.max(0, ix - 1))} disabled={ix === 0}
@@ -487,41 +613,9 @@ export default function HardwareConfigurator({
                         )}
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '14px' }}>
-
-                        <div style={boxStyle}>
-                            {boxHead('Finish', perPart ? 'Per part' : 'Whole configuration')}
-                            <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', maxHeight: '300px' }}>
-                                {!finishGroups.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Choose a part to see its finishes.</span>}
-                                {finishGroups.map(([mat, g]) => (
-                                    <div key={mat} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                        <span style={{ ...mono, fontSize: '8.5px' }}>{mat} <span style={{ color: 'var(--ink-faint)' }}>· {g.inHouse.length + g.out.length}</span></span>
-                                        {!!g.inHouse.length && (
-                                            <div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)' }}>
-                                                <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>In house · {g.inHouse.length}</span>
-                                                {swatchRow(g.inHouse, globalFinish, setGlobalFinish)}
-                                            </div>
-                                        )}
-                                        {!!g.out.length && (
-                                            <div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)' }}>
-                                                <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>Outsourced · {g.out.length}</span>
-                                                {swatchRow(g.out, globalFinish, setGlobalFinish)}
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
-                                {perPart && step?.kind === 'SLOT' && livePicks[step.slot?.key] && (() => {
-                                    const o = step.slot.options.find(x => x.id === livePicks[step.slot.key]);
-                                    if (!o || o.noFinish) return null;
-                                    return (
-                                        <div style={{ borderTop: '1px solid var(--line)', paddingTop: '8px' }}>
-                                            <span style={{ ...mono, fontSize: '8px', color: 'var(--brass)' }}>Just this part · {o.partId}</span>
-                                            {swatchRow(finishesFor(o, finishes), partFinish[o.id] || globalFinish, (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
-                                        </div>
-                                    );
-                                })()}
-                            </div>
-                        </div>
+                    {/* PRICING left at its own size, GUIDANCE given the room it needs — the finish
+                        moved to its own column, so this space belongs to the two that were cramped. */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '14px' }}>
 
                         <div style={boxStyle}>
                             {boxHead('Pricing', priceLevel !== 'STANDARD' ? priceLevel.replace('FAB_', 'Fabricut ').toLowerCase() : '')}
@@ -529,18 +623,26 @@ export default function HardwareConfigurator({
                                 {!priced.lines.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Nothing chosen yet.</span>}
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', fontVariantNumeric: 'tabular-nums' }}>
                                     <tbody>
-                                        {priced.lines.map((l, i) => (
-                                            <tr key={i} title={`${l.source}${l.detail ? ` — ${l.detail}` : ''}`}>
-                                                <td style={{ padding: '2px 0', color: 'var(--ink)' }}>
-                                                    {l.name}{l.qty > 1 ? ` ×${l.qty}` : ''}
-                                                    {l.sku && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}> · {l.sku}</span>}
+                                        {[...priced.lines, ...extraLines].map((l, i) => (
+                                            <tr key={i} title={`${l.source || 'added by hand'}${l.detail ? ` — ${l.detail}` : ''}`}>
+                                                <td style={{ padding: '3px 0', color: 'var(--ink)' }}>
+                                                    {/* Our id, their alias beside it, our description under. */}
+                                                    <span style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' }}>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px' }}>{l.partId}</span>
+                                                        {l.sku && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{l.sku}</span>}
+                                                        {l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>×{l.qty}</span>}
+                                                        {l.extra && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>added</span>}
+                                                    </span>
+                                                    <span style={{ display: 'block', fontSize: '11px', color: 'var(--ink-soft)', lineHeight: 1.25 }}>
+                                                        {findPart(l.partId)?.itemName || l.name}
+                                                    </span>
                                                 </td>
-                                                <td style={{ padding: '2px 0', textAlign: 'right', whiteSpace: 'nowrap', color: l.unit ? 'var(--ink)' : 'var(--ink-faint)' }}>${l.total.toFixed(2)}</td>
+                                                <td style={{ padding: '3px 0', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: l.unit ? 'var(--ink)' : 'var(--ink-faint)' }}>${l.total.toFixed(2)}</td>
                                             </tr>
                                         ))}
                                         {!!priced.lines.length && (
                                             <tr><td style={{ borderTop: '1px solid var(--line)', paddingTop: '6px', fontWeight: 600 }}>Estimated unit</td>
-                                                <td style={{ borderTop: '1px solid var(--line)', paddingTop: '6px', textAlign: 'right', fontWeight: 600 }}>${priced.total.toFixed(2)}</td></tr>
+                                                <td style={{ borderTop: '1px solid var(--line)', paddingTop: '6px', textAlign: 'right', fontWeight: 600 }}>${grandTotal.toFixed(2)}</td></tr>
                                         )}
                                     </tbody>
                                 </table>
@@ -566,6 +668,26 @@ export default function HardwareConfigurator({
                                         No span guidance — this rod is not listed against a family in 6.5.
                                     </div>
                                 )}
+                                {/* A NOTE BELONGS TO THE STEP IT WAS WRITTEN ON (Stuart 2026-08-17).
+                                    The box names the step from the rail, so the shop reads "Right
+                                    Bracket: use the longer screws" rather than an unattributed
+                                    sentence at the bottom of a quote. */}
+                                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span style={{ ...mono, fontSize: '8.5px' }}>
+                                        Note · <span style={{ color: 'var(--brass)' }}>{step?.label || 'this step'}</span>
+                                    </span>
+                                    <textarea value={stepNotes[step?.key] || ''} onChange={e => setStepNotes(n => ({ ...n, [step.key]: e.target.value }))}
+                                        placeholder={`Anything the shop needs to know about ${step?.label || 'this step'}`}
+                                        style={{ minHeight: '54px', border: '1px solid var(--line)', padding: '7px 8px', fontFamily: 'var(--sans)', fontSize: '12.5px', resize: 'vertical', background: '#fff', color: 'var(--ink)' }} />
+                                    {Object.entries(stepNotes).filter(([k, v]) => v && k !== step?.key).length > 0 && (
+                                        <div style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', lineHeight: 1.5 }}>
+                                            {Object.entries(stepNotes).filter(([k, v]) => v && k !== step?.key).map(([k, v]) => {
+                                                const st = steps.find(x => x.key === k);
+                                                return <div key={k}><b style={{ color: 'var(--ink-soft)', fontWeight: 400 }}>{st?.label || k}:</b> {v}</div>;
+                                            })}
+                                        </div>
+                                    )}
+                                </label>
                                 <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                     <span style={{ ...mono, fontSize: '8.5px' }}>Config memo · this line</span>
                                     <input value={configMemo} onChange={e => setConfigMemo(e.target.value)} placeholder="Living Room 1"
@@ -594,6 +716,7 @@ export default function HardwareConfigurator({
                     </div>
                 </div>
             </div>
+          </div>
         </div>
     );
 }

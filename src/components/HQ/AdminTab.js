@@ -2475,6 +2475,62 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                 </div>
                                             );
                                         })()}
+                                        {/* WHAT THIS FLOW OFFERS — FINISHES, AND ITEMS ADDED BY HAND
+                                            (Stuart 2026-08-17: "wherever you put the overall available finish selector
+                                            for this assembly add a control field there so we can add or remove items
+                                            that will appear below the fabric weight. this way the flow is future proof")
+                                            Two lists, one panel, because they answer the same question: what may an
+                                            operator put on THIS collection's order. Neither is code. A collection that
+                                            starts offering a new finish, or starts selling a splice, is edited here and
+                                            live on the next quote — no regenerate, no release. Leave the finishes empty
+                                            and the flow offers every finish in the system, which is what the flows that
+                                            predate this control have always done. */}
+                                        {(() => {
+                                            const af = cpqFlows.find(f => f.id === activeFlowId) || {};
+                                            const offered = Array.isArray(af.flowFinishes) ? af.flowFinishes : [];
+                                            const extras = Array.isArray(af.extraItems) ? af.extraItems : [];
+                                            const save = async (patch) => {
+                                                try { await updateDoc(doc(db, 'cpq_flows', activeFlowId), patch); }
+                                                catch (e) { alert('Save failed: ' + (e.message || e)); }
+                                            };
+                                            const allFin = [...globalFinishes, ...outsourceFinishes];
+                                            const codeOf = (f) => f.code || f.finishCode || f.name || f.id;
+                                            const toggle = (code) => save({ flowFinishes: offered.includes(code) ? offered.filter(c => c !== code) : [...offered, code] });
+                                            const setExtras = (next) => save({ extraItems: next });
+                                            const chip = (on) => ({ padding: '5px 8px', fontFamily: 'var(--mono)', fontSize: '8.5px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}`, background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)' });
+                                            return (
+                                                <div style={{ marginBottom: '10px', padding: '10px 12px', border: '1px solid var(--line)', background: 'var(--paper)' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '7px' }}>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Finishes offered</span>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-faint)' }}>{offered.length ? `${offered.length} chosen` : 'none chosen — every finish is offered'}</span>
+                                                        {!!offered.length && <button onClick={() => save({ flowFinishes: [] })} style={{ ...chip(false), marginLeft: 'auto' }}>Clear</button>}
+                                                    </div>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: '96px', overflowY: 'auto' }}>
+                                                        {allFin.map(f => {
+                                                            const c = codeOf(f);
+                                                            return <button key={f.id} onClick={() => toggle(c)} style={chip(offered.includes(c))} title={f.name || c}>{c}</button>;
+                                                        })}
+                                                    </div>
+
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '12px 0 7px' }}>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Items added by hand</span>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-faint)' }}>offered on the pole step — splices, extra rings</span>
+                                                    </div>
+                                                    {extras.map((x, i) => (
+                                                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr auto', gap: '5px', marginBottom: '5px' }}>
+                                                            <input value={x.code || ''} placeholder="Item code" onChange={e => setExtras(extras.map((y, j) => j === i ? { ...y, code: e.target.value } : y))}
+                                                                style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }} />
+                                                            <input value={x.label || ''} placeholder="What the operator sees" onChange={e => setExtras(extras.map((y, j) => j === i ? { ...y, label: e.target.value } : y))}
+                                                                style={{ padding: '6px', border: '1px solid var(--line)', fontSize: '11.5px' }} />
+                                                            <input value={x.notePlaceholder || ''} placeholder="Note hint — e.g. Default is centre; give the exact location if different" onChange={e => setExtras(extras.map((y, j) => j === i ? { ...y, notePlaceholder: e.target.value } : y))}
+                                                                style={{ padding: '6px', border: '1px solid var(--line)', fontSize: '11.5px' }} />
+                                                            <button onClick={() => setExtras(extras.filter((_, j) => j !== i))} style={{ ...chip(false), padding: '6px 9px' }}>×</button>
+                                                        </div>
+                                                    ))}
+                                                    <button onClick={() => setExtras([...extras, { code: '', label: '', notePlaceholder: '' }])} style={chip(false)}>+ Add item</button>
+                                                </div>
+                                            );
+                                        })()}
                                         {/* FLOW MODE — THE CLEAR SWITCH (Stuart 2026-08-08, the Brimar incident: "we need
                                             to put in place a clear system on the generator of whether this is single
                                             assembly flow or a combined… apparently it looks like it is being ignored").

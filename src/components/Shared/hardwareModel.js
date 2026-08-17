@@ -751,7 +751,11 @@ export function slots(choices, answers = {}, selectedIds = []) {
         if (!['BRACKET', 'BACKPLATE'].includes(slot.kind) || !slot.position) return;
         if (!replaced.has(slot.position)) return;
         const by = choices.find(c => want.has(c.id) && BRACKET_REPLACING_ROLES.includes(c.role) && c.position === slot.position);
-        slot.suppressedBy = by ? by.name : 'the end treatment';
+        // ⚠ NAME IT BY OUR PATTERN ID (Stuart 2026-08-17: "step 9 is referring to the id from the
+        // node H1138inPOLEMTR6Right1 — never use these, always our pattern id"). A pin's name is
+        // sometimes the node it was built from, which is an artefact of the .fbx and means nothing
+        // to anyone quoting. The part number always does.
+        slot.suppressedBy = by ? (by.partId || by.name) : 'the end treatment';
         slot.suppressedReason = by && by.role === 'RETURN'
             ? 'a return carries the rod at that end'
             : 'an inside mount carries the rod at that end';
