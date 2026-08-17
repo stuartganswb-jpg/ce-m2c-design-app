@@ -121,8 +121,15 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         // requires it; a basic bracket takes no plate; an in-line bracket takes in-line plates.
         isCollar: !!pin.isCollar,
         requiresCollar: U(pin.requiresCollar),
-        isBasic: !!pin.isBasic,
-        inlineOnly: !!pin.inlineOnly,
+        // ⚠ THESE FLAGS LIVE ON THE PIN *OR* THE CLUSTER (Stuart 2026-08-17: "the wood brackets are
+        // tagged as basic but it is asking for a backplate selection"). 1.6 writes them either way
+        // — the assign tool reads `pin?.usesReturnPlates || cl.usesReturnPlates` for exactly this
+        // reason — so a flag set on the section rather than the choice was invisible here and the
+        // basic wood arms kept asking for a plate they do not take.
+        isBasic: !!(pin.isBasic || cluster?.isBasic),
+        usesReturnPlates: !!(pin.usesReturnPlates || cluster?.usesReturnPlates),
+        inlineOnly: !!(pin.inlineOnly || cluster?.inlineOnly),
+        returnOnly: !!(pin.returnOnly || cluster?.returnOnly),
         qty: Number(pin.defaultQty) > 0 ? Number(pin.defaultQty) : 1,
         price: Number(pin.price) || 0,
         sort: Number(pin.choiceSort) || 0,

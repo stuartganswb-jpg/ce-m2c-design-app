@@ -250,7 +250,14 @@ export function normalizeChoice(input = {}) {
         // A BASIC bracket takes no backplate; an IN-LINE bracket takes only in-line plates. Both are
         // facts about the part, tagged in 1.6, and both are pairing rules rather than filters.
         isBasic: input.isBasic === true,
+        // ⚠ THE TWO SIDES OF "IN LINE" ARE DIFFERENT FIELDS, and 1.6 says so. On a BRACKET the flag
+        // is `usesReturnPlates` — "this tag is how the system knows a bracket is In Line". On a
+        // BACKPLATE it is `inlineOnly` — "the INLINE-bracket copy of a shared return-style plate".
+        // Reading inlineOnly on the arm matched nothing, so an In Line arm fell through to the
+        // standard pool and took a plate it does not sit on.
+        isInline: input.usesReturnPlates === true || (input.isInline === true),
         inlineOnly: input.inlineOnly === true,
+        returnOnly: input.returnOnly === true,
         qty: Number(input.qty) > 0 ? Number(input.qty) : 1,
         price: Number(input.price) || 0,
         raw: input.raw !== undefined ? input.raw : input,
@@ -573,13 +580,24 @@ export function slots(choices, answers = {}, selectedIds = []) {
             slot.options = [];
             return;
         }
-        const wantInline = !!arm.inlineOnly;
-        slot.options = slot.options.filter(o => !!o.inlineOnly === wantInline);
+        // THREE PLATE POOLS, one live at a time — they occupy the same spot on the wall:
+        //   in-line arm → the in-line copies, falling back to the RETURN copies where a collection
+        //                 has no in-line ones (1.6: "flows without inl-only plates fall back to
+        //                 rtn-only for In Line brackets");
+        //   any other  → the plain plates, neither in-line nor return.
+        if (arm.isInline) {
+            const inl = slot.options.filter(o => o.inlineOnly);
+            slot.options = inl.length ? inl : slot.options.filter(o => o.returnOnly);
+            if (!slot.options.length) {
+                slot.suppressedBy = arm.name;
+                slot.suppressedReason = 'an in-line bracket takes in-line plates, and this assembly has neither in-line nor return copies';
+            }
+            return;
+        }
+        slot.options = slot.options.filter(o => !o.inlineOnly && !o.returnOnly);
         if (!slot.options.length) {
             slot.suppressedBy = arm.name;
-            slot.suppressedReason = wantInline
-                ? 'an in-line bracket takes only in-line backplates, and none are tagged'
-                : 'a standard bracket takes only non-in-line backplates, and none are tagged';
+            slot.suppressedReason = 'a standard bracket takes a plain backplate, and every plate here is tagged in-line or return';
         }
     });
 

@@ -482,15 +482,25 @@ const threePiece = [
         C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
         C({ id: 'STD', partId: 'A-STD', role: 'BRACKET', position: 'CENTER', nodes: ['a-std'] }),
         C({ id: 'BASIC', partId: 'A-BAS', role: 'BRACKET', position: 'CENTER', isBasic: true, nodes: ['a-bas'] }),
-        C({ id: 'INLINE', partId: 'A-INL', role: 'BRACKET', position: 'CENTER', inlineOnly: true, nodes: ['a-inl'] }),
+        // ⚠ THE ARM's in-line flag is usesReturnPlates — 1.6: "this tag is how the system knows a
+        // bracket is In Line". The PLATE's is inlineOnly. Two different fields, and reading the
+        // plate's field on the arm is what let an In Line arm take a plate it does not sit on.
+        C({ id: 'INLINE', partId: 'A-INL', role: 'BRACKET', position: 'CENTER', usesReturnPlates: true, nodes: ['a-inl'] }),
         C({ id: 'BP-STD', partId: 'P-STD', role: 'BACKPLATE', position: 'CENTER', nodes: ['p-std'] }),
         C({ id: 'BP-INL', partId: 'P-INL', role: 'BACKPLATE', position: 'CENTER', inlineOnly: true, nodes: ['p-inl'] }),
+        C({ id: 'BP-RTN', partId: 'P-RTN', role: 'BACKPLATE', position: 'CENTER', returnOnly: true, nodes: ['p-rtn'] }),
     ];
     const plates = (sel) => resolve({ choices: arms, answers: {}, selectedIds: sel }).slots.find(s => s.kind === 'BACKPLATE');
-    eq('with no arm chosen the plate pool is untouched', plates(['ROD']).options.map(o => o.id).sort(), ['BP-INL', 'BP-STD']);
-    eq('a standard arm offers only the non-in-line plate', plates(['ROD', 'STD']).options.map(o => o.id), ['BP-STD']);
+    eq('with no arm chosen the plate pool is untouched', plates(['ROD']).options.map(o => o.id).sort(), ['BP-INL', 'BP-RTN', 'BP-STD']);
+    eq('a standard arm offers only the plain plate — not in-line, not return',
+        plates(['ROD', 'STD']).options.map(o => o.id), ['BP-STD']);
     eq('an in-line arm offers only the in-line plate', plates(['ROD', 'INLINE']).options.map(o => o.id), ['BP-INL']);
     eq('a basic arm offers no plate at all', plates(['ROD', 'BASIC']).options, []);
+    // 1.6: "flows without inl-only plates fall back to rtn-only for In Line brackets".
+    const noInline = arms.filter(c => c.id !== 'BP-INL');
+    eq('an in-line arm falls back to the RETURN plate where no in-line copy exists',
+        resolve({ choices: noInline, answers: {}, selectedIds: ['ROD', 'INLINE'] })
+            .slots.find(s => s.kind === 'BACKPLATE').options.map(o => o.id), ['BP-RTN']);
     ok('and says why', /basic bracket takes no backplate/.test(plates(['ROD', 'BASIC']).suppressedReason || ''));
     ok('a suppressed plate pool is never reported as a fault',
         !diagnose(resolve({ choices: arms, answers: {}, selectedIds: ['ROD', 'BASIC'] })).some(d => d.kind === 'NO OPTIONS'));
