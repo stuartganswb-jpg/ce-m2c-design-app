@@ -149,6 +149,11 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
 //
 // Gates are listed in priority order (most important first) and applied cumulatively, so a flow
 // carrying every tag narrows exactly as its author intended and an untagged flow keeps what it had.
+// Exporter scaffolding, not geometry. FusionImport wrappers were already excluded; H1-138's .glb
+// carries 71 "auxscene" group nodes from the same class of export artifact, and counting them as
+// findings buried the real ones under noise (373 of 444 nodes, almost all auxscene).
+const EXPORTER_RX = /fusionimport|auxscene|^scene(_\d+)*$/i;
+
 export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
     if (typeof g !== 'function') return acc;
     const kept = acc.filter(g);
@@ -3384,7 +3389,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           const recorded = new Set(modelNodesOf(activeAssembly).map(n => String(n).toLowerCase()));
           const claimedByTag = new Set(choices.flatMap(c => c.nodes).map(n => String(n).toLowerCase()));
           const ghostRecords = sceneNames.length ? [...recorded].filter(n => !scene.has(n)) : [];
-          const untaggedMeshes = sceneNames.length ? [...scene].filter(n => !claimedByTag.has(n) && !/fusionimport/i.test(n)) : [];
+          const untaggedMeshes = sceneNames.length ? [...scene].filter(n => !claimedByTag.has(n) && !EXPORTER_RX.test(n)) : [];
 
           // ── WOULD THE TWO ENGINES DRAW THE SAME PICTURE? ────────────────────────────────────
           // Join the old engine's selections onto the new engine's choices by part number AND
@@ -3410,7 +3415,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // otherwise VISIBLE — that default is the ghost mechanism, and this is where it shows up.
           const oldShowsNewHides = [], newShowsOldHides = [];
           scene.forEach(n => {
-              if (/fusionimport/i.test(n)) return;
+              if (EXPORTER_RX.test(n)) return;
               const key = Object.prototype.hasOwnProperty.call(visibilityOverrides, exactNode(n)) ? exactNode(n) : null;
               const oldOn = key ? visibilityOverrides[key] !== false : true;
               const newOn = newVisLower.has(n);
@@ -4534,8 +4539,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                                   {/* Would the two engines draw the same picture? */}
                                                   {shadow.sceneCount > 0 && (
                                                       <div style={{ padding: '3px 0' }}>
+                                                          <span style={{ color: 'var(--ink-soft)' }}>{shadow.selectedCount} of the old engine's selections matched a tagged part{shadow.selectedCount === 0 ? ' — with none matched the comparison below is meaningless, not a finding' : ''}. </span>
                                                           {!shadow.oldShowsNewHides.length && !shadow.newShowsOldHides.length
-                                                              ? <span style={{ color: '#2a7' }}>✓ Both engines would render the same geometry ({shadow.selectedCount} selections matched).</span>
+                                                              ? <span style={{ color: '#2a7' }}>✓ Both engines would render the same geometry.</span>
                                                               : (<>
                                                                   {shadow.oldShowsNewHides.length > 0 && <div><span style={{ color: '#8a6508' }}>OLD SHOWS, NEW HIDES ({shadow.oldShowsNewHides.length})</span> — mostly the ghosts default-visible allowed: {shadow.oldShowsNewHides.slice(0, 4).join(', ')}{shadow.oldShowsNewHides.length > 4 ? '…' : ''}</div>}
                                                                   {shadow.newShowsOldHides.length > 0 && <div><span style={{ color: '#8a6508' }}>NEW SHOWS, OLD HIDES ({shadow.newShowsOldHides.length})</span> — geometry the tags own that the old AND vetoed: {shadow.newShowsOldHides.slice(0, 4).join(', ')}{shadow.newShowsOldHides.length > 4 ? '…' : ''}</div>}

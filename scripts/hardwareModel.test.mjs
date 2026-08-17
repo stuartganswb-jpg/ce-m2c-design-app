@@ -319,6 +319,34 @@ const combinedH1 = [
     console.log(`   (${combos} configurations exercised)`);
 }
 
+// ── THE CHOSEN PARTS MUST AGREE WITH EACH OTHER ───────────────────────────────────────────────
+// H1-138: "even on initial display of 3-5/8 brackets not aligned with backplates". Every gate asks
+// whether an option is ALLOWED; nothing asked whether the options chosen TOGETHER build one product.
+{
+    const parts = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'ARM-36', partId: 'A36', role: 'BRACKET', proj: '3-5/8', position: 'CENTER', nodes: ['a36'] }),
+        C({ id: 'PLATE-36', partId: 'P36', role: 'BACKPLATE', proj: '3-5/8', position: 'CENTER', nodes: ['p36'] }),
+        C({ id: 'PLATE-46', partId: 'P46', role: 'BACKPLATE', proj: '4-5/8', position: 'CENTER', nodes: ['p46'] }),
+    ];
+    const matched = diagnose(resolve({ choices: parts, answers: {}, selectedIds: ['ROD', 'ARM-36', 'PLATE-36'] }));
+    ok('a coherent pick is silent', !matched.some(d => d.kind === 'MISMATCH'));
+
+    const crossed = diagnose(resolve({ choices: parts, answers: {}, selectedIds: ['ROD', 'ARM-36', 'PLATE-46'] }));
+    const mm = crossed.find(d => d.kind === 'MISMATCH');
+    ok('an arm and a plate built for different projections is caught', !!mm);
+    ok('and the message names both parts', mm && /A36|3\.625/.test(mm.msg) && /P46|4\.625/.test(mm.msg), mm && mm.msg);
+
+    // Mount disagreement is the same failure on the other axis.
+    const mounts = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'ARM-W', partId: 'AW', role: 'BRACKET', mount: 'WALL', position: 'CENTER', nodes: ['aw'] }),
+        C({ id: 'PLATE-C', partId: 'PC', role: 'BACKPLATE', mount: 'CEILING', position: 'CENTER', nodes: ['pc'] }),
+    ];
+    ok('a wall arm with a ceiling plate is caught',
+        diagnose(resolve({ choices: mounts, answers: {}, selectedIds: ['ROD', 'ARM-W', 'PLATE-C'] })).some(d => d.kind === 'MISMATCH'));
+}
+
 // ── Parsing: one projection, however it is spelled ────────────────────────────────────────────
 eq('3-5/8 parses', measureOf('3-5/8'), 3.625);
 eq('3 5/8 parses', measureOf('3 5/8'), 3.625);

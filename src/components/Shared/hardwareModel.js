@@ -432,6 +432,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const riders = ridersFor(norm, answers);
     const visible = visibleNodes(norm, answers, selectedIds);
     const ownership = nodeOwnership(norm, modelNodes);
+    const selected = norm.filter(c => selectedIds.includes(c.id));
     const bom = [
         ...norm.filter(c => selectedIds.includes(c.id)),
         ...riders,
@@ -444,6 +445,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
         riders,        // built, never asked
         visible,       // Set of node names that render. Everything else is hidden.
         ownership,     // node -> owning choice; unowned nodes; mapped names the model lacks
+        selected,      // the chosen parts themselves, for coherence checks
         bom,
     };
 }
@@ -472,6 +474,28 @@ export function diagnose(model) {
             const lead = s.rejected.find(r => !WORLD_RULES.includes(r.rule)) || s.rejected[0];
             add('red', 'NO OPTIONS', `${where}: all ${s.all.length} choice(s) excluded — mostly by ${worst ? `${worst[0]} (${worst[1]})` : 'unknown'}. e.g. ${lead.choice.name}: ${lead.detail}`);
         }
+    });
+    // ── THE PARTS CHOSEN MUST AGREE WITH EACH OTHER (Stuart 2026-08-17, H1-138: "even on initial
+    // display of 3-5/8 brackets not aligned with backplates") ────────────────────────────────────
+    // Every gate so far asks whether an option is allowed. NOTHING asked whether the options
+    // chosen TOGETHER describe one buildable product. An arm built for 3-5/8" beside a plate built
+    // for 4-5/8" passes every individual rule and sits on a different wall plane — which is exactly
+    // what "not aligned" looks like, and why the flow can report itself healthy while the render is
+    // visibly wrong. Detail axes only: the world axes cannot disagree, they are one answer.
+    ['proj', 'mount'].forEach(axis => {
+        const seen = new Map();
+        (model.selected || []).forEach(c => {
+            const v = c[axis];
+            if (v == null || v === '') return;
+            const k = typeof v === 'number' ? v.toFixed(3) : v;
+            if (!seen.has(k)) seen.set(k, []);
+            seen.get(k).push(c);
+        });
+        if (seen.size < 2) return;
+        const groups = [...seen.entries()].sort((a, b) => b[1].length - a[1].length);
+        const [odd] = groups.slice(-1);
+        const [main] = groups;
+        add('red', 'MISMATCH', `the chosen parts disagree on ${axis}: ${groups.map(([k, cs]) => `${k} (${cs.map(c => c.name).join(', ')})`).join(' vs ')}. ${odd[1][0].name} is built for a different ${axis} than ${main[1][0].name} — they will not sit together.`);
     });
     model.ownership.unowned.forEach(n => add('amber', 'UNTAGGED GEOMETRY', `${n}: no choice claims this node, so it never renders. Tag it in 1.6 or remove it.`));
     if (model.ownership.missing.length) {
