@@ -184,7 +184,9 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
             // is selected. Matched by cluster/ancestor name (ACRYLIC-… minus the COLLAR cluster,
             // whose item is …AFC) or the acrylic part/combined codes + raw Fusion node names from
             // the H2-138 program (H2/H2 138 Acrylic Finial sheet).
-            const ACRYLIC_CODE_RX = /(ACBF|138ABF|138AFBF|138APF|138AJF|138FBF|138PF|138FJF|HTAJCBA|HTAJF|HCUAP|HRBASQ)/i;
+            // ACKF/ACGF (H1-138 acrylic knob/gem) + the acrylic ROD (138AR) and per-ft acrylic
+            // (138ACR) joined 2026-08-16 — the H2-era list missed them, so they rendered painted.
+            const ACRYLIC_CODE_RX = /(ACBF|138ABF|138AFBF|138APF|138AJF|138FBF|138PF|138FJF|HTAJCBA|HTAJF|HCUAP|HRBASQ|ACKF|ACGF|138AR\b|138ACR)/i;
             const isAcrylicKeep = (node) => { let n = node; while (n) { const nm = n.name || ''; if ((/ACRYLIC/i.test(nm) && !/COLLAR|AFC/i.test(nm)) || ACRYLIC_CODE_RX.test(nm)) return true; n = n.parent; } return false; };
             clonedScene.traverse((child) => {
                 if (child.isMesh && child.userData.originalMaterial && typeof child.userData.originalMaterial.clone === 'function') {
