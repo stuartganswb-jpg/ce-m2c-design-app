@@ -850,17 +850,29 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         return 'METAL';                           // P0n, EPn, MEPn, and short codes: CP, SG, N34
     };
     const handleSeedFinishMaterials = async () => {
-        const blanks = globalFinishes.filter(f => !String(f.material || '').trim());
-        if (!blanks.length) return alert('Every finish already carries a material — nothing to seed.');
-        const preview = blanks.slice(0, 12).map(f => `  ${String(f.code || f.name).toUpperCase()} → ${materialFromCode(f.code || f.name)}`).join('\n');
-        if (!window.confirm(`Tag ${blanks.length} finish(es) that have no material yet?\n\n${preview}${blanks.length > 12 ? '\n  …' : ''}\n\nAC… → CLEAR · S0… → WOOD · everything else → METAL.\nFinishes that already carry a material are left alone.`)) return;
-        const updated = globalFinishes.map(f => String(f.material || '').trim() ? f : { ...f, material: materialFromCode(f.code || f.name) });
-        await setDoc(doc(db, "system", "master_finishes"), { finishes: updated }, { merge: true });
-        // …and make sure the three families exist in the dictionary the editor reads.
+        const blanksIn = globalFinishes.filter(f => !String(f.material || '').trim());
+        const blanksOut = outsourceFinishes.filter(f => !String(f.material || '').trim());
+        const total = blanksIn.length + blanksOut.length;
+        if (!total) return alert('Every finish, in-house and outsourced, already carries a material — nothing to seed.');
+        const show = (arr) => arr.slice(0, 8).map(f => `  ${String(f.code || f.name).toUpperCase()} → ${materialFromCode(f.code || f.name)}`).join('\n');
+        const preview = [
+            blanksIn.length ? `IN-HOUSE (${blanksIn.length})\n${show(blanksIn)}${blanksIn.length > 8 ? '\n  …' : ''}` : '',
+            blanksOut.length ? `OUTSOURCED (${blanksOut.length})\n${show(blanksOut)}${blanksOut.length > 8 ? '\n  …' : ''}` : '',
+        ].filter(Boolean).join('\n\n');
+        if (!window.confirm(`Tag ${total} finish(es) that have no material yet?\n\n${preview}\n\nAC… → CLEAR · S0… → WOOD · everything else → METAL.\nFinishes that already carry a material are left alone.`)) return;
+        // Make sure the three families exist in the dictionary the editors read.
         const have = new Set((globalLists.materials || []).map(m => String(m).toUpperCase()));
         const need = ['METAL', 'WOOD', 'CLEAR (NO FINISH)'].filter(m => !have.has(m));
         if (need.length) await setDoc(doc(db, "system", "master_lists"), { materials: [...(globalLists.materials || []), ...need] }, { merge: true });
-        alert(`Tagged ${blanks.length} finish(es).`);
+        if (blanksIn.length) {
+            const updated = globalFinishes.map(f => String(f.material || '').trim() ? f : { ...f, material: materialFromCode(f.code || f.name) });
+            await setDoc(doc(db, "system", "master_finishes"), { finishes: updated }, { merge: true });
+        }
+        // Outsourced finishes live one doc each, so they are written one at a time.
+        for (const f of blanksOut) {
+            await updateDoc(doc(db, "hq_outsource_finishes", f.id), { material: materialFromCode(f.code || f.name) });
+        }
+        alert(`Tagged ${blanksIn.length} in-house and ${blanksOut.length} outsourced finish(es).`);
     };
 
     const handleSyncFloorRecipes = async () => {
@@ -951,7 +963,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             clientMapping: finish.clientMapping || [],
             bomSuffix: finish.bomSuffix || '',
             isSubFinish: !!finish.isSubFinish,
-            subFinishCode: finish.subFinishCode || ''
+            subFinishCode: finish.subFinishCode || '',
+            // ⚠ MUST BE LOADED (Stuart 2026-08-17: "i hit seed, but everything still shows as
+            // unset"). The seed wrote correctly — the editor simply never read the field back, so
+            // it showed blank AND would have written that blank over the seeded value on the next
+            // save. A form that does not load a field silently deletes it.
+            material: finish.material || ''
         });
         setEditingGlobalFinish(finish.id);
         setShowFinishForm(true);
@@ -1014,7 +1031,13 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             vendorCrmId: newOutsourceFinishConfig.vendorCrmId || "", // External Coop NS-synced vendor id ("VEND-{nsInternalId}") — keeps the plating PO linked to the real NetSuite vendor
             textureUrl: newOutsourceFinishConfig.textureUrl || "",
             clientMapping: newOutsourceFinishConfig.clientMapping || [],
-            subFinishCode: String(newOutsourceFinishConfig.subFinishCode || '').toUpperCase()
+            subFinishCode: String(newOutsourceFinishConfig.subFinishCode || '').toUpperCase(),
+            // ⚠ OUTSOURCED FINISHES NEED THE MATERIAL TOO (Stuart 2026-08-17: "it could be possible
+            // to one day outsource another material and we need the tags and rule in place"). A
+            // plated finish is metal today, but nothing about being outsourced makes it so — and
+            // the day a wood or acrylic process is sent out, the rule must already be there rather
+            // than discovered by a wood rod wearing a nickel plate.
+            material: String(newOutsourceFinishConfig.material || '').toUpperCase()
         }, { merge: true });
 
         setNewOutsourceFinishConfig({ name: '', code: '', description: '', multiplier: 1.0, vendor: '', vendorCrmId: '', textureUrl: '', clientMapping: [], subFinishCode: '' });
@@ -1032,7 +1055,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             vendorCrmId: finish.vendorCrmId || '',
             textureUrl: finish.textureUrl || '',
             clientMapping: finish.clientMapping || [],
-            subFinishCode: finish.subFinishCode || ''
+            subFinishCode: finish.subFinishCode || '',
+            material: finish.material || ''
         });
         setEditingOutsourceFinish(finish.id);
         setShowOutsourceFinishForm(true);
@@ -1691,6 +1715,12 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                                     <select value={newOutsourceFinishConfig.subFinishCode || ''} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, subFinishCode: e.target.value})} style={fieldStyle}>
                                                         <option value="">— none (components take the main finish) —</option>
                                                         {globalFinishes.filter(f => f.isSubFinish).map(f => <option key={f.id} value={String(f.code || f.name).toUpperCase()}>{String(f.code || f.name).toUpperCase()} — {f.name}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div><label style={labelStyle} title="MATERIAL — the finish family. A part only wears a finish whose material it is made in. Plated finishes are metal today, but nothing about being OUTSOURCED makes a finish metal: the day a wood or acrylic process is sent out, this is what keeps it off the steel.">Material</label>
+                                                    <select value={newOutsourceFinishConfig.material || ''} onChange={(e) => setNewOutsourceFinishConfig({...newOutsourceFinishConfig, material: e.target.value})} style={fieldStyle}>
+                                                        <option value="">— unset (reads as METAL) —</option>
+                                                        {(globalLists.materials || []).map(m => <option key={m} value={String(m).toUpperCase()}>{m}</option>)}
                                                     </select>
                                                 </div>
                                             </div>
