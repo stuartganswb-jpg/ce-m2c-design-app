@@ -123,6 +123,32 @@ export function applyFitsDefaults(choices) {
     });
 }
 
+// ── THE ROD IS ONE DECISION; ITS SEGMENTS ARE GEOMETRY (Stuart 2026-08-17) ────────────────────
+// "we decided on only two pole/fascia options … we will load the 3 piece poles or just one single
+//  long rod … if a ball finial is on the left then the left node is selected, and if a return is on
+//  the right then the short center is shown; if both sides are returns then only the short center
+//  pole is used. for assemblies with only 1 long rod there are no returns, so just finials."
+//
+// A three-piece pole is pinned as LEFT / CENTER / RIGHT, which the model was reading as four
+// separate questions offering the same part. It is ONE part. Which of its pieces render is not a
+// customer decision at all — it follows from the ends, because a return bends back and needs the
+// shorter pole:
+//   • the CENTRE (short) piece renders whenever the rod is chosen;
+//   • an END piece renders when that end's treatment is chosen and is NOT a return.
+// A single-rod assembly has no end pieces, so it simply renders whole.
+//
+// The tag names for this grew over weeks — shared rod, short rod, center — so the SEGMENT is read
+// from the canonical position and everything that is not LEFT/RIGHT counts as core. Renaming tags
+// later cannot break it.
+export const segmentOf = (choice) => (choice.position === 'LEFT' || choice.position === 'RIGHT') ? choice.position : 'CORE';
+const END_ROLES = ['FINIAL', 'INSIDE_MOUNT', 'RETURN'];
+
+/** Does this end have a chosen treatment, and is it a return? */
+function endState(selected, pos) {
+    const picks = selected.filter(c => c.position === pos && END_ROLES.includes(c.role));
+    return { answered: picks.length > 0, isReturn: picks.some(c => c.role === 'RETURN') };
+}
+
 // MOUNT IS A PROPERTY OF MOUNTING HARDWARE, AND BLANK MEANS WALL (Stuart 2026-08-15: "all the
 // wall brackets are left with no tag, as they are the default"). Two halves to that rule, and both
 // matter:
@@ -376,9 +402,24 @@ export function ridersFor(choices, answers = {}, selectedIds = []) {
  */
 export function visibleNodes(choices, answers = {}, selectedIds = []) {
     const want = new Set(selectedIds.filter(Boolean).map(String));
+    const selected = choices.filter(c => want.has(c.id));
     const on = new Set();
     const take = (c) => c.nodes.forEach(n => on.add(n));
-    choices.forEach(c => { if (want.has(c.id)) take(c); });
+    const left = endState(selected, 'LEFT');
+    const right = endState(selected, 'RIGHT');
+    // A chosen ROD brings every segment of the SAME PART, each judged by its own end.
+    const segmentShows = (seg) => {
+        if (seg === 'CORE') return true;
+        const e = seg === 'LEFT' ? left : right;
+        return e.answered && !e.isReturn;
+    };
+    selected.forEach(c => {
+        if (!ROD_ROLES.includes(c.role)) { take(c); return; }
+        choices
+            .filter(x => ROD_ROLES.includes(x.role) && x.partId && x.partId === c.partId)
+            .forEach(seg => { if (segmentShows(segmentOf(seg))) take(seg); });
+        if (!c.partId) take(c);   // an unidentified rod is only ever itself
+    });
     ridersFor(choices, answers, selectedIds).forEach(take);
     return on;
 }
@@ -422,13 +463,25 @@ export function slots(choices, answers = {}) {
         if (c.always) return;                       // riders are never a question
         const kind = SLOT_OF_ROLE(c.role);
         if (!kind) return;
-        const pos = c.position || '';
+        // A rod pinned per position is ONE part in three pieces, not three questions. Its pieces
+        // are resolved by visibleNodes from the ends; here it collapses to a single decision.
+        const pos = ROD_ROLES.includes(c.role) ? '' : (c.position || '');
         const key = `${kind}|${pos}`;
         if (!bucket.has(key)) bucket.set(key, { key, kind, position: pos, all: [], options: [], rejected: [] });
         const slot = bucket.get(key);
         slot.all.push(c);
         const v = admits(c, { ...ctx, position: pos ? pos : undefined });
         if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });
+    });
+    // …and offered once per PART, however many pieces it is pinned as.
+    bucket.forEach(slot => {
+        if (!ROD_ROLES.includes(slot.all[0]?.role)) return;
+        const seen = new Set();
+        slot.options = slot.options.filter(o => {
+            const k = String(o.partId || o.id).toUpperCase();
+            if (seen.has(k)) return false;
+            seen.add(k); return true;
+        });
     });
     const rank = (s) => {
         const k = SLOT_ORDER.indexOf(s.kind === 'END' ? 'FINIAL' : s.kind);

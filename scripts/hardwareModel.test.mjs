@@ -276,6 +276,48 @@ const combinedH1 = [
         resolve({ choices: drawn, answers: { rodKind: 'SOLID' } }).slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING']);
 }
 
+// ── THE THREE-PIECE POLE: ONE DECISION, SEGMENTS FOLLOW THE ENDS ──────────────────────────────
+// Stuart's rule, 2026-08-17. The rod is one part pinned as left/centre/right; a return needs the
+// short pole, so that end's long piece drops out.
+const threePiece = [
+    C({ id: 'ROD-L', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rod-left'] }),
+    C({ id: 'ROD-C', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rod-center'] }),
+    C({ id: 'ROD-R', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'RIGHT', nodes: ['rod-right'] }),
+    C({ id: 'FIN-L', partId: 'FN', role: 'FINIAL', position: 'LEFT', nodes: ['fin-l'] }),
+    C({ id: 'FIN-R', partId: 'FN', role: 'FINIAL', position: 'RIGHT', nodes: ['fin-r'] }),
+    C({ id: 'RET-L', partId: 'RT', role: 'RETURN', position: 'LEFT', nodes: ['ret-l'] }),
+    C({ id: 'RET-R', partId: 'RT', role: 'RETURN', position: 'RIGHT', nodes: ['ret-r'] }),
+];
+{
+    const m0 = resolve({ choices: threePiece, answers: {} });
+    const rodSlots = m0.slots.filter(s => s.kind === 'ROD');
+    eq('three pinned pieces ask ONE rod question', rodSlots.length, 1);
+    eq('and offer the part once, not three times', rodSlots[0].options.length, 1);
+
+    const vis = (sel) => [...resolve({ choices: threePiece, answers: {}, selectedIds: sel }).visible].sort();
+
+    eq('rod alone renders the short centre only', vis(['ROD-C']), ['rod-center']);
+    eq('a finial on the left brings the left piece', vis(['ROD-C', 'FIN-L']), ['fin-l', 'rod-center', 'rod-left']);
+    eq('finials both ends bring the whole three-piece pole',
+        vis(['ROD-C', 'FIN-L', 'FIN-R']), ['fin-l', 'fin-r', 'rod-center', 'rod-left', 'rod-right']);
+    eq('a return on the right drops the right piece — the short pole carries it',
+        vis(['ROD-C', 'FIN-L', 'RET-R']), ['fin-l', 'ret-r', 'rod-center', 'rod-left']);
+    eq('returns both ends leave the short centre alone',
+        vis(['ROD-C', 'RET-L', 'RET-R']), ['ret-l', 'ret-r', 'rod-center']);
+    // Selecting ANY piece selects the part — the pieces are geometry, not alternatives.
+    eq('picking the rod by any of its pieces behaves identically',
+        vis(['ROD-L', 'FIN-L', 'FIN-R']), vis(['ROD-C', 'FIN-L', 'FIN-R']));
+}
+{
+    // A single-rod assembly has no end pieces and simply renders whole.
+    const single = [
+        C({ id: 'ROD', partId: 'ONE', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'FIN-L', partId: 'FN', role: 'FINIAL', position: 'LEFT', nodes: ['fin-l'] }),
+    ];
+    eq('a single long rod renders whole with no ends answered',
+        [...resolve({ choices: single, answers: {}, selectedIds: ['ROD'] }).visible], ['rod']);
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.

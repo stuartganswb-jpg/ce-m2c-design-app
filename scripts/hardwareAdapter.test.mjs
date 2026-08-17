@@ -72,7 +72,11 @@ ok('a hidden pin still bills', by('P9').always === true && by('P9').partId === '
 
     const trv = resolve({ choices, answers: { rodKind: 'TRAVERSE', proj: 3.625 } });
     eq('traverse offers its own arm only', trv.slots.find(s => s.kind === 'BRACKET').options.map(o => o.partId), ['BKT-TRV']);
-    eq('carriers ride the traverse rod', trv.riders.filter(r => r.role === 'CARRIER').map(r => r.partId), ['CAR-1']);
+    // Riders arrive WITH the rod — nothing rides a rod nobody chose.
+    eq('no carriers before a rod is chosen', trv.riders.filter(r => r.role === 'CARRIER').map(r => r.partId), []);
+    eq('carriers ride the traverse rod once it is picked',
+        resolve({ choices, answers: { rodKind: 'TRAVERSE', proj: 3.625 }, selectedIds: ['P2'] })
+            .riders.filter(r => r.role === 'CARRIER').map(r => r.partId), ['CAR-1']);
 
     // The shared finial is offered in BOTH worlds, untouched, tagged for neither.
     const endS = solid.slots.find(s => s.kind === 'END');
