@@ -3311,18 +3311,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           } else if (!dynamicConfigParams[step.id] && owns) {
               push('red', 'UNSEEDED', `${step.title}: ${pool.length} option(s) offered, none selected — every mesh this step owns is hidden until one is.`);
           }
-          // A sub-pool (backplate) that has emptied leaves the plate unpickable the same way.
+          // A sub-pool (backplate) that has emptied leaves the plate unpickable the same way — but
+          // only when the sub-pool actually OFFERS something here. The traverse Front Rail sub
+          // exists only on a double; on a single its options are correctly filtered out, and
+          // "nothing selected" is then the right state, not a finding.
           if (Array.isArray(step.subOptions) && step.subOptions.length) {
               const subOwns = Object.values(step.subGeometryMap || {}).some(Boolean);
-              if (subOwns && !dynamicConfigParams[`${step.id}__sub`]) {
-                  push('amber', 'UNSEEDED', `${step.title} · ${step.subLabel || 'sub-choice'}: nothing selected — its geometry is hidden.`);
+              const subPool = step.subOptions.filter(o => { try { return optCustomerOk(o) && trvOkFor(step, { isSub: true })(o) && projTagOk(o); } catch (e) { return true; } });
+              if (subOwns && subPool.length && !dynamicConfigParams[`${step.id}__sub`]) {
+                  push('amber', 'UNSEEDED', `${step.title} · ${step.subLabel || 'sub-choice'}: ${subPool.length} offered, nothing selected — its geometry is hidden.`);
               }
           }
           // An option that owns no geometry is invisible feedback: the customer picks it and the
-          // model does not move. Legitimate for pure fees, so fees are exempt.
-          const blind = (step.styleOptions || []).filter(o => !o.isFee && !(step.geometryMap || {})[o.optId || o.partId]);
+          // model does not move. Exempt: fees, and SYNTHETIC answers — an option with no part
+          // behind it (Flush Cut, "Single (one track)") is a pure question, and a question that
+          // adds nothing to the model is answering correctly, not failing. Only a REAL part that
+          // renders nothing is suspicious.
+          const blind = (step.styleOptions || []).filter(o => !o.isFee && o.partId && !(step.geometryMap || {})[o.optId || o.partId]);
           if (blind.length && owns) {
-              push('amber', 'BLIND OPTION', `${step.title}: ${blind.length} option(s) control no geometry (${blind.slice(0, 2).map(o => o.partName || o.optId).join(', ')}${blind.length > 2 ? '…' : ''}) — picking them cannot change the render.`);
+              push('amber', 'BLIND OPTION', `${step.title}: ${blind.length} real part(s) control no geometry (${blind.slice(0, 2).map(o => o.partName || o.optId).join(', ')}${blind.length > 2 ? '…' : ''}) — they bill but cannot change the render.`);
           }
       });
 
