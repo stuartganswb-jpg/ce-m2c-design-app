@@ -229,3 +229,49 @@ export const ASSUMPTIONS = [
     `Aluminium E ${(ALUM.E / 1e6).toFixed(0)} Msi, yield ${ALUM.yield.toLocaleString()} psi (6063-T5) · ${ALUM_PROFILE.h}" × ${ALUM_PROFILE.w}" × ${ALUM_PROFILE.t}" wall, strong axis only`,
     'Single span simply supported between brackets, uniform load, brackets anchored to studs.',
 ];
+
+// ── WHICH SPAN ROW GOVERNS A GIVEN ITEM (Stuart 2026-08-17) ────────────────────────────────────
+// The CPQ knows the customer chose "H1-138R". This table knows about "H1-1.375" — a rod FAMILY,
+// identified by collection and outside diameter. Something has to join them, and Stuart's call was
+// that the link belongs HERE rather than as a tag on every rod variant:
+//
+//   "yes rule based, we already are setting these rules up tab 6.5 so please add the field there."
+//
+// It is the one place in the hardware work where a fact deliberately does NOT live on the part, and
+// the reason is that it is not a fact about the part: the span comes from the family's ENGINEERING —
+// section, wall, metal — which is exactly what this module already models. A dozen rows carry it;
+// hundreds of rod variants would only repeat it, and repeat it wrongly the first time someone adds
+// a length without thinking about beams.
+//
+// The map is { rodId: "H1-138R, H1-138AR, H1-138WR" } — whatever item codes that family covers,
+// however they are spelled. Matching ignores case, punctuation and any finish suffix, because a
+// /P or /EP variant is the same steel tube.
+const spanKey = (v) => String(v || '').trim().toUpperCase().split('/')[0].replace(/[^A-Z0-9]/g, '');
+
+/** The RODS entry that governs an item code, or null when nothing claims it. */
+export function rodForItemCode(code, map) {
+    const want = spanKey(code);
+    if (!want || !map) return null;
+    const hit = Object.entries(map).find(([, codes]) =>
+        String(codes || '').split(/[,;|\n]+/).map(spanKey).filter(Boolean).includes(want));
+    return hit ? (RODS.find(r => r.id === hit[0]) || null) : null;
+}
+
+/**
+ * The bracket recommendation for one configuration, or null when it cannot be made honestly.
+ *
+ * Returns the span this rod carries, how many brackets the length needs, and WHY the span is what
+ * it is — because "why is this 3?" deserves an answer at the point of quoting, not a trip to 6.5.
+ */
+export function bracketAdviceFor({ itemCode, map, rodInches, fabricId, dropFt }) {
+    const rod = rodForItemCode(itemCode, map);
+    if (!rod || !(rodInches > 0)) return null;
+    const drop = Number(dropFt) > 0 ? Number(dropFt) : DEFAULT_DROP_FT;
+    const row = spanTable(fabricId, drop, rod.collection).find(r => r.id === rod.id);
+    if (!row || !row.spanInches) return null;
+    return {
+        rod, spanInches: row.spanInches, limitedBy: row.limitedBy,
+        brackets: bracketsFor(rodInches, row.spanInches),
+        why: row.limitedBy === 'LOAD' ? 'limited by fabric weight' : 'our maximum span',
+    };
+}

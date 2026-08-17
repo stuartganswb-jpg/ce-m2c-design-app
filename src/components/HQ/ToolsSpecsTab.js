@@ -1,4 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { db } from '../../firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import {
     FABRIC_CLASSES, fabricClass, loadPerFoot, spanTable, bracketsFor, ftIn,
     ROD_COLLECTIONS, rodCollectionsFor, DEFAULT_DROP_FT, ASSUMPTIONS, STUD_NOTE,
@@ -23,6 +25,19 @@ const inp = { width: '100%', boxSizing: 'border-box', padding: '10px', fontSize:
 // ---- TOOL 1 · BRACKET SPAN ----------------------------------------------------------------
 const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
     const [fabricId, setFabricId] = useState('PRINT');
+    // ── WHICH ITEMS EACH ROD FAMILY COVERS (Stuart 2026-08-17) ──────────────────────────────
+    // The CPQ knows the customer chose "H1-138R"; this table knows "1-3/8\" round". The join lives
+    // HERE, one line per family, because the span is a fact about the family's ENGINEERING rather
+    // than about any one item — a dozen rows carry it, where hundreds of rod variants would only
+    // repeat it. Typed once, read by the configurator to recommend a bracket count.
+    const [spanMap, setSpanMap] = useState({});
+    const [draft, setDraft] = useState({});
+    useEffect(() => onSnapshot(doc(db, 'system', 'bracket_span_map'),
+        d => setSpanMap((d.exists() && d.data().map) || {}), () => setSpanMap({})), []);
+    const saveCodes = async (rodId, value) => {
+        try { await setDoc(doc(db, 'system', 'bracket_span_map'), { map: { ...spanMap, [rodId]: value } }, { merge: true }); }
+        catch (e) { alert('Could not save the item codes: ' + (e.message || e)); }
+    };
     const [dropFt, setDropFt] = useState(String(DEFAULT_DROP_FT));
     const [rodLen, setRodLen] = useState('');          // optional, inches → bracket count
     const [collectionId, setCollectionId] = useState('');
@@ -81,6 +96,13 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                     </div>
                 </div>
 
+                <div style={{ padding: '10px 12px', marginBottom: '14px', background: theme.paper2, border: `1px solid ${theme.line}`, fontSize: '0.8rem', color: theme.inkSoft, lineHeight: 1.5 }}>
+                    <b style={{ color: theme.ink, fontWeight: 500 }}>Rod item codes</b> is the join to the configurator. List the codes each family
+                    covers and the CPQ will recommend a bracket count on the pole step — "a support every 6 ft at 1-3/8&quot;;
+                    your 96&quot; pole wants 3". Finish suffixes are ignored, so <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem' }}>H1-138R</span> also
+                    covers <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem' }}>H1-138R/P</span>.
+                </div>
+
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
                     {(mine.length > 1 ? [{ id: '', label: 'All rods' }, ...mine] : []).map(c => (
                         <button key={c.id || 'ALL'} onClick={() => setCollectionId(c.id)}
@@ -100,8 +122,8 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
                         <thead>
                             <tr style={{ background: theme.paper2 }}>
-                                {['Rod', 'Collection', 'Max bracket span', rodInches ? 'Brackets needed' : ''].filter(Boolean).map(h => (
-                                    <th key={h} style={{ textAlign: h === 'Rod' || h === 'Collection' ? 'left' : 'right', padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>
+                                {['Rod', 'Collection', 'Rod item codes (CPQ)', 'Max bracket span', rodInches ? 'Brackets needed' : ''].filter(Boolean).map(h => (
+                                    <th key={h} style={{ textAlign: h === 'Max bracket span' || h === 'Brackets needed' ? 'right' : 'left', padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>
                                 ))}
                             </tr>
                         </thead>
@@ -118,6 +140,17 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
                                         </td>
                                         <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, color: theme.inkSoft, fontSize: '0.82rem' }}>
                                             {(ROD_COLLECTIONS.find(c => c.id === r.collection) || {}).label}
+                                        </td>
+                                        {/* The join to the CPQ. Comma-separated item codes; a finish
+                                            suffix is ignored, because a /P variant is the same tube. */}
+                                        <td style={{ padding: '8px 14px', borderBottom: `1px solid ${theme.paper2}` }}>
+                                            <input
+                                                value={draft[r.id] !== undefined ? draft[r.id] : (spanMap[r.id] || '')}
+                                                onChange={e => setDraft(d => ({ ...d, [r.id]: e.target.value }))}
+                                                onBlur={e => { saveCodes(r.id, e.target.value.trim()); setDraft(d => { const n = { ...d }; delete n[r.id]; return n; }); }}
+                                                placeholder="H1-138R, H1-138AR"
+                                                title="The item codes this rod family covers. The CPQ matches the chosen rod against these to recommend a bracket count — ignoring case, punctuation and any finish suffix."
+                                                style={{ ...inp, padding: '6px 8px', fontFamily: 'var(--mono)', fontSize: '0.75rem', minWidth: '160px', borderColor: (spanMap[r.id] || '').trim() ? theme.brass : theme.line }} />
                                         </td>
                                         <td style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.paper2}`, textAlign: 'right', fontFamily: 'var(--mono)', color: theme.ink }}>
                                             <strong style={{ fontWeight: 600 }}>{ftIn(r.spanInches)}</strong>

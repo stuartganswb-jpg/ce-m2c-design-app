@@ -6,6 +6,7 @@ import { StudioRig } from './studioScene';
 import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor } from './hardwareModel';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, pricingWarnings } from './hardwarePricing';
+import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THE MASTER TEMPLATE (Stuart 2026-08-17)
@@ -59,13 +60,16 @@ const slotLabel = (s) => {
 export default function HardwareConfigurator({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], finishMode = 'GLOBAL',
+    outsourceCodes = [], finishMode = 'GLOBAL', spanMap = {},
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
     const [showDiag, setShowDiag] = useState(false);
     const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
     const [globalFinish, setGlobalFinish] = useState('');
+    const [poleIn, setPoleIn] = useState('');            // finished length, whole inches
+    const [poleFrac, setPoleFrac] = useState('');        // …and the fraction
+    const [fabricId, setFabricId] = useState('PRINT');   // drives the span, so it is asked here
     const [partFinish, setPartFinish] = useState({});   // choice id -> finish code (per-part mode)
     const perPart = finishMode === 'PER_PART';
 
@@ -145,6 +149,26 @@ export default function HardwareConfigurator({
         finishCode: globalFinish, findPart, findByCode: findPart,
     }), [resolved, customerId, customer, priceLevel, outsourceCodes, globalFinish, findPart]);
     const priceWarnings = useMemo(() => pricingWarnings(priced), [priced]);
+
+    // ── LENGTH, AND WHAT IT IMPLIES ──────────────────────────────────────────────────────────
+    // Typed the way an installer measures — whole inches and a fraction — and the FOOT figure is
+    // derived, because feet is what prices. One typed number, one shown consequence, no chance of
+    // the two disagreeing.
+    const lengthInches = useMemo(() => {
+        const whole = parseFloat(poleIn);
+        const m = String(poleFrac).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+        const frac = m ? Number(m[1]) / Number(m[2]) : (parseFloat(poleFrac) || 0);
+        const total = (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(frac) ? frac : 0);
+        return total > 0 ? total : null;
+    }, [poleIn, poleFrac]);
+    const lengthFeet = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
+
+    // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
+    const advice = useMemo(() => {
+        const rod = chosenList.find(c => ['ROD', 'FASCIA', 'TRACK'].includes(c.role));
+        if (!rod || !lengthInches) return null;
+        return bracketAdviceFor({ itemCode: rod.partId, map: spanMap, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
+    }, [chosenList, lengthInches, spanMap, fabricId]);
 
     const chosen = useMemo(() => {
         const ids = new Set(Object.values(livePicks));
@@ -273,6 +297,59 @@ export default function HardwareConfigurator({
                         </div>
                     </div>
                 ))}
+
+                {/* LENGTH — typed as an installer measures, priced as feet. */}
+                <div>
+                    <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>Finished length</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto 1fr', gap: '7px', alignItems: 'end' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <span style={{ ...mono, fontSize: '8px' }}>Inches</span>
+                            <input value={poleIn} onChange={e => setPoleIn(e.target.value)} placeholder="96" inputMode="decimal"
+                                style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: '#fff', color: 'var(--ink)' }} />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <span style={{ ...mono, fontSize: '8px' }}>Fraction</span>
+                            <input value={poleFrac} onChange={e => setPoleFrac(e.target.value)} placeholder="1/2"
+                                style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: '#fff', color: 'var(--ink)' }} />
+                        </div>
+                        <span style={{ color: 'var(--brass)', fontFamily: 'var(--mono)', paddingBottom: '9px' }}>→</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <span style={{ ...mono, fontSize: '8px' }}>Feet · billed</span>
+                            <input value={lengthFeet ?? ''} readOnly placeholder="—"
+                                style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: 'var(--paper-2)', color: 'var(--ink)' }} />
+                        </div>
+                    </div>
+                    {lengthInches && (
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)', marginTop: '5px' }}>
+                            {lengthInches}" ÷ 12 = {lengthFeet} ft — the foot figure is what prices.
+                        </div>
+                    )}
+                </div>
+
+                {/* The recommendation needs to know what it is carrying. */}
+                <div>
+                    <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>Fabric weight</div>
+                    <select value={fabricId} onChange={e => setFabricId(e.target.value)}
+                        style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '13px', width: '100%', background: '#fff', color: 'var(--ink)' }}>
+                        {FABRIC_CLASSES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                    </select>
+                </div>
+
+                {/* GUIDANCE — the engineering from 6.5, at the point of quoting. */}
+                {advice && (
+                    <div style={{ borderLeft: '2px solid var(--brass)', paddingLeft: '10px' }}>
+                        <div style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Recommendation</div>
+                        <div style={{ fontSize: '12.5px', lineHeight: 1.45, marginTop: '2px' }}>
+                            A support every <b>{ftIn(advice.spanInches)}</b> on this rod at this fabric weight — {advice.why}.
+                            Your {lengthInches}" pole wants <b>{advice.brackets} bracket{advice.brackets === 1 ? '' : 's'}</b>.
+                        </div>
+                    </div>
+                )}
+                {!advice && lengthInches && (
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)', borderLeft: '2px solid var(--line)', paddingLeft: '10px' }}>
+                        No span guidance — this rod's item code is not listed against a family in 6.5.
+                    </div>
+                )}
 
                 {isSuperAdmin && (
                     <div style={{ borderTop: '1px solid var(--line)', paddingTop: '8px' }}>

@@ -707,6 +707,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // Every node name in the loaded .glb — the only witness that can settle a records-vs-model
   // argument. Identity-stable and change-guarded: this feeds a memo, and a new array every render
   // is how a diagnostic becomes a render loop (twice tonight already).
+  // The 6.5 join: which item codes each rod family covers, for the bracket recommendation.
+  const [spanMap, setSpanMap] = useState({});
+  useEffect(() => onSnapshot(doc(db, 'system', 'bracket_span_map'),
+      d => setSpanMap((d.exists() && d.data().map) || {}), () => setSpanMap({})), []);
   const [sceneNames, setSceneNames] = useState({ all: [], meshes: [] });
   const handleSceneNames = useCallback((next) => {
       setSceneNames(prev => (prev.all.join('|') === next.all.join('|')) ? prev : next);
@@ -4456,6 +4460,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   /* PER-FLOW SETTING, edited in tab 11: one finish for the whole
                                      configuration, or one per part. GLOBAL is the common case. */
                                   finishMode={activeFlow?.finishMode === 'PER_PART' ? 'PER_PART' : 'GLOBAL'}
+                                  spanMap={spanMap}
                               />
                           ) : (
                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Pick a flow with a linked assembly — the new engine reads the ASSEMBLY, not the flow.</div>
