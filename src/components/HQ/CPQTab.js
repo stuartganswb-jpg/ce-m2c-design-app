@@ -4462,8 +4462,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   isSuperAdmin={isSuperAdmin}
                                   finishes={[...globalFinishes, ...outsourceFinishes]}
                                   parts={[...libraryParts, ...liveAssemblies]}
-                                  customerId={jobData.customerId || ''}
-                                  customer={liveCustomers.find(c => c.id === jobData.customerId) || null}
+                                  /* THE JOB'S CUSTOMER WINS; the flow's own account is the fallback,
+                                     so opening a collection to check its alias and pricing shows
+                                     them without inventing a job first (tab 11 → Customer). */
+                                  customerId={jobData.customerId || activeFlow?.customerId || ''}
+                                  customer={liveCustomers.find(c => c.id === (jobData.customerId || activeFlow?.customerId)) || null}
                                   priceLevel={priceLevel}
                                   outsourceCodes={outsourceFinishes}
                                   /* PER-FLOW SETTING, edited in tab 11: one finish for the whole

@@ -16,6 +16,7 @@ import { joinNodes, splitNodes } from '../Shared/nodeList';
 import { normalizeLocation } from '../Shared/assemblyTags';
 import { isSheet2dAssembly } from '../Shared/sheet2d';
 import { buildSheet2dFlow } from '../Shared/sheet2dFlow';
+import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -160,6 +161,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   
   const [globalFinishes, setGlobalFinishes] = useState([]);
   const [outsourceFinishes, setOutsourceFinishes] = useState([]);
+  const [crmCustomers, setCrmCustomers] = useState([]);
   const [colGlobalFinishes, setColGlobalFinishes] = useState([]); // legacy hq_global_finishes collection
   const [inhouseFinishes, setInhouseFinishes] = useState([]);     // legacy hq_inhouse_finishes collection
   const [floorRecipes, setFloorRecipes] = useState([]);          // Finishing Floor source (fin_recipes), keyed by code
@@ -267,6 +269,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
       const unsubFinishes = onSnapshot(doc(db, "system", "master_finishes"), (snap) => { if(snap.exists() && snap.data().finishes) setGlobalFinishes(snap.data().finishes); });
       const unsubOutsource = onSnapshot(collection(db, "hq_outsource_finishes"), (snap) => setOutsourceFinishes(snap.docs.map(d => ({id: d.id, ...d.data()}))));
+      // Customers, so a flow can name the one it belongs to. Brand-isolated exactly as CPQ and
+      // Client Vision do it — a Fabricut flow must not be able to point at another book's account.
+      const unsubCrmCust = onSnapshot(collection(db, "crm_records"), (snap) => setCrmCustomers(
+          snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.type === 'CUSTOMER' &&
+              (r.brandId === activeBrand || (r.sharedBrands && r.sharedBrands.includes(activeBrand))))
+      ), () => {});
       const unsubDynamic = onSnapshot(collection(db, "hq_dynamic_data"), (snap) => setDynamicAssets(snap.docs.map(d => ({id: d.id, ...d.data()}))));
       // Finishes can also live in the legacy collections the Asset Gallery uses — read them so the
       // CPQ finish picker is a strict superset of every store (in-house + outsourced + legacy).
@@ -284,7 +292,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           }
       });
 
-      return () => { unsubUsers(); unsubFinUsers(); unsubStaffLogins(); unsubRoles(); unsubHqPerms(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
+      return () => { unsubCrmCust(); unsubUsers(); unsubFinUsers(); unsubStaffLogins(); unsubRoles(); unsubHqPerms(); unsubSchema(); unsubRules(); unsubFlows(); unsubLists(); unsubPlatingFees(); unsubDiscounts(); unsubAssemblies(); unsubWindowConfig(); unsubFinishes(); unsubOutsource(); unsubColGlobal(); unsubInhouse(); unsubFloor(); unsubDynamic(); unsubLogos(); unsubForms(); unsubShopPerms(); unsubFinPerms(); unsubPickPerms(); };
   }, [activeBrand]);
 
   useEffect(() => {
@@ -2511,6 +2519,54 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                             return <button key={f.id} onClick={() => toggle(c)} style={chip(offered.includes(c))} title={f.name || c}>{c}</button>;
                                                         })}
                                                     </div>
+
+                                                    {/* WHO THIS COLLECTION IS FOR (Stuart 2026-08-17: "somewhere i need to
+                                                        associate this assembly/flow with my customer for the customer alias
+                                                        and pricing to work/test"). The alias and the negotiated price live
+                                                        per ITEM in 4.6 and always have — nothing about that moves. What was
+                                                        missing is the other half of the key: on a live quote the customer
+                                                        comes from the JOB, so a flow opened to test showed base prices and
+                                                        no part numbers, and there was no way to tell "this customer has no
+                                                        rows" from "no customer was selected". Naming the customer here
+                                                        answers both: the configurator falls back to it when the job has
+                                                        none, and the reading below says how many of this assembly's items
+                                                        actually carry a 4.6 row and a part # for them. A job with its own
+                                                        customer still wins — this is the collection's home account, not an
+                                                        override. */}
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '12px 0 7px' }}>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Customer</span>
+                                                        <select value={af.customerId || ''} onChange={e => save({ customerId: e.target.value })}
+                                                            style={{ flex: 1, padding: '6px', border: '1px solid var(--line)', fontSize: '12px', background: '#fff' }}>
+                                                            <option value="">— none: quotes price at base until a job names one —</option>
+                                                            {[...crmCustomers].sort((a, b) => String(a.companyName || a.name || '').localeCompare(String(b.companyName || b.name || ''))).map(c => (
+                                                                <option key={c.id} value={c.id}>{c.companyName || c.name || c.id}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    {af.customerId && (() => {
+                                                        // The proof, live: of the items this assembly actually uses, how
+                                                        // many this customer has a price for and how many carry their own
+                                                        // part #. A tagging job is finished when this says so.
+                                                        const asm = allApprovedDesigns.find(a => a.id === af.linkedAssemblyId);
+                                                        const cust = crmCustomers.find(c => c.id === af.customerId);
+                                                        const keys = customerKeys(af.customerId, cust);
+                                                        const codes = [...new Set((asm?.assembly_pins || []).map(pn => String(pn.partId || pn.legacyErpId || '').trim().toUpperCase()).filter(Boolean))];
+                                                        let priced = 0, skus = 0;
+                                                        codes.forEach(code => {
+                                                            const it = allApprovedDesigns.find(x => String((x.legacyErpId && x.legacyErpId !== 'PENDING' ? x.legacyErpId : x.itemId) || '').trim().toUpperCase() === code);
+                                                            const row = it ? findClientPriceRow(it.clientPricing, keys) : null;
+                                                            if (row) { priced++; if (String(row.clientSku || '').trim()) skus++; }
+                                                        });
+                                                        const tone = !codes.length ? 'var(--ink-faint)' : priced === codes.length ? '#2e7d32' : priced ? 'var(--brass)' : '#d9534f';
+                                                        return (
+                                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: tone, marginBottom: '9px', lineHeight: 1.6 }}>
+                                                                {!codes.length ? 'No linked assembly to check — link one above.' : (
+                                                                    <>4.6 rows: <b>{priced}</b> of <b>{codes.length}</b> items priced for this customer · <b>{skus}</b> carry their part #
+                                                                        {priced < codes.length && <span style={{ color: 'var(--ink-faint)' }}> — the rest fall back to base price</span>}</>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })()}
 
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '12px 0 7px' }}>
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Items added by hand</span>

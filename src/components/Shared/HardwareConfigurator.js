@@ -433,6 +433,14 @@ export default function HardwareConfigurator({
                 <span style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--ink)', background: 'var(--ink)', color: '#fff' }}>
                     {configMemo || 'This configuration'} <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '5px' }}>${grandTotal.toFixed(2)}</b>
                 </span>
+                {/* WHO IS BEING PRICED, stated plainly. Every alias and every negotiated price on
+                    this screen hangs off this one name, and "no customer" and "this customer has no
+                    rows" look identical on a quote line — so the name is on screen, not implied. */}
+                <span style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--line)', background: '#fff', color: customerId ? 'var(--ink)' : 'var(--ink-faint)' }}
+                    title={customerId ? 'Aliases and prices on this screen are this customer\u2019s (their rows live per item in 4.6). Set the collection\u2019s own account in tab 11; a job\u2019s customer overrides it.' : 'No customer — every line shows our base price and our part numbers. Name one on the job, or give the collection its own account in tab 11.'}>
+                    {customer?.companyName || customer?.name || (customerId ? customerId : 'No customer \u00b7 base pricing')}
+                    {priceLevel && priceLevel !== 'STANDARD' && <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '6px' }}>{priceLevel}</b>}
+                </span>
                 <button onClick={addConfiguration} disabled={!priced.lines.length}
                     style={{ ...mono, marginLeft: 'auto', padding: '7px 12px', cursor: priced.lines.length ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
                     + Add configuration
