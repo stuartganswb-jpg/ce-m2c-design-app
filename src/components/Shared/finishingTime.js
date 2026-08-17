@@ -171,9 +171,13 @@ export const isPendingRecipe = (v) => {
 // The finish suffix of an item code: HCUMB410/BS → BS. The '-' split drops ring-pack suffixes
 // (BASE/SG-EA, BASE/BS-7) so a pack and its single batch together, exactly as Stock View reads them.
 //
-// '/P' is excluded on purpose: it is the PHOSPHATED core an in-house finish is sprayed onto, not a
-// finish of its own. Deriving "P" would invent a spray recipe nobody wrote and batch cores under it;
-// leaving it blank keeps the order honestly un-finished, which is what a /P core is.
+// THE P FAMILY IS THREE DIFFERENT THINGS — the test is EXACT EQUALITY, never a prefix:
+//   /P          the PHOSPHATED core a finish is sprayed ONTO. Not a finish. Excluded, because
+//               deriving "P" would invent a spray recipe nobody wrote and batch cores under it.
+//   /P01, /P1…  PAINTED finishes with real recipes, like any other code. P + digits is paint.
+//   /P25        the outsourced plater code — derived like the rest, then routed away from the
+//               spray line by finishRouteOf, which reads it out of the resolved recipe.
+// Never widen this to /^P/: it would silently strip every painted P-code off its own recipe.
 export function finishCodeFromErp(erpId) {
   const s = String(erpId == null ? '' : erpId).trim();
   const i = s.lastIndexOf('/');
