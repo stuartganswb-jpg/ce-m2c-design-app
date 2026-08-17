@@ -3307,6 +3307,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   //
   // Severity: RED = something is invisible or unpickable right now. AMBER = it will bite later.
   const flowDoctor = useMemo(() => { try {
+      // ⚠ ONLY WHEN ASKED (Stuart 2026-08-16, second machine freeze — on H2-138, the biggest flow).
+      // This walks EVERY step and resolves EVERY option against the full parts list (3,000+
+      // assemblies plus the library) through a linear find, and it re-ran on every selection
+      // change. Before the Doctor existed that resolution happened for the CURRENT step only, so
+      // adding it multiplied the per-keystroke cost by the step count — invisible on a small flow,
+      // a locked tab on a large one. Diagnostics are for when you ask a question; they must never
+      // be a tax on the tool working normally.
+      if (!showDoctor) return { red: 0, amber: 0, findings: [], idle: true };
       if (!activeFlow) return { red: 0, amber: 0, findings: [] };
       // ⚠ disabledSteps holds step TITLES, not ids (see the cross-step rule engine above).
       const off = new Set(engineFlags.disabledSteps || []);
@@ -3482,7 +3490,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // A diagnostic must never be able to break the tool it diagnoses.
       console.error('Flow Doctor failed:', e);
       return { red: 0, amber: 1, findings: [{ sev: 'amber', kind: 'DOCTOR', msg: `The check itself errored (${e.message || e}) — the configurator is unaffected. Console has the trace.` }] };
-  } }, [activeFlow, activeAssembly, dynamicConfigParams, engineFlags.disabledSteps, visAudit, visTokenOwners, debugShowAll]); // eslint-disable-line react-hooks/exhaustive-deps
+  } }, [showDoctor, activeFlow, activeAssembly, dynamicConfigParams, engineFlags.disabledSteps, visAudit, visTokenOwners, debugShowAll]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Steps flagged "clone along pole" (e.g. the center passing bracket) drive procedural cloning:
   // the selected option's meshes are cloned (qty) times and spaced down the pole in DynamicModel.
@@ -4241,8 +4249,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                           </label>
                           <button onClick={() => { const v = captureFnRef.current && captureFnRef.current(); if (v) setCapturedViews(v); else alert('Capture not ready — give the model a moment to load, then try again.'); }} title="Capture Front + Back images of this configuration for the production packet" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: capturedViews ? 'var(--brass)' : 'var(--ink)', background: 'transparent', border: '1px solid var(--line)', padding: '5px 10px' }}>📷 Capture Views</button>
                           {isSuperAdmin && (
-                              <button onClick={() => setShowDoctor(v => !v)} title="FLOW DOCTOR — why this configuration renders the way it does: steps with nothing selected, steps whose options all filtered away, nodes two steps disagree about (invisible), sections no step controls, and mapped names the .glb does not contain. Live: it re-reads on every pick." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: flowDoctor.red ? '#a33' : flowDoctor.amber ? '#8a6508' : 'var(--ink-soft)', background: showDoctor ? 'var(--paper-2)' : 'transparent', border: `1px solid ${flowDoctor.red ? '#a33' : 'var(--line)'}`, padding: '5px 10px' }}>
-                                  🩺 {flowDoctor.red ? `${flowDoctor.red} critical` : flowDoctor.amber ? `${flowDoctor.amber} to review` : 'Healthy'}
+                              <button onClick={() => setShowDoctor(v => !v)} title="FLOW DOCTOR — why this configuration renders the way it does: steps with nothing selected, steps whose options all filtered away, geometry no available option can bring back, sections no step controls, and mapped names the .glb does not contain. Runs ONLY while open — on a large flow the check is far too expensive to leave running behind every click." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: flowDoctor.idle ? 'var(--ink-soft)' : flowDoctor.red ? '#a33' : flowDoctor.amber ? '#8a6508' : '#2a7', background: showDoctor ? 'var(--paper-2)' : 'transparent', border: `1px solid ${!flowDoctor.idle && flowDoctor.red ? '#a33' : 'var(--line)'}`, padding: '5px 10px' }}>
+                                  🩺 {flowDoctor.idle ? 'Check flow' : flowDoctor.red ? `${flowDoctor.red} critical` : flowDoctor.amber ? `${flowDoctor.amber} to review` : 'Healthy'}
                               </button>
                           )}
                           </>
