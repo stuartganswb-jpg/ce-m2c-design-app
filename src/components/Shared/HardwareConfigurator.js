@@ -212,261 +212,386 @@ export default function HardwareConfigurator({
         border: `1px solid ${active ? 'var(--ink)' : 'var(--line)'}`, opacity: disabled ? 0.4 : 1, textAlign: 'left',
     });
 
+    // ── EVERY DECISION IS A STEP (Stuart 2026-08-17) ─────────────────────────────────────────
+    // The rail carries the whole product; the panel carries only what is being decided now. An
+    // answered step shows its ANSWER, so nothing has to be re-opened to check what it was.
+    //
+    // Backplates do not get a step of their own — a plate is chosen WITH its arm, so it nests
+    // inside the bracket step, which is also where the pairing rules can be seen doing their work.
+    const steps = useMemo(() => {
+        const out = [];
+        model.axes.filter(a => !a.implied && a.values.length > 1)
+            .forEach(a => out.push({ kind: 'AXIS', key: `axis:${a.key}`, axis: a, label: AXIS_LABEL[a.key] || a.key }));
+        const plates = model.slots.filter(s => s.kind === 'BACKPLATE');
+        const nested = new Set();
+        model.slots.filter(s => s.kind !== 'BACKPLATE').forEach(s => {
+            if (!s.options.length && !s.suppressedBy) return;
+            const sub = s.kind === 'BRACKET' ? plates.find(p => (p.position || '') === (s.position || '')) : null;
+            if (sub) nested.add(sub.key);
+            out.push({ kind: 'SLOT', key: s.key, slot: s, sub, label: slotLabel(s) });
+        });
+        plates.filter(p => !nested.has(p.key) && p.options.length)
+            .forEach(p => out.push({ kind: 'SLOT', key: p.key, slot: p, label: slotLabel(p) }));
+        out.push({ kind: 'LENGTH', key: 'length', label: 'Pole length' });
+        return out;
+    }, [model]);
+
+    const [stepIx, setStepIx] = useState(0);
+    const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
+    const step = steps[ix];
+
+    // What the rail shows under each heading: the answer, once there is one.
+    const answerOf = useCallback((st) => {
+        if (st.kind === 'AXIS') { const v = answers[st.axis.key]; return v == null || v === '' ? '' : valueLabel(st.axis.key, v); }
+        if (st.kind === 'LENGTH') return lengthFeet ? `${lengthFeet} ft` : '';
+        if (st.slot.suppressedBy) return 'not asked';
+        const pick = st.slot.options.find(o => o.id === livePicks[st.slot.key]);
+        return pick ? (pick.partId || pick.name) : '';
+    }, [answers, livePicks, lengthFeet]);
+
+    // ── SEVERAL CONFIGURATIONS, ONE QUOTE ────────────────────────────────────────────────────
+    // A room is a configuration; a job is several. Each is finished, memo'd and added, and the
+    // strip is where you see what is already in and what it came to.
+    const [configMemo, setConfigMemo] = useState('');
+    const [saved, setSaved] = useState([]);
+    const addConfiguration = () => {
+        if (!priced.lines.length) return;
+        setSaved(s => [...s, { memo: configMemo || `Configuration ${s.length + 1}`, total: priced.total, lines: priced.lines.length }]);
+        setConfigMemo(''); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac(''); setStepIx(0);
+    };
+
+    const railCell = (st, i) => {
+        const ans = answerOf(st);
+        const now = i === ix;
+        return (
+            <button key={st.key} onClick={() => setStepIx(i)} title={st.label}
+                style={{
+                    flex: '1 1 0', minWidth: '104px', textAlign: 'left', cursor: 'pointer',
+                    padding: '8px 10px', borderRight: '1px solid var(--line)', border: 'none',
+                    borderRightWidth: i === steps.length - 1 ? 0 : 1, borderRightStyle: 'solid',
+                    background: now ? 'var(--ink)' : (ans ? 'var(--paper-2)' : '#fff'),
+                    display: 'flex', flexDirection: 'column', gap: '3px', overflow: 'hidden',
+                }}>
+                <span style={{ ...mono, fontSize: '8.5px', color: now ? '#fff' : (ans ? 'var(--ink)' : 'var(--ink-soft)'), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{st.label}</span>
+                <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: now ? 'var(--brass)' : 'var(--ink-faint)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ans || '—'}</span>
+            </button>
+        );
+    };
+
+    // One option card: the part, photographed, named three ways — description, our number, theirs.
+    const optionCard = (o, on, onClick) => {
+        const line = priced.lines.find(l => String(l.partId).toUpperCase() === String(o.partId).toUpperCase());
+        return (
+            <button key={o.id} onClick={onClick} style={{
+                display: 'flex', flexDirection: 'column', gap: '5px', alignItems: 'stretch', textAlign: 'left',
+                padding: '7px', cursor: 'pointer', background: on ? 'var(--paper-2)' : '#fff',
+                border: `1px solid ${on ? 'var(--ink)' : 'var(--line)'}`, boxShadow: on ? 'inset 0 0 0 1px var(--ink)' : 'none',
+            }}>
+                <span style={{ height: '46px', background: 'var(--paper-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                    {thumbs[o.id]
+                        ? <img src={thumbs[o.id]} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        : <span style={{ ...mono, fontSize: '7px', color: 'var(--ink-faint)' }}>{thumbs[o.id] === null ? 'no geometry' : '···'}</span>}
+                </span>
+                <span style={{ fontSize: '10.5px', lineHeight: 1.25, color: 'var(--ink)' }}>{o.name}</span>
+                <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink-soft)' }}>{o.partId}</span>
+                {line?.sku && <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--brass)' }}>{line.sku}</span>}
+                {o.noFinish && <span style={{ ...mono, fontSize: '7.5px', color: 'var(--ink-faint)' }}>clear · takes no finish</span>}
+            </button>
+        );
+    };
+
+    const boxHead = (a, b) => (
+        <div style={{ padding: '10px 13px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px' }}>
+            <span style={mono}>{a}</span>{b ? <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>{b}</span> : null}
+        </div>
+    );
+    const boxStyle = { background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', minHeight: '230px' };
+    const swatchRow = (list, sel, pick) => (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(26px,1fr))', gap: '4px' }}>
+            {list.map(f => {
+                const code = String(f.code || f.name || '').toUpperCase();
+                const url = f.textureUrl || f.finalImageUrl;
+                const on = String(sel).toUpperCase() === code;
+                return <button key={code} title={f.name || code} onClick={() => pick(on ? '' : code)}
+                    style={{ aspectRatio: '1', padding: 0, cursor: 'pointer', border: `1px solid var(--line)`, outline: on ? '2px solid var(--ink)' : 'none', outlineOffset: '1px', background: url ? `url(${url}) center/cover` : '#ddd' }} />;
+            })}
+        </div>
+    );
+    // Material first, then where it is done — in-house and outsourced price and lead differently.
+    const finishGroups = useMemo(() => {
+        const usable = finishes.filter(f => !chosenList.length || chosenList.some(c => finishesFor(c, [f]).length));
+        const byMat = new Map();
+        usable.forEach(f => {
+            const m = String(f.material || f.type || 'METAL').toUpperCase();
+            if (!byMat.has(m)) byMat.set(m, { inHouse: [], out: [] });
+            (f.multiplier !== undefined || f.vendor ? byMat.get(m).out : byMat.get(m).inHouse).push(f);
+        });
+        return [...byMat.entries()];
+    }, [finishes, chosenList]);
+
     return (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: '16px', alignItems: 'start' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ ...mono, color: 'var(--brass)', borderBottom: '1px solid var(--line)', paddingBottom: '6px' }}>
-                    {pins?.length
-                        ? `Tag-driven · ${model.choices.length} choices · nothing pre-answered`
-                        : 'Loading this assembly\u2019s pins\u2026'}
-                </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
 
-                {/* THE QUESTIONS THE ASSEMBLY ACTUALLY ASKS — discovered, never enumerated. An axis
-                    with one possible value is not a question; it constrains silently. */}
-                {model.axes.filter(a => !a.implied && a.values.length > 1).map(axis => (
-                    <div key={axis.key}>
-                        <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>{AXIS_LABEL[axis.key] || axis.key}</div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                            {axis.values.map(v => (
-                                <button key={String(v)} onClick={() => setAnswer(axis.key, v)} style={chip(answers[axis.key] === v)}>
-                                    {valueLabel(axis.key, v)}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
+            {/* CONFIGURATIONS — a job is several rooms. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', background: '#fff', border: '1px solid var(--line)', padding: '10px 14px' }}>
+                <span style={mono}>Configurations</span>
+                {saved.map((c, i) => (
+                    <span key={i} style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                        {c.memo} <b style={{ fontWeight: 400, color: 'var(--ink-soft)', marginLeft: '5px' }}>${c.total.toFixed(2)}</b>
+                    </span>
                 ))}
-
-                {/* FINISH — one for the whole configuration, or a default that each part may
-                    override. The FLOW decides which in tab 11; this obeys it. */}
-                {!!finishes.length && (
-                    <div>
-                        <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>
-                            Finish <span style={{ opacity: 0.6 }}>· {perPart ? 'per part' : 'whole configuration'}</span>
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                            {/* Only finishes SOMETHING here can wear. A collection with no wood
-                                parts never shows a stain, and it needs no rule to know that. */}
-                            {finishes.filter(f => !chosenList.length || chosenList.some(c => finishesFor(c, [f]).length)).map(f => {
-                                const code = String(f.code || f.name || '').toUpperCase();
-                                const on = String(globalFinish).toUpperCase() === code;
-                                const url = f.textureUrl || f.finalImageUrl;
-                                return (
-                                    <button key={code} onClick={() => setGlobalFinish(on ? '' : code)} title={f.name || code}
-                                        style={{ width: '28px', height: '28px', padding: 0, cursor: 'pointer', border: `2px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: url ? `url(${url}) center/cover` : '#ddd' }} />
-                                );
-                            })}
-                        </div>
-                        {perPart && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px' }}>Sets every part; override individually below.</div>}
-                    </div>
-                )}
-
-                {/* ONE DECISION PER PLACE. A slot with no options in this configuration is simply
-                    not shown — on a solid rod there is no fascia question, and that is not an error
-                    to report, it is a product that does not have one. */}
-                {model.slots.filter(s => s.options.length || s.suppressedBy).map(s => (
-                    <div key={s.key}>
-                        <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px', display: 'flex', alignItems: 'baseline', gap: '6px' }}>
-                            <span>{slotLabel(s)} <span style={{ opacity: 0.6 }}>({s.options.length})</span></span>
-                            {/* ALL FIXES ON THE ITEMS, NOT ON THE FLOW (Stuart 2026-08-17: "if a
-                                backplate misbehaves we know exactly what to fix — its tag"). Every
-                                exclusion already carries the rule that made it and the part it was
-                                made about; this simply shows them, so the answer to "why is that
-                                one missing" is one click rather than a hunt. */}
-                            {!!s.rejected.length && (
-                                <span onClick={() => setWhySlot(whySlot === s.key ? null : s.key)}
-                                    style={{ cursor: 'pointer', color: 'var(--brass)', fontSize: '9px', textTransform: 'none', letterSpacing: 0 }}>
-                                    {whySlot === s.key ? 'hide' : `why not the other ${s.rejected.length}?`}
-                                </span>
-                            )}
-                        </div>
-                        {s.suppressedBy && (
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#8a6508', padding: '2px 0 6px' }}>
-                                not asked — {s.suppressedReason} ({s.suppressedBy})
-                            </div>
-                        )}
-                        {whySlot === s.key && (
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', lineHeight: 1.6, marginBottom: '6px', paddingLeft: '6px', borderLeft: '2px solid var(--line)' }}>
-                                {s.rejected.map((r, i) => (
-                                    <div key={i} style={{ color: 'var(--ink-soft)', padding: '1px 0' }}>
-                                        <span style={{ color: 'var(--ink)' }}>{r.choice.name}</span>
-                                        {r.choice.partId ? ` · ${r.choice.partId}` : ''} — <span style={{ color: '#8a6508' }}>{r.rule}</span>: {r.detail}
-                                    </div>
-                                ))}
-                                <div style={{ color: 'var(--ink-soft)', paddingTop: '3px' }}>Every one of these is a tag on the ITEM, in 1.6.</div>
-                            </div>
-                        )}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            {s.options.map(o => (
-                                <React.Fragment key={o.id}>
-                                    <button onClick={() => setPick(s.key, o.id)} style={{
-                                        ...chip(livePicks[s.key] === o.id), display: 'flex', alignItems: 'center', gap: '9px',
-                                        fontSize: '10px', textTransform: 'none', letterSpacing: 0, padding: '7px 9px', textAlign: 'left',
-                                    }}>
-                                        {/* The part, photographed from the model it will actually render from. */}
-                                        <span style={{ width: '44px', height: '33px', flexShrink: 0, background: livePicks[s.key] === o.id ? 'rgba(255,255,255,.12)' : 'var(--paper-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                                            {thumbs[o.id]
-                                                ? <img src={thumbs[o.id]} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-                                                : <span style={{ fontFamily: 'var(--mono)', fontSize: '7px', color: 'var(--ink-faint)' }}>{thumbs[o.id] === null ? 'no geo' : '···'}</span>}
-                                        </span>
-                                        <span style={{ display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 }}>
-                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.name}</span>
-                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', opacity: .7 }}>
-                                                {o.partId}{o.noFinish ? ' · clear' : ''}
-                                            </span>
-                                        </span>
-                                    </button>
-                                    {/* PER-PART FINISH — only where the flow asks for it, only on the
-                                        chosen part, and never on one that takes no finish. */}
-                                    {perPart && livePicks[s.key] === o.id && !o.noFinish && !!finishes.length && (
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', padding: '2px 0 4px 8px' }}>
-                                            {finishesFor(o, finishes).map(f => {
-                                                const code = String(f.code || f.name || '').toUpperCase();
-                                                const on = String(partFinish[o.id] || globalFinish).toUpperCase() === code;
-                                                const url = f.textureUrl || f.finalImageUrl;
-                                                return (
-                                                    <button key={code} title={f.name || code}
-                                                        onClick={() => setPartFinish(pf => ({ ...pf, [o.id]: on ? '' : code }))}
-                                                        style={{ width: '18px', height: '18px', padding: 0, cursor: 'pointer', border: `2px solid ${on ? 'var(--ink)' : 'var(--line)'}`, background: url ? `url(${url}) center/cover` : '#ddd' }} />
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </React.Fragment>
-                            ))}
-                        </div>
-                    </div>
-                ))}
-
-                {/* LENGTH — typed as an installer measures, priced as feet. */}
-                <div>
-                    <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>Finished length</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto 1fr', gap: '7px', alignItems: 'end' }}>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                            <span style={{ ...mono, fontSize: '8px' }}>Inches</span>
-                            <input value={poleIn} onChange={e => setPoleIn(e.target.value)} placeholder="96" inputMode="decimal"
-                                style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: '#fff', color: 'var(--ink)' }} />
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                            <span style={{ ...mono, fontSize: '8px' }}>Fraction</span>
-                            <input value={poleFrac} onChange={e => setPoleFrac(e.target.value)} placeholder="1/2"
-                                style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: '#fff', color: 'var(--ink)' }} />
-                        </div>
-                        <span style={{ color: 'var(--brass)', fontFamily: 'var(--mono)', paddingBottom: '9px' }}>→</span>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                            <span style={{ ...mono, fontSize: '8px' }}>Feet · billed</span>
-                            <input value={lengthFeet ?? ''} readOnly placeholder="—"
-                                style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: 'var(--paper-2)', color: 'var(--ink)' }} />
-                        </div>
-                    </div>
-                    {lengthInches && (
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)', marginTop: '5px' }}>
-                            {lengthInches}" ÷ 12 = {lengthFeet} ft — the foot figure is what prices.
-                        </div>
-                    )}
-                </div>
-
-                {/* The recommendation needs to know what it is carrying. */}
-                <div>
-                    <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>Fabric weight</div>
-                    <select value={fabricId} onChange={e => setFabricId(e.target.value)}
-                        style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '13px', width: '100%', background: '#fff', color: 'var(--ink)' }}>
-                        {FABRIC_CLASSES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-                    </select>
-                </div>
-
-                {/* GUIDANCE — the engineering from 6.5, at the point of quoting. */}
-                {advice && (
-                    <div style={{ borderLeft: '2px solid var(--brass)', paddingLeft: '10px' }}>
-                        <div style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Recommendation</div>
-                        <div style={{ fontSize: '12.5px', lineHeight: 1.45, marginTop: '2px' }}>
-                            A support every <b>{ftIn(advice.spanInches)}</b> on this rod at this fabric weight — {advice.why}.
-                            Your {lengthInches}" pole wants <b>{advice.brackets} bracket{advice.brackets === 1 ? '' : 's'}</b>
-                            {advice.bracketsNoStud && advice.bracketsNoStud !== advice.brackets
-                                ? <> — <b>{advice.bracketsNoStud}</b> if they will not land in studs.</> : '.'}
-                        </div>
-                    </div>
-                )}
-                {!advice && lengthInches && (
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)', borderLeft: '2px solid var(--line)', paddingLeft: '10px' }}>
-                        No span guidance — this rod's item code is not listed against a family in 6.5.
-                    </div>
-                )}
-
-                {isSuperAdmin && (
-                    <div style={{ borderTop: '1px solid var(--line)', paddingTop: '8px' }}>
-                        <button onClick={() => setShowDiag(v => !v)} style={{ ...mono, background: 'transparent', border: '1px solid var(--line)', padding: '6px 10px', cursor: 'pointer', color: diagnosis.some(d => d.sev === 'red') ? '#b00020' : 'var(--ink-soft)' }}>
-                            {diagnosis.length ? `${diagnosis.length} tag note(s)` : 'Tags clean'}
-                        </button>
-                        {showDiag && (
-                            <div style={{ marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', lineHeight: 1.6 }}>
-                                {!diagnosis.length && <div style={{ color: '#2a7' }}>Every slot has options, the chosen parts agree, and every tagged node exists.</div>}
-                                {diagnosis.map((d, i) => (
-                                    <div key={i} style={{ color: d.sev === 'red' ? '#b00020' : '#8a6508', padding: '2px 0' }}>
-                                        {d.sev === 'red' ? '●' : '○'} {d.kind} — {d.msg}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                )}
+                <span style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--ink)', background: 'var(--ink)', color: '#fff' }}>
+                    {configMemo || 'This configuration'} <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '5px' }}>${priced.total.toFixed(2)}</b>
+                </span>
+                <button onClick={addConfiguration} disabled={!priced.lines.length}
+                    style={{ ...mono, marginLeft: 'auto', padding: '7px 12px', cursor: priced.lines.length ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
+                    + Add configuration
+                </button>
             </div>
 
-            <div>
-                <div style={{ height: '440px', background: 'var(--paper-2)', position: 'relative' }}>
-                    {cadUrl ? (
-                        <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}>
-                            <StudioRig />
-                            <OrbitControls makeDefault />
-                            <Bounds fit clip margin={1.2}>
-                                {/* defaultHidden — the model opens empty and every mesh you see is
-                                    one you chose. */}
-                                <DynamicModel
-                                    url={cadUrl}
-                                    visibilityOverrides={visibleOverrides}
-                                    cloneSpecs={[]}
-                                    highlightOverrides={[]}
-                                    textureOverrides={textureOverrides}
-                                    defaultHidden
-                                    clearNodes={clearList}
-                                />
-                            </Bounds>
-                        </Canvas>
-                    ) : (
-                        <div style={{ ...mono, color: 'var(--ink-soft)', display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center' }}>No .glb on this assembly</div>
-                    )}
-                    {!Object.keys(visibleOverrides).length && cadUrl && (
-                        <div style={{ position: 'absolute', bottom: '12px', left: '50%', transform: 'translateX(-50%)', ...mono, color: 'var(--ink-soft)' }}>
-                            Empty by design — choose a rod to begin
-                        </div>
-                    )}
-                </div>
-                <div style={{ marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '10px', lineHeight: 1.7 }}>
-                    <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
-                        <span>{chosen.length} part(s) · {Object.keys(visibleOverrides).length} node(s) rendering</span>
-                        <span style={{ color: 'var(--ink)' }}>${priced.total.toFixed(2)}</span>
+            {/* THE RAIL — the whole product at a glance, every answer visible. */}
+            <div style={{ display: 'flex', border: '1px solid var(--line)', background: '#fff', overflowX: 'auto' }}>
+                {steps.map(railCell)}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px,390px) 1fr', gap: '14px', alignItems: 'start' }}>
+
+                {/* ── THE STEP ────────────────────────────────────────────────────────────── */}
+                <div style={{ background: '#fff', border: '1px solid var(--line)' }}>
+                    <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                        <div style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)', marginBottom: '3px' }}>Step {ix + 1} of {steps.length}</div>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.12rem' }}>{step?.label}</div>
                     </div>
-                    {priced.lines.map((l, i) => (
-                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', color: 'var(--ink)' }}>
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {l.name}{l.partId ? ` · ${l.partId}` : ''}
-                                {/* THEIR part number, from the same 4.6 box as their price. */}
-                                {l.sku ? <span style={{ color: 'var(--brass)' }}> · {l.sku}</span> : null}
-                                {l.qty > 1 ? ` ×${l.qty}` : ''}
-                            </span>
-                            <span title={`${l.source}${l.detail ? ` — ${l.detail}` : ''}`} style={{ flexShrink: 0, color: l.unit ? 'var(--ink)' : 'var(--ink-soft)' }}>
-                                ${l.total.toFixed(2)}
-                            </span>
+                    <div style={{ padding: '15px 16px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+
+                        {!pins?.length && <div style={{ ...mono, color: 'var(--ink-soft)' }}>Loading this assembly’s pins…</div>}
+
+                        {step?.kind === 'AXIS' && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                {step.axis.values.map(v => (
+                                    <button key={String(v)} onClick={() => setAnswer(step.axis.key, v)} style={chip(answers[step.axis.key] === v)}>
+                                        {valueLabel(step.axis.key, v)}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        {step?.kind === 'SLOT' && (<>
+                            {step.slot.suppressedBy && (
+                                <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: '#8a6508', borderLeft: '2px solid #8a6508', paddingLeft: '9px' }}>
+                                    Not asked — {step.slot.suppressedReason} ({step.slot.suppressedBy})
+                                </div>
+                            )}
+                            {!!step.slot.options.length && (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '7px' }}>
+                                    {step.slot.options.map(o => optionCard(o, livePicks[step.slot.key] === o.id, () => setPick(step.slot.key, o.id)))}
+                                </div>
+                            )}
+                            {/* PAIRED: the plate that goes with the arm above, nested under it. */}
+                            {step.sub && (
+                                <div style={{ marginLeft: '10px', paddingLeft: '11px', borderLeft: '2px solid var(--brass)' }}>
+                                    <div style={{ ...mono, fontSize: '8.5px', marginBottom: '6px' }}>
+                                        <span style={{ color: 'var(--brass)' }}>Matching backplate</span>
+                                        {step.sub.suppressedBy
+                                            ? <span style={{ textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}> · {step.sub.suppressedReason}</span>
+                                            : <span style={{ color: 'var(--ink-faint)' }}> · {step.sub.options.length}</span>}
+                                    </div>
+                                    {!!step.sub.options.length && (
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '7px' }}>
+                                            {step.sub.options.map(o => optionCard(o, livePicks[step.sub.key] === o.id, () => setPick(step.sub.key, o.id)))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                            {!!step.slot.rejected.length && (
+                                <div>
+                                    <span onClick={() => setWhySlot(whySlot === step.slot.key ? null : step.slot.key)}
+                                        style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)', cursor: 'pointer' }}>
+                                        {whySlot === step.slot.key ? 'hide' : `why not the other ${step.slot.rejected.length}?`}
+                                    </span>
+                                    {whySlot === step.slot.key && (
+                                        <div style={{ marginTop: '6px', paddingLeft: '9px', borderLeft: '2px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '9px', lineHeight: 1.6 }}>
+                                            {step.slot.rejected.map((r, i) => (
+                                                <div key={i} style={{ color: 'var(--ink-soft)' }}>
+                                                    <span style={{ color: 'var(--ink)' }}>{r.choice.name}</span>{r.choice.partId ? ` · ${r.choice.partId}` : ''} — <span style={{ color: '#8a6508' }}>{r.rule}</span>: {r.detail}
+                                                </div>
+                                            ))}
+                                            <div style={{ color: 'var(--ink-faint)', paddingTop: '3px' }}>Every one of these is a tag on the ITEM, in 1.6.</div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </>)}
+
+                        {step?.kind === 'LENGTH' && (<>
+                            <div>
+                                <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>Finished length</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto 1fr', gap: '7px', alignItems: 'end' }}>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                        <span style={{ ...mono, fontSize: '8px' }}>Inches</span>
+                                        <input value={poleIn} onChange={e => setPoleIn(e.target.value)} placeholder="96" inputMode="decimal"
+                                            style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: '#fff', color: 'var(--ink)' }} />
+                                    </label>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                        <span style={{ ...mono, fontSize: '8px' }}>Fraction</span>
+                                        <input value={poleFrac} onChange={e => setPoleFrac(e.target.value)} placeholder="1/2"
+                                            style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: '#fff', color: 'var(--ink)' }} />
+                                    </label>
+                                    <span style={{ color: 'var(--brass)', fontFamily: 'var(--mono)', paddingBottom: '9px' }}>→</span>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                        <span style={{ ...mono, fontSize: '8px' }}>Feet · billed</span>
+                                        <input value={lengthFeet ?? ''} readOnly placeholder="—"
+                                            style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: 'var(--paper-2)', color: 'var(--ink)' }} />
+                                    </label>
+                                </div>
+                                {lengthInches && <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', marginTop: '5px' }}>{lengthInches}" ÷ 12 = {lengthFeet} ft — the foot figure is what prices.</div>}
+                            </div>
+                            <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                <span style={{ ...mono, color: 'var(--ink-soft)' }}>Fabric weight</span>
+                                <select value={fabricId} onChange={e => setFabricId(e.target.value)}
+                                    style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '13px', background: '#fff', color: 'var(--ink)' }}>
+                                    {FABRIC_CLASSES.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                                </select>
+                            </label>
+                        </>)}
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', paddingTop: '3px' }}>
+                            <button onClick={() => setStepIx(Math.max(0, ix - 1))} disabled={ix === 0}
+                                style={{ ...chip(false), opacity: ix === 0 ? .35 : 1, cursor: ix === 0 ? 'not-allowed' : 'pointer' }}>Back</button>
+                            <button onClick={() => setStepIx(Math.min(steps.length - 1, ix + 1))} disabled={ix >= steps.length - 1}
+                                style={{ ...chip(true), opacity: ix >= steps.length - 1 ? .35 : 1, cursor: ix >= steps.length - 1 ? 'not-allowed' : 'pointer' }}>Next step</button>
                         </div>
-                    ))}
-                    {!priced.lines.length && <div style={{ color: 'var(--ink-soft)' }}>Nothing chosen yet.</div>}
-                    {priceWarnings.map((w, i) => (
-                        <div key={i} style={{ color: '#b00020', fontSize: '9px', paddingTop: '3px' }}>● {w.msg}</div>
-                    ))}
-                    {!!priced.lines.length && (
-                        <div style={{ color: 'var(--ink-soft)', fontSize: '9px', paddingTop: '4px' }}>
-                            Hover a price for the rule that set it{priceLevel !== 'STANDARD' ? ` · ${priceLevel}` : ''}{customerId ? '' : ' · no customer selected, so no client pricing'}
+                    </div>
+                </div>
+
+                {/* ── THE RENDER, THEN THREE BOXES OF EQUAL WEIGHT ─────────────────────────── */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                    <div style={{ height: '420px', background: 'var(--paper-2)', border: '1px solid var(--line)', position: 'relative' }}>
+                        <div style={{ ...mono, position: 'absolute', left: '13px', top: '11px', zIndex: 2, color: 'var(--ink-soft)' }}>
+                            Live 3D · additive · {chosen.length} part(s)
                         </div>
-                    )}
+                        {cadUrl ? (
+                            <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}>
+                                <StudioRig />
+                                <OrbitControls makeDefault />
+                                <Bounds fit clip margin={1.2}>
+                                    <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
+                                        cloneSpecs={[]} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                </Bounds>
+                            </Canvas>
+                        ) : <div style={{ ...mono, color: 'var(--ink-soft)', display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center' }}>No .glb on this assembly</div>}
+                        {!Object.keys(visibleOverrides).length && cadUrl && (
+                            <div style={{ ...mono, position: 'absolute', bottom: '12px', left: '50%', transform: 'translateX(-50%)', color: 'var(--ink-faint)' }}>
+                                Empty by design — choose a rod to begin
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '14px' }}>
+
+                        <div style={boxStyle}>
+                            {boxHead('Finish', perPart ? 'Per part' : 'Whole configuration')}
+                            <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', maxHeight: '300px' }}>
+                                {!finishGroups.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Choose a part to see its finishes.</span>}
+                                {finishGroups.map(([mat, g]) => (
+                                    <div key={mat} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <span style={{ ...mono, fontSize: '8.5px' }}>{mat} <span style={{ color: 'var(--ink-faint)' }}>· {g.inHouse.length + g.out.length}</span></span>
+                                        {!!g.inHouse.length && (
+                                            <div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)' }}>
+                                                <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>In house · {g.inHouse.length}</span>
+                                                {swatchRow(g.inHouse, globalFinish, setGlobalFinish)}
+                                            </div>
+                                        )}
+                                        {!!g.out.length && (
+                                            <div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)' }}>
+                                                <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>Outsourced · {g.out.length}</span>
+                                                {swatchRow(g.out, globalFinish, setGlobalFinish)}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                                {perPart && step?.kind === 'SLOT' && livePicks[step.slot?.key] && (() => {
+                                    const o = step.slot.options.find(x => x.id === livePicks[step.slot.key]);
+                                    if (!o || o.noFinish) return null;
+                                    return (
+                                        <div style={{ borderTop: '1px solid var(--line)', paddingTop: '8px' }}>
+                                            <span style={{ ...mono, fontSize: '8px', color: 'var(--brass)' }}>Just this part · {o.partId}</span>
+                                            {swatchRow(finishesFor(o, finishes), partFinish[o.id] || globalFinish, (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+                        </div>
+
+                        <div style={boxStyle}>
+                            {boxHead('Pricing', priceLevel !== 'STANDARD' ? priceLevel.replace('FAB_', 'Fabricut ').toLowerCase() : '')}
+                            <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, overflowY: 'auto', maxHeight: '300px' }}>
+                                {!priced.lines.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Nothing chosen yet.</span>}
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', fontVariantNumeric: 'tabular-nums' }}>
+                                    <tbody>
+                                        {priced.lines.map((l, i) => (
+                                            <tr key={i} title={`${l.source}${l.detail ? ` — ${l.detail}` : ''}`}>
+                                                <td style={{ padding: '2px 0', color: 'var(--ink)' }}>
+                                                    {l.name}{l.qty > 1 ? ` ×${l.qty}` : ''}
+                                                    {l.sku && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}> · {l.sku}</span>}
+                                                </td>
+                                                <td style={{ padding: '2px 0', textAlign: 'right', whiteSpace: 'nowrap', color: l.unit ? 'var(--ink)' : 'var(--ink-faint)' }}>${l.total.toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                        {!!priced.lines.length && (
+                                            <tr><td style={{ borderTop: '1px solid var(--line)', paddingTop: '6px', fontWeight: 600 }}>Estimated unit</td>
+                                                <td style={{ borderTop: '1px solid var(--line)', paddingTop: '6px', textAlign: 'right', fontWeight: 600 }}>${priced.total.toFixed(2)}</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                                {priceWarnings.map((w, i) => <div key={i} style={{ color: '#b00020', fontSize: '9px' }}>● {w.msg}</div>)}
+                                {!!priced.lines.length && <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>Hover a line for the rule that set it{customerId ? '' : ' · no customer, so no client pricing'}</div>}
+                            </div>
+                        </div>
+
+                        <div style={boxStyle}>
+                            {boxHead('Notes & guidance', 'This step')}
+                            <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', maxHeight: '300px' }}>
+                                {advice && (
+                                    <div style={{ borderLeft: '2px solid var(--brass)', paddingLeft: '9px' }}>
+                                        <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Recommendation</span>
+                                        <p style={{ margin: '2px 0 0', fontSize: '12.5px', lineHeight: 1.45 }}>
+                                            A support every <b>{ftIn(advice.spanInches)}</b> — {advice.why}. Your {lengthInches}" pole wants <b>{advice.brackets}</b>
+                                            {advice.bracketsNoStud && advice.bracketsNoStud !== advice.brackets ? <>, or <b>{advice.bracketsNoStud}</b> off-stud</> : ''}.
+                                        </p>
+                                    </div>
+                                )}
+                                {!advice && lengthInches && (
+                                    <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', borderLeft: '2px solid var(--line)', paddingLeft: '9px' }}>
+                                        No span guidance — this rod is not listed against a family in 6.5.
+                                    </div>
+                                )}
+                                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                    <span style={{ ...mono, fontSize: '8.5px' }}>Config memo · this line</span>
+                                    <input value={configMemo} onChange={e => setConfigMemo(e.target.value)} placeholder="Living Room 1"
+                                        style={{ padding: '7px 8px', border: '1px solid var(--line)', fontSize: '13px', background: '#fff', color: 'var(--ink)' }} />
+                                    <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
+                                        Prints on the quote line, the router and the floor. The job memo covers every configuration.
+                                    </span>
+                                </label>
+                                {isSuperAdmin && (
+                                    <div style={{ borderTop: '1px solid var(--line)', paddingTop: '8px' }}>
+                                        <button onClick={() => setShowDiag(v => !v)}
+                                            style={{ ...mono, fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', padding: '5px 9px', cursor: 'pointer', color: diagnosis.some(d => d.sev === 'red') ? '#b00020' : 'var(--ink-soft)' }}>
+                                            {diagnosis.length ? `${diagnosis.length} tag note(s)` : 'Tags clean'}
+                                        </button>
+                                        {showDiag && (
+                                            <div style={{ marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', lineHeight: 1.55 }}>
+                                                {!diagnosis.length && <div style={{ color: '#2a7' }}>Every slot has options, the chosen parts agree, and every tagged node exists.</div>}
+                                                {diagnosis.map((d, i) => <div key={i} style={{ color: d.sev === 'red' ? '#b00020' : '#8a6508' }}>{d.sev === 'red' ? '●' : '○'} {d.kind} — {d.msg}</div>)}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                    </div>
                 </div>
             </div>
         </div>
