@@ -123,7 +123,10 @@ const mixed = [
     C({ id: 'BP-TRV', partId: 'PT', role: 'BACKPLATE', fits: ['TRAVERSE'], position: 'CENTER', nodes: ['bp-trv'] }),
     C({ id: 'RET-TRV', partId: 'RT', role: 'RETURN', fits: ['TRAVERSE'], position: 'LEFT', nodes: ['ret-trv'] }),
     C({ id: 'FIN-SHARED', partId: 'FS', role: 'FINIAL', position: 'LEFT', nodes: ['fin-l'] }),
-    C({ id: 'RING-STD', partId: 'RG', role: 'RING', nodes: ['rings'] }),
+    // Tagged solid-only, which is what STD_ONLY means in the live vocabulary. The engine no longer
+    // ASSUMES rings are solid-only — H1-2TRV proves they need not be ("no track but rings") — so a
+    // mixed assembly that wants them off the traverse rod must say so. This is the tag doing its job.
+    C({ id: 'RING-STD', partId: 'RG', role: 'RING', fits: ['SOLID'], nodes: ['rings'] }),
 ];
 
 {
@@ -185,7 +188,9 @@ const combinedH1 = [
     C({ id: 'TRACK-REAR', partId: 'TR', role: 'TRACK', setup: 'DOUBLE', nodes: ['track-rear'] }),
     C({ id: 'CARRIER', partId: 'CA', role: 'CARRIER', nodes: ['carriers'] }),
     C({ id: 'FCLIP', partId: 'FC', role: 'FCLIP', nodes: ['fclips'] }),
-    C({ id: 'RING', partId: 'RG', role: 'RING', nodes: ['rings'] }),
+    // Solid-only, said out loud — the engine does not assume it (H1-2TRV runs rings on a
+    // traverse front). This is STD_ONLY in the live vocabulary.
+    C({ id: 'RING', partId: 'RG', role: 'RING', fits: ['SOLID'], nodes: ['rings'] }),
     C({ id: 'BKT-STD', partId: 'BS', role: 'BRACKET', proj: '3-5/8', position: 'CENTER', nodes: ['bkt-std'] }),
     C({ id: 'BKT-TRV', partId: 'BT', role: 'BRACKET', fits: ['TRAVERSE'], proj: '3-5/8', position: 'CENTER', nodes: ['bkt-trv'] }),
     C({ id: 'FIN-L', partId: 'FN', role: 'FINIAL', position: 'LEFT', nodes: ['fin-l'] }),
@@ -228,6 +233,40 @@ const combinedH1 = [
     ok('traverse renders fascia, track and riders', ['fascia', 'track-front', 'carriers', 'fclips', 'bkt-trv', 'fin-l'].every(n => vTrv.visible.has(n)));
     ok('traverse renders no solid rod and no rings', !vTrv.visible.has('rod') && !vTrv.visible.has('rings'));
     ok('a single renders no rear track', !vTrv.visible.has('track-rear'));
+}
+
+// ── A TAG IS EXCLUSIVE ONLY WHEN IT IS USED TO DISTINGUISH ────────────────────────────────────
+// The rule that H1-2TRV forced out, asserted in both directions.
+{
+    // Untagged brackets in a PURE traverse assembly serve it — there is nothing to be exclusive
+    // against. This is the H1-2TRV case that the first cut of the engine got wrong.
+    const pureTraverse = [
+        C({ id: 'FASCIA', partId: 'FA', role: 'FASCIA', nodes: ['fascia'] }),
+        C({ id: 'TRACK', partId: 'TK', role: 'TRACK', nodes: ['track'] }),
+        C({ id: 'BKT', partId: 'BK', role: 'BRACKET', position: 'CENTER', nodes: ['bkt'] }),
+        C({ id: 'RING', partId: 'RG', role: 'RING', nodes: ['ring'] }),
+    ];
+    const m = resolve({ choices: pureTraverse, answers: {} });
+    eq('untagged brackets serve a pure traverse assembly', m.slots.find(s => s.kind === 'BRACKET').options.map(o => o.id), ['BKT']);
+    eq('and so do untagged rings — "no track but rings"', m.slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING']);
+
+    // In a MIXED assembly where nobody drew a distinction for a role, that role serves both worlds.
+    const undrawn = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'TRV', partId: 'T', role: 'ROD', rodKind: 'TRAVERSE', nodes: ['trv'] }),
+        C({ id: 'RING', partId: 'RG', role: 'RING', nodes: ['ring'] }),
+    ];
+    eq('an untagged role in a mixed assembly serves both worlds',
+        resolve({ choices: undrawn, answers: { rodKind: 'TRAVERSE' } }).slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING']);
+    // …and tagging ONE sibling makes the untagged ones the complement.
+    const drawn = [
+        ...undrawn,
+        C({ id: 'RING-TRV', partId: 'RT', role: 'RING', fits: ['TRAVERSE'], nodes: ['ring-trv'] }),
+    ];
+    eq('tagging a sibling makes the untagged one the complement',
+        resolve({ choices: drawn, answers: { rodKind: 'TRAVERSE' } }).slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING-TRV']);
+    eq('and the untagged one owns the other world',
+        resolve({ choices: drawn, answers: { rodKind: 'SOLID' } }).slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING']);
 }
 
 // ── INVARIANTS: the properties that must hold for EVERY combination ───────────────────────────

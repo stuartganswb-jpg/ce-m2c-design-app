@@ -74,18 +74,54 @@ export const TRAVERSE = 'TRAVERSE';
 // rings belong to the solid world unless a tag says otherwise — which is what makes a traverse
 // unit's own arms opt IN rather than every solid bracket having to opt out. Carriers and f-clips
 // are traverse-only, by role.
+// ⚠ CORRECTED 2026-08-17 by shadow-running H1-2TRV, the one collection that works. The first cut
+// hardcoded BRACKET → [SOLID], and H1-2TRV's brackets are UNTAGGED — because that whole assembly is
+// traverse, there was never anything to distinguish them FROM. The engine duly reported all five
+// brackets at every position as excluded, on a flow that renders perfectly. A hardcoded assumption
+// about what a role fits is exactly the thing this engine was built not to have.
+//
+// THE RULE, WHICH IS DATA-DRIVEN: a tag only becomes EXCLUSIVE when it is actually used to
+// distinguish. Resolved per role, per assembly, in applyFitsDefaults() below:
+//   • the assembly offers ONE rod world  → every attachment serves it. Nothing can be exclusive
+//     when there is nothing to be exclusive against. (H1-2TRV, and every pole-only collection.)
+//   • the assembly offers SEVERAL, and some choices of a role carry a tag → the tagged ones are
+//     exclusive and the untagged ones take the COMPLEMENT. (H1-138: trv:bracket arms are
+//     traverse-only, so the untagged arms are the solid ones.)
+//   • the assembly offers several and NO choice of that role carries a tag → no distinction was
+//     drawn, so they serve every world. Erring toward offering, because a wrongly-offered part is
+//     visible and fixable while a wrongly-hidden one is invisible.
+//
+// Only the roles whose world is intrinsic keep a fixed answer: a carrier rides inside a track and
+// cannot mean anything on a solid rod.
 const DEFAULT_FITS = {
-    FINIAL: [SOLID, TRAVERSE],
-    INSIDE_MOUNT: [SOLID, TRAVERSE],
-    RETURN: [SOLID, TRAVERSE],
-    ACCESSORY: [SOLID, TRAVERSE],
-    BRACKET: [SOLID],
-    BACKPLATE: [SOLID],
-    RING: [SOLID],
     CARRIER: [TRAVERSE],
     FCLIP: [TRAVERSE],
     TRV_END: [TRAVERSE],
 };
+
+/**
+ * Fill in what each attachment fits, from what the assembly actually distinguishes.
+ * Runs once per resolve, before any gate sees a choice.
+ */
+export function applyFitsDefaults(choices) {
+    const worlds = [...new Set(choices.filter(c => ROD_ROLES.includes(c.role)).map(c => c.rodKind).filter(Boolean))];
+    if (!worlds.length) return choices;
+    const claimed = {};   // role -> Set(worlds explicitly claimed by a tagged sibling)
+    choices.forEach(c => {
+        if (ROD_ROLES.includes(c.role) || !c.fitsExplicit) return;
+        (claimed[c.role] = claimed[c.role] || new Set());
+        c.fits.forEach(f => claimed[c.role].add(f));
+    });
+    return choices.map(c => {
+        if (ROD_ROLES.includes(c.role) || c.fitsExplicit) return c;
+        if (DEFAULT_FITS[c.role]) return { ...c, fits: DEFAULT_FITS[c.role] };
+        if (worlds.length === 1) return { ...c, fits: worlds };
+        const taken = claimed[c.role];
+        if (!taken || !taken.size) return { ...c, fits: worlds };
+        const complement = worlds.filter(w => !taken.has(w));
+        return { ...c, fits: complement.length ? complement : worlds };
+    });
+}
 
 // MOUNT IS A PROPERTY OF MOUNTING HARDWARE, AND BLANK MEANS WALL (Stuart 2026-08-15: "all the
 // wall brackets are left with no tag, as they are the default"). Two halves to that rule, and both
@@ -138,7 +174,10 @@ export function normalizeChoice(input = {}) {
         rodKind: ROD_ROLES.includes(role)
             ? (U(input.rodKind) === TRAVERSE || role === 'FASCIA' || role === 'TRACK' ? TRAVERSE : SOLID)
             : '',
+        // Left as the raw tag. What an UNTAGGED attachment fits is decided per assembly by
+        // applyFitsDefaults(), because it depends on what the assembly distinguishes.
         fits: fitsTag.length ? fitsTag : (DEFAULT_FITS[role] || [SOLID, TRAVERSE]),
+        fitsExplicit: fitsTag.length > 0,
         setup: U(input.setup),                       // '' = suits every setup
         drive: U(input.drive),                       // '' = suits every drive (a fascia is a fascia)
         proj: measureOf(input.proj),                 // null = suits every projection
@@ -386,7 +425,7 @@ export function slots(choices, answers = {}) {
  * calls this and nothing else, which is what makes it impossible for two surfaces to disagree.
  */
 export function resolve({ choices = [], answers = {}, selectedIds = [], modelNodes = [] } = {}) {
-    const norm = choices.map(normalizeChoice).filter(c => c.role);
+    const norm = applyFitsDefaults(choices.map(normalizeChoice).filter(c => c.role));
     const axes = activeAxes(norm, answers);
     const ctx = contextOf(norm, answers);
     const sl = slots(norm, answers);
@@ -414,13 +453,24 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
 export function diagnose(model) {
     const out = [];
     const add = (sev, kind, msg) => out.push({ sev, kind, msg });
+    // A SLOT THAT BELONGS TO ANOTHER WORLD IS ABSENT, NOT BROKEN (2026-08-17, from shadow-running
+    // H1-138 and H1-2TRV). The world axes — which rod, single or double, which drive — decide which
+    // slots EXIST. Choose a solid rod and the fascia slot is not empty, it is simply not part of
+    // this product; choose a single and the double-only rear track is not missing, it is not there.
+    // Reporting those as faults is how a diagnostic teaches people to ignore it.
+    //
+    // The detail axes — projection, mount — choose AMONG a slot's options. If they leave a slot
+    // with nothing, that IS a fault: the customer is in this world and needs that part.
+    const WORLD_RULES = ['rod type', 'setup', 'drive'];
     model.slots.forEach(s => {
         const where = `${s.kind}${s.position ? ` · ${s.position}` : ''}`;
         if (!s.options.length && s.all.length) {
+            if (s.rejected.every(r => WORLD_RULES.includes(r.rule))) return;  // absent by design
             const byRule = {};
             s.rejected.forEach(r => { byRule[r.rule] = (byRule[r.rule] || 0) + 1; });
             const worst = Object.entries(byRule).sort((a, b) => b[1] - a[1])[0];
-            add('red', 'NO OPTIONS', `${where}: all ${s.all.length} choice(s) excluded — mostly by ${worst ? `${worst[0]} (${worst[1]})` : 'unknown'}. e.g. ${s.rejected[0].choice.name}: ${s.rejected[0].detail}`);
+            const lead = s.rejected.find(r => !WORLD_RULES.includes(r.rule)) || s.rejected[0];
+            add('red', 'NO OPTIONS', `${where}: all ${s.all.length} choice(s) excluded — mostly by ${worst ? `${worst[0]} (${worst[1]})` : 'unknown'}. e.g. ${lead.choice.name}: ${lead.detail}`);
         }
     });
     model.ownership.unowned.forEach(n => add('amber', 'UNTAGGED GEOMETRY', `${n}: no choice claims this node, so it never renders. Tag it in 1.6 or remove it.`));
