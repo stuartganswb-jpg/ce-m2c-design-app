@@ -3329,9 +3329,31 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // ── Cross-step: who else claims this node, and do they agree RIGHT NOW? ───────────────────
       // Rebuilt here rather than read off visibilityOverrides because the finding needs the OWNERS,
       // not just the boolean the AND collapsed them into.
-      const claims = new Map();   // node -> [{ label, allowed }]
+      // ⚠ DISAGREEMENT IS NOT A DEFECT (corrected 2026-08-16, same evening, by using this tool on
+      // H1-138 and then LOOKING AT THE RENDER). The first cut reported every node whose claiming
+      // steps disagreed — and on a multi-material pole that is the DESIGNED mechanism: the Pole /
+      // Rod Material step vetoes the other materials' rod halves precisely through this AND, which
+      // is what eb08a76 set out to do. It reported two criticals against a rod that was rendering
+      // perfectly. A diagnostic that cries wolf about correct behaviour is worse than none, because
+      // it spends the trust you need for the real finding.
+      //
+      // The defect is not "two steps disagree" — it is "this geometry CANNOT BE SHOWN from here":
+      // the step hiding it has no option, among those actually offered in this configuration, that
+      // would bring it back. Then the part is unreachable without changing something else, and the
+      // customer has no way to get to it. Ordinary narrowing — pick the wood rod and the wood half
+      // appears — is silent, as it should be.
+      const claims = new Map();   // node -> [{ label, allowed, reachable }]
       steps.forEach(step => {
-          const claim = (gmap, sel, suffix) => {
+          // Nodes an AVAILABLE option of this step would show — the difference between "not
+          // selected" (fine) and "not selectable" (the finding).
+          const availMain = new Set();
+          try {
+              styleOptionStages(step).opts.forEach(o => splitNodesLower((step.geometryMap || {})[o.optId || o.partId] || '').forEach(n => availMain.add(n)));
+          } catch (e) { /* pool unavailable: treat as reachable, never invent a finding */ }
+          const availSub = new Set();
+          (step.subOptions || []).filter(o => { try { return optCustomerOk(o) && trvOkFor(step, { isSub: true })(o) && projTagOk(o); } catch (e) { return true; } })
+              .forEach(o => splitNodesLower((step.subGeometryMap || {})[o.optId || o.partId] || '').forEach(n => availSub.add(n)));
+          const claim = (gmap, sel, suffix, avail) => {
               if (!gmap || !Object.keys(gmap).length) return;
               Object.entries(gmap).forEach(([optId, csv]) => {
                   if (!csv) return;
@@ -3339,26 +3361,28 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       const list = claims.get(n) || [];
                       const at = list.find(x => x.label === step.title + suffix);
                       if (at) { at.allowed = at.allowed || optId === sel; return; }
-                      list.push({ label: step.title + suffix, allowed: optId === sel });
+                      list.push({ label: step.title + suffix, allowed: optId === sel, reachable: avail.size === 0 || avail.has(n) });
                       claims.set(n, list);
                   });
               });
           };
-          claim(step.geometryMap, dynamicConfigParams[step.id], '');
-          claim(step.subGeometryMap, dynamicConfigParams[`${step.id}__sub`], ` · ${step.subLabel || 'sub'}`);
+          claim(step.geometryMap, dynamicConfigParams[step.id], '', availMain);
+          claim(step.subGeometryMap, dynamicConfigParams[`${step.id}__sub`], ` · ${step.subLabel || 'sub'}`, availSub);
       });
       const conflicts = new Map();  // "ownerA ⊗ ownerB" -> node count
       claims.forEach((list, node) => {
           if (list.length < 2) return;
-          const yes = list.filter(x => x.allowed), no = list.filter(x => !x.allowed);
-          if (!yes.length || !no.length) return;   // unanimous: not a conflict
-          const key = `${yes[0].label}  ⊗  ${no[0].label}`;
+          const yes = list.filter(x => x.allowed);
+          // Only a hider that CANNOT be talked into showing it counts.
+          const stuck = list.filter(x => !x.allowed && !x.reachable);
+          if (!yes.length || !stuck.length) return;
+          const key = `${yes[0].label}  ⊗  ${stuck[0].label}`;
           const hit = conflicts.get(key) || { n: 0, sample: node };
           hit.n++; conflicts.set(key, hit);
       });
       conflicts.forEach((v, key) => {
           const [shows, hides] = key.split('  ⊗  ');
-          push('red', 'CONFLICT', `${v.n} node(s) are claimed by two steps that disagree: "${shows}" shows them, "${hides}" hides them — the AND wins, so they are INVISIBLE. e.g. ${String(v.sample).split('__').pop()}`);
+          push('red', 'UNREACHABLE', `${v.n} node(s): "${shows}" shows them, but "${hides}" hides them and has NO option available in this configuration that would show them — so they cannot be made visible from here at all. e.g. ${String(v.sample).split('__').pop()}`);
       });
 
       // ── Sections with no owner at all vs. loose nodes inside an owned one ─────────────────────
