@@ -90,9 +90,14 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
     // special case at all: give it no nodes. (The old model had to force-hide it, which is how a
     // hidden part could still fight a visible one for the same mesh.) A parked pin has no item yet,
     // so it is neither billed nor rendered.
+    // ⚠ A HIDDEN PIN IS NEVER A QUESTION (Stuart 2026-08-17: "it is still displaying items tagged
+    // as hidden"). Giving it no nodes stopped it RENDERING, but it still had a role and a position,
+    // so it still appeared in its slot as something to pick — a choice that bills and shows nothing.
+    // Hidden means BOM-only: built, billed, never offered, never drawn. That is exactly what a
+    // rider is, so it becomes one.
     const hidden = !!pin.isHiddenPart;
     const parked = !!pin.parked;
-    const isRider = RIDER_ROLES.includes(role) || pin.alwaysShown === true;
+    const isRider = RIDER_ROLES.includes(role) || pin.alwaysShown === true || (hidden && !parked);
 
     const fits = trv.fits || null;
     const rodKindTag = (role === 'FASCIA' || role === 'TRACK') ? TRAVERSE
@@ -112,6 +117,12 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         mount: U(pin.mountType) || normalizeLocation(cluster?.location) || '',
         position: normalizePosition(cluster?.position) || U(cluster?.position) || '',
         always: isRider && !parked,
+        // The pairing + companion tags, straight through: a collar comes with the finial that
+        // requires it; a basic bracket takes no plate; an in-line bracket takes in-line plates.
+        isCollar: !!pin.isCollar,
+        requiresCollar: U(pin.requiresCollar),
+        isBasic: !!pin.isBasic,
+        inlineOnly: !!pin.inlineOnly,
         qty: Number(pin.defaultQty) > 0 ? Number(pin.defaultQty) : 1,
         price: Number(pin.price) || 0,
         sort: Number(pin.choiceSort) || 0,

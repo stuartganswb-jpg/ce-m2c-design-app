@@ -242,6 +242,15 @@ export function normalizeChoice(input = {}) {
         // the rod is chosen, which is exactly what "always shown" was trying to say. So a rod is
         // always a CHOICE, whatever it is tagged, and no retagging is needed to fix this.
         always: (input.always === true || RIDER_ROLES.includes(role)) && !ROD_ROLES.includes(role),
+        // A COLLAR IS NOT A CHOICE — it is the companion of the finial that requires it. Two-part
+        // acrylic finials are a metal collar plus an acrylic top; the customer picks the finial and
+        // the collar comes with it, always the matching one.
+        isCollar: input.isCollar === true,
+        requiresCollar: U(input.requiresCollar),
+        // A BASIC bracket takes no backplate; an IN-LINE bracket takes only in-line plates. Both are
+        // facts about the part, tagged in 1.6, and both are pairing rules rather than filters.
+        isBasic: input.isBasic === true,
+        inlineOnly: input.inlineOnly === true,
         qty: Number(input.qty) > 0 ? Number(input.qty) : 1,
         price: Number(input.price) || 0,
         raw: input.raw !== undefined ? input.raw : input,
@@ -422,6 +431,30 @@ export function ridersFor(choices, answers = {}, selectedIds = []) {
 }
 
 /**
+ * The collars the selected parts require — matched to the finial that asks for them.
+ *
+ * A two-part acrylic finial is a metal collar plus an acrylic top: the customer picks the finial,
+ * and the collar that belongs to it comes along. It is never a question, so it is resolved here
+ * rather than offered anywhere.
+ */
+export function companionsFor(choices, selectedIds = []) {
+    const want = new Set((selectedIds || []).filter(Boolean).map(String));
+    const collars = choices.filter(c => c.isCollar);
+    if (!collars.length) return [];
+    const out = [];
+    choices.filter(c => want.has(c.id) && c.requiresCollar).forEach(c => {
+        const key = c.requiresCollar;
+        // By the code it names, then by position — a left finial takes the left collar. Falling back
+        // to position matters because the tag names a PART and the same collar is pinned per end.
+        const byCode = collars.filter(x => [x.partId, x.name, x.id].some(v => U(v) === key));
+        const pool = byCode.length ? byCode : collars;
+        const hit = pool.find(x => !c.position || !x.position || x.position === c.position) || (byCode.length ? byCode[0] : null);
+        if (hit && !out.includes(hit)) out.push(hit);
+    });
+    return out;
+}
+
+/**
  * WHAT RENDERS. The union of the geometry owned by the selected choices, plus the riders.
  *
  * `selectedIds` is whatever the customer has answered — one id per slot. Nothing else contributes,
@@ -450,6 +483,7 @@ export function visibleNodes(choices, answers = {}, selectedIds = []) {
         if (!c.partId) take(c);   // an unidentified rod is only ever itself
     });
     ridersFor(choices, answers, selectedIds).forEach(take);
+    companionsFor(choices, selectedIds).forEach(take);
     return on;
 }
 
@@ -509,6 +543,7 @@ export function slots(choices, answers = {}, selectedIds = []) {
     const bucket = new Map();
     choices.forEach(c => {
         if (c.always) return;                       // riders are never a question
+        if (c.isCollar) return;                     // …and nor is a collar: it comes with its finial
         const kind = SLOT_OF_ROLE(c.role);
         if (!kind) return;
         // A rod pinned per position is ONE part in three pieces, not three questions. Its pieces
@@ -521,6 +556,33 @@ export function slots(choices, answers = {}, selectedIds = []) {
         const v = admits(c, { ...ctx, position: pos ? pos : undefined });
         if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });
     });
+    // ── WHICH BACKPLATE GOES WITH WHICH BRACKET (Stuart 2026-08-17) ─────────────────────────
+    // "any bracket tagged as basic gets no backplate option. any bracket tagged inline only shows
+    //  the backplate options tagged as inline, and any other bracket not tagged as inline or basic
+    //  only shows backplates not tagged inline."
+    // A pairing, not a filter: the plate pool follows the arm that was chosen, so the two can never
+    // be a mismatched pair. Nothing is offered that would not physically fit.
+    const bracketAt = (pos) => choices.find(c => want.has(c.id) && c.role === 'BRACKET' && (c.position || '') === pos);
+    bucket.forEach(slot => {
+        if (slot.kind !== 'BACKPLATE') return;
+        const arm = bracketAt(slot.position);
+        if (!arm) return;                            // no arm chosen yet — the pool is untouched
+        if (arm.isBasic) {
+            slot.suppressedBy = arm.name;
+            slot.suppressedReason = 'a basic bracket takes no backplate';
+            slot.options = [];
+            return;
+        }
+        const wantInline = !!arm.inlineOnly;
+        slot.options = slot.options.filter(o => !!o.inlineOnly === wantInline);
+        if (!slot.options.length) {
+            slot.suppressedBy = arm.name;
+            slot.suppressedReason = wantInline
+                ? 'an in-line bracket takes only in-line backplates, and none are tagged'
+                : 'a standard bracket takes only non-in-line backplates, and none are tagged';
+        }
+    });
+
     // An end that mounts itself takes its bracket and backplate off the table — with the reason
     // attached, so nothing downstream mistakes it for an empty pool that needs fixing.
     bucket.forEach(slot => {
@@ -561,12 +623,14 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const ctx = contextOf(norm, answers);
     const sl = slots(norm, answers, selectedIds);
     const riders = ridersFor(norm, answers, selectedIds);
+    const companions = companionsFor(norm, selectedIds);
     const visible = visibleNodes(norm, answers, selectedIds);
     const ownership = nodeOwnership(norm, modelNodes);
     const selected = norm.filter(c => selectedIds.includes(c.id));
     const bom = [
         ...norm.filter(c => selectedIds.includes(c.id)),
         ...riders,
+        ...companions,          // the collar bills with its finial
     ].map(c => ({ partId: c.partId, name: c.name, qty: c.qty, price: c.price, raw: c.raw }));
     return {
         choices: norm,
@@ -574,6 +638,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
         ctx,           // what those answers mean
         slots: sl,     // the per-place decisions, each with its live options + why the rest are out
         riders,        // built, never asked
+        companions,    // collars pulled in by the part that requires them
         visible,       // Set of node names that render. Everything else is hidden.
         ownership,     // node -> owning choice; unowned nodes; mapped names the model lacks
         selected,      // the chosen parts themselves, for coherence checks

@@ -448,6 +448,54 @@ const threePiece = [
         chosen.slots.find(s => s.kind === 'BRACKET' && s.position === 'LEFT').options, []);
 }
 
+// ── A COLLAR COMES WITH ITS FINIAL ────────────────────────────────────────────────────────────
+// "it is not grouping and rendering the acrylic finials with the matching collars that are tagged."
+{
+    const acrylic = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'ABF-L', partId: 'H2-138ABF', role: 'FINIAL', position: 'LEFT', requiresCollar: 'AFC', nodes: ['acryl-l'] }),
+        C({ id: 'ABF-R', partId: 'H2-138ABF', role: 'FINIAL', position: 'RIGHT', requiresCollar: 'AFC', nodes: ['acryl-r'] }),
+        C({ id: 'BALL-L', partId: 'H2-138BLF', role: 'FINIAL', position: 'LEFT', nodes: ['ball-l'] }),
+        C({ id: 'COLLAR-L', partId: 'AFC', role: 'FINIAL', position: 'LEFT', isCollar: true, nodes: ['collar-l'] }),
+        C({ id: 'COLLAR-R', partId: 'AFC', role: 'FINIAL', position: 'RIGHT', isCollar: true, nodes: ['collar-r'] }),
+    ];
+    const m = resolve({ choices: acrylic, answers: {} });
+    eq('a collar is never offered as a choice',
+        m.slots.find(s => s.kind === 'END' && s.position === 'LEFT').options.map(o => o.id).sort(), ['ABF-L', 'BALL-L']);
+
+    const vis = (sel) => [...resolve({ choices: acrylic, answers: {}, selectedIds: sel }).visible].sort();
+    eq('the acrylic finial brings its collar', vis(['ROD', 'ABF-L']), ['acryl-l', 'collar-l', 'rod']);
+    eq('and takes the collar at its OWN end', vis(['ROD', 'ABF-R']), ['acryl-r', 'collar-r', 'rod']);
+    eq('both ends acrylic bring both collars', vis(['ROD', 'ABF-L', 'ABF-R']),
+        ['acryl-l', 'acryl-r', 'collar-l', 'collar-r', 'rod']);
+    eq('a plain ball finial brings no collar', vis(['ROD', 'BALL-L']), ['ball-l', 'rod']);
+    const bom = resolve({ choices: acrylic, answers: {}, selectedIds: ['ROD', 'ABF-L'] }).bom.map(b => b.partId).sort();
+    eq('and the collar bills with it', bom, ['AFC', 'H2-138ABF', 'R']);
+}
+
+// ── BASIC AND IN-LINE BRACKETS CHOOSE THEIR OWN PLATES ────────────────────────────────────────
+// "any bracket tagged as basic gets no backplate option. any bracket tagged inline only shows the
+//  backplate options tagged as inline, and any other bracket not tagged as inline or basic only
+//  shows backplates not tagged inline."
+{
+    const arms = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'STD', partId: 'A-STD', role: 'BRACKET', position: 'CENTER', nodes: ['a-std'] }),
+        C({ id: 'BASIC', partId: 'A-BAS', role: 'BRACKET', position: 'CENTER', isBasic: true, nodes: ['a-bas'] }),
+        C({ id: 'INLINE', partId: 'A-INL', role: 'BRACKET', position: 'CENTER', inlineOnly: true, nodes: ['a-inl'] }),
+        C({ id: 'BP-STD', partId: 'P-STD', role: 'BACKPLATE', position: 'CENTER', nodes: ['p-std'] }),
+        C({ id: 'BP-INL', partId: 'P-INL', role: 'BACKPLATE', position: 'CENTER', inlineOnly: true, nodes: ['p-inl'] }),
+    ];
+    const plates = (sel) => resolve({ choices: arms, answers: {}, selectedIds: sel }).slots.find(s => s.kind === 'BACKPLATE');
+    eq('with no arm chosen the plate pool is untouched', plates(['ROD']).options.map(o => o.id).sort(), ['BP-INL', 'BP-STD']);
+    eq('a standard arm offers only the non-in-line plate', plates(['ROD', 'STD']).options.map(o => o.id), ['BP-STD']);
+    eq('an in-line arm offers only the in-line plate', plates(['ROD', 'INLINE']).options.map(o => o.id), ['BP-INL']);
+    eq('a basic arm offers no plate at all', plates(['ROD', 'BASIC']).options, []);
+    ok('and says why', /basic bracket takes no backplate/.test(plates(['ROD', 'BASIC']).suppressedReason || ''));
+    ok('a suppressed plate pool is never reported as a fault',
+        !diagnose(resolve({ choices: arms, answers: {}, selectedIds: ['ROD', 'BASIC'] })).some(d => d.kind === 'NO OPTIONS'));
+}
+
 // ── THE BLANK SCREEN IS A GUARANTEE, NOT A DEFAULT ────────────────────────────────────────────
 // "screen loads with traverse carriers visible" — the first thing the new configurator got wrong.
 // With nothing selected, NOTHING renders. Not riders, not always-shown parts, nothing.

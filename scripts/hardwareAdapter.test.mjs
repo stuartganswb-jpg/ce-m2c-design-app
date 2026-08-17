@@ -60,9 +60,12 @@ eq('carrier is a rider and never a question', [by('P8').role, by('P8').always], 
 eq('the backplate inherits the cluster location as its mount', by('P5').mount, 'CEILING');
 eq('position comes from the cluster', by('P6').position, 'LEFT');
 
-// A HIDDEN pin bills but has no geometry — no force-hide needed under default-hidden.
+// A HIDDEN pin bills but has no geometry — no force-hide needed under default-hidden — and it is
+// never OFFERED either: hidden means BOM-only, which is exactly what a rider is.
 eq('a hidden pin carries no nodes', by('P9').nodes, []);
 ok('a hidden pin still bills', by('P9').always === true && by('P9').partId === 'BUSH-1');
+ok('and is never offered as a choice',
+    !resolve({ choices, answers: { rodKind: 'SOLID' } }).slots.some(s => s.options.some(o => o.partId === 'BUSH-1')));
 
 // ── End to end: the translated assembly behaves like the hand-written fixtures ─────────────────
 {
