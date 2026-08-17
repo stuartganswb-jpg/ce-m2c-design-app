@@ -51,6 +51,7 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
     const [showDiag, setShowDiag] = useState(false);
+    const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
 
     const choices = useMemo(() => choicesFromAssembly(assembly, pins), [assembly, pins]);
     const modelNodes = useMemo(() => modelNodesOf(assembly), [assembly]);
@@ -129,11 +130,38 @@ export default function HardwareConfigurator({ assembly, pins, isSuperAdmin = fa
                 {/* ONE DECISION PER PLACE. A slot with no options in this configuration is simply
                     not shown — on a solid rod there is no fascia question, and that is not an error
                     to report, it is a product that does not have one. */}
-                {model.slots.filter(s => s.options.length).map(s => (
+                {model.slots.filter(s => s.options.length || s.suppressedBy).map(s => (
                     <div key={s.key}>
-                        <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>
-                            {slotLabel(s)} <span style={{ opacity: 0.6 }}>({s.options.length})</span>
+                        <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px', display: 'flex', alignItems: 'baseline', gap: '6px' }}>
+                            <span>{slotLabel(s)} <span style={{ opacity: 0.6 }}>({s.options.length})</span></span>
+                            {/* ALL FIXES ON THE ITEMS, NOT ON THE FLOW (Stuart 2026-08-17: "if a
+                                backplate misbehaves we know exactly what to fix — its tag"). Every
+                                exclusion already carries the rule that made it and the part it was
+                                made about; this simply shows them, so the answer to "why is that
+                                one missing" is one click rather than a hunt. */}
+                            {!!s.rejected.length && (
+                                <span onClick={() => setWhySlot(whySlot === s.key ? null : s.key)}
+                                    style={{ cursor: 'pointer', color: 'var(--brass)', fontSize: '9px', textTransform: 'none', letterSpacing: 0 }}>
+                                    {whySlot === s.key ? 'hide' : `why not the other ${s.rejected.length}?`}
+                                </span>
+                            )}
                         </div>
+                        {s.suppressedBy && (
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#8a6508', padding: '2px 0 6px' }}>
+                                not asked — {s.suppressedReason} ({s.suppressedBy})
+                            </div>
+                        )}
+                        {whySlot === s.key && (
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', lineHeight: 1.6, marginBottom: '6px', paddingLeft: '6px', borderLeft: '2px solid var(--line)' }}>
+                                {s.rejected.map((r, i) => (
+                                    <div key={i} style={{ color: 'var(--ink-soft)', padding: '1px 0' }}>
+                                        <span style={{ color: 'var(--ink)' }}>{r.choice.name}</span>
+                                        {r.choice.partId ? ` · ${r.choice.partId}` : ''} — <span style={{ color: '#8a6508' }}>{r.rule}</span>: {r.detail}
+                                    </div>
+                                ))}
+                                <div style={{ color: 'var(--ink-soft)', paddingTop: '3px' }}>Every one of these is a tag on the ITEM, in 1.6.</div>
+                            </div>
+                        )}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                             {s.options.map(o => (
                                 <button key={o.id} onClick={() => setPick(s.key, o.id)} style={{ ...chip(livePicks[s.key] === o.id), fontSize: '9px', textTransform: 'none', letterSpacing: 0 }}>
