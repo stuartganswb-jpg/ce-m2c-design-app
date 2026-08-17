@@ -3,6 +3,7 @@ import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
 import { Sheet2DOverlay, MaterialRail } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
 import { choicesFromAssembly, modelNodesOf } from '../Shared/hardwareAdapter';
+import HardwareConfigurator from '../Shared/HardwareConfigurator';
 import { resolve as resolveHardware, diagnose as diagnoseHardware } from '../Shared/hardwareModel';
 import { normalizeLocation } from '../Shared/assemblyTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
@@ -160,7 +161,7 @@ export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
     return kept.length ? kept : acc;
 }, Array.isArray(pool) ? pool : []);
 
-export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames }) => {
+export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit, onSceneNames, defaultHidden = false }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
@@ -242,7 +243,14 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                     const nameHit = (nm, t) => nm.toLowerCase() === t;
                     const hitTarget = (t) => { let n = child; while (n) { if (n.name && nameHit(n.name, t)) return true; n = n.parent; } return false; };
 
-                    let isVis = child.userData.originalVisible;
+                    // ADDITIVE RENDERING (Stuart 2026-08-17: "i am fine with opening on ... totally
+                    // blank screen and work purely additive, that is how the portal renders").
+                    // defaultHidden inverts the base state: a mesh appears only when something
+                    // SELECTED claims it. That is the whole ghost class gone — an unclaimed mesh
+                    // cannot render, so it cannot pose as a part nobody chose — and it is what the
+                    // tag engine already computes, since its visible set IS the union of the
+                    // selected choices. The old default stays exactly as it was for the old path.
+                    let isVis = defaultHidden ? false : child.userData.originalVisible;
                     if (visibilityOverrides && Object.keys(visibilityOverrides).length > 0) {
                         let anyShow = false, anyHide = false;
                         for (const [targetStr, isVisibleFlag] of Object.entries(visibilityOverrides)) {
@@ -444,7 +452,7 @@ export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, clone
                 );
             }
         });
-    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, highlightOverridesString]);
+    }, [clonedScene, textureOverridesString, visibilityOverridesString, cloneSpecsString, highlightOverridesString, defaultHidden]);
 
     return <primitive object={clonedScene} />;
 };
@@ -698,6 +706,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // TEMP (Stage 0 debug): when on, glow the meshes the current step's selection controls.
   const [debugHighlight, setDebugHighlight] = useState(false);
   const [showDoctor, setShowDoctor] = useState(false);
+  // ▶ THE NEW ENGINE, side by side (Stuart 2026-08-17: "just get a new master template that works
+  // 100% as long as the tags are correct"). A super-admin toggle that replaces the whole step UI
+  // and render with the tag-driven configurator for this assembly. The old path is untouched and
+  // still what every quote runs on; this is where the template gets proven before anything moves.
+  const [newEngine, setNewEngine] = useState(false);
   // Steps this configuration has already tried to auto-fill (see the sweep below). A Set that also
   // carries the configuration signature it belongs to, so a new configuration starts clean.
   const autoFilledRef = useRef(new Set());
@@ -3346,13 +3359,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   //
   // Severity: RED = something is invisible or unpickable right now. AMBER = it will bite later.
   useEffect(() => {
-      if (!showDoctor || !activeAssembly?.id) { setShadowPins([]); return; }
+      if ((!showDoctor && !newEngine) || !activeAssembly?.id) { setShadowPins([]); return; }
       const unsub = onSnapshot(
           query(collection(db, 'assembly_pins'), where('assemblyId', '==', activeAssembly.id)),
           (snap) => setShadowPins(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
           () => setShadowPins([]));
       return () => unsub();
-  }, [showDoctor, activeAssembly]);
+  }, [showDoctor, newEngine, activeAssembly]);
 
   // What the NEW engine makes of this same configuration, and where it differs from the old one.
   // Never touches state, never renders geometry — it only has an opinion.
@@ -4386,6 +4399,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                           </label>
                           <button onClick={() => { const v = captureFnRef.current && captureFnRef.current(); if (v) setCapturedViews(v); else alert('Capture not ready — give the model a moment to load, then try again.'); }} title="Capture Front + Back images of this configuration for the production packet" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: capturedViews ? 'var(--brass)' : 'var(--ink)', background: 'transparent', border: '1px solid var(--line)', padding: '5px 10px' }}>📷 Capture Views</button>
                           {isSuperAdmin && (
+                              <button onClick={() => setNewEngine(v => !v)} title="NEW ENGINE — the tag-driven master template. Reads the assembly's PINS directly: no generated flow, no baked geometry map, nothing to regenerate. Opens empty and builds additively, so everything you see is something you chose. The old configurator is untouched and still what quotes run on." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', ...{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em' }, color: newEngine ? '#fff' : 'var(--brass)', background: newEngine ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', padding: '5px 10px' }}>
+                                  ▶ New engine
+                              </button>
+                          )}
+                          {isSuperAdmin && (
                               <button onClick={() => setShowDoctor(v => !v)} title="FLOW DOCTOR — why this configuration renders the way it does: steps with nothing selected, steps whose options all filtered away, geometry no available option can bring back, sections no step controls, and mapped names the .glb does not contain. Runs ONLY while open — on a large flow the check is far too expensive to leave running behind every click." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: flowDoctor.idle ? 'var(--ink-soft)' : flowDoctor.red ? '#a33' : flowDoctor.amber ? '#8a6508' : '#2a7', background: showDoctor ? 'var(--paper-2)' : 'transparent', border: `1px solid ${!flowDoctor.idle && flowDoctor.red ? '#a33' : 'var(--line)'}`, padding: '5px 10px' }}>
                                   🩺 {flowDoctor.idle ? 'Check flow' : flowDoctor.red ? `${flowDoctor.red} critical` : flowDoctor.amber ? `${flowDoctor.amber} to review` : 'Healthy'}
                               </button>
@@ -4399,6 +4417,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       </div>
                   </div>
                   
+                  {/* ▶ THE NEW ENGINE takes the whole pane when it is on — its own questions, its own
+                      additive render, driven only by this assembly's pins. The old step column to
+                      the left is inert while it is showing. */}
+                  {newEngine && isSuperAdmin ? (
+                      <div style={{ padding: '16px', background: '#fff', borderTop: '1px solid var(--line)' }}>
+                          {activeAssembly ? (
+                              shadowPins.length
+                                  ? <HardwareConfigurator assembly={activeAssembly} pins={shadowPins} isSuperAdmin={isSuperAdmin} />
+                                  : <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Loading this assembly's pins…</div>
+                          ) : (
+                              <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>Pick a flow with a linked assembly — the new engine reads the ASSEMBLY, not the flow.</div>
+                          )}
+                      </div>
+                  ) : (
                   <div style={{ height: '440px', flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper-2)' }}>
                       {/* 2D TEAR-SHEET FLOW (M2C lighting): the flow doc carries the drawing + regions —
                           render it regardless of viewMode/assembly state; the halos follow the steps.
@@ -4605,6 +4637,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       
 
                   </div>
+                  )}
               </div>
 
               <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '28px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
