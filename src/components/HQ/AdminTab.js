@@ -1594,7 +1594,18 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           //    stacked and the "swap" appeared to do nothing);
           //  • a duplicate pin (the wood rod, twice) collapses into ONE option;
           //  • a material with no center pin (the acrylic rod) still becomes an option.
-          const materials = dedupeByPart([...centerPole, ...endPole]);
+          //
+          // ⚠ A MATERIAL IS A ROD YOU CAN CHOOSE — NOT EVERY ROD SEGMENT (regression caught
+          // 2026-08-16, same day: "Simple Elegance worked perfectly, now it is full of bugs").
+          // The first cut of this rule pooled EVERY pole pin. On a Brimar / H2 / Simple Elegance
+          // model the END pins include the modelled BEND segments, which are a different PART from
+          // the straight rod — so they counted as extra "materials" and a single-material flow that
+          // had worked for months suddenly grew a phantom "Pole / Rod Material" step AND LOST ITS
+          // FINISH CHOOSER (the multi-material branch below emits DIMENSIONS, which carries no
+          // dataSource, because there the MATERIAL step owns the finish). A bend is the same
+          // material as the rod it bends; it is chosen by the End Treatment, not here.
+          const isBendSeg = (o) => BEND_RE.test(`${o.partName || ''} ${o.optId || ''}`);
+          const materials = dedupeByPart([...centerPole, ...endPole.filter(o => !isBendSeg(o))]);
           // CARRIERS RIDE THE TRAVERSE ROD'S GEOMETRY (2026-08-16, the 👻 inverse audit's first
           // catch: HTSLNTCAR was controlled by NO step and rendered on every material). In the
           // mixed pole path the riders' meshes belong to the traverse unit — merge their nodes
@@ -1603,7 +1614,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           // riderPool never sampled — the reason the first cut of this fix changed nothing).
           const riderNodes = [...riderPool, ...other.filter(isRider)].filter(o => ['CARRIER', 'FCLIP'].includes(traverseRoleOf(o))).flatMap(o => splitNodes(o.targetNode));
           if (riderNodes.length) materials.forEach(m => { if (isTrvPoleChoice(m)) m.targetNode = joinNodes([...splitNodes(m.targetNode), ...riderNodes]); });
-          const multiMat = materials.length > 1;
+          // And the question is only asked when there are two REAL, identified materials to ask
+          // about. An unidentified pin (no item #) has nothing to price and must never be what
+          // flips a flow into multi-material mode — it stays in the option list when the step does
+          // exist (so its geometry keeps an owner instead of becoming a permanent ghost).
+          const multiMat = new Set(materials.map(m => String(m.partId || '').toUpperCase()).filter(Boolean)).size > 1;
           if (multiMat) add({ title: 'Pole / Rod Material', type: 'STYLE_SWAP', partHandling: 'Custom', hideQty: true, required: true, useClientPricing: true, styleOptions: materials, geometryMap: geom(materials) });
           // Length & Finish — always present (the core pole step; carries the pole geometry). When there's a
           // single material, this IS the combined "choose length + finish" step. The calculatorTemplate +

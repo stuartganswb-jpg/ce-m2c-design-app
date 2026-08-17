@@ -135,6 +135,24 @@ const SearchableCustomerSelect = ({ value, onChange, customers, placeholder, sty
     );
 };
 
+// ── A GATE MUST NEVER EMPTY A POOL (Stuart 2026-08-16: "every time i add a new flow, i take huge
+// steps backwards") ────────────────────────────────────────────────────────────────────────────
+// Every rule a new collection needs — the projection pairing, the mount pairing, the traverse
+// swap — arrives as a FILTER on a shared pool, and a filter written for the collection that has
+// the tags STARVES the collection that does not: the pool empties, nothing seeds, and a position
+// that rendered correctly for months goes bare. That is the whole regression class, and it has one
+// answer: a gate expresses a PREFERENCE. Apply it while something survives; skip it when it would
+// leave nothing. The pre-existing `cands.length ? cands : pool0` idiom on the plate picker was
+// this rule, written once by hand — this is that idiom, named and applied everywhere.
+//
+// Gates are listed in priority order (most important first) and applied cumulatively, so a flow
+// carrying every tag narrows exactly as its author intended and an untagged flow keeps what it had.
+export const preferring = (pool, ...gates) => gates.reduce((acc, g) => {
+    if (typeof g !== 'function') return acc;
+    const kept = acc.filter(g);
+    return kept.length ? kept : acc;
+}, Array.isArray(pool) ? pool : []);
+
 export const DynamicModel = ({ url, textureOverrides, visibilityOverrides, cloneSpecs, highlightOverrides, onVisAudit }) => {
     const { scene } = useGLTF(url, 'https://www.gstatic.com/draco/versioned/decoders/1.5.5/');
     const clonedScene = useMemo(() => scene.clone(true), [scene]);
@@ -903,15 +921,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   // Stable sort: wall/untagged options ahead of ceiling/end-tagged ones; the
                   // ordinary default heuristic then runs on that ordering.
                   const wallFirst = (arr) => [...arr].sort((a, b) => (mountOf(a) === 'WALL' ? 0 : 1) - (mountOf(b) === 'WALL' ? 0 : 1));
-                  if (!next[step.id]) { const id = defaultOptionFor(wallFirst((step.styleOptions || []).filter(optCustomerOk).filter(trvOkFor(step)).filter(seedProjOk)), step.geometryMap, step.defaultOptId); if (id) { next[step.id] = id; changed = true; } }
+                  // `preferring`, not `.filter` — the projection/traverse gates narrow the seed pool
+                  // while they can and step aside when they cannot. A position whose arms carry no
+                  // tag for the seeded projection used to seed NOTHING and render bare (H2/Brimar
+                  // after the H1-138 projection work); now it seeds its own best option.
+                  if (!next[step.id]) { const id = defaultOptionFor(wallFirst(preferring((step.styleOptions || []).filter(optCustomerOk), trvOkFor(step), seedProjOk)), step.geometryMap, step.defaultOptId); if (id) { next[step.id] = id; changed = true; } }
                   // Secondary chooser in the same step (e.g. the backplate paired with the bracket),
                   // seeded to a plate whose location matches the chosen bracket's mount.
                   if (Array.isArray(step.subOptions) && step.subOptions.length && !next[`${step.id}__sub`]) {
                       const mainOpt = step.styleOptions.find(o => (o.optId || o.partId) === next[step.id]);
                       const loc = mainOpt?.location;
-                      const pool0 = (step.subOptions || []).filter(optCustomerOk).filter(trvOkFor(step, { isSub: true })).filter(mountPairGate(step.subOptions, mainOpt)).filter(seedProjOk);
-                      const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
-                      const sid = defaultOptionFor(cands.length ? cands : pool0, step.subGeometryMap, step.defaultSubOptId);
+                      const pool0 = preferring((step.subOptions || []).filter(optCustomerOk),
+                          trvOkFor(step, { isSub: true }), mountPairGate(step.subOptions, mainOpt), seedProjOk,
+                          loc ? (o) => !o.location || o.location === loc : null);
+                      const sid = defaultOptionFor(pool0, step.subGeometryMap, step.defaultSubOptId);
                       if (sid) { next[`${step.id}__sub`] = sid; changed = true; }
                   }
               } else if (step.mountSelector && !next[step.id]) {
@@ -1030,6 +1053,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return { setup, drive, trvPole };
   }, [activeFlow, dynamicConfigParams]);
 
+  // A flow built by the traverse generator — recognised by the steps only it emits. Used where the
+  // two grammars genuinely need different rules rather than a shared one bent to serve both.
+  // (Defined here, above trvOkFor, because the mixed-assembly swap below must know whether this
+  // flow HAS a standard grammar to swap back to.)
+  const isTraverseFlow = useMemo(() => (activeFlow?.steps || [])
+      .some(s => ['TRV_SETUP', 'TRV_DRIVE', 'TRV_FASCIA', 'TRACK'].includes(s.stepRole)), [activeFlow]);
+
   // A SELECTOR NEVER FILTERS ITSELF. The Single-or-Double step's own options carry trvSetup, and
   // the track's traverse-end sub-options carry driveType — filtering those by the current answer
   // would hide every alternative the moment one was picked, leaving a step that cannot be changed.
@@ -1045,7 +1075,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // the bracket steps and the backplate sub-pools — the traverse rod uses its own arms and
       // plates. Other pools (End Treatment) only filter the trv-tagged options: a gem finial
       // belongs on the decorative traverse front too, and must not vanish there.
-      const isMutualPool = isSub || step?.stepRole === 'BRACKET' || (/bracket/i.test(step?.title || '') && !/end treatment/i.test(step?.title || ''));
+      // THE SWAP NEEDS SOMETHING TO SWAP TO (Stuart 2026-08-16). The mutual pool is a MIXED-assembly
+      // rule: on H1-138 the traverse rod brings its own arms, so the standard ones step aside. On a
+      // PURE traverse flow (H1-2TRV) the traverse rod is the only rod there is — trvPole is true for
+      // the whole order — so the moment any one bracket there carried a trv: tag, every UNTAGGED
+      // bracket beside it would hide and the step would empty. There is no standard mode to swap
+      // back to on that flow, so the mutual half simply does not apply.
+      const isMutualPool = !isTraverseFlow && (isSub || step?.stepRole === 'BRACKET' || (/bracket/i.test(step?.title || '') && !/end treatment/i.test(step?.title || '')));
       const attachOk = trvAttachGate(isSub ? step?.subOptions : step?.styleOptions, trvSelection.trvPole, { mutual: isMutualPool });
       return (o) => (isSetupSelector || setupAllows(o, trvSelection.setup))
           && (isDriveSelector || driveAllows(o, trvSelection.drive))
@@ -2232,11 +2268,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       changed = true;
                   }
               };
-              const mutualMain = st.stepRole === 'BRACKET' || (/bracket/i.test(st.title || '') && !/end treatment/i.test(st.title || ''));
+              // Same rule as trvOkFor's isMutualPool: no standard grammar on a pure traverse flow,
+              // so nothing swaps out there.
+              const mutualMain = !isTraverseFlow && (st.stepRole === 'BRACKET' || (/bracket/i.test(st.title || '') && !/end treatment/i.test(st.title || '')));
               check(st.id, st.styleOptions, trvAttachGate(st.styleOptions, trvSelection.trvPole, { mutual: mutualMain }));
               const mainSelOpt = (st.styleOptions || []).find(x => (x.optId || x.partId) === next[st.id]);
               const subMount = mountPairGate(st.subOptions, mainSelOpt);
-              const subTrv = trvAttachGate(st.subOptions, trvSelection.trvPole, { mutual: true });
+              const subTrv = trvAttachGate(st.subOptions, trvSelection.trvPole, { mutual: !isTraverseFlow });
               check(`${st.id}__sub`, st.subOptions, (o) => subMount(o) && subTrv(o), true);
           });
           return changed ? next : prev;
@@ -2256,8 +2294,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       if (step && Array.isArray(step.subOptions) && step.subOptions.length) {
           const mainOpt = (step.styleOptions || []).find(o => (o.optId || o.partId) === value);
           const loc = mainOpt?.location;
-          const pool0 = step.subOptions.filter(optCustomerOk).filter(trvOkFor(step, { isSub: true })).filter(mountPairGate(step.subOptions, mainOpt)).filter(projTagOk);
-          const cands = loc ? pool0.filter(o => !o.location || o.location === loc) : pool0;
+          const cands = preferring(step.subOptions.filter(optCustomerOk),
+              trvOkFor(step, { isSub: true }), mountPairGate(step.subOptions, mainOpt), projTagOk,
+              loc ? (o) => !o.location || o.location === loc : null);
           const pick = cands.find(o => o.targetNode) || cands[0];
           next[`${stepId}__sub`] = pick ? pick.optId : '';
       }
@@ -2944,10 +2983,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const f = parseFloat(String(o?.projInches ?? '').replace(/[^0-9.]/g, ''));
       return Number.isFinite(f) ? f : null;
   }, [activeFlow, dynamicConfigParams]);
-  // A flow built by the traverse generator — recognised by the steps only it emits. Used where the
-  // two grammars genuinely need different rules rather than a shared one bent to serve both.
-  const isTraverseFlow = useMemo(() => (activeFlow?.steps || [])
-      .some(s => ['TRV_SETUP', 'TRV_DRIVE', 'TRV_FASCIA', 'TRACK'].includes(s.stepRole)), [activeFlow]);
   const projTagOk = (o) => {
       if (flowProjSel == null || !o?.projInches) return true;
       const f = parseFloat(String(o.projInches).replace(/[^0-9.]/g, ''));
@@ -3204,7 +3239,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           const n = String(raw || '').trim().toLowerCase();
           if (!n) return true;
           if (controlled.has(n)) return true;
-          return ctrlList.some(c => n.startsWith(c + '__'));
+          // DESCENDANT of a controlled node — rides its controlled ancestor.
+          if (ctrlList.some(c => n.startsWith(c + '__'))) return true;
+          // ⚠ AND THE OTHER DIRECTION (2026-08-16 false alarm — the H2-1 banner named all six
+          // sections). 1.6 stores every cluster as [slotPrefix, ...allNodeNames], and the slot
+          // PREFIX is the wrapper GROUP: it carries no geometry of its own, its meshes are the
+          // "<prefix>__n_…" children, and those ARE mapped. Flagging the wrapper made a fully
+          // controlled section read as a ghost — noise that sent a whole session chasing
+          // geometry that was never loose. A node whose descendants are controlled is controlled.
+          return ctrlList.some(c => c.startsWith(n + '__'));
       };
       const out = [];
       (activeAssembly.nodeClusters || []).forEach(cl => {
@@ -3677,7 +3720,14 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                               // matching plates show (e.g. wall plates when a wall arm is selected).
                               const selMainOpt = (currentStep.styleOptions || []).find(o => (o.optId || o.partId) === dynamicConfigParams[currentStep.id]);
                               const selLoc = selMainOpt?.location;
-                              let subs = currentStep.subOptions.filter(optCustomerOk).filter(trvOkFor(currentStep, { isSub: true })).filter(mountPairGate(currentStep.subOptions, selMainOpt)).filter(o => !selLoc || !o.location || o.location === selLoc);
+                              // preferring(): the mount pairing and the location match narrow the plate
+                              // list while plates survive. A bracket whose mount has no plates of its
+                              // own keeps the full list rather than showing an EMPTY plate picker —
+                              // an unpickable step is worse than an imprecise one.
+                              let subs = preferring(currentStep.subOptions.filter(optCustomerOk),
+                                  trvOkFor(currentStep, { isSub: true }),
+                                  mountPairGate(currentStep.subOptions, selMainOpt),
+                                  selLoc ? (o) => !o.location || o.location === selLoc : null);
                               // Return-aware scoping: the RETURN backplates show while this side's End
                               // Treatment is a return OR the selected bracket is flagged usesReturnPlates
                               // (e.g. In Line brackets share the return plates); regular plates otherwise —
