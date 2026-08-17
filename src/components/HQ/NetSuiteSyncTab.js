@@ -181,6 +181,37 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         return { sql: good.map(c => `${c.expr} AS ${c.alias},`).join('\n                        '), aliases: new Set(good.map(c => c.alias)) };
     };
 
+    // ── "SYNC TO APP" GATE — custentity18 (Eric 2026-08-14) ──────────────────────────────────────
+    // "Sync to App checkbox added to Vendor and Customer records, which should eliminate a lot of
+    // excess records in app lists/searching. Have applied to most prominent vendors and select CE
+    // customers, NOT YET to M2C customers."
+    //
+    // That last clause is why this is a TOGGLE and not simply switched on. Filtering on the field
+    // today would silently drop every M2C customer out of the app — the tagging is deliberately
+    // half-finished. Off = exactly the behaviour before this existed. When it IS on, both counts are
+    // logged (total active vs ticked) so the effect is visible before anyone relies on it.
+    //
+    // Turning it on does NOT delete records already synced; it stops NEW pulls from bringing
+    // untagged ones back. Clearing out what is already there is a separate, deliberate act.
+    const [syncOnlyFlagged, setSyncOnlyFlagged] = useState(() => {
+        try { return localStorage.getItem('ns_sync_only_flagged') === '1'; } catch (e) { return false; }
+    });
+    const setSyncGate = (v) => {
+        setSyncOnlyFlagged(v);
+        try { localStorage.setItem('ns_sync_only_flagged', v ? '1' : '0'); } catch (e) { /* storage unavailable */ }
+    };
+    // Probed per entity type — an account that never created the field just syncs everything.
+    const syncGateSql = async (table) => {
+        if (!syncOnlyFlagged) return '';
+        try {
+            await executeSuiteQL(`SELECT custentity18 FROM ${table} WHERE id = 0`);
+            return ` AND custentity18 = 'T'`;
+        } catch (e) {
+            addLog(`⚠ "Sync to App" (custentity18) isn't available on the ${table} record — syncing every active ${table} instead of only the ticked ones.`, 'warn');
+            return '';
+        }
+    };
+
     const handleSyncCustomers = async () => {
         if (!nsSubsidiaryId) return alert("Please enter a Target Subsidiary ID.");
         setIsSyncing(true);
@@ -193,9 +224,19 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             // (network drop, closed tab) can never pass silently again. Real CUSTOMERs only: the
             // customer table also holds LEADs and PROSPECTs (M2C: 770 vs 1,037 vs 231), which were
             // being imported as customers.
-            const cnt = await executeSuiteQL(`SELECT COUNT(*) AS n FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND stage = 'CUSTOMER'`);
+            const gate = await syncGateSql('customer');
+            if (gate) {
+                const allCnt = await executeSuiteQL(`SELECT COUNT(*) AS n FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND stage = 'CUSTOMER'`);
+                addLog(`"Sync to App" gate ON — of ${parseInt(allCnt.items?.[0]?.n) || 0} active customers in subsidiary ${nsSubsidiaryId}, only those ticked custentity18 will be pulled.`, 'warn');
+            }
+            const cnt = await executeSuiteQL(`SELECT COUNT(*) AS n FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND stage = 'CUSTOMER'${gate}`);
             const expected = parseInt(cnt.items?.[0]?.n) || 0;
-            addLog(`NetSuite reports ${expected} active CUSTOMER-stage records for subsidiary ${nsSubsidiaryId} (leads/prospects excluded).`, 'info');
+            addLog(`NetSuite reports ${expected} active CUSTOMER-stage records for subsidiary ${nsSubsidiaryId} (leads/prospects excluded)${gate ? ', ticked Sync to App' : ''}.`, 'info');
+            if (gate && expected === 0) {
+                addLog(`⚠ NOTHING is ticked "Sync to App" for this subsidiary — the run would import 0 customers. Un-tick the gate, or tick the records in NetSuite first.`, 'error');
+                alert(`No customers in subsidiary ${nsSubsidiaryId} are ticked "Sync to App" (custentity18).\n\nRunning would import nothing. Eric hasn't applied the flag to M2C customers yet — un-tick "Only Sync-to-App records" on this card to sync them all, or tick them in NetSuite first.`);
+                setIsSyncing(false); return;
+            }
 
             let allRecords = [];
             let lastId = 0;
@@ -204,7 +245,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
             while (hasMore) {
                 addLog(`Fetching customer batch ${pageCount}...`, 'info');
-                const q = `SELECT id, companyname, email, phone, creditlimit, terms, stage FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND stage = 'CUSTOMER' AND id > ${lastId} ORDER BY id ASC`;
+                const q = `SELECT id, companyname, email, phone, creditlimit, terms, stage FROM customer WHERE subsidiary = ${nsSubsidiaryId} AND isinactive = 'F' AND stage = 'CUSTOMER'${gate} AND id > ${lastId} ORDER BY id ASC`;
                 const result = await executeSuiteQL(q);
                 const batch = result.items || [];
                 allRecords = allRecords.concat(batch);
@@ -382,6 +423,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             try { await executeSuiteQL('SELECT subsidiary FROM vendor WHERE id = 0'); }
             catch (e) { hasVendorSub = false; }
 
+            const gate = await syncGateSql('vendor');
+            if (gate) addLog(`"Sync to App" gate ON — only vendors ticked custentity18 will be pulled.`, 'warn');
+
             let allRecords = [];
             let lastId = 0;
             let hasMore = true;
@@ -389,7 +433,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
 
             while (hasMore) {
                 addLog(`Fetching vendor batch ${pageCount}...`, 'info');
-                const q = `SELECT id, companyname, email, phone, terms${hasVendorSub ? ', subsidiary' : ''} FROM vendor WHERE isinactive = 'F' AND id > ${lastId} ORDER BY id ASC`;
+                const q = `SELECT id, companyname, email, phone, terms${hasVendorSub ? ', subsidiary' : ''} FROM vendor WHERE isinactive = 'F'${gate} AND id > ${lastId} ORDER BY id ASC`;
                 const result = await executeSuiteQL(q);
                 const batch = result.items || [];
                 allRecords = allRecords.concat(batch);
@@ -403,7 +447,12 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 }
             }
             
-            addLog(`Downloaded ${allRecords.length} active vendors. Writing to CRM Database...`, 'success');
+            if (gate && allRecords.length === 0) {
+                addLog(`⚠ No vendors are ticked "Sync to App" — nothing was written. Un-tick the gate, or tick them in NetSuite first.`, 'error');
+                alert(`No vendors came back ticked "Sync to App" (custentity18), so nothing was written.\n\nUn-tick "Only Sync-to-App records" on this card to sync them all, or tick the vendors in NetSuite first.\n\n(Purchase orders resolve their vendor from these records — an empty vendor list would block every PO.)`);
+                setIsSyncing(false); return;
+            }
+            addLog(`Downloaded ${allRecords.length} active vendors${gate ? ' ticked Sync to App' : ''}. Writing to CRM Database...`, 'success');
 
             let successCount = 0;
             for (const v of allRecords) {
@@ -1356,6 +1405,21 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     })()}
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {/* ERIC'S "SYNC TO APP" GATE (custentity18, 2026-08-14). Deliberately opt-in:
+                            he has tagged the prominent vendors and select CE customers but NOT the
+                            M2C customers, so switching this on globally would empty their lists. */}
+                        <label title="Only pull Customers/Vendors ticked 'Sync to App' (custentity18) in NetSuite — Eric's field for keeping app lists and searches free of records nobody here needs."
+                            style={{ display: 'flex', alignItems: 'flex-start', gap: '9px', padding: '10px 12px', cursor: isSyncing ? 'default' : 'pointer', border: `1px solid ${syncOnlyFlagged ? 'var(--brass)' : 'var(--line)'}`, background: syncOnlyFlagged ? '#fdfaf3' : '#fff' }}>
+                            <input type="checkbox" checked={syncOnlyFlagged} disabled={isSyncing} onChange={e => setSyncGate(e.target.checked)} style={{ cursor: 'pointer', marginTop: '2px' }} />
+                            <span>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: syncOnlyFlagged ? 'var(--brass)' : 'var(--ink-soft)', fontWeight: syncOnlyFlagged ? 700 : 400 }}>Only “Sync to App” records · custentity18</span>
+                                <span style={{ display: 'block', fontSize: '11px', color: 'var(--ink-soft)', marginTop: '3px', lineHeight: 1.45 }}>
+                                    {syncOnlyFlagged
+                                        ? 'ON — Customer and Vendor syncs pull only the ticked records. Records already in the app stay; this only stops new pulls bringing untagged ones back. A run that would import ZERO stops and says so.'
+                                        : 'OFF — every active Customer / Vendor is pulled, as before. Turn on once the flag is ticked in NetSuite for everyone you need (M2C customers were still untagged as of 8/14).'}
+                                </span>
+                            </span>
+                        </label>
                         <SyncButton onClick={handleSyncCustomers} disabled={isSyncing} label="Sync Active Customers" sub="SuiteQL: Pulls all active customers mapped to Subsidiary." />
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />

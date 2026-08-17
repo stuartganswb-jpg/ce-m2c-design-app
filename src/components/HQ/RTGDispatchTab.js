@@ -526,9 +526,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     // are treated as old, so they archive straight away rather than crowding today's board.
     const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
     const isRecent = (o) => !!o.dispatchedAt && (Date.now() - o.dispatchedAt) < WEEK_MS;
+    // ⚡ URGENT RIDES TO THE TOP, IN RED (Eric 2026-08-17: "we now have several Brimars of varying
+    // age entered, but the most recently entered is the oldest — its processing was delayed for the
+    // elbows and wands. Nothing exists to flag it for first work").
+    //
+    // The flag already existed at Stock View's Generate press and pins the order in the Finishing
+    // Setup Queue. What was missing is the middle of the journey: RTG could neither SHOW that an
+    // order is urgent nor MARK one on its way out. Same field, same meaning, three screens.
+    // Entry order is not priority order — that is the whole point of his report.
+    const isUrgent = (o) => !!(o && o.urgent);
+    const needByOf = (o) => (o && (o.needBy || o.reqDate)) || '2999-12-31';
+    const urgentFirst = (a, b) => {
+        if (isUrgent(a) !== isUrgent(b)) return isUrgent(a) ? -1 : 1;
+        if (isUrgent(a)) return String(needByOf(a)).localeCompare(String(needByOf(b)));  // soonest first
+        return 0;                                                                        // otherwise leave the existing order alone
+    };
     const splitBoard = (list) => {
         const live = list.filter(o => !o.rtgArchived);
-        const pending = live.filter(o => o.status === 'Approved');
+        const pending = live.filter(o => o.status === 'Approved').sort(urgentFirst);
         const done = live.filter(o => o.status === 'Dispatched').sort((a, b) => (b.dispatchedAt || 0) - (a.dispatchedAt || 0));
         return { pending, recent: done.filter(isRecent), archived: done.filter(o => !isRecent(o)) };
     };
@@ -552,6 +567,46 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     };
     const soBoard = splitBoard(salesOrders);
     const woBoard = splitBoard(workOrders);
+
+    // Flip the flag ON THE ORDER, not on some dispatch-time-only checkbox: an order that is urgent
+    // is urgent while it sits here waiting too, which is exactly the situation Eric described. The
+    // need-by date is asked for when raising the flag (blank = keep the existing req date) and both
+    // fields travel onto the floor doc at dispatch, where the Setup Queue already pins them.
+    const toggleUrgent = async (order, collectionName) => {
+        const on = !isUrgent(order);
+        let needBy = order.needBy || '';
+        if (on) {
+            const ans = window.prompt(`⚡ Flag ${order.woNo || order.soId || order.id} URGENT.\n\nNeed-by date (YYYY-MM-DD) — leave blank to keep ${order.reqDate || 'the existing req date'}:`, order.needBy || order.reqDate || '');
+            if (ans === null) return;                       // cancelled — no change
+            needBy = String(ans).trim();
+            if (needBy && !/^\d{4}-\d{2}-\d{2}$/.test(needBy)) return alert(`"${needBy}" isn't a date in YYYY-MM-DD form. Nothing was changed.`);
+        }
+        try {
+            await updateDoc(doc(db, collectionName, order.id), on
+                ? { urgent: true, urgentAck: false, needBy: needBy || order.reqDate || '', urgentBy: currentUser || '', urgentAt: Date.now() }
+                : { urgent: false, urgentAck: false, urgentClearedBy: currentUser || '', urgentClearedAt: Date.now() });
+            addLog(`${on ? '⚡ URGENT' : 'Cleared urgent on'} ${order.woNo || order.soId || order.id}${on && needBy ? ` — need by ${needBy}` : ''}.`, on ? 'warn' : 'info');
+            loadRTGOrders();
+        } catch (e) { alert(`Couldn't change the urgent flag: ${e.message || e}`); }
+    };
+    // The chip + the button, shared by the sales-order and work-order cards so the two can't drift.
+    const urgentControls = (order, collectionName) => (
+        <button
+            onClick={() => toggleUrgent(order, collectionName)}
+            title={isUrgent(order)
+                ? `Urgent${order.needBy ? ` — need by ${order.needBy}` : ''}${order.urgentBy ? `, flagged by ${order.urgentBy}` : ''}. Click to clear.`
+                : 'Flag this order URGENT — it moves to the top of this board in red, and arrives pinned to the top of the Finishing Setup Queue until an operator acknowledges it.'}
+            style={{
+                fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em',
+                padding: '3px 8px', cursor: 'pointer', marginTop: '6px',
+                border: `1px solid ${isUrgent(order) ? '#d9534f' : 'var(--line)'}`,
+                background: isUrgent(order) ? '#d9534f' : '#fff',
+                color: isUrgent(order) ? '#fff' : 'var(--ink-soft)',
+                fontWeight: isUrgent(order) ? 700 : 400,
+            }}>
+            {isUrgent(order) ? `⚡ URGENT${order.needBy ? ` · BY ${order.needBy}` : ''}` : '⚡ Flag urgent'}
+        </button>
+    );
     const dispatchedChip = (o) => [o.pushedToFinishing ? 'FINISHING ✓' : null, o.pushedToShop ? 'SHOP ✓' : null].filter(Boolean).join('  ·  ') || 'SENT';
     const whenStr = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
 
@@ -911,7 +966,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
         if (hqOrder.finPayload && hqOrder.finPayload.id) {
             try {
                 const fp = hqOrder.finPayload;
-                await setDoc(doc(db, "fin_workorders", fp.id), { ...fp, dispatchedAt: Date.now(), dispatchedBy: currentUser || '' });
+                // The urgent flag rides the release. It may have been set at Stock View's Generate
+                // press (already in the payload) or raised here while the order waited — the board's
+                // value wins, since it is the later statement of intent.
+                await setDoc(doc(db, "fin_workorders", fp.id), {
+                    ...fp,
+                    ...(isUrgent(hqOrder) ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || fp.needBy || fp.reqDate || '', urgentBy: hqOrder.urgentBy || currentUser || '', urgentAt: hqOrder.urgentAt || Date.now() } : {}),
+                    dispatchedAt: Date.now(), dispatchedBy: currentUser || ''
+                });
                 await updateDoc(doc(db, "hq_work_orders", hqOrder.id), { pushedToFinishing: true, status: "Dispatched" });
                 // ROUTE A (2026-07-16): these stocked items are real NetSuite assemblies with BOMs,
                 // so releasing to the floor ALSO queues a real NetSuite work order (outbox — serial,
@@ -1018,7 +1080,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 createdBy: currentUser
             };
 
-            await setDoc(doc(db, "fin_workorders", finWorkOrderId), finPayload);
+            await setDoc(doc(db, "fin_workorders", finWorkOrderId), {
+                ...finPayload,
+                // Urgent travels here too — the Setup Queue pins it above every finish batch until
+                // an operator acknowledges it.
+                ...(isUrgent(hqOrder) ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || hqOrder.reqDate || '', urgentBy: hqOrder.urgentBy || currentUser || '', urgentAt: hqOrder.urgentAt || Date.now() } : {}),
+            });
 
             // Change status to Dispatched so it leaves the RTG board
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
@@ -1117,7 +1184,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 createdBy: currentUser
             };
 
-            await setDoc(doc(db, "shop_custom_orders", shopJobId), shopPayload);
+            await setDoc(doc(db, "shop_custom_orders", shopJobId), {
+                ...shopPayload,
+                // Same flag, same field names as the finishing side — the shop list sorts on it.
+                ...(isUrgent(hqOrder) ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || hqOrder.reqDate || '', urgentBy: hqOrder.urgentBy || currentUser || '', urgentAt: hqOrder.urgentAt || Date.now() } : {}),
+            });
 
             // Change status to Dispatched so it leaves the RTG board
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
@@ -1432,11 +1503,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             {soBoard.pending.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved sales orders pending dispatch.</p>}
                             
                             {soBoard.pending.map(so => (
-                                <div key={so.id} style={{ ...cardStyle, borderLeft: '4px solid var(--ink)' }}>
+                                <div key={so.id} style={{ ...cardStyle, borderLeft: `4px solid ${isUrgent(so) ? '#d9534f' : 'var(--ink)'}`, ...(isUrgent(so) ? { background: '#fdf3f3' } : {}) }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                                         <div>
-                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>SO: {so.soId || so.id}</div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || 'N/A'}</div>
+                                            {urgentControls(so, 'hq_sales_orders')}
                                         </div>
                                         <button onClick={() => deleteOrder('hq_sales_orders', so.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
@@ -1472,13 +1544,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             {woBoard.pending.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved work orders pending dispatch.</p>}
                             
                             {woBoard.pending.map(wo => (
-                                <div key={wo.id} style={{ ...cardStyle, borderLeft: '4px solid var(--brass)' }}>
+                                <div key={wo.id} style={{ ...cardStyle, borderLeft: `4px solid ${isUrgent(wo) ? '#d9534f' : 'var(--brass)'}`, ...(isUrgent(wo) ? { background: '#fdf3f3' } : {}) }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                                         <div>
-                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }} title={`${wo.id}${wo.nsWoTran ? ` · NetSuite ${wo.nsWoTran}` : ''}`}>WO: {wo.nsWoTran || wo.woId || wo.id}</div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(wo) ? '#d9534f' : 'var(--ink)' }} title={`${wo.id}${wo.nsWoTran ? ` · NetSuite ${wo.nsWoTran}` : ''}`}>WO: {wo.nsWoTran || wo.woId || wo.id}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Build to Stock</div>
                                             {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}
                                             {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
+                                            {urgentControls(wo, 'hq_work_orders')}
                                         </div>
                                         <button onClick={() => deleteOrder('hq_work_orders', wo.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>

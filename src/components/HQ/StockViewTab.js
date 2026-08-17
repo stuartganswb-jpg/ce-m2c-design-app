@@ -622,6 +622,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     // RTG's release to fall through to PENDING-RECIPE — the finish was in the item
                     // code the whole time. Raw and /P codes have no finish suffix and stay unset.
                     ...(finishCodeFromErp(erpId) ? { recipe: finishCodeFromErp(erpId) } : {}),
+                    // ⚡ The urgent tick above the Generate button applies to THIS push too — it was
+                    // the one WO-creating path here that ignored it (2026-08-17).
+                    ...(woUrgent ? { urgent: true, urgentAck: false, needBy: woNeedBy || new Date(Date.now() + 12096e5).toISOString().split('T')[0], urgentBy: currentUser || '', urgentAt: Date.now() } : {}),
                     ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
                     // Scheduler keys for the finishing time matrix (recipe × paintSize × productType).
                     // Carried downstream by RTGDispatch.pushToFinishing onto the fin_workorder.
