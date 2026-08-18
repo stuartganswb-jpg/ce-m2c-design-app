@@ -15,6 +15,7 @@ import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
 import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, normalizePosition, normalizeCategory, suggestTagsFromName } from '../Shared/assemblyTags';
 import { sheet2dChoiceNode } from '../Shared/sheet2d';
+import { planTagImport, applyTagPlan } from '../Shared/tagSheetImport';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -1339,6 +1340,57 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         });
         return out.sort();
     };
+    // ── TAG FROM THE DESIGNER'S SHEET (Stuart 2026-08-18) ────────────────────────────────────
+    // "we need to make a final control file like this that she can use going forward and then we
+    //  auto upload as this screen is very important and one simple mistake costs me hours in work
+    //  figuring out what happened."
+    //
+    // She already knows which node is which part, which rod it dresses, what depth it is cut for.
+    // What was missing was a way to hand that over without a person re-typing it into 150
+    // dropdowns — and the re-typing is where the hours go, because a wrong tag never announces
+    // itself; it renders something plausible and wrong, three screens away.
+    //
+    // The import PLANS first and applies second, and it applies to what is on screen — so nothing
+    // reaches Firestore until the same Save Assignments button as always. The node name is the only
+    // join: a row matching no geometry is reported rather than guessed at, and geometry matching no
+    // row is reported too, because an untagged node renders in no configuration at all.
+    const [tagPlan, setTagPlan] = useState(null);   // { plan, fileName } — the dry run
+    const readTagSheet = async (file) => {
+        if (!file) return;
+        try {
+            const ExcelJS = (await import('exceljs/dist/exceljs.min.js')).default;
+            const wb = new ExcelJS.Workbook();
+            await wb.xlsx.load(await file.arrayBuffer());
+            // The upload sheet by name, else the first sheet that HAS a node column.
+            const sheets = wb.worksheets;
+            let rows2d = null;
+            for (const ws of sheets) {
+                const grid = [];
+                ws.eachRow({ includeEmpty: false }, (row) => {
+                    const vals = [];
+                    row.eachCell({ includeEmpty: true }, (cell, col) => {
+                        const v = cell.value;
+                        vals[col - 1] = (v && typeof v === 'object')
+                            ? (v.text || v.result || v.richText?.map(t => t.text).join('') || '')
+                            : (v ?? '');
+                    });
+                    grid.push(vals);
+                });
+                if (grid.length && grid[0].some(h => String(h || '').trim().toUpperCase().startsWith('NODE'))) { rows2d = grid; break; }
+            }
+            if (!rows2d) { alert('No sheet in that file has a NODE NAME column.'); return; }
+            const plan = planTagImport(rows2d, assignData?.rows || []);
+            setTagPlan({ plan, fileName: file.name });
+        } catch (e) {
+            alert('Could not read that file: ' + (e.message || e));
+        }
+    };
+    const applyTagSheet = () => {
+        if (!tagPlan) return;
+        setAssignData(prev => prev ? { ...prev, rows: applyTagPlan(prev.rows, tagPlan.plan) } : prev);
+        setTagPlan(null);
+    };
+
     const setChoicePatch = (clusterId, nodeName, patch) => setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.map(c => c.nodeName === nodeName ? { ...c, ...patch } : c) }) } : prev);
 
     // Reorder a choice within its cluster (▲▼). The order is saved as choiceSort and drives the
@@ -1911,6 +1963,76 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 {assignData && assignModelInfo && (
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.04em', margin: '8px 0 2px' }}>
                         EDITING · doc {assignModelInfo.docId} · itemId {assignModelInfo.itemId} · model {assignModelInfo.cadFile} — CPQ's red strip names ITS model; if they differ, the flow links another record.
+                    </div>
+                )}
+                {/* 📄 TAG FROM THE DESIGNER'S SHEET. Plans first, applies to the screen second, and
+                    still saves through the same button as everything else — so a bad sheet costs a
+                    glance, never a repair. */}
+                {assignData && (
+                    <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '9px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                            <span style={{ ...lbl, color: 'var(--brass)', margin: 0 }}>Tag from sheet</span>
+                            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', cursor: 'pointer', border: '1px solid var(--brass)', padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--brass)' }}
+                                title="The designer's tagging sheet (.xlsx). Every tag on this screen is read from it and matched to the geometry BY NODE NAME. Nothing is written until you Save Assignments — you see exactly what would change first.">
+                                📄 Choose .xlsx
+                                <input type="file" accept=".xlsx" style={{ display: 'none' }}
+                                    onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; readTagSheet(f); }} />
+                            </label>
+                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>
+                                Matched by node name. Nothing is written until you save.
+                            </span>
+                        </div>
+                        {tagPlan && (() => {
+                            const p = tagPlan.plan;
+                            const line = { fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.03em' };
+                            return (
+                                <div style={{ border: '1px solid var(--line)', background: 'var(--paper)', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '9px' }}>
+                                    <div style={{ ...line, color: 'var(--ink)' }}>
+                                        {tagPlan.fileName} — <b style={{ color: 'var(--brass)' }}>{p.changed.length}</b> choice(s) would change
+                                        {p.hits.length !== p.changed.length && <span style={{ color: 'var(--ink-faint)' }}> · {p.hits.length - p.changed.length} already agree</span>}
+                                    </div>
+                                    {!!p.unmatchedRows.length && (
+                                        <div style={{ ...line, color: '#b00020', lineHeight: 1.6 }}>
+                                            ⚠ {p.unmatchedRows.length} sheet row(s) name geometry this assembly does not have — fix the sheet or the .fbx, they are not guessed at:
+                                            <div style={{ color: 'var(--ink-soft)', paddingLeft: '12px' }}>{p.unmatchedRows.slice(0, 8).join(' · ')}{p.unmatchedRows.length > 8 ? ' …' : ''}</div>
+                                        </div>
+                                    )}
+                                    {!!p.untagged.length && (
+                                        <div style={{ ...line, color: '#8a6508', lineHeight: 1.6 }}>
+                                            ⚠ {p.untagged.length} node(s) on screen have no row in the sheet — an untagged node renders in no configuration:
+                                            <div style={{ color: 'var(--ink-soft)', paddingLeft: '12px' }}>{p.untagged.slice(0, 8).map(u => u.node).join(' · ')}{p.untagged.length > 8 ? ' …' : ''}</div>
+                                        </div>
+                                    )}
+                                    {p.warnings.map((w, i) => <div key={i} style={{ ...line, color: '#b00020' }}>⚠ {w}</div>)}
+                                    {!!p.changed.length && (
+                                        <div style={{ maxHeight: '190px', overflowY: 'auto', borderTop: '1px solid var(--line)', paddingTop: '7px' }}>
+                                            {p.changed.slice(0, 60).map((h, i) => (
+                                                <div key={i} style={{ ...line, color: 'var(--ink-soft)', padding: '3px 0', borderBottom: '1px solid var(--paper-2)' }}>
+                                                    <span style={{ color: 'var(--ink)' }}>{h.nodeName}</span>
+                                                    {h.diff.map((d, j) => (
+                                                        <span key={j}> · {d.field} <span style={{ color: 'var(--ink-faint)' }}>{String(d.from) || '—'}</span> → <b style={{ color: 'var(--brass)', fontWeight: 400 }}>{String(d.to)}</b></span>
+                                                    ))}
+                                                </div>
+                                            ))}
+                                            {p.changed.length > 60 && <div style={{ ...line, color: 'var(--ink-faint)', paddingTop: '5px' }}>…and {p.changed.length - 60} more</div>}
+                                        </div>
+                                    )}
+                                    <div style={{ display: 'flex', gap: '9px' }}>
+                                        <button onClick={applyTagSheet} disabled={!p.changed.length}
+                                            style={{ padding: '9px 16px', background: p.changed.length ? 'var(--brass)' : 'var(--paper-2)', color: p.changed.length ? '#fff' : 'var(--ink-faint)', border: 'none', cursor: p.changed.length ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                            Apply to the {p.changed.length} shown
+                                        </button>
+                                        <button onClick={() => setTagPlan(null)}
+                                            style={{ padding: '9px 16px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                            Discard
+                                        </button>
+                                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', alignSelf: 'center' }}>
+                                            Applying only fills the fields on screen — Save Assignments still writes them.
+                                        </span>
+                                    </div>
+                                </div>
+                            );
+                        })()}
                     </div>
                 )}
                 {assignData && (
