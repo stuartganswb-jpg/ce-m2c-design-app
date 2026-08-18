@@ -79,7 +79,20 @@ export function tagsFromPhrase(phrase) {
     // customer buys is the BENDING of the pole, so it bills as a fee and the bent pole renders
     // beside it. ⚠ The bent pole itself is NOT the fee: it is a POLE carrying the rod's item
     // number, in its own slot. Two rows, two things, and only one of them is money.
-    if (out.cat === 'RETURN') out.fee = true;
+    // …and it says WHICH fee, so the item number can be filled in rather than typed. The same two
+    // fee entities cover the french and miter cut across collections (Stuart 2026-08-18: "these two
+    // fees cover the french and miter return cuts in a lot of collections, it should fill these in
+    // when it sees them as default, i can manually overwrite for the rare occurrences"). The CODES
+    // are never written down here — they are looked up in the library by feeType, so a collection
+    // that one day prices its returns differently is a new fee item, not a new release.
+    if (out.cat === 'RETURN') {
+        out.fee = true;
+        // "FR-MTR" is her name for the pair — the slot that holds both cuts. Naming one of them
+        // there would be a coin toss, so it stays blank and she picks.
+        const isM = /\bMTR\b|\bMITER\b/.test(p), isF = /\bFR\b|\bFRENCH\b/.test(p) || /\bFR[ -]/.test(p);
+        if (isM && !isF) out.feeType = 'MITER_RETURN';
+        else if (isF && !isM) out.feeType = 'FRENCH_RETURN';
+    }
     if (/\bHIDE\b|\bHIDDEN\b/.test(p)) out.hide = true;
     if (/\bBASIC\b/.test(p)) out.basic = true;
     if (/\bINL\b|\bIN-?L\b|\bINLINE\b|\bIN LINE\b/.test(p)) out.inline = true;

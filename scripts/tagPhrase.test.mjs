@@ -12,8 +12,9 @@ has('a front pole piece',      'Pole Left Front',                 { cat:'POLE', 
 has('her "Ront" typo',         'Pole Right Ront',                 { cat:'POLE', position:'RIGHT' });
 has('the short centre piece',  'Pole Short Front',                { cat:'POLE', position:'CENTER', tier:'FRONT' });
 has('the rear rod',            'POLE DBL long Back',              { cat:'POLE', tier:'BACK', setup:'DOUBLE' });
-has('a french return bills as a fee', 'FR 4 LEFT',                 { cat:'RETURN', position:'LEFT', proj:'4.625', fee:true });
-has('a miter return too',      'MTR 6 LEFT',                      { cat:'RETURN', position:'LEFT', proj:'6', fee:true });
+has('a french return bills as a fee', 'FR 4 LEFT',                 { cat:'RETURN', position:'LEFT', proj:'4.625', fee:true, feeType:'FRENCH_RETURN' });
+has('a miter return too',      'MTR 6 LEFT',                      { cat:'RETURN', position:'LEFT', proj:'6', fee:true, feeType:'MITER_RETURN' });
+has('a combined FR-MTR row names neither', 'FR-MTR DBL RIGHT',  { fee:true, feeType:undefined });
 has('a return BACKPLATE is not a fee', 'FR-MTR Back-Cover Plates 6 Left', { cat:'BACKPLATE', fee:undefined });
 has('an in-line bracket',      'inL Bracket Arm 4 left',          { cat:'BRACKET', position:'LEFT', proj:'4.625', inline:true });
 has('a basic bracket',         'BASIC BRACKET 3 CENTER',          { cat:'BRACKET', position:'CENTER', basic:true });

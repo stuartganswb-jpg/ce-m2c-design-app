@@ -15,7 +15,7 @@ import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
 import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, normalizePosition, normalizeCategory, suggestTagsFromName } from '../Shared/assemblyTags';
 import { sheet2dChoiceNode } from '../Shared/sheet2d';
-import { planTagImport, applyTagPlan, slotsFromSheet, matchSlotFiles, planSinglesFill, applySinglesFill } from '../Shared/tagSheetImport';
+import { planTagImport, applyTagPlan, slotsFromSheet, matchSlotFiles, planSinglesFill, applySinglesFill, parseTagRows, fillReturnFees } from '../Shared/tagSheetImport';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -1496,6 +1496,26 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         addLog(`Built ${built} slot(s) from ${sheetBuild.fileName}${failed.length ? ` — ${failed.length} failed` : ''}. NEXT: the green ${nextBtn} button at the bottom of the slot list on the left. Then "Already built" → Load Choices → Tag from sheet.`, failed.length ? 'error' : 'success');
         failed.forEach(f => addLog(f, 'error'));
     };
+    // The library's own answer to "what do we bill a french return as". Looked up, never written
+    // down — and OUR number wins over the app id, which is what everyone downstream reads.
+    // Fetched when a sheet is read, not held open: two documents, wanted twice a month.
+    const loadFeeItems = async () => {
+        try {
+            const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('partClass', '==', 'Fee')));
+            const by = {};
+            snap.docs.forEach(d => {
+                const x = { id: d.id, ...d.data() };
+                const cd = x?.manufacturingSpecs?.customData || {};
+                const t = String(cd.feeType || cd.endTreatment || '').toUpperCase();
+                if (!t || by[t]) return;
+                // OUR number wins over the app id — it is what the shop, the quote and NetSuite read.
+                const legacy = String(x.legacyErpId || '').trim();
+                by[t] = (legacy && legacy.toUpperCase() !== 'PENDING') ? legacy : String(x.itemId || x.id || '').trim();
+            });
+            return (feeType) => by[String(feeType || '').toUpperCase()] || '';
+        } catch (e) { console.warn('fee lookup failed', e); return () => ''; }
+    };
+
     const readTagSheet = async (file) => {
         if (!file) return;
         try {
@@ -1520,7 +1540,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 if (grid.length && grid[0].some(h => String(h || '').trim().toUpperCase().startsWith('NODE'))) { rows2d = grid; break; }
             }
             if (!rows2d) { alert('No sheet in that file has a NODE NAME column.'); return; }
-            const plan = planTagImport(rows2d, assignData?.rows || []);
+            const findFeeItem = await loadFeeItems();
+            const plan = planTagImport(rows2d, assignData?.rows || [], { findFeeItem });
             setTagPlan({ plan, fileName: file.name });
         } catch (e) {
             alert('Could not read that file: ' + (e.message || e));

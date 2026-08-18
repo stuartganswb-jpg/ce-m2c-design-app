@@ -31,6 +31,8 @@
 // same words the 1.6 controls use, so a person reading the sheet and a person reading the screen
 // are reading the same thing.
 
+import { tagsFromPhrase } from './tagPhrase.js';
+
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const S = (v) => String(v == null ? '' : v).trim();
 // ⚠ A FLAG IS TRI-STATE, AND BLANK MEANS "LEAVE IT ALONE" (Stuart 2026-08-18: "other than these
@@ -60,6 +62,7 @@ const COLUMN = {
     'FEE': 'fee', 'HIDE': 'hide', 'ALWAYS': 'always', 'COLLAR': 'collar',
     'REQUIRES COLLAR': 'requiresCollar', 'END TREATMENT': 'endTreatment',
     'NOTES': 'note', 'NOTE': 'note',
+    'TAG': 'tag', 'TAG — WHAT IS IT?': 'tag', 'TAG - WHAT IS IT?': 'tag',
 };
 
 /** A node name as it is compared: whitespace and case are noise, everything else is not. */
@@ -101,6 +104,28 @@ export const nodeTail = (n) => {
 };
 /** Cluster and slot names compared the way merge writes them: LABEL → LABEL-WITH-DASHES. */
 export const slotKey = (n) => S(n).toUpperCase().replace(/\s+/g, '-').replace(/[^A-Z0-9-]/g, '');
+
+// ── THE TWO RETURN FEES FILL THEMSELVES IN (Stuart 2026-08-18) ───────────────────────────────
+// "these two fees cover the french and miter return cuts in a lot of collections, it should fill
+//  these in when it sees them as default, i can manually overwrite for the rare occurrences."
+//
+// So a row that says "FR 6 LEFT" gets the french fee's number without anyone typing it. The CODES
+// are deliberately not written down here: the caller passes a lookup that finds the library's fee
+// item BY ITS feeType, so a collection that one day prices its returns differently is a new fee
+// item and not a new release. Her own Item ID always wins — this only fills a blank, or replaces a
+// number that is plainly not a fee (the rod's, which is what she had been writing).
+export function fillReturnFees(patches, findFeeItem) {
+    if (typeof findFeeItem !== 'function') return patches;
+    patches.forEach(p => {
+        if (!p.__feeType) return;
+        const code = findFeeItem(p.__feeType);
+        if (!code) return;
+        const has = S(p.itemNo);
+        const looksLikeAFee = /FEE/i.test(has);
+        if (!has || !looksLikeAFee) p.itemNo = code;
+    });
+    return patches;
+}
 
 /**
  * Read a sheet already loaded as rows of cells.
@@ -163,6 +188,10 @@ export function parseTagRows(rows = []) {
         p.__slot = get(row, 'slot');
         p.__file = get(row, 'file');
         p.__node = node;
+        // From the TAG phrase, when the sheet did not spell the tags out itself.
+        const phrase = tagsFromPhrase(get(row, 'tag') || get(row, 'slot'));
+        if (phrase.feeType) p.__feeType = phrase.feeType;
+        if (phrase.fee && p.isFee === undefined) p.isFee = true;
         patches.set(key, p);
 
         const sk = p.__slot || p.__file || '(unnamed)';
@@ -179,8 +208,9 @@ export function parseTagRows(rows = []) {
  * @param rows2d   the sheet
  * @param loaded   [{ clusterId, clusterName, choices:[{nodeName,…}] }]
  */
-export function planTagImport(rows2d, loaded = []) {
+export function planTagImport(rows2d, loaded = [], { findFeeItem } = {}) {
     const { patches, warnings } = parseTagRows(rows2d);
+    fillReturnFees(patches, findFeeItem);   // a return's fee number is looked up, never typed
 
     // ── FINDING THE RIGHT ROW FOR A PIN, IN THREE TRIES ─────────────────────────────────────
     // 1. the exact node name, for a slot that has not been merged yet;
