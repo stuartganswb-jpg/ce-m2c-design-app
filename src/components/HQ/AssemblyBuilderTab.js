@@ -183,6 +183,18 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [assignData, setAssignData] = useState(null); // { asmId, asmName, rows:[{clusterId,clusterName,category,position,found,choices:[{nodeName,label,itemNo,thumb}]}] }
     const [assignBusy, setAssignBusy] = useState(false);
     const [assignFilter, setAssignFilter] = useState('');   // draw the rows being worked on, not all 700
+    // ⚠ CLOSED UNTIL ASKED FOR (Stuart 2026-08-18: "can you collapse the slots, so they are closed
+    // and then i click to open them… i need to work my way down so i could open only one section at
+    // a time"). Filtering assumed he knew what he was looking for; working DOWN a list is how you
+    // find out. Ninety-six sections open at once is ten thousand form controls in the document and
+    // every edit re-renders all of them — closed, it is the headings and the dozen controls of
+    // whichever one he is in. This is the difference between a page that lags and one that does not.
+    const [openClusters, setOpenClusters] = useState(() => new Set());
+    const toggleCluster = (id) => setOpenClusters(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+    });
     const [codeOptions, setCodeOptions] = useState([]);
     const [pickQuery, setPickQuery] = useState('');   // what is being typed RIGHT NOW, for the suggestion list // alphabetical Master-Library codes for the item # picker
     const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
@@ -2455,8 +2467,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                     show all {assignData.rows.length}
                                 </button>
                             )}
+                            <button onClick={() => setOpenClusters(new Set(assignData.rows.map(r => r.clusterId)))}
+                                title="Opens every section. On a large assembly this is the slow state — it is here for a quick look, not for working in."
+                                style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', border: '1px solid var(--line)', background: '#fff', padding: '7px 11px', cursor: 'pointer', color: 'var(--ink-soft)' }}>open all</button>
+                            <button onClick={() => setOpenClusters(new Set())}
+                                style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', border: '1px solid var(--line)', background: '#fff', padding: '7px 11px', cursor: 'pointer', color: 'var(--ink-soft)' }}>close all</button>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>
-                                {assignData.rows.reduce((n, r) => n + (r.choices || []).length, 0)} choice(s) in {assignData.rows.length} section(s)
+                                {assignData.rows.reduce((n, r) => n + (r.choices || []).length, 0)} choice(s) in {assignData.rows.length} section(s) · click a heading to open it
                             </span>
                         </div>
                         {/* 🧭 TROUBLESHOOTING ORDER (Stuart 2026-08-16: "group them all... all poles/rods
@@ -2498,20 +2515,27 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         }).map((r) => {
                             return (
                                 <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
-                                        {r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){r.found ? '' : ' · ⚠ group not found'}</span>{!r.is2d && r.choices.length === 0 && <span style={{ color: '#d9534f' }}> · ⚠ EMPTY — its nodes weren't found in the current .glb. Usual cause: a name collision with an OLDER section holding the same item (🗑 the stale twin, then re-upload this one via ➕ Extend).</span>}{twinOf(r) && <button onClick={() => swapSides(r)} disabled={assignBusy} title="LEFT and RIGHT render on each other's ends? The clusters carry each other's nodes — this swaps the geometry records (clusters + pins) with the twin, then Regenerate." style={{ marginLeft: '10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>⇄ sides</button>}
-                                        {r.is2d && <button onClick={() => addChoice2d(r.clusterId)} disabled={assignBusy} title="Add a choice to this tear-sheet section — type its display name (what the CPQ card shows) and its item #, then Save Assignments." style={{ marginLeft: '8px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>➕ choice</button>}
-                                        <button onClick={() => deleteSection(r)} disabled={assignBusy} title="Delete this ENTIRE section: every choice + pin, and its geometry is stripped from the .glb so the file shrinks (old .glb kept as backup). For re-uploading a whole section via ➕ Extend." style={{ marginLeft: '8px', border: '1px solid #d9534f', background: '#fff', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>🗑 section</button>
+                                    <div onClick={() => toggleCluster(r.clusterId)} title={openClusters.has(r.clusterId) ? 'Click to close this section' : 'Click to open this section'} style={{ cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
+                                        <span style={{ color: 'var(--brass)', marginRight: '6px' }}>{openClusters.has(r.clusterId) ? '\u25be' : '\u25b8'}</span>{r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){(() => {
+                                            // What a closed section must still tell him: how many
+                                            // choices have no item # yet. That is the whole reason
+                                            // for opening one, so it should not require opening it.
+                                            const blank = (r.choices || []).filter(c => !String(c.itemNo || '').trim() && !c.isFee && !c.isHidden).length;
+                                            return blank ? <span style={{ color: '#b00020' }}> · {blank} without an item #</span> : null;
+                                        })()}{r.found ? '' : ' · ⚠ group not found'}</span>{!r.is2d && r.choices.length === 0 && <span style={{ color: '#d9534f' }}> · ⚠ EMPTY — its nodes weren't found in the current .glb. Usual cause: a name collision with an OLDER section holding the same item (🗑 the stale twin, then re-upload this one via ➕ Extend).</span>}{twinOf(r) && <button onClick={e => { e.stopPropagation(); swapSides(r); }} disabled={assignBusy} title="LEFT and RIGHT render on each other's ends? The clusters carry each other's nodes — this swaps the geometry records (clusters + pins) with the twin, then Regenerate." style={{ marginLeft: '10px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>⇄ sides</button>}
+                                        {r.is2d && <button onClick={e => { e.stopPropagation(); addChoice2d(r.clusterId); }} disabled={assignBusy} title="Add a choice to this tear-sheet section — type its display name (what the CPQ card shows) and its item #, then Save Assignments." style={{ marginLeft: '8px', border: '1px solid var(--brass)', background: '#fff', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>➕ choice</button>}
+                                        <button onClick={e => { e.stopPropagation(); deleteSection(r); }} disabled={assignBusy} title="Delete this ENTIRE section: every choice + pin, and its geometry is stripped from the .glb so the file shrinks (old .glb kept as backup). For re-uploading a whole section via ➕ Extend." style={{ marginLeft: '8px', border: '1px solid #d9534f', background: '#fff', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: '2px' }}>🗑 section</button>
                                         {/* ✎ RECLASS — the slot's category/position were locked in at upload; these two
                                             selects rewrite the CLUSTER record (pins ride along), then Regenerate. */}
-                                        {!r.is2d && <select value={String(r.category || '').toUpperCase()} disabled={assignBusy} title="RECLASSIFY CATEGORY — chosen at upload, editable here. Moves this whole section's choices into that pool (POLE = rod/material options, RING = the Rings step, …) on the next flow Regenerate. Pins stay linked." onChange={e => { if (e.target.value !== String(r.category || '').toUpperCase()) reclassSection(r, { category: e.target.value }); }} style={{ marginLeft: '8px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 4px', borderRadius: '2px' }}>
+                                        {!r.is2d && <select onClick={e => e.stopPropagation()} value={String(r.category || '').toUpperCase()} disabled={assignBusy} title="RECLASSIFY CATEGORY — chosen at upload, editable here. Moves this whole section's choices into that pool (POLE = rod/material options, RING = the Rings step, …) on the next flow Regenerate. Pins stay linked." onChange={e => { if (e.target.value !== String(r.category || '').toUpperCase()) reclassSection(r, { category: e.target.value }); }} style={{ marginLeft: '8px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 4px', borderRadius: '2px' }}>
                                             {[...new Set(['POLE', 'FINIAL', 'BRACKET', 'BACKPLATE', 'RING', 'OTHER', String(r.category || '').toUpperCase()])].filter(Boolean).map(cat => <option key={cat} value={cat}>{cat.toLowerCase()}</option>)}
                                         </select>}
-                                        {!r.is2d && <select value={['LEFT', 'CENTER', 'RIGHT'].includes(String(r.position || '').toUpperCase()) ? String(r.position).toUpperCase() : ''} disabled={assignBusy} title="RECLASSIFY POSITION — chosen at upload, editable here. LEFT/RIGHT on a POLE section = that side's end-half (follows the End Treatment pick); shared/CENTER = the always-shown run (what the material step offers). On the next flow Regenerate. Pins stay linked." onChange={e => { const cur = ['LEFT', 'CENTER', 'RIGHT'].includes(String(r.position || '').toUpperCase()) ? String(r.position).toUpperCase() : ''; if (e.target.value !== cur) reclassSection(r, { position: e.target.value }); }} style={{ marginLeft: '4px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 4px', borderRadius: '2px' }}>
+                                        {!r.is2d && <select onClick={e => e.stopPropagation()} value={['LEFT', 'CENTER', 'RIGHT'].includes(String(r.position || '').toUpperCase()) ? String(r.position).toUpperCase() : ''} disabled={assignBusy} title="RECLASSIFY POSITION — chosen at upload, editable here. LEFT/RIGHT on a POLE section = that side's end-half (follows the End Treatment pick); shared/CENTER = the always-shown run (what the material step offers). On the next flow Regenerate. Pins stay linked." onChange={e => { const cur = ['LEFT', 'CENTER', 'RIGHT'].includes(String(r.position || '').toUpperCase()) ? String(r.position).toUpperCase() : ''; if (e.target.value !== cur) reclassSection(r, { position: e.target.value }); }} style={{ marginLeft: '4px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '2px 4px', borderRadius: '2px' }}>
                                             <option value="">shared</option>
                                             {['LEFT', 'CENTER', 'RIGHT'].map(p => <option key={p} value={p}>{p.toLowerCase()}</option>)}
                                         </select>}
                                     </div>
+                                    {openClusters.has(r.clusterId) && (
                                     <div style={{ display: 'grid', gridTemplateColumns: normalizeCategory(r.category) === 'FINIAL' ? '48px minmax(150px,230px) 220px 122px minmax(300px,1fr) 72px' : '48px minmax(150px,230px) 220px minmax(300px,1fr) 72px', gap: '6px 12px', alignItems: 'center' }}>
                                         {r.choices.map((c) => (
                                             <React.Fragment key={c.nodeName}>
@@ -2760,6 +2784,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                             </React.Fragment>
                                         ))}
                                     </div>
+                                    )}
                                 </div>
                             );
                         })}
