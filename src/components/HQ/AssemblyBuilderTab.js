@@ -1405,9 +1405,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const runSheetBuild = async () => {
         if (!sheetBuild?.match?.paired.length) return;
         setSheetBuild(prev => ({ ...prev, busy: true, done: 0 }));
-        // The slot list becomes the sheet's, and the old uploads go with it — mixing a fixed
-        // template's slots with the sheet's would leave orphans nobody can account for.
-        setSlots(sheetBuild.slots.map(s => ({ ...s })));
+        // The slot list becomes the sheet's — but ONLY the slots a file was actually chosen for.
+        // The sheet describes the whole assembly (96 slots for H1-138, singles included); building
+        // all of them would leave 59 empty slots beside the 37 real ones, on a screen whose entire
+        // job is showing what has been filled. Mixing the fixed template's slots with the sheet's is
+        // avoided the same way: the list is replaced, never merged.
+        setSlots(sheetBuild.match.paired.map(({ slot }) => ({ ...slot })));
         setLayers({});
         const index = await refreshCodeIndex().catch(() => null);
         let built = 0, failed = [];

@@ -1,8 +1,9 @@
-import { parseTagRows, planTagImport, applyTagPlan, nodeKey, slotsFromSheet, matchSlotFiles } from '../src/components/Shared/tagSheetImport.js';
+import { parseTagRows, planTagImport, applyTagPlan, nodeKey, nodeTail, slotsFromSheet, matchSlotFiles } from '../src/components/Shared/tagSheetImport.js';
 let pass=0, fail=0;
 const ok=(n,c)=>{ if(c) pass++; else { fail++; console.error('  ✗',n); } };
 const eq=(n,a,b)=>{ if(JSON.stringify(a)===JSON.stringify(b)) pass++; else { fail++; console.error('  ✗',n,'\n    got ',JSON.stringify(a),'\n    want',JSON.stringify(b)); } };
 
+const find=(m,node)=>[...m.values()].find(p=>nodeKey(p.__node)===nodeKey(node));
 const HEAD=['SLOT','SLOT FILE (.fbx)','CAT','POSITION','NODE NAME','ITEM ID','ROD','PROJ','SETUP','TRV','MOUNT','MADE IN','BASIC','INL-BKT','FEE','HIDE','ALWAYS','COLLAR','NOTES'];
 const row=(o={})=>HEAD.map(h=>o[h]??'');
 
@@ -24,7 +25,7 @@ eq('every row parsed', patches.size, 5);
 eq('slots grouped', slots.length, 5);
 eq('no warnings', warnings, []);
 
-const pole=patches.get(nodeKey('H1-138inPOLE DBL Back left:1'));
+const pole=find(patches, 'H1-138inPOLE DBL Back left:1');
 eq('item id', pole.itemNo, 'H1-138R');
 eq('tier', pole.tier, 'BACK');
 eq('the depth pair survives verbatim', pole.projInches, 'FRONT:6.5, BACK:3.25');
@@ -32,15 +33,15 @@ eq('setup', pole.trvSetup, 'DOUBLE');
 eq('material', pole.materials, 'METAL');
 ok('a pole is not flagged basic', !pole.isBasic);
 
-const acr=patches.get(nodeKey('H1-138AR DBL BACK'));
+const acr=find(patches, 'H1-138AR DBL BACK');
 eq('CLEAR is stored as a material', acr.materials, 'CLEAR');
 ok('…and sets noFinish, so the sheet says it once', acr.noFinish === true);
 
-const trv=patches.get(nodeKey('H1-138TRVDBA:1'));
+const trv=find(patches, 'H1-138TRVDBA:1');
 eq('traverse-only bracket', trv.traverseRole, 'TRV_BRACKET');
-const bkt=patches.get(nodeKey('H1-138DD:1'));
+const bkt=find(patches, 'H1-138DD:1');
 ok('BASIC is read', bkt.isBasic === true);
-const std=patches.get(nodeKey('H1-138STDOFF:1'));
+const std=find(patches, 'H1-138STDOFF:1');
 ok('ALWAYS is read', std.alwaysShown === true);
 eq('CARRIER becomes a traverse role, not a category', [std.catOverride, std.traverseRole], ['', 'CARRIER']);
 
@@ -69,9 +70,9 @@ eq('re-importing the same sheet changes nothing', plan2.changed.length, 0);
 // ── the things that go wrong ─────────────────────────────────────────────────────────────────
 const dup=[HEAD, row({'NODE NAME':'X:1','ITEM ID':'A'}), row({'NODE NAME':'x:1','ITEM ID':'B'})];
 const d=parseTagRows(dup);
-eq('a repeated node is caught', d.patches.size, 1);
-ok('and said out loud', d.warnings.some(w=>/more than once/.test(w)));
-eq('the first wins', d.patches.get(nodeKey('X:1')).itemNo, 'A');
+eq('a repeat in the SAME slot is caught', d.patches.size, 1);
+ok('and said out loud', d.warnings.some(w=>/twice in the same slot/.test(w)));
+eq('the first wins', find(d.patches, 'X:1').itemNo, 'A');
 
 const notASheet=parseTagRows([['A','B'],['1','2']]);
 ok('a file that is not a tagging sheet is refused', /not a tagging sheet/.test(notASheet.warnings[0]));
@@ -146,6 +147,39 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     const off=[...singleRow]; off[11]='N';
     const cleared=applyTagPlan(before, planTagImport([H2, off], before))[0].choices[0];
     ok('an explicit N does untick', cleared.isBasic === false);
+}
+
+// ── THE SHEET IS WRITTEN AGAINST THE .FBX; THE PINS HOLD MERGED NAMES ───────────────────────
+// Merge renames every node to <slot-prefix>__<n>_<original, punctuation stripped, 24 chars>.
+{
+    const H3=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','ITEM ID','ROD','SETUP'];
+    eq('a merged name yields its original tail', nodeTail('S12ABCDE-TRAV-DBL-BACKPLATES__3_H1138TRVBPV1'), 'H1138TRVBPV1');
+    eq('a raw name is its own tail', nodeTail('H1-138TRVBP-V:1'), 'H1138TRVBPV1');
+
+    const rows3=[H3,
+      ['TRAV DBL Backplates Center','d.fbx','BACKPLATE','H1-138TRVBP-V:1','','','DOUBLE'],
+      ['3','s.fbx','BACKPLATE','H1-138TRVBP-V:1','','','SINGLE']];
+    // The SAME node name in both sections — the double's plate and the single's plate.
+    const loaded=[
+      { clusterId:'cD', clusterName:'TRAV-DBL-BACKPLATES-CENTER', choices:[{ nodeName:'S1AAAAA-TRAV-DBL-BACKPLATES-CENTER__2_H1138TRVBPV1', trvSetup:'' }]},
+      { clusterId:'cS', clusterName:'3', choices:[{ nodeName:'S9BBBBB-3__7_H1138TRVBPV1', trvSetup:'' }]},
+    ];
+    const plan=planTagImport(rows3, loaded);
+    eq('both merged pins are matched', plan.hits.length, 2);
+    const dbl=plan.hits.find(h=>h.clusterId==='cD'), sing=plan.hits.find(h=>h.clusterId==='cS');
+    eq('the double plate gets DOUBLE', dbl.patch.trvSetup, 'DOUBLE');
+    eq('the single plate gets SINGLE — not the double row', sing.patch.trvSetup, 'SINGLE');
+
+    // …and with no slot to separate them, it refuses rather than guessing.
+    const blind=[{ clusterId:'cX', clusterName:'SOMETHING ELSE', choices:[{ nodeName:'S3CCCCC-X__1_H1138TRVBPV1' }]}];
+    const p2=planTagImport(rows3, blind);
+    eq('an unscoped collision is not guessed at', p2.hits.length, 0);
+    ok('it is reported', p2.ambiguous.some(a=>/2 rows claim it/.test(a)));
+
+    // A tail only one row claims still matches without a slot.
+    const one=[H3,['ANY','a.fbx','POLE','H1-138R DBL Back','','BACK','DOUBLE']];
+    const p3=planTagImport(one, [{ clusterId:'c', clusterName:'WHATEVER', choices:[{ nodeName:'S0ZZZZZ-WHATEVER__4_H1138RDBLBack'.toUpperCase() }] }]);
+    eq('an unambiguous tail matches through the rename', p3.hits.length, 1);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

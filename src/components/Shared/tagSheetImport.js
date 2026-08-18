@@ -65,6 +65,23 @@ const COLUMN = {
 /** A node name as it is compared: whitespace and case are noise, everything else is not. */
 export const nodeKey = (n) => S(n).replace(/\s+/g, ' ').toUpperCase();
 
+// ── THE NAME IN THE FILE IS NOT THE NAME ON THE PIN (Stuart 2026-08-18) ──────────────────────
+// Merge renames every node to `<slot-prefix>__<n>_<original, stripped of punctuation, 24 chars>`,
+// because GLB exporters reuse generic names across files and the engine matches geometry BY NAME —
+// without a per-slot namespace two clusters cannot be told apart. Excellent, and it means a sheet
+// written against the .fbx matches NOTHING once the assembly is merged and saved. The original is
+// still in there, at the tail, in sanitized form — so that is what we compare.
+const sanitize = (n) => S(n).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+const MERGE_TAIL = 24;                                    // the merge's own truncation
+export const nodeTail = (n) => {
+    const raw = S(n);
+    // a merged name: <prefix>__<index>_<sanitized original>
+    const m = raw.match(/__\d+_(.*)$/);
+    return sanitize(m ? m[1] : raw).slice(0, MERGE_TAIL);
+};
+/** Cluster and slot names compared the way merge writes them: LABEL → LABEL-WITH-DASHES. */
+export const slotKey = (n) => S(n).toUpperCase().replace(/\s+/g, '-').replace(/[^A-Z0-9-]/g, '');
+
 /**
  * Read a sheet already loaded as rows of cells.
  *
@@ -86,8 +103,14 @@ export function parseTagRows(rows = []) {
     rows.slice(1).forEach((row, i) => {
         const node = get(row, 'node');
         if (!node) return;
-        const key = nodeKey(node);
-        if (patches.has(key)) { warnings.push(`Row ${i + 2}: node "${node}" appears more than once — the first wins.`); return; }
+        // ⚠ A NODE NAME IS ONLY UNIQUE WITHIN ITS SLOT (Stuart 2026-08-18, from the real file). The
+        // H1-138 double reuses 17 names from the singles — both files call a plate H1-138TRVBP-V:1,
+        // because they ARE both that plate, in two different assemblies' geometry. Keying rows by
+        // node name alone threw the second one away and reported it as a duplicate; the single's
+        // row vanished and its part would have taken the DOUBLE's tags. The slot is what tells
+        // them apart, and merge namespaces by slot for exactly the same reason.
+        const key = `${slotKey(get(row, 'slot'))}::${nodeKey(node)}`;
+        if (patches.has(key)) { warnings.push(`Row ${i + 2}: node "${node}" appears twice in the same slot — the first wins.`); return; }
 
         // Everything the 1.6 choice carries, in the 1.6 spelling. Blank means "leave it alone" for
         // free-text fields and "off" for the flags, which is what a blank cell means to a person.
@@ -119,6 +142,7 @@ export function parseTagRows(rows = []) {
         p.__position = U(get(row, 'position'));
         p.__slot = get(row, 'slot');
         p.__file = get(row, 'file');
+        p.__node = node;
         patches.set(key, p);
 
         const sk = p.__slot || p.__file || '(unnamed)';
@@ -137,13 +161,48 @@ export function parseTagRows(rows = []) {
  */
 export function planTagImport(rows2d, loaded = []) {
     const { patches, warnings } = parseTagRows(rows2d);
+
+    // ── FINDING THE RIGHT ROW FOR A PIN, IN THREE TRIES ─────────────────────────────────────
+    // 1. the exact node name, for a slot that has not been merged yet;
+    // 2. the SLOT plus the sanitized tail, for anything already merged — this is the one that
+    //    matters, because the H1-138 double reuses 17 node names from the singles (both files call
+    //    a plate H1-138TRVBP-V:1) and the tail alone cannot tell those two plates apart;
+    // 3. the tail alone, ONLY when exactly one row in the whole sheet carries it.
+    // A tail that several rows claim, with no slot to separate them, is reported and left alone —
+    // guessing there would put the double's tags on a single's part, which is the one outcome this
+    // import must never produce.
+    const byExact = new Map();
+    const byScoped = new Map();
+    const byTail = new Map();
+    patches.forEach((p) => {
+        const nk = nodeKey(p.__node), t = nodeTail(p.__node);
+        if (!byExact.has(nk)) byExact.set(nk, []);
+        byExact.get(nk).push(p);
+        if (p.__slot) byScoped.set(`${slotKey(p.__slot)}::${t}`, p);
+        if (!byTail.has(t)) byTail.set(t, []);
+        byTail.get(t).push(p);
+    });
+    const ambiguous = new Set();
     const seen = new Set();
     const hits = [];
     loaded.forEach(r => (r.choices || []).forEach(ch => {
         const k = nodeKey(ch.nodeName);
-        const p = patches.get(k);
+        const t = nodeTail(ch.nodeName);
+        // The slot wins whenever it can, because it is the only thing that separates two parts
+        // that share a name.
+        let p = byScoped.get(`${slotKey(r.clusterName || '')}::${t}`);
+        if (!p) {
+            const ex = byExact.get(k) || [];
+            if (ex.length === 1) p = ex[0];
+            else if (ex.length > 1) { ambiguous.add(`${ch.nodeName} — ${ex.length} rows claim it (${ex.map(c => c.__slot || '?').join(', ')})`); return; }
+        }
+        if (!p) {
+            const cands = byTail.get(t) || [];
+            if (cands.length === 1) p = cands[0];
+            else if (cands.length > 1) { ambiguous.add(`${ch.nodeName} — ${cands.length} rows claim it (${cands.map(c => c.__slot || '?').join(', ')})`); return; }
+        }
         if (!p) return;
-        seen.add(k);
+        seen.add(`${slotKey(p.__slot)}::${nodeKey(p.__node)}`);
         // What actually CHANGES — a sheet that agrees with the screen should read as no work.
         const diff = [];
         Object.entries(p).forEach(([f, v]) => {
@@ -156,23 +215,25 @@ export function planTagImport(rows2d, loaded = []) {
         });
         hits.push({ clusterId: r.clusterId, clusterName: r.clusterName, nodeName: ch.nodeName, patch: p, diff });
     }));
-    const unmatchedRows = [...patches.entries()].filter(([k]) => !seen.has(k)).map(([, p], i) => ({ node: [...patches.keys()][i], slot: p.__slot }));
+    const matchedNodes = new Set(hits.map(h => nodeKey(h.nodeName)));
+    const unmatchedRows = [...patches.values()].filter(p => !seen.has(`${slotKey(p.__slot)}::${nodeKey(p.__node)}`)).map(p => p.__node);
     const untagged = [];
     loaded.forEach(r => (r.choices || []).forEach(ch => {
-        if (!patches.has(nodeKey(ch.nodeName)) && S(ch.nodeName)) untagged.push({ cluster: r.clusterName, node: ch.nodeName });
+        if (!matchedNodes.has(nodeKey(ch.nodeName)) && S(ch.nodeName)) untagged.push({ cluster: r.clusterName, node: ch.nodeName });
     }));
     return {
         hits,
         changed: hits.filter(h => h.diff.length),
-        unmatchedRows: [...patches.keys()].filter(k => !seen.has(k)),
+        unmatchedRows,
         untagged,
+        ambiguous: [...ambiguous],
         warnings,
     };
 }
 
 /** Apply a plan to the 1.6 rows, returning new rows. Pure — the caller decides to keep them. */
 export function applyTagPlan(loaded, plan) {
-    const by = new Map(plan.hits.map(h => [`${h.clusterId}::${nodeKey(h.nodeName)}`, h.patch]));
+    const by = new Map(plan.hits.map(h => [`${h.clusterId}::${nodeKey(h.nodeName)}`, h.patch]));   // the plan already resolved which row won
     return loaded.map(r => ({
         ...r,
         choices: (r.choices || []).map(ch => {
@@ -223,7 +284,7 @@ const slugOf = (s) => S(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_
 export function slotsFromSheet(rows2d = []) {
     const { patches, warnings } = parseTagRows(rows2d);
     const bySlot = new Map();
-    patches.forEach((p, key) => {
+    patches.forEach((p) => {
         const name = p.__slot || p.__file;
         if (!name) return;
         // ⚠ THE FILE IS PART OF A SLOT'S IDENTITY, not just its name. The designer names several
@@ -233,7 +294,7 @@ export function slotsFromSheet(rows2d = []) {
         const id = slugOf(`${name}__${p.__file || ''}`);
         if (!bySlot.has(id)) bySlot.set(id, { id, label: name, file: p.__file, cats: new Set(), positions: new Set(), mounts: new Set(), nodes: [] });
         const sl = bySlot.get(id);
-        sl.nodes.push(key);
+        sl.nodes.push(p.__node);
         if (p.catOverride) sl.cats.add(p.catOverride);
         if (p.traverseRole === 'CARRIER') sl.cats.add('CARRIER');
         if (p.__position) sl.positions.add(p.__position);
