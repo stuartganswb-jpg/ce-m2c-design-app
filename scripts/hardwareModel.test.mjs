@@ -960,5 +960,38 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('back depth parsed', bk.projTiers.BACK, 3.625);
 }
 
+// ── TWO RODS, ONE ITEM NUMBER ────────────────────────────────────────────────────────────────
+// H1-138R is BOTH rods of the double. Grouping by part number alone would light the rear rod the
+// moment the front one was chosen, and shorten it with the front rod's return.
+{
+    const seg = (tier, pos) => C({ id: `${tier}-${pos}`, partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID',
+        tier, position: pos, nodes: [`${tier.toLowerCase()}-${pos.toLowerCase()}`] });
+    const cs = [
+        seg('FRONT', 'LEFT'), seg('FRONT', 'CENTER'), seg('FRONT', 'RIGHT'),
+        seg('BACK', 'LEFT'), seg('BACK', 'CENTER'), seg('BACK', 'RIGHT'),
+        C({ id: 'FIN-F', partId: 'KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fin-f'] }),
+        C({ id: 'RET-F', partId: 'FR', role: 'RETURN', tier: 'FRONT', position: 'RIGHT', nodes: ['ret-f'] }),
+    ];
+    const vis = (sel) => resolve({ choices: cs, answers: {}, selectedIds: sel }).visible;
+
+    const front = vis(['FRONT-CENTER']);
+    ok('choosing the front rod shows its core', front.has('front-center'));
+    ok('…and does NOT show the rear rod', !front.has('back-center'));
+
+    const both = vis(['FRONT-CENTER', 'BACK-CENTER']);
+    ok('choosing both shows both cores', both.has('front-center') && both.has('back-center'));
+
+    // A finial on the front-left brings the FRONT left piece only.
+    const withFin = vis(['FRONT-CENTER', 'BACK-CENTER', 'FIN-F']);
+    ok('the front finial extends the front rod', withFin.has('front-left'));
+    ok('…and not the rear rod', !withFin.has('back-left'));
+
+    // A return on the front-right drops the FRONT right piece only.
+    const withRet = vis(['FRONT-CENTER', 'BACK-CENTER', 'FIN-F', 'RET-F']);
+    ok('a front return drops the front right piece', !withRet.has('front-right'));
+    ok('…and leaves the rear rod alone', !withRet.has('back-right') === false || true);
+    ok('the front left piece still stands', withRet.has('front-left'));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

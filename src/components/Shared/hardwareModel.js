@@ -197,8 +197,12 @@ export const segmentOf = (choice) => (choice.position === 'LEFT' || choice.posit
 const END_ROLES = ['FINIAL', 'INSIDE_MOUNT', 'RETURN'];
 
 /** Does this end have a chosen treatment, and is it a return? */
-function endState(selected, pos) {
-    const picks = selected.filter(c => c.position === pos && END_ROLES.includes(c.role));
+// Scoped to ONE ROD. On a double each rod has its own left and right end, and a french return on
+// the front rod must not shorten the rear one. An end tagged for no tier answers whichever rod is
+// asking — which is right for a finial style shared front and back.
+function endState(selected, pos, tier = '') {
+    const picks = selected.filter(c => c.position === pos && END_ROLES.includes(c.role)
+        && (!tier || !c.tier || c.tier === tier));
     return { answered: picks.length > 0, isReturn: picks.some(c => c.role === 'RETURN') };
 }
 
@@ -626,19 +630,22 @@ export function visibleNodes(choices, answers = {}, selectedIds = []) {
     const selected = choices.filter(c => want.has(c.id));
     const on = new Set();
     const take = (c) => c.nodes.forEach(n => on.add(n));
-    const left = endState(selected, 'LEFT');
-    const right = endState(selected, 'RIGHT');
-    // A chosen ROD brings every segment of the SAME PART, each judged by its own end.
-    const segmentShows = (seg) => {
-        if (seg === 'CORE') return true;
-        const e = seg === 'LEFT' ? left : right;
+    // A chosen ROD brings every segment of the SAME PART **ON THE SAME ROD**, each judged by that
+    // rod's own end. ⚠ THE TIER IS PART OF THE IDENTITY (Stuart 2026-08-17, tagging the double):
+    // front and back are frequently the SAME item number — H1-138R is both rods — so grouping by
+    // partId alone would light the rear rod's geometry the moment the front one was chosen, and
+    // shorten it with the front rod's return. Two rods, same number, different pins, different rods.
+    const segmentShows = (seg, tier) => {
+        if (segmentOf(seg) === 'CORE') return true;
+        const e = endState(selected, segmentOf(seg), tier);
         return e.answered && !e.isReturn;
     };
     selected.forEach(c => {
         if (!ROD_ROLES.includes(c.role)) { take(c); return; }
         choices
-            .filter(x => ROD_ROLES.includes(x.role) && x.partId && x.partId === c.partId)
-            .forEach(seg => { if (segmentShows(segmentOf(seg))) take(seg); });
+            .filter(x => ROD_ROLES.includes(x.role) && x.partId && x.partId === c.partId
+                && (x.tier || '') === (c.tier || ''))
+            .forEach(seg => { if (segmentShows(seg, c.tier || '')) take(seg); });
         if (!c.partId) take(c);   // an unidentified rod is only ever itself
     });
     ridersFor(choices, answers, selectedIds).forEach(take);
@@ -792,12 +799,15 @@ export function slots(choices, answers = {}, selectedIds = []) {
     // guessing would hide a legitimate choice.
     const chosenRods = choices.filter(c => want.has(c.id) && ROD_ROLES.includes(c.role));
     if (chosenRods.length) {
-        const segmentsAt = (pos) => choices.some(c => ROD_ROLES.includes(c.role)
-            && chosenRods.some(r => r.partId && r.partId === c.partId)
+        // Same identity rule as the renderer: a segment belongs to a rod only if it shares BOTH the
+        // part number and the tier.
+        const segmentsAt = (pos, tier) => choices.some(c => ROD_ROLES.includes(c.role)
+            && chosenRods.some(r => r.partId && r.partId === c.partId && (r.tier || '') === (c.tier || '')
+                && (!tier || (r.tier || '') === tier))
             && (c.position === pos));
         bucket.forEach(slot => {
             if (slot.kind !== 'END' || !slot.position) return;
-            if (segmentsAt(slot.position)) return;                  // a piece exists here — returns are possible
+            if (segmentsAt(slot.position, slot.tier || '')) return;  // a piece exists here — returns are possible
             const dropped = slot.options.filter(o => o.role === 'RETURN');
             if (!dropped.length) return;
             slot.options = slot.options.filter(o => o.role !== 'RETURN');
