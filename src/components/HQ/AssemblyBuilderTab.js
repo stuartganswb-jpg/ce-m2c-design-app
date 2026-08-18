@@ -1447,7 +1447,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             setSheetBuild(prev => prev ? { ...prev, done: built } : prev);
         }
         setSheetBuild(prev => prev ? { ...prev, busy: false, built, failed } : prev);
-        addLog(`Built ${built} slot(s) from ${sheetBuild.fileName}${failed.length ? ` — ${failed.length} failed` : ''}. Now Merge & Save, then Assign Items → Tag from sheet.`, failed.length ? 'error' : 'success');
+        // Name the BUTTON, not the concept. "Merge & Save" is what the step is called in my head;
+        // the control at the bottom of the slot list says "Add N Slots to Assembly" when extending
+        // and "Build Assembly" when not, and a person following instructions looks for the words
+        // they were given.
+        const nextBtn = extendId ? `"⚙ Add ${built} Slots to Assembly"` : `"⚙ Build Assembly"`;
+        addLog(`Built ${built} slot(s) from ${sheetBuild.fileName}${failed.length ? ` — ${failed.length} failed` : ''}. NEXT: the green ${nextBtn} button at the bottom of the slot list on the left. Then "Already built" → Load Choices → Tag from sheet.`, failed.length ? 'error' : 'success');
         failed.forEach(f => addLog(f, 'error'));
     };
     const readTagSheet = async (file) => {
@@ -2016,7 +2021,17 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                 <div style={{ ...line, color: '#8a6508' }}>⚠ {m.extra.length} chosen file(s) no slot asks for:
                                     <span style={{ color: 'var(--ink-soft)' }}> {m.extra.slice(0, 5).join(' · ')}{m.extra.length > 5 ? ' …' : ''}</span></div>
                             )}
-                            {!!sheetBuild.built && <div style={{ ...line, color: '#3a7d44' }}>✓ Built {sheetBuild.built} slot(s). Now Merge &amp; Save, then Assign Items → Tag from sheet.</div>}
+                            {!!sheetBuild.built && (
+                                <div style={{ ...line, color: '#3a7d44', lineHeight: 1.8 }}>
+                                    ✓ Built {sheetBuild.built} slot(s) — check the Live Preview, then:
+                                    <div style={{ color: 'var(--ink)', paddingLeft: '12px' }}>
+                                        NEXT · the green <b>{extendId ? `⚙ Add ${sheetBuild.built} Slots to Assembly` : '⚙ Build Assembly'}</b> button at the BOTTOM of the slot list on the left
+                                    </div>
+                                    <div style={{ color: 'var(--ink-soft)', paddingLeft: '12px' }}>
+                                        THEN · “Already built” below → Load Choices → Tag from sheet
+                                    </div>
+                                </div>
+                            )}
                             <div style={{ display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' }}>
                                 <button onClick={runSheetBuild} disabled={!m?.paired.length || sheetBuild.busy}
                                     style={{ padding: '10px 18px', background: (m?.paired.length && !sheetBuild.busy) ? 'var(--ink)' : 'var(--paper-2)', color: (m?.paired.length && !sheetBuild.busy) ? '#fff' : 'var(--ink-faint)', border: 'none', cursor: (m?.paired.length && !sheetBuild.busy) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
