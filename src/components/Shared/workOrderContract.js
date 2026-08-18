@@ -87,9 +87,13 @@ export const resolveByExactKey = (finWOs = [], scan) => {
 // properly, making this the safety net rather than the mechanism.
 const looksLikeItemCode = (v) => {
     const s = String(v == null ? '' : v).trim();
-    // Real codes have no spaces. Rejects the labels that live in the same field: "Stock Build",
-    // "Just For Paint", "Mixed", "Custom" — and display names like "Round Bracket 4.5 inch".
-    return !!s && !/\s/.test(s) && !/^(stock build|custom|mixed|n\/a|pending|unassigned)$/i.test(s);
+    if (!s || /\s/.test(s)) return false;                                    // no code has spaces
+    if (/^(stock build|custom|mixed|n\/a|pending|unassigned|none)$/i.test(s)) return false;
+    // A code carries a DIGIT or a FINISH SLASH — HCUMB415/BB, H1-138BE/P, HTA435/SG. Without this
+    // the sales-order cards read "Item: BRIMAR" (2026-08-17), because `type` holds the assembly
+    // name on those and a bare word passed every other test. A collection or customer name is not
+    // a pattern number, and labelling it "Item" is worse than showing nothing.
+    return /[0-9]/.test(s) || s.includes('/');
 };
 export const woItemCodeOf = (wo) => {
     if (!wo) return '';

@@ -633,7 +633,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '0.95rem', fontWeight: 600, color: 'var(--ink)' }}>{code}</span>
                                 {name && <span style={{ color: 'var(--ink-soft)' }}> · {name}</span>}
                               </div>
-                            : <div style={{ marginBottom: '4px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px' }}>⚠ No item # on this order — it cannot be identified on the floor.</div>;
+                            : (wo.orderType === 'stock'
+                                // Only a STOCK build is defined by its code. A sales order is
+                                // identified by customer + assembly, which the lines below already
+                                // carry — warning there would cry wolf on every custom job.
+                                ? <div style={{ marginBottom: '4px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px' }}>⚠ No item # on this order — it cannot be identified on the floor.</div>
+                                : null);
                     })()}
                     <span style={{color:'var(--ink-soft)'}}>Type:</span> {(wo.type || wo.itemName || 'Custom').toUpperCase()} | <span style={{color:'var(--ink-soft)'}}>Total Parts:</span> {wo.totalParts || wo.qty || 1} <br/>
                     {wo.type === 'sales' && (
