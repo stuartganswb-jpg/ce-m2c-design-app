@@ -182,5 +182,14 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     eq('an unambiguous tail matches through the rename', p3.hits.length, 1);
 }
 
+// A traverse role is not a category — a carrier row says what it IS and which world it is in.
+{
+    const H4=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','TRV'];
+    const { slots, warnings: w } = slotsFromSheet([H4,
+        ['TRV POLE DBL Back Carrier rings','c.fbx','RING','HTSLNTCAR:1','CARRIER']]);
+    eq('the slot is what CAT says', slots[0].category, 'RING');
+    ok('and nothing claims it mixes categories', !w.some(x=>/mixes categories/.test(x)));
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail?1:0);

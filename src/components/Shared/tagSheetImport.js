@@ -296,7 +296,7 @@ export function slotsFromSheet(rows2d = []) {
         const sl = bySlot.get(id);
         sl.nodes.push(p.__node);
         if (p.catOverride) sl.cats.add(p.catOverride);
-        if (p.traverseRole === 'CARRIER') sl.cats.add('CARRIER');
+        else if (p.traverseRole === 'CARRIER') sl.cats.add('CARRIER');   // only when nothing said otherwise
         if (p.__position) sl.positions.add(p.__position);
         if (p.mountType) sl.mounts.add(p.mountType);
     });
