@@ -58,7 +58,12 @@ const valueLabel = (axis, v) => {
 };
 const slotLabel = (s) => {
     const kind = s.kind === 'END' ? 'End Treatment' : s.kind.charAt(0) + s.kind.slice(1).toLowerCase().replace('_', ' ');
-    return s.position ? `${s.position.charAt(0)}${s.position.slice(1).toLowerCase()} ${kind}` : kind;
+    const cap = (w) => `${w.charAt(0)}${w.slice(1).toLowerCase()}`;
+    // On a double every rod asks its own questions, so the rail must say WHICH ROD — "Front Rod",
+    // "Back Left End Treatment". Without it a double shows two identical headings and the operator
+    // is answering one of them blind.
+    const parts = [s.tier ? cap(s.tier) : '', s.position ? cap(s.position) : '', kind].filter(Boolean);
+    return parts.join(' ');
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
