@@ -1501,6 +1501,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // reconcile three copies that collapse to one name. Blanks only: everything the sheet set —
     // every DOUBLE, every BACK — is left exactly as it is.
     const [singlesPlan, setSinglesPlan] = useState(null);
+    const [saveProgress, setSaveProgress] = useState('');   // a slow save must read as a slow save
     const previewSingles = () => setSinglesPlan(planSinglesFill(assignData?.rows || []));
     const applySingles = () => {
         if (!singlesPlan) return;
@@ -1725,6 +1726,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
   const handleSaveItemNumbers = async () => {
         if (!assignData) return;
         setAssignBusy(true);
+        // ⚠ ONE ROUND TRIP PER PIN IS FINE UNTIL IT IS NOT (Stuart 2026-08-18: "it has been saving
+        // for minutes, so i think the page is hung up"). This loop awaited every write in turn — at
+        // 59 clusters that was a few hundred milliseconds and nobody noticed. The double takes the
+        // assembly to 96 clusters and ~700 choices, so it became ~700 serial round-trips: minutes of
+        // a screen that says nothing, which is indistinguishable from a hang and had him restarting
+        // Chrome. The writes are independent, so they are queued and run 25 at a time, with a count
+        // on screen so a slow save reads as a slow save.
+        const _ops = [];
+        const qSet = (ref, data) => { _ops.push(() => setDoc(ref, data)); };
+        const qDel = (ref) => { _ops.push(() => deleteDoc(ref)); };
         try {
             // True SYNC, not append-only: the pin doc id embeds the partId, so renumbering a choice
             // would otherwise leave the old pin behind (stale duplicates that confuse the generator
@@ -1809,13 +1820,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             const slugP = (ch.label || 'PART').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 18);
                             const partIdP = `HIDDEN-${slugP}`;
                             const pidP = pinIdFor(assignData.asmId, r.clusterId, partIdP, ch.nodeName);
-                            for (const old of existing) { if (old.docId !== pidP) { await deleteDoc(old.ref); removed++; } }
-                            await setDoc(doc(db, 'assembly_pins', pidP), { id: pidP, assemblyId: assignData.asmId, clusterId: r.clusterId, partId: partIdP, partName: ch.label || partIdP, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, isHiddenPart: true, parked: true, ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}) });
+                            for (const old of existing) { if (old.docId !== pidP) { qDel(old.ref); removed++; } }
+                            qSet(doc(db, 'assembly_pins', pidP), { id: pidP, assemblyId: assignData.asmId, clusterId: r.clusterId, partId: partIdP, partName: ch.label || partIdP, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, isHiddenPart: true, parked: true, ...(String(ch.note || '').trim() ? { designerNote: String(ch.note).trim() } : {}) });
                             parked++;
                             continue;
                         }
                         // Cleared back to blank (= hardware): remove any pin this node had.
-                        for (const old of existing) { await deleteDoc(old.ref); removed++; }
+                        for (const old of existing) { qDel(old.ref); removed++; }
                         continue;
                     }
                     // Hidden choice: force-hidden in every configuration (stray/duplicate geometry).
@@ -1826,8 +1837,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     // BOM (includedParts) at its cluster's position. HIDDEN-… synthetic = geometry-only.
                     const partId = hasItem ? ch.itemNo.trim().toUpperCase() : (ch.isHidden ? `HIDDEN-${slug}` : `FEE-${slug}`);
                     const pid = pinIdFor(assignData.asmId, r.clusterId, partId, ch.nodeName);
-                    for (const old of existing) { if (old.docId !== pid) { await deleteDoc(old.ref); removed++; } }
-                    await setDoc(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment && !(ch.catOverride && String(ch.catOverride).toUpperCase() !== 'FINIAL') ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}), ...(hasItem && !ch.isFee && Array.isArray(ch.custIds) && ch.custIds.length ? { customerIds: ch.custIds, customerNames: ch.custNames || [] } : {}), ...(hasItem && !ch.isFee && ch.isCollar ? { isCollar: true } : {}), ...(hasItem && !ch.isFee && !ch.isCollar && String(ch.requiresCollar || '').trim() ? { requiresCollar: String(ch.requiresCollar).trim() } : {}), ...(hasItem && String(ch.projInches || '').trim() ? { projInches: String(ch.projInches).trim().toUpperCase() } : {}), ...(hasItem && !ch.isFee && String(ch.mountType || '').trim() ? { mountType: String(ch.mountType).trim().toUpperCase() } : {}), ...(hasItem && String(ch.catOverride || '').trim() ? { catOverride: String(ch.catOverride).trim().toUpperCase() } : {}), ...(String(ch.traverseRole || '').trim() ? { traverseRole: String(ch.traverseRole).trim().toUpperCase() } : {}), ...(String(ch.driveType || '').trim() ? { driveType: String(ch.driveType).trim().toUpperCase() } : {}), ...(String(ch.trvSetup || '').trim() ? { trvSetup: String(ch.trvSetup).trim().toUpperCase() } : {}), ...(ch.alwaysShown && !ch.isFee ? { alwaysShown: true } : {}), ...(ch.noFinish ? { noFinish: true } : {}), ...(String(ch.materials || '').trim() ? { materials: String(ch.materials).trim().toUpperCase() } : {}), // THE FEE'S TYPED CODE, IN A FIELD OF ITS OWN (Stuart 2026-08-04: "the bug that keeps
+                    for (const old of existing) { if (old.docId !== pid) { qDel(old.ref); removed++; } }
+                    qSet(doc(db, 'assembly_pins', pid), { id: pid, assemblyId: assignData.asmId, clusterId: r.clusterId, partId, partName: ch.label || partId, defaultQty: 1, choiceNode: ch.nodeName, targetNode: ch.nodeName, choiceSort: idx, ...(ch.endTreatment && !(ch.catOverride && String(ch.catOverride).toUpperCase() !== 'FINIAL') ? { endTreatment: ch.endTreatment } : {}), ...(ch.isFee && !ch.isHidden ? { isFee: true } : {}), ...(ch.isHidden ? { isHiddenPart: true } : {}), ...(ch.isBasic && !ch.isFee && !ch.isHidden ? { isBasic: true } : {}), ...(ch.usesReturnPlates && !ch.isFee && !ch.isHidden ? { usesReturnPlates: true } : {}), ...(ch.isReturnArm && !ch.isFee && !ch.isHidden ? { isReturnArm: true } : {}), ...(ch.returnOnly && !ch.isFee && !ch.isHidden ? { returnOnly: true } : {}), ...(ch.inlineOnly && !ch.isFee && !ch.isHidden ? { inlineOnly: true } : {}), ...(hasItem && !ch.isFee && Array.isArray(ch.custIds) && ch.custIds.length ? { customerIds: ch.custIds, customerNames: ch.custNames || [] } : {}), ...(hasItem && !ch.isFee && ch.isCollar ? { isCollar: true } : {}), ...(hasItem && !ch.isFee && !ch.isCollar && String(ch.requiresCollar || '').trim() ? { requiresCollar: String(ch.requiresCollar).trim() } : {}), ...(hasItem && String(ch.projInches || '').trim() ? { projInches: String(ch.projInches).trim().toUpperCase() } : {}), ...(hasItem && !ch.isFee && String(ch.mountType || '').trim() ? { mountType: String(ch.mountType).trim().toUpperCase() } : {}), ...(hasItem && String(ch.catOverride || '').trim() ? { catOverride: String(ch.catOverride).trim().toUpperCase() } : {}), ...(String(ch.traverseRole || '').trim() ? { traverseRole: String(ch.traverseRole).trim().toUpperCase() } : {}), ...(String(ch.driveType || '').trim() ? { driveType: String(ch.driveType).trim().toUpperCase() } : {}), ...(String(ch.trvSetup || '').trim() ? { trvSetup: String(ch.trvSetup).trim().toUpperCase() } : {}), ...(ch.alwaysShown && !ch.isFee ? { alwaysShown: true } : {}), ...(ch.noFinish ? { noFinish: true } : {}), ...(String(ch.materials || '').trim() ? { materials: String(ch.materials).trim().toUpperCase() } : {}), // THE FEE'S TYPED CODE, IN A FIELD OF ITS OWN (Stuart 2026-08-04: "the bug that keeps
                     // whipping out all my miter fees is still, they are yet again gone"). partId was
                     // carrying it, and partId is rewritten by anything that re-saves a choice — once it
                     // became the synthetic FEE-<slug> the code was unrecoverable. This field is written
@@ -1841,9 +1852,18 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     n++; if (ch.isFee && !ch.isHidden) fees++; if (ch.isHidden) hides++;
                 }
             }
+            // FLUSH. Everything above only decided WHAT to write; nothing has gone to Firestore
+            // yet. Twenty-five at a time keeps a big assembly well inside the connection's limits
+            // while turning ~700 sequential round-trips into ~28 rounds.
+            const _total = _ops.length;
+            for (let i = 0; i < _ops.length; i += 25) {
+                await Promise.all(_ops.slice(i, i + 25).map(fn => fn()));
+                setSaveProgress(`${Math.min(i + 25, _total)} / ${_total}`);
+            }
+            setSaveProgress('');
             addLog(`✅ Saved ${n} choice pin(s) (${fees} fee, ${hides} hidden${parked ? `, ${parked} ⏸ parked` : ''}${removed ? `, ${removed} stale removed` : ''}${renamed ? `, ${renamed} node name(s) reconciled to the live model` : ''}${droppedStale.length ? `, ${droppedStale.length} stale node record(s) dropped` : ''}).`, 'success');
             alert(`✅ Wrote ${n} choice pin(s)${fees ? ` — ${fees} marked as FEE (renders its geometry, bills as a fee, no BOM item)` : ''}${parked ? `\n\n⏸ ${parked} choice(s) PARKED (no item # yet) — hidden from the model and the flow. When the item # lands in the library, come back, LOAD CHOICES, type it in, save, and regenerate — the part appears on the CPQ.` : ''}.${reconStatus !== 'ran' ? `\n\n⚠ NODE RECONCILIATION ${reconStatus} — stale names were NOT cleaned; fix this before regenerating.` : `\n\n🔧 Node reconciliation ran: ${renamed} renamed, ${droppedStale.length} stale name(s) dropped${droppedStale.length ? ` (${droppedStale.slice(0, 6).join(', ')}${droppedStale.length > 6 ? '…' : ''})` : ''}.`}\n\nNow REGENERATE the CPQ flow (System Admin → the flow → "Regenerate Steps from Tags (keep prices)") — clusters with 2+ choices fan out into individual options. Hardware left blank stays as always-on shared geometry.`);
-        } catch (e) { console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
+        } catch (e) { setSaveProgress(''); console.error(e); addLog(`Save failed: ${e.message || e}`, 'error'); alert('Save failed:\n\n' + (e.message || e)); }
         setAssignBusy(false);
     };
 
@@ -2602,7 +2622,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             );
                         })}
                         <button onClick={handleSaveItemNumbers} disabled={assignBusy} style={{ padding: '12px', background: assignBusy ? 'var(--paper-2)' : '#3a7d44', color: assignBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: assignBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600 }}>
-                            {assignBusy ? 'Saving…' : '⬇ Save Item Numbers as Choice Pins'}
+                            {assignBusy ? 'Saving…' : '⬇ Save Item Numbers as Choice Pins'}{assignBusy && saveProgress ? ` — ${saveProgress}` : ''}
                         </button>
                         <span style={{ fontFamily: 'var(--sans)', fontSize: '0.78rem', color: 'var(--ink-soft)', textAlign: 'center' }}>Safe to save in passes — saved numbers come back prefilled on the next Load Choices; blanks just don't create pins yet.</span>
                     </div>
