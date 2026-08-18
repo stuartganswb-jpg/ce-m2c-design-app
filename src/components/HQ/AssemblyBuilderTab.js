@@ -2126,7 +2126,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: '240px' }}>
-                        <span style={{ ...lbl, color: 'var(--brass)' }}>④ Assign item numbers · tag from sheet</span>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>Already built · assign item numbers, or tag from sheet</span>
                         <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>For an assembly built without item numbers: lists each cluster's stacked choices from the .glb. Type an item # per real choice; leave shared hardware (screws / standoffs) blank. Clusters with 2+ item-numbered choices fan out into individual options after you regenerate the flow.</span>
                     </div>
                     <div style={{ minWidth: '240px' }}>
