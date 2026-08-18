@@ -96,12 +96,19 @@ export const nodeKey = (n) => cleanFusion(n).toUpperCase();
 // still in there, at the tail, in sanitized form — so that is what we compare.
 const sanitize = (n) => cleanFusion(n).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 const MERGE_TAIL = 24;                                    // the merge's own truncation
+// Fusion also writes a copy number with a SPACE — "… DBL Back left 1" — which the colon rule does
+// not catch. Stripping every trailing digit is too blunt to do everywhere (H1-138B6 and H1-1D6 END
+// in a digit that is part of the code), so it is a LAST RESORT, used only inside a slot and only
+// when exactly one row there answers to it. Two rows in one slot that differ only by a trailing
+// number stay ambiguous and are refused, which is the right answer for "Arm 4" beside "Arm 6".
 export const nodeTail = (n) => {
     const raw = S(n);
     // a merged name: <prefix>__<index>_<sanitized original>
     const m = raw.match(/__\d+_(.*)$/);
     return sanitize(m ? m[1] : raw).slice(0, MERGE_TAIL);
 };
+export const looseTail = (n) => nodeTail(n).replace(/\d+$/, '');
+
 /** Cluster and slot names compared the way merge writes them: LABEL → LABEL-WITH-DASHES. */
 export const slotKey = (n) => S(n).toUpperCase().replace(/\s+/g, '-').replace(/[^A-Z0-9-]/g, '');
 
@@ -224,11 +231,16 @@ export function planTagImport(rows2d, loaded = [], { findFeeItem } = {}) {
     const byExact = new Map();
     const byScoped = new Map();
     const byTail = new Map();
+    const byLoose = new Map();
     patches.forEach((p) => {
         const nk = nodeKey(p.__node), t = nodeTail(p.__node);
         if (!byExact.has(nk)) byExact.set(nk, []);
         byExact.get(nk).push(p);
-        if (p.__slot) byScoped.set(`${slotKey(p.__slot)}::${t}`, p);
+        if (p.__slot) {
+            byScoped.set(`${slotKey(p.__slot)}::${t}`, p);
+            const lk = `${slotKey(p.__slot)}::${looseTail(p.__node)}`;
+            byLoose.set(lk, byLoose.has(lk) ? null : p);   // null = two rows here, so neither wins
+        }
         if (!byTail.has(t)) byTail.set(t, []);
         byTail.get(t).push(p);
     });
@@ -241,6 +253,8 @@ export function planTagImport(rows2d, loaded = [], { findFeeItem } = {}) {
         // The slot wins whenever it can, because it is the only thing that separates two parts
         // that share a name.
         let p = byScoped.get(`${slotKey(r.clusterName || '')}::${t}`);
+        // Same slot, same name but for a trailing copy number Fusion added.
+        if (!p) p = byLoose.get(`${slotKey(r.clusterName || '')}::${looseTail(ch.nodeName)}`) || null;
         if (!p) {
             const ex = byExact.get(k) || [];
             if (ex.length === 1) p = ex[0];

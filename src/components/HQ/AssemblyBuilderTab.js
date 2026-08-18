@@ -123,6 +123,35 @@ const makeLoader = () => {
 //
 // So a name that is only ever a container is never a choice. Descend past it whatever it holds.
 const WRAPPER_NAME = /^(fusionimport|scene\d*|rootnode|auxscene|object_?\d*|group_?\d*|node_?\d*|untitled|root)$/i;
+
+// ── TYPING AN ITEM # USED TO REDRAW THE WHOLE TAB (Stuart 2026-08-18: "it still really lags when
+// trying to go into that field and enter a part#, it does it eventually but only after a really
+// long time") ────────────────────────────────────────────────────────────────────────────────
+// Two costs, paid on every keystroke, in a list that is now ~700 choices long:
+//
+//   1. each character called setAssignData, which rebuilds every row's object and re-renders all
+//      seven hundred of them to show one letter appearing in one box;
+//   2. the shared <datalist> carried EVERY code in the library — thousands of <option> elements
+//      that the browser re-filters on each keypress.
+//
+// So the box keeps its own value while it is being typed and tells the tab ONCE, when it is left
+// or Enter is pressed; and the suggestion list is built from what has actually been typed, capped,
+// so the browser filters fifty options instead of thousands. Escape restores what was there.
+const ItemNoInput = React.memo(function ItemNoInput({ value, onCommit, onQuery, ...rest }) {
+    const [local, setLocal] = React.useState(value || '');
+    React.useEffect(() => { setLocal(value || ''); }, [value]);
+    return (
+        <input {...rest} value={local}
+            onChange={e => { setLocal(e.target.value); if (onQuery) onQuery(e.target.value); }}
+            onFocus={e => { if (onQuery) onQuery(e.target.value); }}
+            onBlur={() => { if ((value || '') !== local) onCommit(local); }}
+            onKeyDown={e => {
+                if (e.key === 'Enter') { e.currentTarget.blur(); }
+                if (e.key === 'Escape') { setLocal(value || ''); e.currentTarget.blur(); }
+            }} />
+    );
+});
+
 const slotChoiceNames = (scene) => {
     let level = (scene.children || []).filter(c => c.name);
     let guard = 0;
@@ -153,7 +182,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [assignId, setAssignId] = useState('');       // assembly whose choices we're assigning item #s to
     const [assignData, setAssignData] = useState(null); // { asmId, asmName, rows:[{clusterId,clusterName,category,position,found,choices:[{nodeName,label,itemNo,thumb}]}] }
     const [assignBusy, setAssignBusy] = useState(false);
-    const [codeOptions, setCodeOptions] = useState([]); // alphabetical Master-Library codes for the item # picker
+    const [codeOptions, setCodeOptions] = useState([]);
+    const [pickQuery, setPickQuery] = useState('');   // what is being typed RIGHT NOW, for the suggestion list // alphabetical Master-Library codes for the item # picker
     const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
     const [zoomThumb, setZoomThumb] = useState(null);    // { url, label } — enlarged thumbnail overlay
     // FUSION IMPORT (.fbx → house .glb, replaces the Blender pass): { slot, fileName, buffer,
@@ -2453,7 +2483,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                 </span>
                                                 {(() => { const willPark = !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && looksRealPart(c.label); const missing = nodeMissing(c.nodeName); return (
                                                 <span style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
-                                                <input value={c.itemNo} list="ab-item-codes" onChange={e => setChoicePatch(r.clusterId, c.nodeName, { itemNo: e.target.value })} title={willPark ? 'No item # yet — on save this choice PARKS: the node hides from the model AND the flow until you assign the # (Load Choices keeps listing it). Perfect for parts IT hasn\'t set up yet.' : undefined} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds it to the BOM)' : (willPark ? '⏸ parks on save — no item # yet' : 'item # — type to search (blank = hardware)'))} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : (willPark ? 'var(--brass)' : 'var(--line)')), borderStyle: willPark ? 'dashed' : 'solid', opacity: c.isFee ? 0.5 : 1 }} />
+                                                <ItemNoInput value={c.itemNo} list="ab-item-codes" onCommit={v => setChoicePatch(r.clusterId, c.nodeName, { itemNo: v })} onQuery={setPickQuery} title={willPark ? 'No item # yet — on save this choice PARKS: the node hides from the model AND the flow until you assign the # (Load Choices keeps listing it). Perfect for parts IT hasn\'t set up yet.' : undefined} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds it to the BOM)' : (willPark ? '⏸ parks on save — no item # yet' : 'item # — type to search (blank = hardware)'))} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : (willPark ? 'var(--brass)' : 'var(--line)')), borderStyle: willPark ? 'dashed' : 'solid', opacity: c.isFee ? 0.5 : 1 }} />
                                                 <input value={c.note || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { note: e.target.value })} placeholder="designer note — what is it / where does it sit" maxLength={120} title="Typed at upload (or here) — saved on the pin, shown every time Load Choices lists this part." style={{ ...inp, padding: '3px 8px', fontSize: '0.72rem', fontStyle: 'italic', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.85 }} />
                                                 {r.is2d && (
                                                     <input value={c.imgUrl || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { imgUrl: e.target.value })} placeholder="swatch image URL — the material photo the hybrid CPQ leader-lines to (m2cstudio materials page)" title="HYBRID material rail (Leyla): paste the material's image URL (e.g. the tassel color swatch from m2cstudio.com/materials). When this choice is selected in the CPQ, its swatch appears on the right with an architect leader line to the render." style={{ ...inp, padding: '3px 8px', fontSize: '0.7rem', fontFamily: 'var(--mono)', borderColor: c.imgUrl ? 'var(--brass)' : 'var(--line)', opacity: 0.9 }} />
@@ -2748,7 +2778,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         <button onClick={() => splitSlotChoice(slot.id, c.nodeName)} title="Several parts merged under one wrapper node? Split it into its named sub-parts, each with its own thumbnail and item #." style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '8px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '1px 5px', borderRadius: '2px', flexShrink: 0 }}>⤢</button>
                                                     </span>
                                                     <span style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
-                                                        <input value={c.itemNo} list="ab-item-codes" onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: e.target.value })} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds to BOM)' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
+                                                        <ItemNoInput value={c.itemNo} list="ab-item-codes" onCommit={v => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: v })} onQuery={setPickQuery} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds to BOM)' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
                                                         {/* DESIGNER NOTE — same grid CELL as the item # (a sibling input became its
                                                             own grid cell and wrecked the row layout, Stuart 2026-08-10). */}
                                                         <input value={c.note || ''} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { note: e.target.value })} placeholder="note — what is it / where does it sit" maxLength={120} style={{ ...inp, padding: '3px 7px', fontSize: '0.7rem', fontStyle: 'italic', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.85 }} />
@@ -2902,8 +2932,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
 
             {/* Searchable item-# picker source, shared by the uploader AND the assign tool: type in
                 any item field to filter this alphabetical Master-Library list (native datalist). */}
+            {/* Only what the typing could plausibly mean, and never more than fifty. An empty box
+                offers the first fifty so the list is not mysteriously blank on focus. */}
             <datalist id="ab-item-codes">
-                {codeOptions.map(o => <option key={o.code} value={o.code}>{o.name}</option>)}
+                {(() => {
+                    const q = String(pickQuery || '').trim().toUpperCase();
+                    const pool = q
+                        ? codeOptions.filter(o => String(o.code).toUpperCase().includes(q) || String(o.name || '').toUpperCase().includes(q))
+                        : codeOptions;
+                    return pool.slice(0, 50).map(o => <option key={o.code} value={o.code}>{o.name}</option>);
+                })()}
             </datalist>
 
             {/* Enlarged-thumbnail overlay: click any choice thumbnail to identify the part; click

@@ -260,5 +260,24 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     eq('the slot is still enough', planTagImport([H6, ['WOOD ROD','','','H1-138WR','FRONT','']], scoped).hits.length, 1);
 }
 
+// ── FUSION'S OTHER COPY NUMBER: a space and a digit ─────────────────────────────────────────
+// "H1-138inPOLE DBL Back left 1" in the model, "H1-138inPOLE DBL Back left:1" in her sheet.
+{
+    const H7=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','ITEM ID','ROD'];
+    const rows7=[H7,['METAL POLE DBL BACK LEFT- basic bracket 3.5','m.fbx','POLE','H1-138inPOLE DBL Back left:1','H1-138R','BACK']];
+    const loaded=[{ clusterId:'c', clusterName:'METAL-POLE-DBL-BACK-LEFT--BASIC-BRACKET-3.5', category:'POLE',
+        choices:[{ nodeName:'S65X__1_H1138inPOLEDBLBackleft1', itemNo:'', tier:'' }]}];
+    const p=planTagImport(rows7, loaded);
+    eq('the trailing copy number no longer blocks it', p.hits.length, 1);
+    eq('and the item # lands', p.hits[0].patch.itemNo, 'H1-138R');
+
+    // …but two rows in one slot that differ only by that digit stay refused.
+    const two=[H7,
+      ['ARMS','a.fbx','BRACKET','H1-1 Arm 4','H1-1BE',''],
+      ['ARMS','','BRACKET','H1-1 Arm 6','H1-1B6','']];
+    const one=[{ clusterId:'c', clusterName:'ARMS', category:'BRACKET', choices:[{ nodeName:'S1__0_H11Arm', itemNo:'' }]}];
+    eq('an ambiguous loose match is refused', planTagImport(two, one).hits.length, 0);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail?1:0);
