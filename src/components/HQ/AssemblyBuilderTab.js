@@ -151,6 +151,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [syncId, setSyncId] = useState('');            // assembly whose pins we're linking to the library
     const [syncBusy, setSyncBusy] = useState(false);
     const [starterBusy, setStarterBusy] = useState(false); // Item Starter Kit upload in flight
+    // The tab is three things to do and five things to have. Closed by default, because a screen
+    // that shows every capability at once reads as a to-do list of ten steps.
+    const [showTools, setShowTools] = useState(false);
     const [extendId, setExtendId] = useState('');          // '' = build NEW; else append slots to this assembly
     // Picking an extend target POPULATES context (Stuart 2026-07-14 — selecting one previously
     // changed nothing visible): the existing merged .glb loads into the Live Preview as a base
@@ -1932,73 +1935,52 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px', fontFamily: 'var(--sans)' }}>
-            <div style={{ ...card, padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-                <div>
-                    <span style={{ ...lbl, color: 'var(--brass)' }}>Step-by-step layered assembly</span>
-                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Assembly Builder</h2>
+            {/* ① WHAT ARE WE BUILDING. The Extend picker used to be an unlabelled dropdown in the
+                corner of the header, and it is the single most consequential control on the tab:
+                left alone it makes a NEW assembly, and an existing collection quietly gains a
+                duplicate. It is now labelled, first, and says out loud what it is about to do. */}
+            <div style={{ ...card, padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '16px', flexWrap: 'wrap' }}>
+                    <div>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>Step-by-step layered assembly</span>
+                        <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Assembly Builder</h2>
+                    </div>
+                    <button onClick={() => setShowTools(v => !v)}
+                        style={{ ...lbl, margin: 0, cursor: 'pointer', background: 'transparent', border: '1px solid var(--line)', padding: '7px 12px', color: 'var(--ink-soft)' }}>
+                        {showTools ? '▾' : '▸'} Occasional tools
+                    </button>
                 </div>
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <select value={extendId} onChange={e => setExtendId(e.target.value)} title="Extend an existing builder assembly: uploaded slots are APPENDED — existing geometry, clusters, item #s and flags are untouched (same doc, so BOM/CPQ/flow links survive). Leave on 'New assembly' to create fresh." style={{ ...sel, padding: '9px', minWidth: '250px' }}>
-                        <option value="">— New assembly —</option>
-                        {repairList.map(a => <option key={a.id} value={a.id}>➕ Extend: {a.itemName || a.id}</option>)}
-                    </select>
-                    <input value={extendId ? (repairList.find(a => a.id === extendId)?.itemName || '') : assemblyName} disabled={!!extendId} onChange={e => setAssemblyName(e.target.value)} placeholder="Assembly name / item #…" style={{ ...inp, minWidth: '260px', ...(extendId ? { background: 'var(--paper-2)', color: 'var(--ink-soft)' } : {}) }} />
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                        <span style={{ ...lbl, margin: 0, color: 'var(--brass)' }}>① New, or extend an existing one</span>
+                        <select value={extendId} onChange={e => setExtendId(e.target.value)}
+                            title="EXTEND appends what you upload to an assembly that already exists — its geometry, clusters, item #s and flags are untouched, and because it stays the same document every BOM, CPQ and flow link survives. NEW creates a fresh assembly."
+                            style={{ ...sel, padding: '10px', minWidth: '320px', borderColor: extendId ? 'var(--brass)' : 'var(--line)', color: extendId ? 'var(--brass)' : 'var(--ink)' }}>
+                            <option value="">— New assembly —</option>
+                            {repairList.map(a => <option key={a.id} value={a.id}>➕ Extend: {a.itemName || a.id}</option>)}
+                        </select>
+                    </label>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', flex: 1, minWidth: '260px' }}>
+                        <span style={{ ...lbl, margin: 0 }}>{extendId ? 'Extending' : 'Name it'}</span>
+                        <input value={extendId ? (repairList.find(a => a.id === extendId)?.itemName || '') : assemblyName} disabled={!!extendId}
+                            onChange={e => setAssemblyName(e.target.value)} placeholder="Assembly name / item #…"
+                            style={{ ...inp, width: '100%', ...(extendId ? { background: 'var(--paper-2)', color: 'var(--ink-soft)' } : {}) }} />
+                    </label>
                 </div>
+                {extendId && (
+                    <div style={{ border: '1px solid var(--brass)', background: 'var(--paper)', padding: '9px 12px', fontFamily: 'var(--mono)', fontSize: '9.5px', color: 'var(--brass)', lineHeight: 1.6 }}>
+                        APPENDING to {repairList.find(a => a.id === extendId)?.itemName || extendId}
+                        {extendInfo?.loading && <span style={{ color: 'var(--ink-soft)' }}> · reading it…</span>}
+                        {!!extendInfo?.clusters?.length && <span style={{ color: 'var(--ink-soft)' }}> · {extendInfo.clusters.length} existing slot(s) stay exactly as they are</span>}
+                        {extendInfo?.error && <span style={{ color: '#b00020' }}> · {extendInfo.error}</span>}
+                    </div>
+                )}
             </div>
 
-            {/* Workflow template picker — swaps the slot scaffold. Every slot is optional. */}
-            <div style={{ ...card, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-                <span style={lbl}>Workflow</span>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                    {Object.entries(TEMPLATES).map(([key, t]) => (
-                        <button key={key} onClick={() => switchTemplate(key)}
-                            style={{ padding: '8px 14px', border: `1px solid ${template === key ? 'var(--ink)' : 'var(--line)'}`, background: template === key ? 'var(--ink)' : '#fff', color: template === key ? '#fff' : 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', borderRadius: '2px' }}>
-                            {t.label}
-                        </button>
-                    ))}
-                </div>
-                <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', flex: 1, minWidth: '220px' }}>{TEMPLATES[template].hint}</span>
-                <span style={{ ...lbl, color: 'var(--brass)' }}>Every slot optional — upload only what's used; the flow builds from filled slots</span>
-            </div>
-
-            {/* Item Starter Kit — step 0: create the flow's items in the library before building. */}
-            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: '260px' }}>
-                    <span style={{ ...lbl, color: 'var(--brass)' }}>Item Starter Kit (step 0)</span>
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>Download the pre-filled template (every item kind a flow needs: pole + /P variant, rings, brackets, regular/return backplates, finials, fee entities — fields mirror tab 4.5), fill it in with your series + a Project name, and upload. Items are created in the library so auto-match finds them; existing ERP ids are skipped.</span>
-                </div>
-                <button onClick={() => downloadItemStarterTemplate(activeBrand)} style={{ padding: '11px 18px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>⬇ Download Template</button>
-                <label style={{ padding: '11px 18px', background: starterBusy ? 'var(--paper-2)' : 'var(--ink)', color: starterBusy ? 'var(--ink-soft)' : '#fff', cursor: starterBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
-                    {starterBusy ? '⚙ Creating…' : '⬆ Upload & Create Items'}
-                    <input type="file" accept=".xlsx" style={{ display: 'none' }} onChange={e => { handleStarterUpload(e.target.files[0]); e.target.value = ''; }} />
-                </label>
-            </div>
-
-            {/* Repair tool — fix an assembly built before the unique-node-name fix (no re-upload). */}
-            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: '240px' }}>
-                    <span style={{ ...lbl, color: 'var(--brass)' }}>Repair node names (built before the fix)</span>
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>If a built assembly's clusters share node names and bleed together in Node Grouping, this re-namespaces every slot's nodes uniquely and rewrites the clusters — no re-upload, tags &amp; item numbers untouched, old .glb kept as backup.</span>
-                </div>
-                <div style={{ minWidth: '260px' }}>
-                    <span style={lbl}>Assembly</span>
-                    <select value={repairId} onChange={e => setRepairId(e.target.value)} style={{ ...sel, width: '100%', padding: '9px' }}>
-                        <option value="">Select an assembly…</option>
-                        {repairList.map(a => <option key={a.id} value={a.id}>{a.itemName || a.id}</option>)}
-                    </select>
-                </div>
-                <button onClick={handleRepairNodeNames} disabled={repairBusy || !repairId} style={{ padding: '11px 22px', background: repairBusy ? 'var(--paper-2)' : 'var(--ink)', color: repairBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: repairBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
-                    {repairBusy ? '⚙ Repairing…' : '⚙ Repair Node Names'}
-                </button>
-            </div>
-
-            {/* 📦 BUILD FROM THE SHEET + THE FOLDER. The slot list comes from the designer's file
-                rather than a fixed template, because her double is 37 files and the template holds
-                ten. Merge & Save afterwards is unchanged. */}
             <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: '260px' }}>
-                        <span style={{ ...lbl, color: 'var(--brass)' }}>Build from tagging sheet</span>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>② Build from tagging sheet</span>
                         <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>
                             The sheet names every slot, its .fbx, its category and its position — so it builds the slot list, loads each file into its own slot and converts the .fbx the same way the one-at-a-time importer does. Replaces the fixed template: use it when the model has more slots than the template offers. Merge &amp; Save afterwards is unchanged.
                         </span>
@@ -2046,43 +2028,105 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 })()}
             </div>
 
-            {/* Code collision audit — punctuation-only twin codes shadow each other in auto-match. */}
-            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                    <div style={{ flex: 1, minWidth: '240px' }}>
-                        <span style={{ ...lbl, color: 'var(--brass)' }}>Code collision audit</span>
-                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>Finds item #s that differ only by punctuation (H1-75BPR vs H1-75BP-R) — twins can shadow each other in auto-match and pickers. ✓ = the names tell them apart, the matcher handles it. ⚠ = rename one item so its part type (ring / backplate / bracket / finial / pole) is in the name.</span>
-                    </div>
-                    <button onClick={runCollisionAudit} disabled={auditBusy} style={{ padding: '11px 22px', background: auditBusy ? 'var(--paper-2)' : 'var(--ink)', color: auditBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: auditBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
-                        {auditBusy ? '⚙ Scanning…' : '🔎 Scan Library'}
-                    </button>
-                </div>
-                {audit && (
-                    <div style={{ maxHeight: '280px', overflowY: 'auto', borderTop: '1px solid var(--line)' }}>
-                        {audit.length === 0 && <div style={{ padding: '12px 0', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: '#3a7d44' }}>✓ No punctuation-only code collisions in the {String(activeBrand || '').toUpperCase()} library.</div>}
-                        {audit.map(g => (
-                            <div key={g.norm} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '8px 0', borderBottom: '1px solid var(--paper-2)' }}>
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: g.breakable ? '#3a7d44' : '#d9534f', minWidth: '16px' }}>{g.breakable ? '✓' : '⚠'}</span>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    {g.items.map(it => (
-                                        <div key={it.code} style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)' }}>
-                                            <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{it.code}</span>
-                                            <span style={{ color: 'var(--ink-soft)' }}> — {it.name || '(no name)'}{it.cls ? ` · ${it.cls}` : ''}</span>
-                                        </div>
-                                    ))}
-                                    {!g.breakable && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '2px' }}>names too similar — the matcher can't tell these apart; rename one in the Master Library</div>}
-                                </div>
-                            </div>
+            {/* ⚙ THE TOOLS THAT ARE NOT THE JOB. Each of these is used a few times a year — a
+                template scaffold, a starter kit, two repair utilities and the library sync. On
+                screen all day they read as steps, and the tab looked like ten things to do rather
+                than three. Folded away, present, unchanged. */}
+            {showTools && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', borderLeft: '2px solid var(--line)', paddingLeft: '12px' }}>
+                <div style={{ ...card, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                    <span style={lbl}>Workflow</span>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        {Object.entries(TEMPLATES).map(([key, t]) => (
+                            <button key={key} onClick={() => switchTemplate(key)}
+                                style={{ padding: '8px 14px', border: `1px solid ${template === key ? 'var(--ink)' : 'var(--line)'}`, background: template === key ? 'var(--ink)' : '#fff', color: template === key ? '#fff' : 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', borderRadius: '2px' }}>
+                                {t.label}
+                            </button>
                         ))}
                     </div>
-                )}
-            </div>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', flex: 1, minWidth: '220px' }}>{TEMPLATES[template].hint}</span>
+                    <span style={{ ...lbl, color: 'var(--brass)' }}>Every slot optional — upload only what's used; the flow builds from filled slots</span>
+                </div>
+                <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: '260px' }}>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>Item Starter Kit (step 0)</span>
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>Download the pre-filled template (every item kind a flow needs: pole + /P variant, rings, brackets, regular/return backplates, finials, fee entities — fields mirror tab 4.5), fill it in with your series + a Project name, and upload. Items are created in the library so auto-match finds them; existing ERP ids are skipped.</span>
+                    </div>
+                    <button onClick={() => downloadItemStarterTemplate(activeBrand)} style={{ padding: '11px 18px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>⬇ Download Template</button>
+                    <label style={{ padding: '11px 18px', background: starterBusy ? 'var(--paper-2)' : 'var(--ink)', color: starterBusy ? 'var(--ink-soft)' : '#fff', cursor: starterBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                        {starterBusy ? '⚙ Creating…' : '⬆ Upload & Create Items'}
+                        <input type="file" accept=".xlsx" style={{ display: 'none' }} onChange={e => { handleStarterUpload(e.target.files[0]); e.target.value = ''; }} />
+                    </label>
+                </div>
+                <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: '240px' }}>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>Repair node names (built before the fix)</span>
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>If a built assembly's clusters share node names and bleed together in Node Grouping, this re-namespaces every slot's nodes uniquely and rewrites the clusters — no re-upload, tags &amp; item numbers untouched, old .glb kept as backup.</span>
+                    </div>
+                    <div style={{ minWidth: '260px' }}>
+                        <span style={lbl}>Assembly</span>
+                        <select value={repairId} onChange={e => setRepairId(e.target.value)} style={{ ...sel, width: '100%', padding: '9px' }}>
+                            <option value="">Select an assembly…</option>
+                            {repairList.map(a => <option key={a.id} value={a.id}>{a.itemName || a.id}</option>)}
+                        </select>
+                    </div>
+                    <button onClick={handleRepairNodeNames} disabled={repairBusy || !repairId} style={{ padding: '11px 22px', background: repairBusy ? 'var(--paper-2)' : 'var(--ink)', color: repairBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: repairBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                        {repairBusy ? '⚙ Repairing…' : '⚙ Repair Node Names'}
+                    </button>
+                </div>
+                <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <div style={{ flex: 1, minWidth: '240px' }}>
+                            <span style={{ ...lbl, color: 'var(--brass)' }}>Code collision audit</span>
+                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>Finds item #s that differ only by punctuation (H1-75BPR vs H1-75BP-R) — twins can shadow each other in auto-match and pickers. ✓ = the names tell them apart, the matcher handles it. ⚠ = rename one item so its part type (ring / backplate / bracket / finial / pole) is in the name.</span>
+                        </div>
+                        <button onClick={runCollisionAudit} disabled={auditBusy} style={{ padding: '11px 22px', background: auditBusy ? 'var(--paper-2)' : 'var(--ink)', color: auditBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: auditBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                            {auditBusy ? '⚙ Scanning…' : '🔎 Scan Library'}
+                        </button>
+                    </div>
+                    {audit && (
+                        <div style={{ maxHeight: '280px', overflowY: 'auto', borderTop: '1px solid var(--line)' }}>
+                            {audit.length === 0 && <div style={{ padding: '12px 0', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: '#3a7d44' }}>✓ No punctuation-only code collisions in the {String(activeBrand || '').toUpperCase()} library.</div>}
+                            {audit.map(g => (
+                                <div key={g.norm} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '8px 0', borderBottom: '1px solid var(--paper-2)' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: g.breakable ? '#3a7d44' : '#d9534f', minWidth: '16px' }}>{g.breakable ? '✓' : '⚠'}</span>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        {g.items.map(it => (
+                                            <div key={it.code} style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)' }}>
+                                                <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{it.code}</span>
+                                                <span style={{ color: 'var(--ink-soft)' }}> — {it.name || '(no name)'}{it.cls ? ` · ${it.cls}` : ''}</span>
+                                            </div>
+                                        ))}
+                                        {!g.breakable && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '2px' }}>names too similar — the matcher can't tell these apart; rename one in the Master Library</div>}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+                <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: '240px' }}>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>Sync BOM ↔ Library</span>
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>If Visual Assembly shows this assembly's items as new/leftover (brass) even though the item #s are real: links every pin to its existing Master-Library part (name, ERP id, specs) and wires per-choice node thumbnails. Item #s, flags &amp; order unchanged.</span>
+                    </div>
+                    <div style={{ minWidth: '260px' }}>
+                        <span style={lbl}>Assembly</span>
+                        <select value={syncId} onChange={e => setSyncId(e.target.value)} style={{ ...sel, width: '100%', padding: '9px' }}>
+                            <option value="">Select an assembly…</option>
+                            {repairList.map(a => <option key={a.id} value={a.id}>{a.itemName || a.id}</option>)}
+                        </select>
+                    </div>
+                    <button onClick={handleSyncPinsToLibrary} disabled={syncBusy || !syncId} style={{ padding: '11px 22px', background: syncBusy ? 'var(--paper-2)' : 'var(--ink)', color: syncBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: syncBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
+                        {syncBusy ? '⚙ Syncing…' : '⚙ Link Pins to Library'}
+                    </button>
+                </div>
+                </div>
+            )}
 
-            {/* Assign item numbers to an existing assembly's choices (for assemblies built with 0 pins). */}
             <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: '240px' }}>
-                        <span style={{ ...lbl, color: 'var(--brass)' }}>Assign item numbers to choices</span>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>④ Assign item numbers · tag from sheet</span>
                         <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>For an assembly built without item numbers: lists each cluster's stacked choices from the .glb. Type an item # per real choice; leave shared hardware (screws / standoffs) blank. Clusters with 2+ item-numbered choices fan out into individual options after you regenerate the flow.</span>
                     </div>
                     <div style={{ minWidth: '240px' }}>
@@ -2477,24 +2521,6 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 )}
             </div>
 
-            {/* Sync BOM ↔ Library: link an assembly's pins to their existing Master-Library parts. */}
-            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <div style={{ flex: 1, minWidth: '240px' }}>
-                    <span style={{ ...lbl, color: 'var(--brass)' }}>Sync BOM ↔ Library</span>
-                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>If Visual Assembly shows this assembly's items as new/leftover (brass) even though the item #s are real: links every pin to its existing Master-Library part (name, ERP id, specs) and wires per-choice node thumbnails. Item #s, flags &amp; order unchanged.</span>
-                </div>
-                <div style={{ minWidth: '260px' }}>
-                    <span style={lbl}>Assembly</span>
-                    <select value={syncId} onChange={e => setSyncId(e.target.value)} style={{ ...sel, width: '100%', padding: '9px' }}>
-                        <option value="">Select an assembly…</option>
-                        {repairList.map(a => <option key={a.id} value={a.id}>{a.itemName || a.id}</option>)}
-                    </select>
-                </div>
-                <button onClick={handleSyncPinsToLibrary} disabled={syncBusy || !syncId} style={{ padding: '11px 22px', background: syncBusy ? 'var(--paper-2)' : 'var(--ink)', color: syncBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: syncBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
-                    {syncBusy ? '⚙ Syncing…' : '⚙ Link Pins to Library'}
-                </button>
-            </div>
-
             {/* FLEX-WRAP, not a fixed grid (Liesl 2026-08-12: "see all check boxes on screen
                 without having to scroll over to see those hidden by assembly visual") — when the
                 window can't fit slot rows AND the 3D visual side by side, the visual WRAPS BELOW
@@ -2503,7 +2529,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 {/* LEFT: slot uploader */}
                 <div style={{ ...card, flex: '1.15 1 680px', minWidth: 0, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '78vh', overflowY: 'auto' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>Slots — one .glb each (choices stacked inside)</span>
+                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', color: 'var(--ink)' }}>③ Slots — one .glb each (choices stacked inside)</span>
                         <button onClick={addSlot} style={{ ...sel, cursor: 'pointer', background: 'var(--paper-2)' }}>+ Slot</button>
                     </div>
                     {slots.map(slot => {
