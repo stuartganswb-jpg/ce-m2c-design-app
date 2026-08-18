@@ -915,5 +915,50 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('but two rod questions', sl.filter(x => x.kind === 'ROD').length, 2);
 }
 
+// ── TWO DOUBLE BRACKETS, EACH WITH ITS OWN PAIR OF DEPTHS ────────────────────────────────────
+// "two different double bracket options and each one has a different projection both of the front
+//  rod and the rear"
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    const family = [
+        C({ id: 'RF', partId: 'FR', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['fr'] }),
+        C({ id: 'RB', partId: 'BR', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', nodes: ['br'] }),
+        // Two bracket options. Each presents BOTH rods, at its own two depths.
+        C({ id: 'BK-A', partId: 'DA', role: 'BRACKET', position: 'CENTER', proj: 'FRONT:6, BACK:3-5/8', nodes: ['ba'] }),
+        C({ id: 'BK-B', partId: 'DB', role: 'BRACKET', position: 'CENTER', proj: 'FRONT:8, BACK:4-5/8', nodes: ['bb'] }),
+        // Ends made at one depth apiece.
+        C({ id: 'RET-6', partId: 'R6', role: 'RETURN', proj: '6', position: 'LEFT', nodes: ['r6'] }),
+        C({ id: 'RET-36', partId: 'R36', role: 'RETURN', proj: '3-5/8', position: 'LEFT', nodes: ['r36'] }),
+        C({ id: 'RET-8', partId: 'R8', role: 'RETURN', proj: '8', position: 'LEFT', nodes: ['r8'] }),
+    ];
+
+    // The pair is a property of the bracket, so it never becomes a projection question.
+    const ax = activeAxes(N(family), {});
+    ok('no projection question on a tiered family', !ax.some(a => a.key === 'proj'));
+
+    // …and the bracket is asked before the ends its depths gate.
+    const order = slots(N(family), {}, []).map(x => x.kind);
+    ok('the bracket comes before the ends', order.indexOf('BRACKET') < order.indexOf('END'));
+
+    const endsOn = (tier, sel) => slots(N(family), {}, sel)
+        .find(x => x.kind === 'END' && x.tier === tier).options.map(o => o.partId).sort();
+
+    // Bracket A: front 6", back 3-5/8". One choice, two different depths.
+    eq('A · the front rod takes the 6" return', endsOn('FRONT', ['BK-A']).join(), 'R6');
+    eq('A · the back rod takes the 3-5/8" return', endsOn('BACK', ['BK-A']).join(), 'R36');
+    // Bracket B: front 8", back 4-5/8". Nothing in this family fits the back at 4-5/8".
+    eq('B · the front rod takes the 8" return', endsOn('FRONT', ['BK-B']).join(), 'R8');
+    eq('B · nothing is made for its back depth', endsOn('BACK', ['BK-B']).length, 0);
+    // Before a bracket is chosen the engine constrains nothing — the same restraint the return
+    // and ring rules use.
+    eq('every end stands until a bracket is picked', endsOn('FRONT', []).length, 3);
+
+    // A per-tier tag is not a list of alternatives.
+    const bk = N(family).find(c => c.id === 'BK-A');
+    eq('the pair does not become two projections', bk.projs.length, 0);
+    eq('front depth parsed', bk.projTiers.FRONT, 6);
+    eq('back depth parsed', bk.projTiers.BACK, 3.625);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -2105,20 +2105,57 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         Tick none = made in every projection. Stored comma-joined, so a single existing
                                                         value still reads correctly. */}
                                                     {(['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || r.category)) || !!String(c.endTreatment || '').trim()) && (
-                                                        <span title="PROJECTIONS — tick EVERY projection this part is made in. A bracket ticked 6&quot; only appears at 6&quot;; a return ticked 4-5/8&quot; and 6&quot; appears at both. Nothing ticked = available at every projection. Replaces the old single-value tag and its minimum-depth rule for returns: availability is now stated, not inferred." style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center', border: `1px solid ${c.projInches ? 'var(--brass)' : 'var(--line)'}`, padding: '2px 4px' }}>
-                                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>proj:</span>
-                                                            {((dictLists && dictLists.projections) || []).map(pj => {
-                                                                const val = String(pj).toUpperCase();
-                                                                const on = String(c.projInches || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean).includes(val);
+                                                        <span title="PROJECTIONS — tick EVERY projection this part is made in. A bracket ticked 6&quot; only appears at 6&quot;; a return ticked 4-5/8&quot; and 6&quot; appears at both. Nothing ticked = available at every projection.&#10;&#10;PER ROD: a DOUBLE bracket does not have a projection, it has two — one for the front rod and one for the rear — and they arrive together as a property of that bracket. Switch to 'per rod' and set each. The bracket then becomes the projection question: the Projection step disappears, the bracket is asked before the ends, and each rod's parts are judged at ITS depth. Do not use the plain list for a double — two numbers there read as alternatives, and the bracket would appear twice, each time judged against the wrong rod." style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center', border: `1px solid ${c.projInches ? 'var(--brass)' : 'var(--line)'}`, padding: '2px 4px' }}>
+                                                            {(() => {
+                                                                const raw = String(c.projInches || '');
+                                                                const perRod = raw.includes(':');
+                                                                const projList = (dictLists && dictLists.projections) || [];
+                                                                const tierVal = (t) => {
+                                                                    const hit = raw.split(',').map(x => x.trim()).find(x => x.toUpperCase().startsWith(`${t}:`));
+                                                                    return hit ? hit.split(':').slice(1).join(':').trim().toUpperCase() : '';
+                                                                };
+                                                                const setTier = (t, v) => {
+                                                                    const other = t === 'FRONT' ? 'BACK' : 'FRONT';
+                                                                    const keep = tierVal(other);
+                                                                    const parts = [];
+                                                                    if (t === 'FRONT') { if (v) parts.push(`FRONT:${v}`); if (keep) parts.push(`BACK:${keep}`); }
+                                                                    else { if (keep) parts.push(`FRONT:${keep}`); if (v) parts.push(`BACK:${v}`); }
+                                                                    setChoicePatch(r.clusterId, c.nodeName, { projInches: parts.join(',') });
+                                                                };
+                                                                const chip = (on) => ({ fontFamily: 'var(--mono)', fontSize: '8px', padding: '1px 4px', cursor: 'pointer', background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}` });
                                                                 return (
-                                                                    <button key={pj} type="button" onClick={() => {
-                                                                        const cur = String(c.projInches || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
-                                                                        const next = on ? cur.filter(x => x !== val) : [...cur, val];
-                                                                        setChoicePatch(r.clusterId, c.nodeName, { projInches: next.join(',') });
-                                                                    }} style={{ fontFamily: 'var(--mono)', fontSize: '8px', padding: '1px 4px', cursor: 'pointer', background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}` }}>{pj}"</button>
+                                                                    <>
+                                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>proj:</span>
+                                                                        {!perRod && projList.map(pj => {
+                                                                            const val = String(pj).toUpperCase();
+                                                                            const on = raw.split(',').map(x => x.trim().toUpperCase()).filter(Boolean).includes(val);
+                                                                            return (
+                                                                                <button key={pj} type="button" onClick={() => {
+                                                                                    const cur = raw.split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+                                                                                    setChoicePatch(r.clusterId, c.nodeName, { projInches: (on ? cur.filter(x => x !== val) : [...cur, val]).join(',') });
+                                                                                }} style={chip(on)}>{pj}"</button>
+                                                                            );
+                                                                        })}
+                                                                        {perRod && ['FRONT', 'BACK'].map(t => (
+                                                                            <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--brass)' }}>{t.toLowerCase()}</span>
+                                                                                {projList.map(pj => {
+                                                                                    const val = String(pj).toUpperCase();
+                                                                                    const on = tierVal(t) === val;
+                                                                                    return <button key={`${t}-${pj}`} type="button" onClick={() => setTier(t, on ? '' : val)} style={chip(on)}>{pj}"</button>;
+                                                                                })}
+                                                                            </span>
+                                                                        ))}
+                                                                        {!raw.trim() && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)' }}>any</span>}
+                                                                        {/* A double bracket's two depths are one fact, not two options. */}
+                                                                        <button type="button" title={perRod ? 'Back to one depth for the whole part' : 'This part carries a DIFFERENT depth for the front rod and the rear — a double bracket'}
+                                                                            onClick={() => setChoicePatch(r.clusterId, c.nodeName, { projInches: perRod ? '' : 'FRONT:' })}
+                                                                            style={{ fontFamily: 'var(--mono)', fontSize: '7.5px', padding: '1px 4px', cursor: 'pointer', background: 'transparent', color: 'var(--ink-faint)', border: '1px dashed var(--line)' }}>
+                                                                            {perRod ? 'one depth' : 'per rod'}
+                                                                        </button>
+                                                                    </>
                                                                 );
-                                                            })}
-                                                            {!String(c.projInches || '').trim() && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)' }}>any</span>}
+                                                            })()}
                                                         </span>
                                                     )}
                                                     {/* BACKPLATES tag mount: too (ceiling backplates — Stuart 2026-08-14). */}

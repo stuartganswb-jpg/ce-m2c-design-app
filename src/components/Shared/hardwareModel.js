@@ -74,6 +74,39 @@ export const ROD_ROLES = ['ROD', 'FASCIA', 'TRACK'];
 // 4-5/8" or 6"; it is both, at once, on one bracket.
 export const TIER_POSITIONS = ['FRONT', 'BACK'];
 
+// ── A DOUBLE BRACKET PRESENTS TWO DEPTHS AT ONCE (Stuart 2026-08-17) ─────────────────────────
+// "how do we handle the situation coming up where there are two different double bracket options
+//  and each one has a different projection both of the front rod and the rear?"
+//
+// This is the case that breaks projection as it has always worked. On a single, projection is ONE
+// answer for the order — "4-5/8 off the wall" — and every part is filtered by it. A double bracket
+// does not have a projection; it has TWO, one per rod, and they arrive together as a property of
+// that bracket. Two bracket options are then two PAIRS: 6"/3-5/8" or 8"/4-5/8". Asking "what
+// projection" cannot express that, and listing both numbers on the bracket makes them read as
+// alternatives — the bracket would appear at 6" and again at 3-5/8", each time filtered against
+// the wrong rod.
+//
+// So on a tiered assembly the BRACKET IS THE PROJECTION QUESTION. Tag the bracket per tier —
+// "FRONT:6, BACK:3-5/8" in the same projection field — and:
+//   • it stops voting for values in the projection axis, which then has nothing to ask and
+//     disappears, because choosing the bracket already answers it;
+//   • it is asked BEFORE the ends, since it is what gates them;
+//   • each tier's parts are judged against THAT TIER's depth, so a return that needs 6" is offered
+//     on the front rod and refused on the back, off one bracket choice.
+// Untiered assemblies never see any of this: nothing is tagged per tier, so nothing changes.
+export function parseProjTiers(raw) {
+    const out = {};
+    String(raw == null ? '' : raw).split(',').forEach(part => {
+        const bits = String(part).split(':');
+        if (bits.length < 2) return;
+        const tier = String(bits[0] || '').trim().toUpperCase();
+        if (!TIER_POSITIONS.includes(tier)) return;
+        const v = measureOf(bits.slice(1).join(':'));
+        if (v != null) out[tier] = v;
+    });
+    return out;
+}
+
 // WHAT A TIER SPLITS, AND WHAT IT DOES NOT. A double has two rods, so it has two of everything
 // that DRESSES a rod — the rod, its ends, its rings. It does NOT have two of everything that CARRIES
 // the rods: one bracket arm holds both, on one backplate, at one projection. Splitting those would
@@ -273,7 +306,10 @@ export function normalizeChoice(input = {}) {
         // position decide" (see carriesRings), which is the normal case for every existing pin.
         ...(input.carriesRings === true || input.carriesRings === false ? { carriesRings: input.carriesRings } : {}),
         drive: U(input.drive),                       // '' = suits every drive (a fascia is a fascia)
-        projs: measureList(input.proj),              // [] = suits every projection
+        // A per-tier tag is NOT a list of alternatives, so it never lands in `projs` — otherwise a
+        // double bracket would appear once per depth, each time judged against the wrong rod.
+        projs: Object.keys(parseProjTiers(input.proj)).length ? [] : measureList(input.proj),
+        ...(Object.keys(parseProjTiers(input.proj)).length ? { projTiers: parseProjTiers(input.proj) } : {}),
         // Blank on mounting hardware = WALL; blank on anything else = not filtered by mount.
         // ⚠ ONLY MOUNTING HARDWARE CARRIES A MOUNT (Stuart 2026-08-17: "when i switch to inside
         // mount or wall it reduces to only two, the wood and acrylic"). This line supplied a
@@ -698,6 +734,11 @@ export function slots(choices, answers = {}, selectedIds = []) {
     // today — so nothing about a single-rod order changes.
     const allTiers = [...new Set(choices.map(c => c.tier).filter(Boolean))]
         .sort((a, b) => TIER_POSITIONS.indexOf(a) - TIER_POSITIONS.indexOf(b));
+    // THE DEPTH AT EACH ROD, from the bracket that was actually chosen. Before a bracket is
+    // picked this is empty and nothing is filtered by projection — the same restraint the return
+    // and ring rules use, because guessing hides legitimate choices.
+    const tierProj = {};
+    choices.filter(c => want.has(c.id) && c.projTiers).forEach(c => Object.assign(tierProj, c.projTiers));
     const bucket = new Map();
     choices.forEach(c => {
         if (c.always) return;                       // riders are never a question
@@ -728,7 +769,13 @@ export function slots(choices, answers = {}, selectedIds = []) {
             if (!bucket.has(key)) bucket.set(key, { key, kind, tier, position: pos, all: [], options: [], rejected: [] });
             const slot = bucket.get(key);
             slot.all.push(c);
-            const v = admits(c, { ...ctx, position: pos ? pos : undefined, tier: tier || undefined });
+            // Each tier is judged at ITS OWN depth. One bracket choice, two projections, and a
+            // return that needs 6" is offered on the front rod and refused on the back.
+            const v = admits(c, {
+                ...ctx,
+                ...(tier && tierProj[tier] !== undefined ? { proj: tierProj[tier] } : {}),
+                position: pos ? pos : undefined, tier: tier || undefined,
+            });
             if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });
         });
     });
@@ -880,9 +927,17 @@ export function slots(choices, answers = {}, selectedIds = []) {
         });
     });
     const rank = (s) => {
-        const k = SLOT_ORDER.indexOf(s.kind === 'END' ? 'FINIAL' : s.kind);
+        let k = SLOT_ORDER.indexOf(s.kind === 'END' ? 'FINIAL' : s.kind);
+        // On a tiered assembly the bracket carries each rod's depth, so it must be answered BEFORE
+        // the ends that depth gates — otherwise an end is chosen against no constraint and a later
+        // bracket silently invalidates it. On a single nothing moves: projection is still its own
+        // question, asked first, exactly as it always has been.
+        if (allTiers.length && (s.kind === 'BRACKET' || s.kind === 'BACKPLATE')) {
+            k = SLOT_ORDER.indexOf('FINIAL') - (s.kind === 'BRACKET' ? 0.6 : 0.5);
+        }
+        const t = TIER_POSITIONS.indexOf(s.tier);
         const p = POSITION_ORDER.indexOf(s.position);
-        return (k < 0 ? 99 : k) * 100 + (p < 0 ? 99 : p);
+        return (k < 0 ? 99 : k) * 10000 + (t < 0 ? 0 : t) * 100 + (p < 0 ? 99 : p);
     };
     return [...bucket.values()].sort((a, b) => rank(a) - rank(b));
 }
