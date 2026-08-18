@@ -1501,7 +1501,14 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // Fetched when a sheet is read, not held open: two documents, wanted twice a month.
     const loadFeeItems = async () => {
         try {
-            const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('partClass', '==', 'Fee')));
+            // ⚠ A FEE IS NOT A partClass. The seeder writes productType 'FEE' on a partClass
+            // 'Inventory' document (11.1 → H1 fee seeder), while other collections have used
+            // partClass 'Fee'. Asking for one of those finds none of the other, so ask for both.
+            const [byType, byClass] = await Promise.all([
+                getDocs(query(collection(db, 'Approved_Designs'), where('productType', '==', 'FEE'))).catch(() => ({ docs: [] })),
+                getDocs(query(collection(db, 'Approved_Designs'), where('partClass', '==', 'Fee'))).catch(() => ({ docs: [] })),
+            ]);
+            const snap = { docs: [...byType.docs, ...byClass.docs] };
             const by = {};
             snap.docs.forEach(d => {
                 const x = { id: d.id, ...d.data() };
