@@ -17,6 +17,7 @@ import { finishLabelOfItem } from './finishLabel';
 // that cart line (shop-floor per-configuration View buttons); the dropdown still switches.
 const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
     const [job, setJob] = useState(null);
+    const [libPart, setLibPart] = useState(null);   // stock builds: the Master Library item, not a quote
     const [parts, setParts] = useState([]);
     const [flowsById, setFlowsById] = useState({});
     const [loading, setLoading] = useState(true);
@@ -26,12 +27,23 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
     useEffect(() => {
         let alive = true;
         (async () => {
-            setLoading(true); setError(null); setJob(null);
+            setLoading(true); setError(null); setJob(null); setLibPart(null);
             if (!quoteId) { setError('No order id provided.'); setLoading(false); return; }
             try {
                 const snap = await getDoc(doc(db, 'jobs', quoteId));
                 if (!alive) return;
-                if (!snap.exists()) { setError(`No saved job found for "${quoteId}".`); setLoading(false); return; }
+                if (!snap.exists()) {
+                    // A STOCK BUILD HAS NO CPQ JOB (Stuart 2026-08-17: "View Item → No saved job
+                    // found"). Its `quoteId` is the MASTER LIBRARY doc id, not a quote — nothing was
+                    // configured, the item simply exists. Fall back to that record and show the item
+                    // itself, instead of an error that reads like the order is broken.
+                    try {
+                        const lib = await getDoc(doc(db, 'Approved_Designs', quoteId));
+                        if (!alive) return;
+                        if (lib.exists()) { setLibPart({ id: lib.id, ...lib.data() }); setLoading(false); return; }
+                    } catch (e) { /* fall through to the original message */ }
+                    setError(`No saved job found for "${quoteId}".`); setLoading(false); return;
+                }
                 const jobData = { id: snap.id, ...snap.data() };
                 setJob(jobData);
                 // Parts let the spec strip resolve Vision-pick ids -> names; non-fatal if it fails.
@@ -132,9 +144,11 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                 {/* Header */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', padding: '16px 20px', borderBottom: '1px solid var(--line, #ddd)', background: '#fff' }}>
                     <div>
-                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', fontWeight: 500 }}>{job?.jobName || 'Configured Item'}</div>
+                        <div style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', fontWeight: 500 }}>{libPart ? (libPart.itemName || libPart.legacyErpId || 'Library Item') : (job?.jobName || 'Configured Item')}</div>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft, #888)', marginTop: '4px' }}>
-                            Confirmed Order · Read-Only{job?.customer?.name ? ` · ${job.customer.name}` : ''}{quoteId ? ` · ${quoteId}` : ''}
+                            {libPart
+                                ? `Master Library item · Read-Only${libPart.legacyErpId ? ` · ${libPart.legacyErpId}` : ''}`
+                                : `Confirmed Order · Read-Only${job?.customer?.name ? ` · ${job.customer.name}` : ''}${quoteId ? ` · ${quoteId}` : ''}`}
                         </div>
                         {(multNote || finLabel) && (
                             <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
@@ -157,6 +171,41 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                 <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexWrap: 'wrap', gap: '20px', padding: '20px', alignItems: 'stretch' }}>
                     {loading && <div style={{ flex: 1, textAlign: 'center', padding: '60px', color: 'var(--ink-soft)' }}>Loading configuration…</div>}
                     {error && !loading && <div style={{ flex: 1, textAlign: 'center', padding: '60px', color: 'var(--ink-soft)' }}>{error}</div>}
+                    {/* STOCK BUILD — no configuration to replay, so show the ITEM: its reference
+                        image and the specs the floor actually needs. Nothing was configured here,
+                        which is why there is no 3D state to restore (Stuart 2026-08-17). */}
+                    {!loading && !error && libPart && (() => {
+                        const sp = libPart.manufacturingSpecs || {};
+                        const img = libPart.finalImageUrl || libPart.thumbnailUrl || sp.referenceImageUrl || '';
+                        const rows = [
+                            ['Item #', libPart.legacyErpId || ''],
+                            ['Name', libPart.itemName || ''],
+                            ['Category', sp.productType || ''],
+                            ['Collection', (sp.customData && sp.customData.collection) || ''],
+                            ['UOM', sp.uom || ''],
+                            ['Home bin', sp.binLocation || ''],
+                            ['NetSuite id', libPart.netSuiteInternalId || ''],
+                        ].filter(([, v]) => v !== '' && v != null);
+                        return (
+                            <>
+                                {img && (
+                                    <div style={{ flex: '1 1 320px', minWidth: '280px', background: '#fff', border: '1px solid var(--line, #ddd)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                                        <img src={img} alt={libPart.itemName || 'Item'} style={{ maxWidth: '100%', maxHeight: '52vh', objectFit: 'contain' }} />
+                                    </div>
+                                )}
+                                <div style={{ flex: '1 1 320px', minWidth: '280px', background: '#fff', border: '1px solid var(--line, #ddd)', padding: '18px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '14px' }}>Stock build — no configuration</div>
+                                    {rows.map(([k, v]) => (
+                                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', padding: '8px 0', borderBottom: '1px solid var(--line, #eee)', fontSize: '0.9rem' }}>
+                                            <span style={{ color: 'var(--ink-soft)' }}>{k}</span>
+                                            <span style={{ fontWeight: 500, textAlign: 'right', fontFamily: k === 'Item #' ? 'var(--mono)' : 'var(--sans)' }}>{String(v)}</span>
+                                        </div>
+                                    ))}
+                                    {!img && <div style={{ marginTop: '14px', color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem' }}>No reference image on this library record.</div>}
+                                </div>
+                            </>
+                        );
+                    })()}
                     {!loading && !error && job && (
                         <>
                             {/* The whole point of the modal when qty > 1: say it once, at the top,

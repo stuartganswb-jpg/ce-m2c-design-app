@@ -13,7 +13,7 @@ import { CATEGORY_NAME_RX } from '../Shared/itemCodeMatch';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
-import { resolveByExactKey, normalizeKey, stagingScanMatches } from '../Shared/workOrderContract';
+import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf } from '../Shared/workOrderContract';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
@@ -2888,6 +2888,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     <span style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '0.9rem', marginRight: '8px' }}>{expandedJob === job.id ? '▾' : '▸'}</span><span title={job.id}>{packRef(job)}</span>
                                                 </h3>
                                                 {customer && <div style={{ color: theme.ink, fontFamily: theme.sans, fontSize: '0.95rem', fontWeight: 500, marginTop: '5px' }}>{customer}</div>}
+                                                {/* THE ITEM, ON THE CARD (Stuart 2026-08-17: "no pattern# nothing").
+                                                    A stock build's whole identity is its code — the header showed
+                                                    only the WO ref, so the warehouse had to expand the row to learn
+                                                    what it was picking. */}
+                                                {(() => { const c = woItemCodeOf(job), n = woItemNameOf(job); return c ? (
+                                                    <div style={{ color: theme.ink, fontFamily: theme.mono, fontSize: '0.9rem', fontWeight: 600, marginTop: '4px' }}>
+                                                        {c}{n ? <span style={{ color: theme.inkSoft, fontFamily: theme.sans, fontWeight: 400 }}> · {n}</span> : null}
+                                                    </div>
+                                                ) : null; })()}
                                                 {(sidemark || poNum) && (
                                                     <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '10px', marginTop: '3px', textTransform: 'uppercase', letterSpacing: '.05em' }}>
                                                         {sidemark ? `REF: ${sidemark}` : ''}{sidemark && poNum ? '  ·  ' : ''}{poNum ? `PO: ${poNum}` : ''}

@@ -617,7 +617,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     variantErpId: erpId,
                     totalParts: Number(qty),
                     reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-                    type: "Stock Build",
+                    // The ITEM, not the category — the floor card reads `type` (Stuart 2026-08-17).
+                    // variantErpId/rootItem were already here; `type` said "Stock Build", which is
+                    // what every screen ended up showing instead of the pattern number.
+                    type: String(erpId || "Stock Build"),
+                    itemName: part.itemName || '',
+                    ...(part.netSuiteInternalId ? { stockInternalId: String(part.netSuiteInternalId) } : {}),
                     // The finish the floor batches on. Omitted here until 2026-08-17, which left
                     // RTG's release to fall through to PENDING-RECIPE — the finish was in the item
                     // code the whole time. Raw and /P codes have no finish suffix and stay unset.

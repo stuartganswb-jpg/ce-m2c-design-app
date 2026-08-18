@@ -1073,7 +1073,18 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
           ...(recipe ? { recipe } : {}),
           ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
-          type: "Stock Build", createdAt: Date.now()
+          // THE ITEM TRAVELS TOO (Stuart 2026-08-17: "no pattern# nothing, they are all blank").
+          // `type: "Stock Build"` is a CATEGORY, and the floor card reads `type` as the item — so
+          // every order raised here reached the floor unidentifiable. The Sales Snapshot has always
+          // put the real code in this field; match it, and carry the rest of the identity the floor
+          // and the NetSuite work order need (name, internal id, product type, paint size).
+          type: String(part.legacyErpId || part.itemId || 'Stock Build'),
+          rootItem: String(part.legacyErpId || part.itemId || '').toUpperCase(),
+          itemName: part.itemName || '',
+          ...(part.netSuiteInternalId ? { stockInternalId: String(part.netSuiteInternalId) } : {}),
+          ...(part.manufacturingSpecs?.productType ? { productType: String(part.manufacturingSpecs.productType).toUpperCase() } : {}),
+          ...(part.manufacturingSpecs?.paintSize ? { paintSize: String(part.manufacturingSpecs.paintSize).toUpperCase() } : {}),
+          createdAt: Date.now()
       });
       return newWoId;
   };

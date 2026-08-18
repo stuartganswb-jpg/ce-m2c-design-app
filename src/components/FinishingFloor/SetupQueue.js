@@ -4,7 +4,7 @@ import { doc, updateDoc, setDoc, getDocs, query, where, collection, onSnapshot }
 import { btnStyle, cardStyle } from './finishingStyles';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { nsProxyFetch } from '../Shared/nsProxy';
-import { makeFullTasks } from '../Shared/workOrderContract';
+import { makeFullTasks, woItemCodeOf, woItemNameOf, isPlaceholderDims } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
 import OrderStatusChips from '../Shared/OrderStatusChips';
@@ -620,13 +620,31 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                 </div>
                 
                 <div style={{ fontSize: '0.85rem', lineHeight: '1.6', color: 'var(--ink)' }}>
+                    {/* THE ITEM, NOT THE WORD "STOCK BUILD" (Stuart 2026-08-17: "there is no pattern#
+                        nothing, they are all blank"). The code was always on the order — in
+                        stockErpId / partErpId — but this line read `type`, which only the Sales
+                        Snapshot fills with a real code. Everything else writes a category label. */}
+                    {(() => {
+                        const code = woItemCodeOf(wo);
+                        const name = woItemNameOf(wo);
+                        return code
+                            ? <div style={{ marginBottom: '4px' }}>
+                                <span style={{ color: 'var(--ink-soft)' }}>Item:</span>{' '}
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '0.95rem', fontWeight: 600, color: 'var(--ink)' }}>{code}</span>
+                                {name && <span style={{ color: 'var(--ink-soft)' }}> · {name}</span>}
+                              </div>
+                            : <div style={{ marginBottom: '4px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px' }}>⚠ No item # on this order — it cannot be identified on the floor.</div>;
+                    })()}
                     <span style={{color:'var(--ink-soft)'}}>Type:</span> {(wo.type || wo.itemName || 'Custom').toUpperCase()} | <span style={{color:'var(--ink-soft)'}}>Total Parts:</span> {wo.totalParts || wo.qty || 1} <br/>
                     {wo.type === 'sales' && (
                         <span style={{color: 'var(--ink-soft)'}}>
                             (Poles: {wo.poles?.qty || 0}, Fin: {wo.smallParts?.fin || 0}, Rng: {wo.smallParts?.rng || 0}, Brk: {wo.smallParts?.brk || 0})
                         </span>
                     )}
-                    {wo.dimensions && (
+                    {/* Only REAL dimensions. 10L × 5W × 2H is the fallback every stock build gets
+                        when nothing measured it — printing it as fact told the floor a size that
+                        was never established. */}
+                    {wo.dimensions && !isPlaceholderDims(wo.dimensions) && (
                         <div style={{ fontWeight: 500, marginTop: '8px', fontSize: '0.85rem', color: 'var(--ink)' }}>
                             Item Dimensions: {wo.dimensions.length}L x {wo.dimensions.width}W x {wo.dimensions.height}H
                         </div>
@@ -721,6 +739,36 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                               </div>
                           )}
                           
+                          {/* THE BUILD FACTS. A stock build has no CPQ configuration, so this modal
+                              used to open on "no extended specifications" and tell the floor nothing
+                              — not even WHAT to make (Stuart 2026-08-17). These facts are always on
+                              the order; they were simply never rendered. */}
+                          {(() => {
+                              const code = woItemCodeOf(activeSpecs);
+                              const name = woItemNameOf(activeSpecs);
+                              const rows = [
+                                  ['Item #', code],
+                                  ['Description', name],
+                                  ['Finish / recipe', activeSpecs.recipe || activeSpecs.color || ''],
+                                  ['Quantity', activeSpecs.totalParts || activeSpecs.qty || ''],
+                                  ['NetSuite WO', activeSpecs.nsWoTran || activeSpecs.nsWoId || ''],
+                                  ['Need by', activeSpecs.needBy || activeSpecs.reqDate || ''],
+                                  ['Pull source', activeSpecs.jfpPullFrom || ''],
+                              ].filter(([, v]) => v !== '' && v !== undefined && v !== null);
+                              if (!rows.length) return null;
+                              return (
+                                  <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)' }}>
+                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px', borderBottom: '1px solid var(--line)', paddingBottom: '8px' }}>Build</div>
+                                      {rows.map(([k, v]) => (
+                                          <div key={k} style={{ fontSize: '0.9rem', display: 'flex', justifyContent: 'space-between', gap: '16px', borderBottom: '1px solid var(--line)', padding: '8px 0' }}>
+                                              <span style={{ color: 'var(--ink-soft)' }}>{k}:</span>
+                                              <span style={{ fontWeight: 500, color: 'var(--ink)', fontFamily: k === 'Item #' ? 'var(--mono)' : 'var(--sans)', textAlign: 'right' }}>{String(v)}</span>
+                                          </div>
+                                      ))}
+                                  </div>
+                              );
+                          })()}
+
                           {activeSpecs.cpqSpecs && Object.keys(activeSpecs.cpqSpecs).length > 0 && (
                               <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)' }}>
                                   <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '16px', borderBottom: '1px solid var(--line)', paddingBottom: '8px' }}>CPQ Build Specs</div>
@@ -732,7 +780,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                               </div>
                           )}
 
-                          {!activeSpecs.imageUrl && !activeSpecs.note && (!activeSpecs.cpqSpecs || Object.keys(activeSpecs.cpqSpecs).length === 0) && (
+                          {!activeSpecs.imageUrl && !activeSpecs.note && !woItemCodeOf(activeSpecs) && (!activeSpecs.cpqSpecs || Object.keys(activeSpecs.cpqSpecs).length === 0) && (
                               <div style={{ padding: '30px', textAlign: 'center', color: 'var(--ink-soft)', fontStyle: 'italic', border: '1px dashed var(--line)', fontFamily: 'var(--serif)', fontSize: '1.2rem' }}>
                                   No extended specifications or client notes attached to this Work Order.
                               </div>

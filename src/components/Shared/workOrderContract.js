@@ -70,3 +70,45 @@ export const resolveByExactKey = (finWOs = [], scan) => {
         [w.orderKey, w.salesOrderId, w.soNum].map(normalizeKey).filter(Boolean).includes(s)
     ) || null;
 };
+
+// ── WHAT IS THIS ORDER FOR? (Stuart 2026-08-17) ─────────────────────────────────────────────────
+// "why are none of the work order windows displaying any product info, there is no pattern# nothing
+//  they are all blank on wms set up and finishing floor?"
+//
+// Because the floor card reads `type`, and `type` means two different things depending on who wrote
+// the order. The Sales Snapshot writes the ITEM CODE into it (`type: r.itemid`), so those cards have
+// always shown the pattern number. Every other stock-build path — the Master Library's direct build
+// and its make-up cascade, Stock View's grid push — writes the literal string "Stock Build", and RTG
+// copies it forward. The item was never lost; it was sitting in stockErpId / partErpId, which no
+// floor screen looked at.
+//
+// This resolves the identity from every field any writer has ever used, so a screen asks one
+// question and gets the same answer wherever the order came from. Writers now also stamp it
+// properly, making this the safety net rather than the mechanism.
+const looksLikeItemCode = (v) => {
+    const s = String(v == null ? '' : v).trim();
+    // Real codes have no spaces. Rejects the labels that live in the same field: "Stock Build",
+    // "Just For Paint", "Mixed", "Custom" — and display names like "Round Bracket 4.5 inch".
+    return !!s && !/\s/.test(s) && !/^(stock build|custom|mixed|n\/a|pending|unassigned)$/i.test(s);
+};
+export const woItemCodeOf = (wo) => {
+    if (!wo) return '';
+    const candidates = [wo.jfpItemCode, wo.stockErpId, wo.variantErpId, wo.partErpId, wo.rootItem, wo.type];
+    for (const c of candidates) if (looksLikeItemCode(c)) return String(c).trim().toUpperCase();
+    return '';
+};
+// The human name, when the order carries one. Never the item code — callers show both.
+export const woItemNameOf = (wo) => {
+    if (!wo) return '';
+    const code = woItemCodeOf(wo);
+    for (const v of [wo.itemName, wo.jfpItemName, wo.type]) {
+        const s = String(v == null ? '' : v).trim();
+        if (s && s.toUpperCase() !== code && !/^(stock build|custom|mixed)$/i.test(s)) return s;
+    }
+    return '';
+};
+// The 10×5×2 that `dimensions` falls back to when nothing supplied real ones. A stock build has no
+// measured box, so printing that trio as "Item Dimensions" states a fact nobody established.
+export const isPlaceholderDims = (d) =>
+    !d || (Number(d.length) === 10 && Number(d.width) === 5 && Number(d.height) === 2)
+       || (!Number(d.length) && !Number(d.width) && !Number(d.height));

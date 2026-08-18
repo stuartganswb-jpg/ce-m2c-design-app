@@ -4,7 +4,7 @@ import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
-import { makeFullTasks } from '../Shared/workOrderContract';
+import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { woRecipeCode } from '../Shared/finishingTime';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
@@ -1030,7 +1030,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                 // advanced. woRecipeCode reads it off the code and leaves a real recipe untouched.
                 recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : woRecipeCode(hqOrder),
                 reqDate: hqOrder.reqDate || "",
-                type: hqOrder.type || "Mixed",
+                // `type` is what the floor card shows as the item, so a stock build must carry its
+                // CODE here — not the category label older writers put in this field (2026-08-17).
+                // Sales orders keep the assembly/mixed wording they have always had.
+                type: (orderType !== 'sales' && woItemCodeOf(hqOrder)) || hqOrder.type || "Mixed",
+                itemName: hqOrder.itemName || '',
+                stockInternalId: hqOrder.stockInternalId ? String(hqOrder.stockInternalId) : null,
                 totalParts: Number(hqOrder.totalParts) || 1,
                 // JUST FOR PAINT (Stuart 2026-08-03): a legacy item with no assembly. Everything
                 // packing needs to close it out in NetSuite rides here, because by then there is no
