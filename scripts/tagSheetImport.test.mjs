@@ -231,5 +231,21 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     eq('it is safe to run again', planSinglesFill(after).hits.length, 0);
 }
 
+// ── A NAME MATCH ALONE IS NOT ENOUGH ────────────────────────────────────────────────────────
+// The rings slot holds a node called H1-138WR, and so does the wood rod. One row claimed it, so it
+// looked unambiguous — and a POLE row's tags landed on a RING.
+{
+    const H5=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','ROD','SETUP'];
+    const rows5=[H5, ['wood rod','w.fbx','POLE','H1-138WR','FRONT','']];
+    const ring=[{ clusterId:'c', clusterName:'RINGS', category:'RING', choices:[{ nodeName:'S3-RINGS__2_H1138WR', tier:'' }]}];
+    const p=planTagImport(rows5, ring);
+    eq('a POLE row does not tag a RING', p.hits.length, 0);
+    ok('and it says why', p.ambiguous.some(a=>/is a POLE, this is a RING/.test(a)));
+
+    // The same row on a POLE cluster is exactly right.
+    const pole=[{ clusterId:'c', clusterName:'WOOD-ROD', category:'POLE', choices:[{ nodeName:'S7-WOOD-ROD__0_H1138WR', tier:'' }]}];
+    eq('but it does tag the pole', planTagImport(rows5, pole).hits.length, 1);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail?1:0);

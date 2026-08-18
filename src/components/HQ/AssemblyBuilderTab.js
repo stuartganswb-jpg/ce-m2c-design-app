@@ -1492,7 +1492,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         setTagPlan(null);
         // ⚠ SAY THAT IT HAPPENED. The panel used to just vanish, which is indistinguishable from a
         // click that missed — and the fields it fills are three screens of scrolling away.
-        setTagDone(`Applied ${n} change(s) from the sheet. They are on screen only — Save Assignments writes them.`);
+        setTagDone(`Applied ${n} change(s) from the sheet. They are on screen only — the green “Save Item Numbers as Choice Pins” button writes them.`);
     };
     const [tagDone, setTagDone] = useState('');
     // ── FINISH THE SINGLES BY CATEGORY (Stuart 2026-08-18) ───────────────────────────────────
@@ -1507,7 +1507,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         const n = singlesPlan.hits.length;
         setAssignData(prev => prev ? { ...prev, rows: applySinglesFill(prev.rows, singlesPlan) } : prev);
         setSinglesPlan(null);
-        setTagDone(`Filled ${n} blank tag(s) on the singles. On screen only — Save Assignments writes them.`);
+        setTagDone(`Filled ${n} blank tag(s) on the singles. On screen only — the green “Save Item Numbers as Choice Pins” button writes them.`);
     };
 
     const setChoicePatch = (clusterId, nodeName, patch) => setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.map(c => c.nodeName === nodeName ? { ...c, ...patch } : c) }) } : prev);
@@ -2047,7 +2047,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                         NEXT · the green <b>{extendId ? `⚙ Add ${sheetBuild.built} Slots to Assembly` : '⚙ Build Assembly'}</b> button at the BOTTOM of the slot list on the left
                                     </div>
                                     <div style={{ color: 'var(--ink-soft)', paddingLeft: '12px' }}>
-                                        THEN · “Already built” below → Load Choices → Tag from sheet
+                                        THEN · “Already built” below → Load Choices → Tag from sheet → Save Item Numbers as Choice Pins
                                     </div>
                                 </div>
                             )}
@@ -2203,7 +2203,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                     onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; readTagSheet(f); }} />
                             </label>
                             <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>
-                                Matched by node name. Nothing is written until you save.
+                                Matched by node name. Nothing is written until you press the green Save button at the bottom.
                             </span>
                         </div>
                         {!!tagDone && (
@@ -2302,7 +2302,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                             Discard
                                         </button>
                                         <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', alignSelf: 'center' }}>
-                                            Applying only fills the fields on screen — Save Assignments still writes them.
+                                            Applying only fills the fields on screen — the green “Save Item Numbers as Choice Pins” button below still writes them.
                                         </span>
                                     </div>
                                 </div>

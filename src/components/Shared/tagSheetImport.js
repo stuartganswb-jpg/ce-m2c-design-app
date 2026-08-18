@@ -218,8 +218,22 @@ export function planTagImport(rows2d, loaded = []) {
         }
         if (!p) {
             const cands = byTail.get(t) || [];
-            if (cands.length === 1) p = cands[0];
-            else if (cands.length > 1) { ambiguous.add(`${ch.nodeName} — ${cands.length} rows claim it (${cands.map(c => c.__slot || '?').join(', ')})`); return; }
+            if (cands.length > 1) { ambiguous.add(`${ch.nodeName} — ${cands.length} rows claim it (${cands.map(c => c.__slot || '?').join(', ')})`); return; }
+            // ⚠ THE LAST RESORT NEEDS A SECOND OPINION (Stuart 2026-08-18, the wood ring). Matching
+            // on the name alone, with no slot to confirm it, put a POLE row's tags on a RING: the
+            // rings slot holds a node called H1-138WR and so does the wood rod, and only one row in
+            // the sheet claimed that name, so it looked unambiguous. It was not — it was the wrong
+            // part with the right name. When nothing but the name agrees, the CATEGORY must agree
+            // too, or the row is left alone and said out loud.
+            if (cands.length === 1) {
+                const rowCat = U(cands[0].catOverride);
+                const pinCat = U(ch.catOverride || r.category || '');
+                if (rowCat && pinCat && rowCat !== pinCat) {
+                    ambiguous.add(`${ch.nodeName} — the only row with that name is a ${rowCat}, this is a ${pinCat}`);
+                    return;
+                }
+                p = cands[0];
+            }
         }
         if (!p) return;
         seen.add(`${slotKey(p.__slot)}::${nodeKey(p.__node)}`);
