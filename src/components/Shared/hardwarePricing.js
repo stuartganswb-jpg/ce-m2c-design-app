@@ -35,7 +35,7 @@
 // somewhere that might forget to.
 
 import { customerKeys, clientPriceFor, findClientPriceRow } from './clientPricing.js';
-import { fabricutPriceOf, fabricutCodeOf } from './priceLevels.js';
+import { fabricutPriceOf, fabricutCodeOf, priceLevelShort } from './priceLevels.js';
 import { finishVariantOf } from './finishVariant.js';
 
 export const PRICE_SOURCES = {
@@ -100,7 +100,7 @@ export function priceChoice(choice, part, ctx = {}) {
     // 4 — the item's own price.
     const base = num(part.manufacturingSpecs?.basePrice);
     if (base !== null && base > 0) return out(base, PRICE_SOURCES.BASE, '');
-    return out(0, PRICE_SOURCES.NONE, 'no override, no tier, no customer row, no base price');
+    return out(0, PRICE_SOURCES.NONE, `nothing on ${billedId || 'this item'} at ${priceLevel === 'STANDARD' ? 'standard pricing' : priceLevelShort(priceLevel)} — no override, no tier, no customer row, no base price`);
 }
 
 /**
@@ -139,6 +139,26 @@ export function priceConfiguration(model, ctx = {}) {
 export function pricingWarnings({ lines }) {
     const out = [];
     lines.filter(l => l.source === PRICE_SOURCES.NONE).forEach(l =>
-        out.push({ sev: 'red', msg: `${l.name}${l.partId ? ` (${l.partId})` : ''} has no price under any rule — ${l.detail}. It is quoting at $0.` }));
+        out.push({ sev: 'red', msg: `${l.name}${l.billedId || l.partId ? ` (${l.billedId || l.partId})` : ''} has no price under any rule — ${l.detail}. It is quoting at $0.` }));
     return out;
+}
+
+/**
+ * The customer's own name for a part, with no pricing involved.
+ *
+ * The pricing path already returns this, but only for parts that are ON the order — so an option
+ * the customer had not chosen yet showed our number alone, in the one place (the picker) where
+ * their number is most useful for reading a request back over the phone. Their negotiated row's
+ * SKU wins; the item's resolved pattern # stands in when there is no row.
+ *
+ * @param part the library doc (already finish-resolved, or a mill base — the pattern # falls back
+ *             to the base doc either way)
+ */
+export function aliasFor(part, ctx = {}) {
+    const { customerId, customer, outsourceCodes, findByCode } = ctx;
+    if (!part) return '';
+    const keys = customerId ? customerKeys(customerId, customer) : null;
+    const row = keys ? findClientPriceRow(part.clientPricing, keys) : null;
+    const sku = row?.clientSku ? String(row.clientSku).trim() : '';
+    return sku || fabricutCodeOf(part, findByCode, outsourceCodes) || '';
 }

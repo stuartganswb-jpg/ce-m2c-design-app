@@ -5,7 +5,8 @@ import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
 import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor } from './hardwareModel';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
-import { priceConfiguration, priceChoice, pricingWarnings } from './hardwarePricing';
+import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
+import { priceLevelShort } from './priceLevels';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 
@@ -220,11 +221,28 @@ function HardwareConfiguratorInner({
         if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
         return String(pt?.itemId || id || '').trim();
     }, [findPart]);
+    // ── OUR COST TO THEM IS THE DEFAULT, ONCE THERE IS A "THEM" ──────────────────────────────
+    // Stuart 2026-08-17: "it should default at our cost to them". The tier in the Customer Alias &
+    // Pricing box only ever applied ABOVE Standard, so a connected customer still quoted off the
+    // item's own base price — which a mill item does not have, hence a screen of $0.00 lines with
+    // a perfectly good 12.50 sitting in the box beside them. Standard is "our pricing", and our
+    // pricing to a NAMED account is the cost column; with nobody named there is no tier to read
+    // and Standard is the only honest answer.
+    //
+    // This is a DEFAULT, not an override: choosing Wholesale or Retail still wins, an item with no
+    // tier data still falls through to its customer row and then its base price, and the level in
+    // force is named on screen beside the total so a quote can never be priced off a tier nobody
+    // could see.
+    const effectiveLevel = (priceLevel && priceLevel !== 'STANDARD') ? priceLevel
+        : (customerId ? 'FAB_COST' : 'STANDARD');
+    const levelIsDefault = effectiveLevel !== 'STANDARD' && (!priceLevel || priceLevel === 'STANDARD');
     const priceCtx = useMemo(() => ({
-        customerId, customer, priceLevel, outsourceCodes,
+        customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
         finishCode: globalFinish, findPart, findByCode: findPart,
-    }), [customerId, customer, priceLevel, outsourceCodes, globalFinish, findPart]);
+    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, findPart]);
     const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
+    // Their number for any part, chosen or not — the picker is where it is most useful.
+    const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
     const priceWarnings = useMemo(() => pricingWarnings(priced), [priced]);
     // Added by hand — priced by the SAME chain as everything else (override → price level → client
     // row → base). A splice a customer negotiated is still that customer's price; nothing about it
@@ -395,7 +413,7 @@ function HardwareConfiguratorInner({
                 </span>
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' }}>
                     <span style={{ ...mono, fontSize: '9.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)' }}>{ourId(o.partId)}</span>
-                    {(line?.sku || line?.aliasCode) && <span style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--brass)' }}>{line.sku || line.aliasCode}</span>}
+                    {(line?.sku || line?.aliasCode || aliasOf(o.partId)) && <span style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--brass)' }}>{line?.sku || line?.aliasCode || aliasOf(o.partId)}</span>}
                 </span>
                 <span style={{ fontSize: '10.5px', lineHeight: 1.25, color: 'var(--ink-soft)' }}>{desc}</span>
                 {o.noFinish && <span style={{ ...mono, fontSize: '7.5px', color: 'var(--ink-faint)' }}>clear · takes no finish</span>}
@@ -522,7 +540,11 @@ function HardwareConfiguratorInner({
                 <span style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--line)', background: '#fff', color: customerId ? 'var(--ink)' : 'var(--ink-faint)' }}
                     title={customerId ? 'Aliases and prices on this screen are this customer\u2019s (their rows live per item in 4.6). Set the collection\u2019s own account in tab 11; a job\u2019s customer overrides it.' : 'No customer — every line shows our base price and our part numbers. Name one on the job, or give the collection its own account in tab 11.'}>
                     {customer?.companyName || customer?.name || (customerId ? customerId : 'No customer \u00b7 base pricing')}
-                    {priceLevel && priceLevel !== 'STANDARD' && <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '6px' }}>{priceLevel}</b>}
+                    {effectiveLevel !== 'STANDARD' && (
+                        <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '6px' }}>
+                            {priceLevelShort(effectiveLevel)}{levelIsDefault ? ' \u00b7 default' : ''}
+                        </b>
+                    )}
                 </span>
                 <button onClick={addConfiguration} disabled={!priced.lines.length}
                     style={{ ...mono, marginLeft: 'auto', padding: '7px 12px', cursor: priced.lines.length ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
@@ -666,7 +688,10 @@ function HardwareConfiguratorInner({
                                             <div key={it.code} style={{ border: `1px solid ${row ? 'var(--ink)' : 'var(--line)'}`, background: '#fff', padding: '8px 9px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
                                                     <div style={{ flex: 1, minWidth: 0 }}>
-                                                        <div style={{ ...mono, fontSize: '9.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)' }}>{ourId(it.code)}</div>
+                                                        <div style={{ ...mono, fontSize: '9.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                            {ourId(it.code)}
+                                                            {aliasOf(it.code) && <span style={{ color: 'var(--brass)' }}>{aliasOf(it.code)}</span>}
+                                                        </div>
                                                         <div style={{ fontSize: '11.5px', color: 'var(--ink-soft)', lineHeight: 1.25 }}>{it.label || part?.itemName || it.code}</div>
                                                     </div>
                                                     <input value={qty} onChange={e => set({ qty: e.target.value })} inputMode="numeric" placeholder="0"
