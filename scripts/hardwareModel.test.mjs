@@ -1046,5 +1046,40 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('and the reason names both pairs', /8\.5/.test(why.detail) && /6\.5/.test(why.detail));
 }
 
+// ── A ROD THAT NEVER BENDS HAS NO END PIECES ────────────────────────────────────────────────
+// Stuart 2026-08-18: "the rear rods do not ever get the bend so there is no short center, a double
+// french return only bends the front rod and the rear is straight."
+//
+// POSITION on a rod pin does not mean "which half of the geometry" — it means "the end piece that
+// is SWAPPED OUT when that end is treated". A rear rod is never swapped, so its pieces carry no
+// position, and both stand whatever the ends do. Tagging them LEFT/RIGHT would make them vanish
+// until an end was answered and disappear again the moment a return was chosen.
+{
+    const cs = [
+        C({ id: 'F-L', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'LEFT', nodes: ['f-l'] }),
+        C({ id: 'F-C', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'CENTER', nodes: ['f-c'] }),
+        C({ id: 'F-R', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'RIGHT', nodes: ['f-r'] }),
+        // the rear rod: two pieces, one straight rod, no position on either
+        C({ id: 'B-1', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', nodes: ['b-1'] }),
+        C({ id: 'B-2', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', nodes: ['b-2'] }),
+        C({ id: 'FIN-L', partId: 'KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fin-l'] }),
+        C({ id: 'RET-R', partId: 'FR', role: 'RETURN', tier: 'FRONT', position: 'RIGHT', nodes: ['ret-r'] }),
+    ];
+    const vis = (sel) => resolve({ choices: cs, answers: {}, selectedIds: sel }).visible;
+
+    const bare = vis(['B-1']);
+    ok('the whole rear rod stands with nothing else chosen', bare.has('b-1') && bare.has('b-2'));
+
+    const withRet = vis(['F-C', 'B-1', 'FIN-L', 'RET-R']);
+    ok('a front return drops the front right piece', !withRet.has('f-r'));
+    ok('the front finial keeps the front left piece', withRet.has('f-l'));
+    ok('and the rear rod is untouched by either', withRet.has('b-1') && withRet.has('b-2'));
+
+    // It is still ONE rod decision, not two.
+    const N = applyFitsDefaults(cs.map(normalizeChoice));
+    eq('the rear rod is one question', slots(N, {}, []).filter(s => s.kind === 'ROD' && s.tier === 'BACK').length, 1);
+    eq('…offering one item', slots(N, {}, []).find(s => s.kind === 'ROD' && s.tier === 'BACK').options.length, 1);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
