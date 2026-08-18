@@ -153,16 +153,20 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
 // Merge renames every node to <slot-prefix>__<n>_<original, punctuation stripped, 24 chars>.
 {
     const H3=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','ITEM ID','ROD','SETUP'];
-    eq('a merged name yields its original tail', nodeTail('S12ABCDE-TRAV-DBL-BACKPLATES__3_H1138TRVBPV1'), 'H1138TRVBPV1');
-    eq('a raw name is its own tail', nodeTail('H1-138TRVBP-V:1'), 'H1138TRVBPV1');
+    // The model stores the CLEANED name — Fusion's " v2" and ":1" are gone by the time it is a pin,
+    // so both sides clean before comparing and the instance number is not part of the tail.
+    eq('a merged name yields its original tail', nodeTail('S12ABCDE-TRAV-DBL-BACKPLATES__3_H1138TRVBPV'), 'H1138TRVBPV');
+    eq('the sheet\'s raw Fusion name cleans to the same', nodeTail('H1-138TRVBP-V:1'), 'H1138TRVBPV');
+    eq('a version suffix cleans too', nodeTail('H1-138BR v2:3'), 'H1138BR');
+    eq('…however the sheet spells it', nodeTail('H1-138BR:3'), 'H1138BR');
 
     const rows3=[H3,
       ['TRAV DBL Backplates Center','d.fbx','BACKPLATE','H1-138TRVBP-V:1','','','DOUBLE'],
       ['3','s.fbx','BACKPLATE','H1-138TRVBP-V:1','','','SINGLE']];
     // The SAME node name in both sections — the double's plate and the single's plate.
     const loaded=[
-      { clusterId:'cD', clusterName:'TRAV-DBL-BACKPLATES-CENTER', choices:[{ nodeName:'S1AAAAA-TRAV-DBL-BACKPLATES-CENTER__2_H1138TRVBPV1', trvSetup:'' }]},
-      { clusterId:'cS', clusterName:'3', choices:[{ nodeName:'S9BBBBB-3__7_H1138TRVBPV1', trvSetup:'' }]},
+      { clusterId:'cD', clusterName:'TRAV-DBL-BACKPLATES-CENTER', choices:[{ nodeName:'S1AAAAA-TRAV-DBL-BACKPLATES-CENTER__2_H1138TRVBPV', trvSetup:'' }]},
+      { clusterId:'cS', clusterName:'3', choices:[{ nodeName:'S9BBBBB-3__7_H1138TRVBPV', trvSetup:'' }]},
     ];
     const plan=planTagImport(rows3, loaded);
     eq('both merged pins are matched', plan.hits.length, 2);
@@ -171,7 +175,7 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     eq('the single plate gets SINGLE — not the double row', sing.patch.trvSetup, 'SINGLE');
 
     // …and with no slot to separate them, it refuses rather than guessing.
-    const blind=[{ clusterId:'cX', clusterName:'SOMETHING ELSE', choices:[{ nodeName:'S3CCCCC-X__1_H1138TRVBPV1' }]}];
+    const blind=[{ clusterId:'cX', clusterName:'SOMETHING ELSE', choices:[{ nodeName:'S3CCCCC-X__1_H1138TRVBPV' }]}];
     const p2=planTagImport(rows3, blind);
     eq('an unscoped collision is not guessed at', p2.hits.length, 0);
     ok('it is reported', p2.ambiguous.some(a=>/2 rows claim it/.test(a)));

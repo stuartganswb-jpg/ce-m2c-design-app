@@ -63,7 +63,27 @@ const COLUMN = {
 };
 
 /** A node name as it is compared: whitespace and case are noise, everything else is not. */
-export const nodeKey = (n) => S(n).replace(/\s+/g, ' ').toUpperCase();
+// ⚠ THE NAME SHE WROTE DOWN IS NOT THE NAME THE MODEL STORES (Stuart 2026-08-18, 415 of 464 rows
+// matching nothing). Fusion exports a component as "H1-138BR v2:3" — a version and an instance
+// number — and the importer has always cleaned both off, because the version is a modelling detail
+// and the instance is one of several copies of the same part. The designer reads names off her
+// Fusion browser, so her sheet says "H1-138BR:3". Neither is wrong; it is the same part, spelled at
+// two different moments. So the comparison cleans exactly the way Shared/fusionImport does, on both
+// sides, before it compares anything.
+//
+// Instances then collapse — H1-138BR:1 and :3 are both H1-138BR — which is correct, because they
+// ARE one part. The SLOT is what tells two copies apart, and where it cannot, the row is reported
+// rather than guessed at.
+const cleanFusion = (s) => S(s)
+    .replace(/[\s_]v\d+.*$/i, '')      // " v2:3", and anything after it
+    .replace(/:\d+$/, '')              // a bare instance number
+    .replace(/\.\d{3}$/, '')           // Blender's ".001"
+    .replace(/_+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** A node name as it is compared: version, instance, case and spacing are all noise. */
+export const nodeKey = (n) => cleanFusion(n).toUpperCase();
 
 // ── THE NAME IN THE FILE IS NOT THE NAME ON THE PIN (Stuart 2026-08-18) ──────────────────────
 // Merge renames every node to `<slot-prefix>__<n>_<original, stripped of punctuation, 24 chars>`,
@@ -71,7 +91,7 @@ export const nodeKey = (n) => S(n).replace(/\s+/g, ' ').toUpperCase();
 // without a per-slot namespace two clusters cannot be told apart. Excellent, and it means a sheet
 // written against the .fbx matches NOTHING once the assembly is merged and saved. The original is
 // still in there, at the tail, in sanitized form — so that is what we compare.
-const sanitize = (n) => S(n).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+const sanitize = (n) => cleanFusion(n).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 const MERGE_TAIL = 24;                                    // the merge's own truncation
 export const nodeTail = (n) => {
     const raw = S(n);

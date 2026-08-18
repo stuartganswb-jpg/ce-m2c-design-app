@@ -2208,6 +2208,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                             <div style={{ color: 'var(--ink-soft)', paddingLeft: '12px' }}>{p.untagged.slice(0, 8).map(u => u.node).join(' · ')}{p.untagged.length > 8 ? ' …' : ''}</div>
                                         </div>
                                     )}
+                                    {!!p.ambiguous?.length && (
+                                        <div style={{ ...line, color: '#b00020', lineHeight: 1.6 }}>
+                                            ⚠ {p.ambiguous.length} node(s) are claimed by more than one row and no slot separates them — left alone rather than guessed at:
+                                            <div style={{ color: 'var(--ink-soft)', paddingLeft: '12px' }}>{p.ambiguous.slice(0, 6).join(' · ')}{p.ambiguous.length > 6 ? ' …' : ''}</div>
+                                        </div>
+                                    )}
                                     {p.warnings.map((w, i) => <div key={i} style={{ ...line, color: '#b00020' }}>⚠ {w}</div>)}
                                     {!!p.changed.length && (
                                         <div style={{ maxHeight: '190px', overflowY: 'auto', borderTop: '1px solid var(--line)', paddingTop: '7px' }}>
