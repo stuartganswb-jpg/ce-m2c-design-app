@@ -279,5 +279,25 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     eq('an ambiguous loose match is refused', planTagImport(two, one).hits.length, 0);
 }
 
+// ── THE LIBRARY IS THE AUTHORITY ON WHAT AN ITEM NUMBER IS ──────────────────────────────────
+// A screw has no item number. A sheet that offers one — because the cell was filled in from the
+// node name — must not be able to write it.
+{
+    const H8=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','ITEM ID','ROD'];
+    const rows8=[H8,
+      ['POLE FR-MTR DBL Back','f.fbx','POLE','H1-138STDOFF:1','H1-138STDOFF','BACK'],
+      ['POLE FR-MTR DBL Back','','POLE','8-32, 3/8\" L_91253A192:1','8-32, 3/8\" L_91253A192','BACK']];
+    const loaded=[{ clusterId:'c', clusterName:'POLE-FR-MTR-DBL-BACK', category:'POLE', choices:[
+        { nodeName:'S1__0_H1138STDOFF', itemNo:'' },
+        { nodeName:'S1__1_8323381253A192', itemNo:'' }]}];
+    const known=(c)=>['H1-138STDOFF','H1-138R'].includes(String(c).toUpperCase());
+    const p=planTagImport(rows8, loaded, { knownCode: known });
+    ok('the real item is written', p.hits.some(h=>h.patch.itemNo==='H1-138STDOFF'));
+    ok('the screw gets no item number', !p.hits.some(h=>String(h.patch.itemNo||'').startsWith('8-32')));
+    ok('and it is reported, not silent', p.unknownItems.some(u=>/8-32/.test(u)));
+    // with no library to ask, nothing is second-guessed
+    eq('no checker means no interference', planTagImport(rows8, loaded).unknownItems, []);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail?1:0);

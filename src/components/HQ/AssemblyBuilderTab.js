@@ -1578,7 +1578,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
             }
             if (!rows2d) { alert('No sheet in that file has a NODE NAME column.'); return; }
             const findFeeItem = await loadFeeItems();
-            const plan = planTagImport(rows2d, assignData?.rows || [], { findFeeItem });
+            // The library decides what an item number IS. Freshly fetched, because a code created
+            // in another tab this afternoon must count.
+            const index = await refreshCodeIndex().catch(() => null);
+            const known = new Set();
+            (index || []).forEach(e => { [e.code, e.erp].forEach(c => { const k = String(c || '').trim().toUpperCase(); if (k) known.add(k); }); });
+            const knownCode = known.size ? (c) => known.has(String(c).trim().toUpperCase()) : null;
+            const plan = planTagImport(rows2d, assignData?.rows || [], { findFeeItem, knownCode });
             setTagPlan({ plan, fileName: file.name });
         } catch (e) {
             alert('Could not read that file: ' + (e.message || e));
@@ -2389,6 +2395,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                         <div style={{ ...line, color: '#8a6508', lineHeight: 1.6 }}>
                                             ⚠ {p.untagged.length} node(s) on screen have no row in the sheet — an untagged node renders in no configuration:
                                             <div style={{ color: 'var(--ink-soft)', paddingLeft: '12px' }}>{p.untagged.slice(0, 8).map(u => u.node).join(' · ')}{p.untagged.length > 8 ? ' …' : ''}</div>
+                                        </div>
+                                    )}
+                                    {!!p.unknownItems?.length && (
+                                        <div style={{ ...line, color: '#b00020', lineHeight: 1.6 }}>
+                                            ⚠ {p.unknownItems.length} item number(s) in the sheet are not in the library — NOT written, the choice is left blank:
+                                            <div style={{ color: 'var(--ink-soft)', paddingLeft: '12px' }}>{p.unknownItems.slice(0, 6).join(' · ')}{p.unknownItems.length > 6 ? ' …' : ''}</div>
                                         </div>
                                     )}
                                     {!!p.ambiguous?.length && (

@@ -215,9 +215,31 @@ export function parseTagRows(rows = []) {
  * @param rows2d   the sheet
  * @param loaded   [{ clusterId, clusterName, choices:[{nodeName,…}] }]
  */
-export function planTagImport(rows2d, loaded = [], { findFeeItem } = {}) {
+export function planTagImport(rows2d, loaded = [], { findFeeItem, knownCode } = {}) {
     const { patches, warnings } = parseTagRows(rows2d);
     fillReturnFees(patches, findFeeItem);   // a return's fee number is looked up, never typed
+
+    // ── AN ITEM NUMBER THAT IS NOT AN ITEM IS NOT AN ITEM NUMBER (Stuart 2026-08-18) ─────────
+    // "it populated with items that do not even exist, nearly the fusion code."
+    //
+    // He is right, and the damage would have been quiet: a pin whose partId is `8-32, 3/8"
+    // L_91253A192` — a SCREW, which has no item number and never should — looks like a part all the
+    // way down the line. It prices at nothing, it bills as nothing, and it sits in a BOM as a line
+    // nobody can order. The sheet offered it because a blank Item ID cell had been filled in from
+    // the NODE name, and shared hardware is exactly the case that must stay blank.
+    //
+    // So the library is the authority: a number it does not know is not written, and is listed. A
+    // sheet cannot invent a part here however badly it is filled in — blank is always available and
+    // always safe, because blank hardware simply creates no pin.
+    const unknownItems = [];
+    if (typeof knownCode === 'function') {
+        patches.forEach(p => {
+            const code = S(p.itemNo);
+            if (!code || knownCode(code)) return;
+            unknownItems.push(`${p.__node || '?'} → ${code}`);
+            delete p.itemNo;
+        });
+    }
 
     // ── FINDING THE RIGHT ROW FOR A PIN, IN THREE TRIES ─────────────────────────────────────
     // 1. the exact node name, for a slot that has not been merged yet;
@@ -316,6 +338,7 @@ export function planTagImport(rows2d, loaded = [], { findFeeItem } = {}) {
         unmatchedRows,
         untagged,
         ambiguous: [...ambiguous],
+        unknownItems,
         warnings,
     };
 }
