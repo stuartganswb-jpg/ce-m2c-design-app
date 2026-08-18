@@ -1,4 +1,4 @@
-import { parseTagRows, planTagImport, applyTagPlan, nodeKey } from '../src/components/Shared/tagSheetImport.js';
+import { parseTagRows, planTagImport, applyTagPlan, nodeKey, slotsFromSheet, matchSlotFiles } from '../src/components/Shared/tagSheetImport.js';
 let pass=0, fail=0;
 const ok=(n,c)=>{ if(c) pass++; else { fail++; console.error('  ✗',n); } };
 const eq=(n,a,b)=>{ if(JSON.stringify(a)===JSON.stringify(b)) pass++; else { fail++; console.error('  ✗',n,'\n    got ',JSON.stringify(a),'\n    want',JSON.stringify(b)); } };
@@ -80,6 +80,28 @@ ok('a file that is not a tagging sheet is refused', /not a tagging sheet/.test(n
 const loaded2=[{ clusterId:'c1', clusterName:'X', choices:[{ nodeName:'H1-138AR DBL BACK', itemNo:'H1-138AR', mountType:'CEILING' }]}];
 const after2=applyTagPlan(loaded2, planTagImport(rows, loaded2));
 eq('a blank cell does not clear an existing value', after2[0].choices[0].mountType, 'CEILING');
+
+// ── the sheet defines the slots ──────────────────────────────────────────────────────────────
+{
+    const { slots, warnings: w } = slotsFromSheet(rows);
+    eq('one slot per slot name', slots.length, 5);
+    const pole = slots.find(s => s.label === 'METAL POLE DBL BACK LEFT');
+    eq('category carried', pole.category, 'POLE');
+    eq('its file carried', pole.file, 'a.fbx');
+    const bkt = slots.find(s => s.label === 'Dec DBL Bracket Center');
+    eq('bracket position carried', bkt.position, 'CENTER');
+    const carrier = slots.find(s => s.label === 'POLE FR-MTR DBL Back');
+    eq('a CARRIER slot becomes a RING slot', carrier.category, 'RING');
+    ok('slots without a file are called out', !w.some(x => /name no .fbx/.test(x)));
+
+    // …and matched to the files actually chosen, by name only.
+    const files = [{ name: 'a.fbx' }, { name: 'B.FBX' }, { name: 'stray.fbx' }];
+    const m = matchSlotFiles(slots, files);
+    eq('matched pairs', m.paired.length, 2);
+    ok('case does not matter', m.paired.some(p => p.file.name === 'B.FBX'));
+    eq('slots with no file are listed', m.missing.length, 3);
+    eq('files nothing asked for are listed', m.extra, ['stray.fbx']);
+}
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail?1:0);

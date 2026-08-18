@@ -176,3 +176,81 @@ export function applyTagPlan(loaded, plan) {
         }),
     }));
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE SHEET DEFINES THE SLOTS (Stuart 2026-08-18)
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+// "why do we need to load the files in the slots? with the new sheet, can't we build an import tool
+//  similar to 14.5 and 14.6, as the details for each slot are in the sheet"
+//
+// He is right, and the file proves it. 1.6 has always offered a FIXED slot list — ten for a double
+// bracket — while the designer's double is 37 files: a bracket set per family, plates per family,
+// finials per rod per end. The fixed list has no backplate slots for a double at all. So today the
+// only way through is for her to merge many files into few, by hand, which is work she should not
+// be doing and a place for a mistake that costs an afternoon.
+//
+// The sheet already carries the slot, its file, its category and its position on every row. That IS
+// the slot list. Reading it means she exports whatever grouping her model actually has, and the
+// screen takes the shape of her work rather than the other way round.
+//
+// Category is mapped, not invented: an END TREATMENT lives in the FINIAL category with its own
+// endTreatment tag (that is how a return and a finial share one question), and a CARRIER is a RING
+// whose traverse role makes it a rider. Everything else passes through.
+
+const SLOT_CATEGORY = { POLE: 'POLE', BRACKET: 'BRACKET', BACKPLATE: 'BACKPLATE', FINIAL: 'FINIAL',
+    RING: 'RING', RETURN: 'FINIAL', CARRIER: 'RING' };
+
+const slugOf = (s) => S(s).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 48) || 'slot';
+
+/**
+ * The slot list this sheet describes, in the shape 1.6's uploader already uses.
+ *
+ * @returns { slots:[{id,label,category,position,location,desc,file}], warnings }
+ */
+export function slotsFromSheet(rows2d = []) {
+    const { patches, warnings } = parseTagRows(rows2d);
+    const bySlot = new Map();
+    patches.forEach((p, key) => {
+        const name = p.__slot || p.__file;
+        if (!name) return;
+        const id = slugOf(name);
+        if (!bySlot.has(id)) bySlot.set(id, { id, label: name, file: p.__file, cats: new Set(), positions: new Set(), mounts: new Set(), nodes: [] });
+        const sl = bySlot.get(id);
+        sl.nodes.push(key);
+        if (p.catOverride) sl.cats.add(p.catOverride);
+        if (p.traverseRole === 'CARRIER') sl.cats.add('CARRIER');
+        if (p.__position) sl.positions.add(p.__position);
+        if (p.mountType) sl.mounts.add(p.mountType);
+    });
+    const slots = [...bySlot.values()].map(sl => {
+        const cat = [...sl.cats][0] || '';
+        if (sl.cats.size > 1) warnings.push(`Slot "${sl.label}" mixes categories (${[...sl.cats].join(', ')}) — using ${cat}.`);
+        return {
+            id: sl.id,
+            label: sl.label,
+            category: SLOT_CATEGORY[cat] || cat || 'POLE',
+            position: [...sl.positions][0] || 'SHARED',
+            location: [...sl.mounts][0] || '',
+            file: sl.file,
+            desc: `From the tagging sheet · ${sl.nodes.length} choice(s)${sl.file ? ` · ${sl.file}` : ''}`,
+        };
+    });
+    const noFile = slots.filter(s => !s.file).map(s => s.label);
+    if (noFile.length) warnings.push(`${noFile.length} slot(s) name no .fbx: ${noFile.slice(0, 4).join(', ')}${noFile.length > 4 ? '…' : ''}`);
+    return { slots, warnings };
+}
+
+/** Match the sheet's slot files against the files a person actually chose. Name only, case-insensitive. */
+export function matchSlotFiles(slots, files = []) {
+    const by = new Map();
+    files.forEach(f => by.set(String(f.name || '').trim().toLowerCase(), f));
+    const paired = [], missing = [];
+    slots.forEach(s => {
+        const f = s.file ? by.get(String(s.file).trim().toLowerCase()) : null;
+        if (f) paired.push({ slot: s, file: f }); else if (s.file) missing.push(s);
+    });
+    const used = new Set(paired.map(p => String(p.file.name).toLowerCase()));
+    const extra = files.filter(f => !used.has(String(f.name).toLowerCase())).map(f => f.name);
+    return { paired, missing, extra };
+}

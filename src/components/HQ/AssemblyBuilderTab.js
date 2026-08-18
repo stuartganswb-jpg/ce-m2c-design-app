@@ -15,7 +15,7 @@ import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
 import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, normalizePosition, normalizeCategory, suggestTagsFromName } from '../Shared/assemblyTags';
 import { sheet2dChoiceNode } from '../Shared/sheet2d';
-import { planTagImport, applyTagPlan } from '../Shared/tagSheetImport';
+import { planTagImport, applyTagPlan, slotsFromSheet, matchSlotFiles } from '../Shared/tagSheetImport';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -1355,6 +1355,95 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     // join: a row matching no geometry is reported rather than guessed at, and geometry matching no
     // row is reported too, because an untagged node renders in no configuration at all.
     const [tagPlan, setTagPlan] = useState(null);   // { plan, fileName } — the dry run
+    // ── BUILD THE WHOLE ASSEMBLY FROM THE SHEET + THE FOLDER (Stuart 2026-08-18) ─────────────
+    // "why do we need to load the files in the slots? … the details for each slot are in the sheet"
+    //
+    // Because the slot list used to be fixed — ten for a double — while the designer's double is 37
+    // files. The fixed list has no backplate slots for a double at all, so the only way through was
+    // for her to merge many files into few by hand: work she should not be doing, in the place where
+    // a mistake costs an afternoon.
+    //
+    // The sheet names the slot, its file, its category and its position on every row. So it IS the
+    // slot list, and the screen can take the shape of her model instead of the reverse. This reads
+    // the sheet, builds the slots, loads every file into its own, and tags the lot — then stops, so
+    // the merge and the save are the same two buttons as always.
+    const [sheetBuild, setSheetBuild] = useState(null);   // { rows2d, slots, match, fileName, busy, done }
+    const readBuildSheet = async (file) => {
+        if (!file) return;
+        try {
+            const ExcelJS = (await import('exceljs/dist/exceljs.min.js')).default;
+            const wb = new ExcelJS.Workbook();
+            await wb.xlsx.load(await file.arrayBuffer());
+            let rows2d = null;
+            for (const ws of wb.worksheets) {
+                const grid = [];
+                ws.eachRow({ includeEmpty: false }, (row) => {
+                    const vals = [];
+                    row.eachCell({ includeEmpty: true }, (cell, col) => {
+                        const v = cell.value;
+                        vals[col - 1] = (v && typeof v === 'object')
+                            ? (v.text || v.result || v.richText?.map(t => t.text).join('') || '')
+                            : (v ?? '');
+                    });
+                    grid.push(vals);
+                });
+                if (grid.length && grid[0].some(h => String(h || '').trim().toUpperCase().startsWith('NODE'))) { rows2d = grid; break; }
+            }
+            if (!rows2d) { alert('No sheet in that file has a NODE NAME column.'); return; }
+            const { slots: derived, warnings } = slotsFromSheet(rows2d);
+            setSheetBuild({ rows2d, slots: derived, match: null, fileName: file.name, warnings, busy: false, done: 0 });
+        } catch (e) { alert('Could not read that file: ' + (e.message || e)); }
+    };
+    const chooseBuildFiles = (fileList) => {
+        if (!sheetBuild) return;
+        const files = [...(fileList || [])].filter(f => /\.(fbx|glb)$/i.test(f.name || ''));
+        setSheetBuild(prev => prev ? { ...prev, match: matchSlotFiles(prev.slots, files) } : prev);
+    };
+    const runSheetBuild = async () => {
+        if (!sheetBuild?.match?.paired.length) return;
+        setSheetBuild(prev => ({ ...prev, busy: true, done: 0 }));
+        // The slot list becomes the sheet's, and the old uploads go with it — mixing a fixed
+        // template's slots with the sheet's would leave orphans nobody can account for.
+        setSlots(sheetBuild.slots.map(s => ({ ...s })));
+        setLayers({});
+        const index = await refreshCodeIndex().catch(() => null);
+        let built = 0, failed = [];
+        for (const { slot, file } of sheetBuild.match.paired) {
+            try {
+                const raw = await file.arrayBuffer();
+                // An .fbx is converted exactly as the one-at-a-time importer converts it, then read
+                // back as a .glb — so a slot built in bulk and a slot built by hand hold the same
+                // thing. NON-INTERACTIVE on purpose: the unit hypothesis is the analyser's own (the
+                // default that dialog offers), every component is kept, and the designer's names are
+                // left alone, because the SHEET is what says which node is which part. There is
+                // nothing here for a person to decide 37 times.
+                let glb = raw;
+                if (/\.fbx$/i.test(file.name)) {
+                    const analysis = await analyzeFusionFbx(raw);
+                    glb = await buildGlbFromAnalysis(
+                        analysis,
+                        analysis.components.map(c => ({ key: c.key, keep: true, finalName: c.cleanName })),
+                        { mode: 'PRODUCTION', unitId: analysis.unitGuess });
+                }
+                const gltf = await new Promise((res, rej) => loaderRef.current.parse(glb, '', res, rej));
+                const scene = gltf.scene;
+                const names = slotChoiceNames(scene);
+                const isEndSlot = normalizeCategory(slot.category) === 'FINIAL';
+                const choices = names.map(nm => {
+                    const m = index ? matchItemByName(nm, index, normalizeCategory(slot.category) || slot.category) : null;
+                    const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', tier: '', alwaysShown: false, note: '', thumb: '' };
+                });
+                const url = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
+                setLayers(prev => ({ ...prev, [slot.id]: { scene, url, fileName: file.name, choices, offset: { x: 0, y: 0, z: 0 } } }));
+                built++;
+            } catch (e) { failed.push(`${file.name}: ${e.message || e}`); }
+            setSheetBuild(prev => prev ? { ...prev, done: built } : prev);
+        }
+        setSheetBuild(prev => prev ? { ...prev, busy: false, built, failed } : prev);
+        addLog(`Built ${built} slot(s) from ${sheetBuild.fileName}${failed.length ? ` — ${failed.length} failed` : ''}. Now Merge & Save, then Assign Items → Tag from sheet.`, failed.length ? 'error' : 'success');
+        failed.forEach(f => addLog(f, 'error'));
+    };
     const readTagSheet = async (file) => {
         if (!file) return;
         try {
@@ -1901,6 +1990,60 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 <button onClick={handleRepairNodeNames} disabled={repairBusy || !repairId} style={{ padding: '11px 22px', background: repairBusy ? 'var(--paper-2)' : 'var(--ink)', color: repairBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: repairBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
                     {repairBusy ? '⚙ Repairing…' : '⚙ Repair Node Names'}
                 </button>
+            </div>
+
+            {/* 📦 BUILD FROM THE SHEET + THE FOLDER. The slot list comes from the designer's file
+                rather than a fixed template, because her double is 37 files and the template holds
+                ten. Merge & Save afterwards is unchanged. */}
+            <div style={{ ...card, borderColor: 'var(--brass)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: '260px' }}>
+                        <span style={{ ...lbl, color: 'var(--brass)' }}>Build from tagging sheet</span>
+                        <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--ink-soft)', display: 'block' }}>
+                            The sheet names every slot, its .fbx, its category and its position — so it builds the slot list, loads each file into its own slot and converts the .fbx the same way the one-at-a-time importer does. Replaces the fixed template: use it when the model has more slots than the template offers. Merge &amp; Save afterwards is unchanged.
+                        </span>
+                    </div>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', cursor: 'pointer', border: '1px solid var(--brass)', padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--brass)', whiteSpace: 'nowrap' }}>
+                        ① Sheet (.xlsx)
+                        <input type="file" accept=".xlsx" style={{ display: 'none' }}
+                            onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; readBuildSheet(f); }} />
+                    </label>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', cursor: sheetBuild ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', padding: '10px 14px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: sheetBuild ? 'var(--ink)' : 'var(--ink-faint)', whiteSpace: 'nowrap' }}>
+                        ② Files (.fbx)
+                        <input type="file" accept=".fbx,.glb" multiple disabled={!sheetBuild} style={{ display: 'none' }}
+                            onChange={e => { chooseBuildFiles(e.target.files); e.target.value = ''; }} />
+                    </label>
+                </div>
+                {sheetBuild && (() => {
+                    const m = sheetBuild.match; const line = { fontFamily: 'var(--mono)', fontSize: '9.5px', lineHeight: 1.7 };
+                    return (
+                        <div style={{ borderTop: '1px solid var(--line)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                            <div style={{ ...line, color: 'var(--ink)' }}>
+                                {sheetBuild.fileName} — <b style={{ color: 'var(--brass)' }}>{sheetBuild.slots.length}</b> slot(s) described
+                                {m && <> · <b style={{ color: m.paired.length ? 'var(--brass)' : '#b00020' }}>{m.paired.length}</b> matched to a file</>}
+                            </div>
+                            {sheetBuild.warnings?.map((w, i) => <div key={i} style={{ ...line, color: '#8a6508' }}>⚠ {w}</div>)}
+                            {m && !!m.missing.length && (
+                                <div style={{ ...line, color: '#b00020' }}>⚠ {m.missing.length} slot(s) name a file you did not choose:
+                                    <span style={{ color: 'var(--ink-soft)' }}> {m.missing.slice(0, 5).map(s => s.file).join(' · ')}{m.missing.length > 5 ? ' …' : ''}</span></div>
+                            )}
+                            {m && !!m.extra.length && (
+                                <div style={{ ...line, color: '#8a6508' }}>⚠ {m.extra.length} chosen file(s) no slot asks for:
+                                    <span style={{ color: 'var(--ink-soft)' }}> {m.extra.slice(0, 5).join(' · ')}{m.extra.length > 5 ? ' …' : ''}</span></div>
+                            )}
+                            {!!sheetBuild.built && <div style={{ ...line, color: '#3a7d44' }}>✓ Built {sheetBuild.built} slot(s). Now Merge &amp; Save, then Assign Items → Tag from sheet.</div>}
+                            <div style={{ display: 'flex', gap: '9px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <button onClick={runSheetBuild} disabled={!m?.paired.length || sheetBuild.busy}
+                                    style={{ padding: '10px 18px', background: (m?.paired.length && !sheetBuild.busy) ? 'var(--ink)' : 'var(--paper-2)', color: (m?.paired.length && !sheetBuild.busy) ? '#fff' : 'var(--ink-faint)', border: 'none', cursor: (m?.paired.length && !sheetBuild.busy) ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                    {sheetBuild.busy ? `⚙ Building ${sheetBuild.done}/${m?.paired.length}…` : `③ Build ${m?.paired.length || 0} slot(s)`}
+                                </button>
+                                <button onClick={() => setSheetBuild(null)} disabled={sheetBuild.busy}
+                                    style={{ padding: '10px 16px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Clear</button>
+                                <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>Replaces the current slot list and clears uploaded files.</span>
+                            </div>
+                        </div>
+                    );
+                })()}
             </div>
 
             {/* Code collision audit — punctuation-only twin codes shadow each other in auto-match. */}
