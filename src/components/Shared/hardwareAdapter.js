@@ -119,6 +119,9 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         always: isRider && !parked,
         // BOM-ONLY: real, picked and billed, but never drawn and never on a customer document.
         hidden,
+        // Tri-state override for the ring rule: tagged true or false wins over what the rod's role
+        // and position imply, so an exception to "what a ring rides on" is a tag, not a release.
+        ...(pin.carriesRings === true || pin.carriesRings === false ? { carriesRings: pin.carriesRings } : {}),
         // The pairing + companion tags, straight through: a collar comes with the finial that
         // requires it; a basic bracket takes no plate; an in-line bracket takes in-line plates.
         isCollar: !!pin.isCollar,

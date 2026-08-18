@@ -9,7 +9,7 @@
 // projection on singles, a 3rd on doubles — which must pass with NO code change.
 
 import {
-    resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor,
+    resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults
 } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
@@ -789,6 +789,58 @@ eq('nonsense is null', measureOf('n/a'), null);
     const m2 = resolve({ choices: broken, answers: { proj: 6 }, modelNodes: ['rod'] });
     const d2 = diagnose(m2);
     ok('a tagged node the model lacks is reported', d2.some(x => x.kind === 'MISSING GEOMETRY'));
+}
+
+// ── WHAT A RING RIDES ON ──────────────────────────────────────────────────────────────────────
+// "when traverse poles are selected skip the ring step, unless it is a double traverse and the
+//  front rod is a fascia, then rings can be selected (see H1-2TRV flow, for this instance)."
+{
+    const ring = C({ id: 'RING', partId: 'RG', role: 'RING', nodes: ['ring'] });
+    // Normalized the way resolve() does it — slots() is given real choices, never raw literals.
+    const ringSlot = (choices, answers, sel) =>
+        slots(applyFitsDefaults(choices.map(normalizeChoice)), answers, sel).find(s => s.kind === 'RING');
+
+    // A solid rod carries rings, as it always has.
+    {
+        const cs = [C({ id: 'R', partId: 'SR', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }), ring];
+        eq('solid rod offers rings', ringSlot(cs, {}, ['R']).options.length, 1);
+    }
+    // A track does not: its carriers do that job, and they are built without being asked.
+    {
+        const cs = [C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', nodes: ['trk'] }), ring];
+        const sl = ringSlot(cs, {}, ['T']);
+        eq('a track offers no rings', sl.options.length, 0);
+        ok('and says why', /carrier/.test(sl.suppressedReason || ''));
+        ok('naming the rod that suppressed it', sl.suppressedBy === 'TR');
+    }
+    // A fascia at the FRONT is the face of a double — rings ride on it. (The H1-2TRV case.)
+    {
+        const cs = [
+            C({ id: 'F', partId: 'FA', role: 'FASCIA', rodKind: 'TRAVERSE', position: 'FRONT', nodes: ['fas'] }),
+            C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', position: 'BACK', nodes: ['trk'] }),
+            ring,
+        ];
+        eq('a front fascia offers rings', ringSlot(cs, {}, ['F']).options.length, 1);
+        eq('the track behind it does not veto them', ringSlot(cs, {}, ['F', 'T']).options.length, 1);
+    }
+    // A fascia with nothing behind it is a cover, not a face.
+    {
+        const cs = [C({ id: 'F', partId: 'FA', role: 'FASCIA', rodKind: 'TRAVERSE', nodes: ['fas'] }), ring];
+        eq('a lone fascia offers no rings', ringSlot(cs, {}, ['F']).options.length, 0);
+        eq('…but does on a DOUBLE order', ringSlot([...cs.map(c => c.id === 'F' ? { ...c, setup: 'DOUBLE' } : c)], { setup: 'DOUBLE' }, ['F']).options.length, 1);
+    }
+    // The tag wins outright, in both directions — an exception is never a code change.
+    {
+        const tagged = [C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', carriesRings: true, nodes: ['trk'] }), ring];
+        eq('carriesRings:true overrides the track rule', ringSlot(tagged, {}, ['T']).options.length, 1);
+        const off = [C({ id: 'R', partId: 'SR', role: 'ROD', rodKind: 'SOLID', carriesRings: false, nodes: ['rod'] }), ring];
+        eq('carriesRings:false overrides the solid rule', ringSlot(off, {}, ['R']).options.length, 0);
+    }
+    // Nothing is decided before a rod is chosen.
+    {
+        const cs = [C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', nodes: ['trk'] }), ring];
+        eq('rings stand until a rod is picked', ringSlot(cs, {}, []).options.length, 1);
+    }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

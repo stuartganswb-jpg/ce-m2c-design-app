@@ -243,6 +243,9 @@ export function normalizeChoice(input = {}) {
         fits: fitsTag.length ? fitsTag : (DEFAULT_FITS[role] || [SOLID, TRAVERSE]),
         fitsExplicit: fitsTag.length > 0,
         setup: U(input.setup),                       // '' = suits every setup
+        // Tri-state, and only carried when actually tagged — undefined means "let the role and the
+        // position decide" (see carriesRings), which is the normal case for every existing pin.
+        ...(input.carriesRings === true || input.carriesRings === false ? { carriesRings: input.carriesRings } : {}),
         drive: U(input.drive),                       // '' = suits every drive (a fascia is a fascia)
         projs: measureList(input.proj),              // [] = suits every projection
         // Blank on mounting hardware = WALL; blank on anything else = not filtered by mount.
@@ -619,6 +622,37 @@ const SLOT_OF_ROLE = (role) => (['FINIAL', 'INSIDE_MOUNT', 'RETURN'].includes(ro
 // nothing extra is needed for it here.
 const BRACKET_REPLACING_ROLES = ['RETURN', 'INSIDE_MOUNT'];
 
+// WHAT A RING RIDES ON (Stuart 2026-08-17) ────────────────────────────────────────────────────
+// "when traverse poles are selected skip the ring step, unless it is a double traverse and the
+//  front rod is a fascia, then rings can be selected (see H1-2TRV flow, for this instance)."
+//
+// Stated as a rule about traverse it needs a rule about doubles too, and then one about the next
+// configuration nobody has built yet. Stated as a fact about the PART it needs neither, because
+// this is not really a rule about traverse at all — it is about whether the order contains a
+// surface a ring can hang on:
+//
+//   • a SOLID ROD is one. Rings have always ridden on it.
+//   • a TRACK is not. What rides in a track is a carrier, which the engine already builds without
+//     asking — offering rings beside carriers offers the same job twice.
+//   • a FASCIA is one WHEN IT IS THE FRONT FACE of a multi-rod order. That is precisely the double
+//     he describes: a decorative face in front, a track working behind it, rings on the face. A
+//     fascia that is the only rod is a cover, with nothing behind it to be the front of.
+//
+// So the answer falls out of the tags the pins already carry — role, position, setup — and a
+// triple, or a fascia-and-solid pairing, or whatever comes next, is answered without another rule.
+// `carriesRings` on the pin overrides it outright in either direction, so a genuine exception is a
+// tag and never a code change.
+export function carriesRings(rod, ctx = {}) {
+    if (!rod) return false;
+    if (rod.carriesRings === true || rod.carriesRings === false) return rod.carriesRings;
+    if (rod.role === 'TRACK') return false;
+    // Front-ness, from whichever tag carries it: the pin's own position, its own setup, or the
+    // order's. A one-value setup axis is IMPLIED rather than asked, so it may never reach ctx —
+    // reading the rod itself means the fact does not depend on whether a question was posed.
+    if (rod.role === 'FASCIA') return rod.position === 'FRONT' || rod.setup === 'DOUBLE' || ctx.setup === 'DOUBLE';
+    return true;   // a solid rod, and anything else that is a rod
+}
+
 export function slots(choices, answers = {}, selectedIds = []) {
     const ctx = contextOf(choices, answers);
     const want = new Set((selectedIds || []).filter(Boolean).map(String));
@@ -668,6 +702,24 @@ export function slots(choices, answers = {}, selectedIds = []) {
                 choice, ok: false, rule: 'pole construction',
                 detail: `${chosenRods[0].name} is a single-piece pole — a return replaces an end SEGMENT, and there is none to replace`,
             }))];
+        });
+    }
+
+    // ── RINGS NEED SOMETHING TO RIDE ON ────────────────────────────────────────────────────
+    // See carriesRings() above. Only judged once a rod is chosen: before that the engine does not
+    // know what it is dressing, and guessing hides a legitimate choice.
+    if (chosenRods.length && !chosenRods.some(r => carriesRings(r, ctx))) {
+        bucket.forEach(slot => {
+            if (slot.kind !== 'RING' || !slot.options.length) return;
+            const by = chosenRods[0];
+            slot.suppressedBy = by.partId || by.name;
+            slot.suppressedReason = by.role === 'TRACK'
+                ? 'a track carries its drapery on carriers, which are built with it — rings would be the same job twice'
+                : 'nothing in this order presents a face a ring can ride on';
+            slot.rejected = [...slot.rejected, ...slot.options.map(choice => ({
+                choice, ok: false, rule: 'nothing to ride on', detail: slot.suppressedReason,
+            }))];
+            slot.options = [];
         });
     }
 
