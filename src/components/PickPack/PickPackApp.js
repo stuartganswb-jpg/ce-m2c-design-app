@@ -915,6 +915,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const bin = putawayBin.trim().toUpperCase();
         if (isStockPutaway) {
             if (!bin) return alert('Scan/enter the put-away bin — stocked goods go straight to the shelf.');
+            // THAT IS THE ITEM LABEL, NOT A BIN (Stuart 2026-08-18). WO-JFP-HTFMRLG-04 was put away
+            // to "HTFMRLG/04" — its own item code — because the packer scanned the item label. The
+            // bin is posted to NetSuite as a binNumber refName, so a bin that does not exist takes
+            // the whole inventory adjustment down with it: the app says PUT AWAY and NetSuite never
+            // receives the pieces. A finish suffix is the tell — no bin here is named "CODE/FIN".
+            const itemCodes = [job.jfpItemCode, job.stockErpId, job.type].map(v => String(v || '').trim().toUpperCase()).filter(Boolean);
+            if (itemCodes.includes(bin) || (bin.includes('/') && !/^[A-Z]{2,}-/.test(bin))) {
+                return alert(`"${bin}" looks like the ITEM code, not a bin.\n\nScan the BIN label (e.g. RTS-CUS, BB 2-2) — the bin is posted to NetSuite, and one that doesn't exist makes the whole inventory adjustment fail, leaving the pieces un-received there while this screen says they were put away.`);
+            }
             const lv = liveBins[String(job.stockErpId || job.type || '').toUpperCase()];
             if (lv && lv.bins.length && !lv.bins.some(x => x.bin === bin) && !window.confirm(`Bin ${bin} isn't where NetSuite holds this item today (${lv.bins.slice(0, 3).map(x => x.bin).join(', ')}).\n\nPut away to ${bin} anyway? (Recorded as the physical location — no NetSuite move.)`)) return;
         }
@@ -3346,6 +3355,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <span style={{ color: theme.inkSoft, marginRight: '6px' }}>{expandedPacked === j.id ? '▾' : '▸'}</span>{packRef(j)}
                                             </span>
                                             <span>{j.customerName || j.clientName || j.customer || ''}</span>
+                                            {/* A put-away paint run was indistinguishable from a stock build once it
+                                                left the queue — the badge only ever rendered on the to-pack list
+                                                (Stuart 2026-08-18). */}
+                                            {isPaintOnlyOrder(j) && <span title={`Paint run — the painted pieces are adjusted into the scanned bin as ${j.jfpItemCode || 'the item'}`} style={{ background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE}{j.jfpItemCode ? ` · ${j.jfpItemCode}` : ''}</span>}
                                             <OrderStatusChips wo={j} showWho={false} />
                                             <span style={{ fontFamily: theme.mono, fontSize: '10px', color: j.nsIfTran ? '#3a7d44' : theme.inkSoft }}>
                                                 {j.nsIfTran ? `IF ${j.nsIfTran}${j.nsFulfillStatus ? ` · ${j.nsFulfillStatus}` : ''}` : (j.nsFulfillQueued ? 'IF queued…' : '')}

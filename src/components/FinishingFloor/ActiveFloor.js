@@ -172,6 +172,24 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // on poleStepIndex (defaults to currentStepIndex on legacy docs). Orders without real poles
   // never see pole cards or pole gates at all.
   const woHasPoles = (wo) => Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0 || wo.type === 'Poles';
+  // A POLE-ONLY ORDER HAS NO SMALL PARTS (Grace 2026-08-18: "with orders that are only Poles, an
+  // option to spray small parts shows up … in this instance there are no small parts and it's only
+  // an order of 20 poles"). The small-parts stream was unconditional, so the floor was offered
+  // Setup/Spray/Bake for a sled that was never going to be loaded — and, worse, the order could
+  // never COMPLETE, because completion waits for a parts stream that has nothing to run.
+  //
+  // Deliberately conservative: it only says "no small parts" when poles are present AND nothing
+  // counts small parts (no S/M/L sled sizes) AND the total is fully accounted for by the poles.
+  // Anything ambiguous keeps both streams, because hiding real work is the worse mistake.
+  const woHasSmallParts = (wo) => {
+      if (!wo || !woHasPoles(wo)) return true;                       // no poles → it is all small parts
+      const sizes = wo.paintSizes || null;
+      if (sizes && Object.values(sizes).some(v => Number(v) > 0)) return true;
+      const poleQty = Number(wo.totalPoles || (wo.poles && wo.poles.qty) || 0);
+      const total = Number(wo.totalParts || 0);
+      if (!poleQty) return true;
+      return total > poleQty;
+  };
   const poleIdxOf = (wo) => (wo.poleStepIndex !== undefined && wo.poleStepIndex !== null) ? wo.poleStepIndex : (wo.currentStepIndex || 0);
   // STREAM RECIPE VARIANTS (Stuart & Grace 2026-08-11): the order says `CP`; the small parts run
   // `CP-S` and the poles run `CP-P` when those recipes exist — Grace's CP case, where poles take
@@ -257,7 +275,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const len = poleRecipeLen(wo);
       if (recipeMissing(wo, len)) return;
       const next = poleIdxOf(wo) + 1;
-      const partsFinished = (wo.currentStepIndex || 0) >= recipeLen(wo);
+      // A pole-only order has no parts stream to wait on — without this the order could never
+      // complete, because completion required a stream with nothing in it (Grace 2026-08-18).
+      const partsFinished = !woHasSmallParts(wo) || (wo.currentStepIndex || 0) >= recipeLen(wo);
       const updates = {
           poleStepIndex: next,
           lastPoleCoatTime: Date.now(),
@@ -272,7 +292,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const len = poleRecipeLen(wo);
       if (recipeMissing(wo, len)) return;
       const next = poleIdxOf(wo) + 1;
-      const partsFinished = (wo.currentStepIndex || 0) >= recipeLen(wo);
+      // A pole-only order has no parts stream to wait on — without this the order could never
+      // complete, because completion required a stream with nothing in it (Grace 2026-08-18).
+      const partsFinished = !woHasSmallParts(wo) || (wo.currentStepIndex || 0) >= recipeLen(wo);
       if (next >= len && partsFinished && setQcModal) {
           setQcModal({ id: wo.id, parts: wo.totalParts || 0, taskType: null, onPassed: () => finalizePoleAdvance(wo) });
           return;
@@ -565,6 +587,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   };
   // The single next action for the PARTS stream on the current coat.
   const nextPartsAction = (wo) => {
+      if (!woHasSmallParts(wo)) return null;   // pole-only: there is no sled to set up (Grace)
       const r = partsRecipeOf(wo);
       const len = (r && r.steps && r.steps.length) || 0;
       const idx = wo.currentStepIndex || 0;
@@ -660,15 +683,15 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       const pushT = (wo, key, label) => { if (wo && wo.tasks && wo.tasks[key]) out.push({ wo, key, label }); };
       if (st === 'RED' || st === 'BLUE') {
           const wo = st === 'RED' ? redWO : blueWO;
-          pushT(wo, 'spinSetup', 'Sled Setup'); pushT(wo, 'spinSpray', 'Spray Coat'); pushT(wo, 'spinBake', 'Bake (oven)');
+          if (woHasSmallParts(wo)) { pushT(wo, 'spinSetup', 'Sled Setup'); pushT(wo, 'spinSpray', 'Spray Coat'); pushT(wo, 'spinBake', 'Bake (oven)'); }
       } else if (st === 'OVEN') {
-          activeWOs.forEach(wo => { pushT(wo, 'spinBake', 'Sled Bake'); if (woHasPoles(wo)) pushT(wo, 'poleBake', 'Pole Bake'); });
+          activeWOs.forEach(wo => { if (woHasSmallParts(wo)) pushT(wo, 'spinBake', 'Sled Bake'); if (woHasPoles(wo)) pushT(wo, 'poleBake', 'Pole Bake'); });
       } else if (st === 'POLES') {
           activeWOs.filter(woHasPoles).forEach(wo => { pushT(wo, 'poleSpray', 'Pole Spray'); pushT(wo, 'poleBake', 'Pole Bake'); });
       } else if (st === 'HAND') {
           // Both streams hand-finish. Poles were absent entirely, so an order hand-finishing its
           // poles showed nothing at the hand station (Grace 2026-08-11).
-          activeWOs.forEach(wo => { pushT(wo, 'hand', 'Hand Finish'); if (woHasPoles(wo)) pushT(wo, 'poleHand', 'Pole Hand Finish'); });
+          activeWOs.forEach(wo => { if (woHasSmallParts(wo)) pushT(wo, 'hand', 'Hand Finish'); if (woHasPoles(wo)) pushT(wo, 'poleHand', 'Pole Hand Finish'); });
       }
       return out;
   };
@@ -838,6 +861,7 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '14px' }}>
                             {step ? `COAT ${idx + 1} OF ${len} — ${step.color} (${step.app})` : `PARTS DONE (${len}/${len})`}{manualWo.customerName ? ` · ${manualWo.customerName}` : ''}
                         </div>
+                        {woHasSmallParts(manualWo) && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '10px' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>Small parts</span>
                             {/* Every step of this coat, each with its own PIN'd Start / Stop — no
@@ -852,6 +876,14 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                                     : <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>finish the steps to advance the coat</span>}
                             </span>
                         </div>
+                        )}
+                        {/* Say it out loud rather than just omitting the row — an operator who
+                            expected small parts should see WHY there are none (Grace 2026-08-18). */}
+                        {!woHasSmallParts(manualWo) && (
+                            <div style={{ padding: '10px 14px', marginBottom: '10px', background: 'var(--paper)', border: '1px dashed var(--line)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>
+                                Poles only — no small parts on this order
+                            </div>
+                        )}
                         {woHasPoles(manualWo) && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '12px 14px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink)', width: '92px' }}>Poles</span>
