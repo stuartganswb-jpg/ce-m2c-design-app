@@ -737,9 +737,16 @@ export function slots(choices, answers = {}, selectedIds = []) {
     const replaced = new Set(choices
         .filter(c => want.has(c.id) && BRACKET_REPLACING_ROLES.includes(c.role) && c.position)
         .map(c => c.position));
-    // The tiers this assembly actually has. Empty on every single — which is every collection
-    // today — so nothing about a single-rod order changes.
-    const allTiers = [...new Set(choices.map(c => c.tier).filter(Boolean))]
+    // The tiers this order ACTUALLY HAS — read from the rods that are admissible right now, not
+    // from every rod the assembly contains. ⚠ A COMBINED FAMILY HOLDS BOTH (Stuart 2026-08-18,
+    // reviewing the H1-138 double sheet): the back rod pins live in the same assembly as the
+    // singles and are held off a single order by `setup: double`. Reading tiers from all choices
+    // would still open a BACK slot on every single order, and an untagged finial — which serves
+    // whichever rod is asking — would fill it. The operator would be asked to dress a rod that is
+    // not on the order.
+    const allTiers = [...new Set(choices
+        .filter(c => ROD_ROLES.includes(c.role) && c.tier && admits(c, ctx).ok)
+        .map(c => c.tier))]
         .sort((a, b) => TIER_POSITIONS.indexOf(a) - TIER_POSITIONS.indexOf(b));
     // THE DEPTH AT EACH ROD, from the bracket that was actually chosen. Before a bracket is
     // picked this is empty and nothing is filtered by projection — the same restraint the return

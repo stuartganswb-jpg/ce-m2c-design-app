@@ -993,5 +993,29 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('the front left piece still stands', withRet.has('front-left'));
 }
 
+// ── A COMBINED FAMILY: the double's pins live beside the singles' ───────────────────────────
+// The back rod is held off a single order by `setup: double`. No back rod means no back rod's
+// questions — an untagged finial must not open a "Back Left End Treatment" step on a single.
+{
+    const cs = [
+        C({ id: 'RF', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['fr'] }),
+        C({ id: 'RB', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', setup: 'DOUBLE', nodes: ['br'] }),
+        C({ id: 'FIN', partId: 'KF', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] }),
+        C({ id: 'BKS', partId: 'BS', role: 'BRACKET', setup: 'SINGLE', proj: '4-5/8', position: 'CENTER', nodes: ['bks'] }),
+        C({ id: 'BKD', partId: 'BD', role: 'BRACKET', setup: 'DOUBLE', proj: 'FRONT:6.5, BACK:3.25', position: 'CENTER', nodes: ['bkd'] }),
+    ];
+    const N = applyFitsDefaults(cs.map(normalizeChoice));
+    const kinds = (answers) => slots(N, answers, []).filter(s => s.options.length || s.suppressedBy);
+
+    const single = kinds({ setup: 'SINGLE' });
+    ok('a single order has no back rod step', !single.some(s => s.kind === 'ROD' && s.tier === 'BACK'));
+    ok('…and no back end step', !single.some(s => s.kind === 'END' && s.tier === 'BACK'));
+    ok('…but still dresses its own ends', single.some(s => s.kind === 'END' && s.options.length));
+
+    const dbl = kinds({ setup: 'DOUBLE' });
+    ok('a double order has both rod steps', dbl.filter(s => s.kind === 'ROD').length === 2);
+    ok('…and an end step per rod', dbl.filter(s => s.kind === 'END' && s.position === 'LEFT').length === 2);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
