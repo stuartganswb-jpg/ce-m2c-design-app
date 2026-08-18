@@ -182,6 +182,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [assignId, setAssignId] = useState('');       // assembly whose choices we're assigning item #s to
     const [assignData, setAssignData] = useState(null); // { asmId, asmName, rows:[{clusterId,clusterName,category,position,found,choices:[{nodeName,label,itemNo,thumb}]}] }
     const [assignBusy, setAssignBusy] = useState(false);
+    const [assignFilter, setAssignFilter] = useState('');   // draw the rows being worked on, not all 700
     const [codeOptions, setCodeOptions] = useState([]);
     const [pickQuery, setPickQuery] = useState('');   // what is being typed RIGHT NOW, for the suggestion list // alphabetical Master-Library codes for the item # picker
     const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
@@ -2443,6 +2444,21 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 )}
                 {assignData && (
                     <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '10px', maxHeight: '46vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', paddingBottom: '4px' }}>
+                            <input value={assignFilter} onChange={e => setAssignFilter(e.target.value)}
+                                placeholder="Show only… slot name, item # or node"
+                                title="Filters what is DRAWN, nothing else. With 96 clusters on screen every edit redraws ten thousand controls to change one — narrow it and the page is quick again. Edits you have already made are kept."
+                                style={{ ...inp, flex: 1, minWidth: '260px', padding: '7px 10px', fontSize: '0.85rem' }} />
+                            {!!assignFilter && (
+                                <button onClick={() => setAssignFilter('')}
+                                    style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', border: '1px solid var(--line)', background: '#fff', padding: '7px 11px', cursor: 'pointer', color: 'var(--ink-soft)' }}>
+                                    show all {assignData.rows.length}
+                                </button>
+                            )}
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>
+                                {assignData.rows.reduce((n, r) => n + (r.choices || []).length, 0)} choice(s) in {assignData.rows.length} section(s)
+                            </span>
+                        </div>
                         {/* 🧭 TROUBLESHOOTING ORDER (Stuart 2026-08-16: "group them all... all poles/rods
                             come first, then all finials left, all finials right, all brackets left, all
                             backplates left, all brackets center, all backplates center"). Display-only —
@@ -2451,7 +2467,22 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             new wood-rod slot "disappeared": its nodes weren't found in the current .glb
                             — usually a name collision with an older copy of the same item — so it loaded
                             with 0 choices and the old filter dropped it from the list entirely). */}
-                        {[...assignData.rows].sort((a, b) => {
+                        {/* ⚠ RENDER WHAT IS BEING WORKED ON, NOT THE WHOLE ASSEMBLY. Ninety-six
+                            clusters and ~700 choices is roughly ten thousand form controls, and every
+                            edit re-renders all of them to change one. Filtering is not a convenience
+                            here, it is what makes the page usable: type a slot name, an item # or a
+                            node and work on the twenty rows that matter. It filters the DISPLAY only
+                            — every edit already made is still in hand and still saves. */}
+                        {[...assignData.rows].filter(r => {
+                            const q = String(assignFilter || '').trim().toUpperCase();
+                            if (!q) return true;
+                            if (String(r.clusterName || '').toUpperCase().includes(q)) return true;
+                            if (String(r.category || '').toUpperCase().includes(q)) return true;
+                            return (r.choices || []).some(c =>
+                                String(c.itemNo || '').toUpperCase().includes(q) ||
+                                String(c.label || '').toUpperCase().includes(q) ||
+                                String(c.nodeName || '').toUpperCase().includes(q));
+                        }).sort((a, b) => {
                             const rank = (r) => {
                                 const cat = normalizeCategory(r.category);
                                 const posRank = { LEFT: 0, CENTER: 1, RIGHT: 2 }[String(r.position || '').toUpperCase()] ?? 3;
@@ -2744,6 +2775,16 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 without having to scroll over to see those hidden by assembly visual") — when the
                 window can't fit slot rows AND the 3D visual side by side, the visual WRAPS BELOW
                 instead of sitting on top of the checkboxes. Wide screens look exactly as before. */}
+            {/* ⚠ THE PREVIEW IS A RENDER LOOP, NOT A PICTURE (Stuart 2026-08-18: "would it help
+                that when we use this section you hide the others such as 3 Slots and the live
+                preview (does not render on this step any way)"). He is right on both counts, and
+                the second is the expensive one: that canvas keeps drawing every frame even with
+                nothing in it, on the same thread as the several thousand form controls the assign
+                list puts on screen. Editing tags while it spins is editing against a machine that
+                is already busy. While an assembly is loaded for assignment, both step aside —
+                nothing is unmounted that holds work, because the slot list and the preview only
+                ever describe files waiting to be merged, and Load Choices does not use either. */}
+            {!assignData && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '18px', alignItems: 'flex-start' }}>
                 {/* LEFT: slot uploader */}
                 <div style={{ ...card, flex: '1.15 1 680px', minWidth: 0, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '78vh', overflowY: 'auto' }}>
@@ -2941,6 +2982,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     )}
                 </div>
             </div>
+            )}
 
             {/* Searchable item-# picker source, shared by the uploader AND the assign tool: type in
                 any item field to filter this alphabetical Master-Library list (native datalist). */}
