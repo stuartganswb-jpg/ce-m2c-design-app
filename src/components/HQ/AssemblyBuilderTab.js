@@ -113,15 +113,28 @@ const makeLoader = () => {
 // 1 root, 25 plates inside) — which used to surface as a single unusable "choice". AUTO-UNWRAP:
 // while there's exactly one named container holding 2+ named children, descend into it. Deeper
 // mixed nesting is handled per-row with the ⤢ split button.
+// A WRAPPER IS NOT A CHOICE (Stuart 2026-08-18: "there are a lot of items listed as FUSIONIMPORT,
+// that when i hit split it immediately sees it and names it correctly"). Exporters wrap everything
+// in a container — GLTFExporter calls it "Scene", three's own loader adds "AuxScene", and our .fbx
+// converter names its group "FusionImport". The unwrap below only descended when the wrapper held
+// TWO OR MORE children, so a slot holding ONE part reported the WRAPPER's name: the part lost its
+// name, its item # could not auto-match, and it took a manual Split to recover a name the file had
+// all along. Every single-part slot in the double landed this way.
+//
+// So a name that is only ever a container is never a choice. Descend past it whatever it holds.
+const WRAPPER_NAME = /^(fusionimport|scene\d*|rootnode|auxscene|object_?\d*|group_?\d*|node_?\d*|untitled|root)$/i;
 const slotChoiceNames = (scene) => {
     let level = (scene.children || []).filter(c => c.name);
     let guard = 0;
-    while (level.length === 1 && guard++ < 4) {
+    while (level.length === 1 && guard++ < 6) {
         const kids = (level[0].children || []).filter(c => c.name);
-        if (kids.length >= 2) level = kids; else break;
+        if (!kids.length) break;
+        // ≥2 children means the wrapper was grouping choices; a GENERIC name means it is a wrapper
+        // whatever it holds.
+        if (kids.length >= 2 || WRAPPER_NAME.test(level[0].name)) level = kids; else break;
     }
-    let out = level.map(c => c.name);
-    if (!out.length) scene.traverse(o => { if (o.isMesh && o.name) out.push(o.name); });
+    let out = level.map(c => c.name).filter(n => !WRAPPER_NAME.test(n));
+    if (!out.length) scene.traverse(o => { if (o.isMesh && o.name && !WRAPPER_NAME.test(o.name)) out.push(o.name); });
     return [...new Set(out)];
 };
 const allNodeNames = (obj) => { const n = []; obj.traverse(o => { if (o.name) n.push(o.name); }); return [...new Set(n)]; };
@@ -1304,6 +1317,34 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 };
             });
             assignSceneRef.current = scene;
+            // ── A WRAPPER THAT WAS ALREADY SAVED AS A CHOICE (Stuart 2026-08-18) ─────────────
+            // The reader no longer mistakes a container for a part, but an assembly BUILT before
+            // that fix has pins pointing at "…__0_FusionImport". Splitting each one by hand is 37
+            // clicks and the file has known the real names all along, so do it on load: any choice
+            // whose name is only ever a container, and which has named children in the model, is
+            // replaced by those children. Anything else is untouched, and a wrapper with nothing
+            // named inside stays exactly as it is rather than vanishing.
+            const idx0 = codeIndexRef.current?.brand === activeBrand ? codeIndexRef.current.index : null;
+            let unwrapped = 0;
+            rows.forEach(r => {
+                r.choices = r.choices.flatMap(c => {
+                    const tail = String(c.nodeName || '').replace(/^.*__\d+_/, '');
+                    if (!WRAPPER_NAME.test(tail)) return [c];
+                    const node = scene.getObjectByName(c.nodeName);
+                    const kids = node ? (node.children || []).map(k => k.name).filter(Boolean) : [];
+                    if (!kids.length) return [c];
+                    unwrapped++;
+                    return kids.map(nm => {
+                        const label = choiceLabel(nm);
+                        const m = idx0 ? matchItemByName(label, idx0, normalizeCategory(r.category) || r.category) : null;
+                        const et = normalizeCategory(r.category) === 'FINIAL' ? (suggestTagsFromName(label).endTreatment || 'FINIAL') : '';
+                        // The wrapper's own tags carry down — it stood in for these parts, so
+                        // whatever was true of it is true of them until someone says otherwise.
+                        return { ...c, nodeName: nm, label, itemNo: m ? m.code : (c.itemNo || ''), endTreatment: et, thumb: '' };
+                    });
+                });
+            });
+            if (unwrapped) addLog(`Opened ${unwrapped} container node(s) that had been saved as a single choice — their real part names were in the file all along. Check the item #s, then save.`, 'success');
             // Identity line for the fork check (Brimar 2026-08-10): WHICH doc + WHICH .glb this
             // pass is editing — compared against CPQ's strip, a mismatch = the flow links another
             // record entirely, and no amount of Load Choices here can affect what CPQ renders.
