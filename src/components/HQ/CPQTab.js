@@ -4495,6 +4495,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   customer={liveCustomers.find(c => c.id === (jobData.customerId || activeFlow?.customerId)) || null}
                                   priceLevel={priceLevel}
                                   outsourceCodes={outsourceFinishes}
+                                  flow={activeFlow}
+                                  /* The engine's finished configuration lands in the SAME cart the
+                                     old one fills, in the same shape — so checkout, the floors, RTG
+                                     and the ERP push are untouched by which engine built it. */
+                                  onAdd={(item) => setCart(prev => [...prev, item])}
                                   spanMap={spanMap}
                                   spanCaps={spanCaps}
                                   /* ADD-BY-HAND ITEMS for this flow (splices, extra rings …), set

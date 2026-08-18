@@ -7,6 +7,8 @@ import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor }
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort } from './priceLevels';
+import { handoffItem, customerLines } from './hardwareHandoff';
+import { finishLabelOf } from './finishLabel';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 
@@ -98,7 +100,7 @@ class EngineBoundary extends React.Component {
 function HardwareConfiguratorInner({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
+    outsourceCodes = [], onAdd = null, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -243,7 +245,16 @@ function HardwareConfiguratorInner({
     const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
-    const priceWarnings = useMemo(() => pricingWarnings(priced), [priced]);
+    // The finishes this configuration actually wears — the configuration's own, plus any per-part
+    // exception. RTG reads the label off this, so it must be what is on the parts, not what is
+    // selected in the panel.
+    const chosenFinishObjects = useMemo(() => {
+        const codes = new Set([globalFinish, ...Object.values(partFinish)].filter(Boolean).map(c => String(c).toUpperCase()));
+        return [...codes].map(c => finishByCode.get(c)).filter(Boolean);
+    }, [globalFinish, partFinish, finishByCode]);
+    // A hidden part with no price is still a real problem — it just is not the operator's, so it
+    // is reported quietly rather than in red on a quote they cannot act on.
+    const priceWarnings = useMemo(() => pricingWarnings({ lines: priced.lines.filter(l => !l.hidden) }), [priced]);
     // Added by hand — priced by the SAME chain as everything else (override → price level → client
     // row → base). A splice a customer negotiated is still that customer's price; nothing about it
     // being typed in rather than resolved changes what they pay for it.
@@ -369,9 +380,21 @@ function HardwareConfiguratorInner({
     const [saved, setSaved] = useState([]);
     const addConfiguration = () => {
         if (!priced.lines.length) return;
-        setSaved(s => [...s, { memo: configMemo || `Configuration ${s.length + 1}`, total: grandTotal, lines: priced.lines.length }]);
+        // THE HANDOFF IS BUILT HERE, in the shape CPQ has always written — so the shop floor, the
+        // finishing floor, RTG, the ERP push and the CRM documents all keep working without
+        // knowing which engine produced the order. onAdd is what puts it in the cart; without one
+        // the strip still works, so the configurator is usable before the cart is wired.
+        const item = handoffItem(resolved, {
+            ...priceCtx, assembly, flow, findPart, qty: 1,
+            sidemark: configMemo, memo: configMemo,
+            finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
+            priceLevel: effectiveLevel, lengthInches, lengthFeet,
+            extras, stepNotes, answers, picks: livePicks, partFinish,
+        });
+        if (typeof onAdd === 'function') onAdd(item);
+        setSaved(s => [...s, { memo: configMemo || `Configuration ${s.length + 1}`, total: grandTotal, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
-        setStepNotes({}); setExtras([]); setStepIx(0);
+        setStepNotes({}); setExtras([]); setPartFinish({}); setStepIx(0);
     };
 
     const railCell = (st, i) => {
@@ -755,7 +778,9 @@ function HardwareConfiguratorInner({
                                 {!priced.lines.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Nothing chosen yet.</span>}
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', fontVariantNumeric: 'tabular-nums' }}>
                                     <tbody>
-                                        {[...priced.lines, ...extraLines].map((l, i) => (
+                                        {/* Hidden parts are BILLED but not SHOWN: they are in the
+                                            total and on the shop's BOM, off the customer's quote. */}
+                                        {[...priced.lines.filter(l => !l.hidden), ...extraLines].map((l, i) => (
                                             <tr key={i} title={`${l.source || 'added by hand'}${l.detail ? ` — ${l.detail}` : ''}`}>
                                                 <td style={{ padding: '3px 0', color: 'var(--ink)' }}>
                                                     {/* Our id, their alias beside it, our description under. */}

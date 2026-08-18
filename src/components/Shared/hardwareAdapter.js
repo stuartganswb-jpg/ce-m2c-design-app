@@ -117,6 +117,8 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         mount: U(pin.mountType) || normalizeLocation(cluster?.location) || '',
         position: normalizePosition(cluster?.position) || U(cluster?.position) || '',
         always: isRider && !parked,
+        // BOM-ONLY: real, picked and billed, but never drawn and never on a customer document.
+        hidden,
         // The pairing + companion tags, straight through: a collar comes with the finial that
         // requires it; a basic bracket takes no plate; an in-line bracket takes in-line plates.
         isCollar: !!pin.isCollar,
@@ -159,7 +161,13 @@ export function choicesFromAssembly(assembly, pins = [], opts = {}) {
             const c = choiceFromPin(p, cluster, opts);
             if (!c) return null;
             // A hidden CLUSTER is BOM-only for its whole contents — same semantics as a hidden pin.
-            if (cluster?.hidden) return { ...c, nodes: [], always: !!c.partId };
+            // HIDDEN = BUILT, BILLED, NEVER SHOWN TO THE CUSTOMER (Stuart 2026-08-17: "the hidden,
+            // if they are actually hidden items, can be hidden from these pages as well, only
+            // included in the shop floor bom"). A standoff or an internal sleeve is real — the shop
+            // picks it and it must ride the work order — but it has no geometry the customer sees
+            // and no place on a quote. The flag rides the choice so every consumer can decide for
+            // itself: the pricing panel and the rail drop it, the BOM keeps it.
+            if (cluster?.hidden) return { ...c, nodes: [], always: !!c.partId, hidden: true };
             return c;
         })
         .filter(Boolean)

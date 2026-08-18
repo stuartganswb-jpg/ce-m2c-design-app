@@ -798,7 +798,10 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
         ...norm.filter(c => selectedIds.includes(c.id)),
         ...riders,
         ...companions,          // the collar bills with its finial
-    ].map(c => ({ partId: c.partId, name: c.name, qty: c.qty, price: c.price, raw: c.raw }));
+    ].map(c => ({ partId: c.partId, name: c.name, qty: c.qty, price: c.price, raw: c.raw,
+        // BOM-only parts stay IN the bill of materials — the shop picks them — but every
+        // customer-facing surface filters on this. One list, two audiences.
+        hidden: !!c.hidden, role: c.role, position: c.position }));
     return {
         choices: norm,
         axes,          // the questions, with their discovered values

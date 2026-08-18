@@ -127,6 +127,9 @@ export function priceConfiguration(model, ctx = {}) {
             total: p.price * qty,
             source: p.source,
             detail: p.detail,
+            hidden: !!entry.hidden,   // built and billed, never shown on a customer document
+            role: entry.role || '',
+            position: entry.position || '',
         };
     });
     return { lines, total: lines.reduce((s, l) => s + l.total, 0) };
