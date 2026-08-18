@@ -4,6 +4,7 @@ import { Sheet2DOverlay, MaterialRail } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
 import { choicesFromAssembly, modelNodesOf } from '../Shared/hardwareAdapter';
 import HardwareConfigurator from '../Shared/HardwareConfigurator';
+import { finishVariantOf as sharedFinishVariantOf } from '../Shared/finishVariant';
 import { resolve as resolveHardware, diagnose as diagnoseHardware } from '../Shared/hardwareModel';
 import { normalizeLocation } from '../Shared/assemblyTags';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
@@ -1842,19 +1843,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       allParts.forEach(p => { [p.legacyErpId, p.itemId].forEach(c => { const k = String(c || '').trim().toUpperCase(); if (k && k !== 'PENDING' && !byCode.has(k)) byCode.set(k, p); }); });
       // UPPERCASE code → base doc, for fabricutPriceOf's variant-inherits-base-tiers fallback.
       const fabFindByCode = (c) => byCode.get(String(c || '').trim().toUpperCase()) || null;
-      const finishVariantOf = (basePart, finishCode) => {
-          if (!basePart || !finishCode) return basePart;
-          const baseCode = String((basePart.legacyErpId && basePart.legacyErpId !== 'PENDING' ? basePart.legacyErpId : basePart.itemId) || '').trim().toUpperCase();
-          if (!baseCode || baseCode.includes('/')) return basePart; // already a finished variant
-          const fc = String(finishCode).trim().toUpperCase();
-          const cands = [`${baseCode}/${fc}`];
-          if (/^P\d/.test(fc)) cands.push(`${baseCode}/P`);
-          // Generic plated doc: fee items carry ONE /EP record (painted $X vs plated $Y) instead
-          // of six /EP1..6 — the exact stocked /EPn still wins for real parts when it exists.
-          if (/^EP\d/.test(fc)) cands.push(`${baseCode}/EP`);
-          for (const cand of cands) { const hit = byCode.get(cand); if (hit) return hit; }
-          return basePart;
-      };
+      // Moved to Shared/finishVariant.js so the tag engine reads the SAME rule — a second copy of
+      // an identity rule is how pricing drifts, and pricing drift ships on an invoice.
+      const finishVariantOf = (basePart, finishCode) => sharedFinishVariantOf(basePart, finishCode, fabFindByCode);
       const finishObjForStep = (stepId) => {
           const fid = dynamicConfigParams[`${stepId}__finish`];
           if (!fid) return null;
@@ -4504,9 +4495,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   customer={liveCustomers.find(c => c.id === (jobData.customerId || activeFlow?.customerId)) || null}
                                   priceLevel={priceLevel}
                                   outsourceCodes={outsourceFinishes}
-                                  /* PER-FLOW SETTING, edited in tab 11: one finish for the whole
-                                     configuration, or one per part. GLOBAL is the common case. */
-                                  finishMode={activeFlow?.finishMode === 'PER_PART' ? 'PER_PART' : 'GLOBAL'}
                                   spanMap={spanMap}
                                   spanCaps={spanCaps}
                                   /* ADD-BY-HAND ITEMS for this flow (splices, extra rings …), set

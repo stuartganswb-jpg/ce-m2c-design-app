@@ -97,7 +97,7 @@ class EngineBoundary extends React.Component {
 function HardwareConfiguratorInner({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], finishMode = 'GLOBAL', spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
+    outsourceCodes = [], spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -116,7 +116,6 @@ function HardwareConfiguratorInner({
     // 2026-08-17: "once i hit new engine … goes full blank on me". Every hook lives in this block.
     const [stepNotes, setStepNotes] = useState({});   // step key → note, stamped with the step
     const [extras, setExtras] = useState([]);         // [{ code, qty, note }] — added by hand
-    const perPart = finishMode === 'PER_PART';
 
     const choices = useMemo(() => choicesFromAssembly(assembly, pins), [assembly, pins]);
     const modelNodes = useMemo(() => modelNodesOf(assembly), [assembly]);
@@ -160,7 +159,11 @@ function HardwareConfiguratorInner({
         () => [...resolved.choices.filter(c => Object.values(livePicks).includes(c.id)), ...resolved.riders, ...resolved.companions],
         [resolved, livePicks]);
     // What a given part is wearing: its own finish in per-part mode, the configuration's otherwise.
-    const finishFor = useCallback((c) => (perPart ? (partFinish[c.id] || globalFinish) : globalFinish), [perPart, partFinish, globalFinish]);
+    // ONE FINISH, THEN ANY EXCEPTIONS (Stuart 2026-08-17: "select a finish once for the whole
+    // config, select again at any part you would like in another finish"). The override is always
+    // available — it is not a mode to turn on. A part wears its own finish if one was set for it,
+    // and the configuration's otherwise, so the common order is one click and the mixed one is two.
+    const finishFor = useCallback((c) => partFinish[c.id] || globalFinish, [partFinish, globalFinish]);
 
     // NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
     // the collar of a two-part finial takes the finish, the acrylic top never does.
@@ -392,7 +395,7 @@ function HardwareConfiguratorInner({
                 </span>
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' }}>
                     <span style={{ ...mono, fontSize: '9.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)' }}>{ourId(o.partId)}</span>
-                    {line?.sku && <span style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--brass)' }}>{line.sku}</span>}
+                    {(line?.sku || line?.aliasCode) && <span style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--brass)' }}>{line.sku || line.aliasCode}</span>}
                 </span>
                 <span style={{ fontSize: '10.5px', lineHeight: 1.25, color: 'var(--ink-soft)' }}>{desc}</span>
                 {o.noFinish && <span style={{ ...mono, fontSize: '7.5px', color: 'var(--ink-faint)' }}>clear · takes no finish</span>}
@@ -456,7 +459,14 @@ function HardwareConfiguratorInner({
 
     const finishPanel = (
         <div style={{ ...boxStyle, minHeight: '0', position: 'sticky', top: '12px' }}>
-            {boxHead('Finish', perPart ? 'Per part' : 'Whole configuration')}
+            {boxHead('Finish', Object.keys(partFinish).length ? `${Object.keys(partFinish).length} exception(s)` : 'Whole configuration')}
+            {/* Said once, where the decision is made — the two-click rule is not obvious from a
+                grid of swatches, and an operator who does not know it quotes the whole rod in one
+                finish when the customer asked for brass rings on a black pole. */}
+            <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--line)', background: 'var(--paper)', fontSize: '11px', lineHeight: 1.45, color: 'var(--ink-soft)' }}>
+                Select a finish once for the whole configuration. Select again at any part you would
+                like in another finish.
+            </div>
             <div style={{ padding: '12px 13px', display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto', maxHeight: 'calc(100vh - 160px)' }}>
                 {!finishGroups.length && <span style={{ ...mono, fontSize: '9px', color: 'var(--ink-faint)' }}>Choose a part to see its finishes.</span>}
                 {finishGroups.map(([mat, g]) => (
@@ -472,12 +482,16 @@ function HardwareConfiguratorInner({
                         </div>)}
                     </div>
                 ))}
-                {perPart && step?.kind === 'SLOT' && livePicks[step.slot?.key] && (() => {
+                {step?.kind === 'SLOT' && livePicks[step.slot?.key] && (() => {
                     const o = step.slot.options.find(x => x.id === livePicks[step.slot.key]);
                     if (!o || o.noFinish) return null;
                     return (
                         <div style={{ borderTop: '1px solid var(--line)', paddingTop: '9px' }}>
-                            <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Just this part · {ourId(o.partId)}</span>
+                            <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)', display: 'flex', alignItems: 'baseline', gap: '7px' }}>
+                                Just this part · {ourId(o.partId)}
+                                {partFinish[o.id] && <button onClick={() => setPartFinish(pf => { const n = { ...pf }; delete n[o.id]; return n; })}
+                                    style={{ ...mono, fontSize: '7.5px', border: '1px solid var(--line)', background: '#fff', padding: '2px 5px', cursor: 'pointer', color: 'var(--ink-soft)' }}>back to config finish</button>}
+                            </span>
                             {swatchRow(finishesFor(o, finishes), partFinish[o.id] || globalFinish, (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
                         </div>
                     );
@@ -721,8 +735,11 @@ function HardwareConfiguratorInner({
                                                 <td style={{ padding: '3px 0', color: 'var(--ink)' }}>
                                                     {/* Our id, their alias beside it, our description under. */}
                                                     <span style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' }}>
-                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px' }}>{ourId(l.partId)}</span>
-                                                        {l.sku && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{l.sku}</span>}
+                                                        {/* The BILLED sku — H1-138KF/P, not the mill base — and their number
+                                                            for it, from whichever box carries one: the negotiated 4.6 row's
+                                                            clientSku first, else the item's resolved pattern #. */}
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px' }}>{l.billedId || ourId(l.partId)}</span>
+                                                        {(l.sku || l.aliasCode) && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{l.sku || l.aliasCode}</span>}
                                                         {l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>×{l.qty}</span>}
                                                         {l.extra && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>added</span>}
                                                     </span>

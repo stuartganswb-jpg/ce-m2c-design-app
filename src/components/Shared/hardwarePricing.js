@@ -36,6 +36,7 @@
 
 import { customerKeys, clientPriceFor, findClientPriceRow } from './clientPricing.js';
 import { fabricutPriceOf, fabricutCodeOf } from './priceLevels.js';
+import { finishVariantOf } from './finishVariant.js';
 
 export const PRICE_SOURCES = {
     OVERRIDE: 'authored override',
@@ -58,12 +59,23 @@ const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : nu
  */
 export function priceChoice(choice, part, ctx = {}) {
     const { customerId, customer, priceLevel = 'STANDARD', finishCode, outsourceCodes, findByCode } = ctx;
+    // ── 0 — WHICH RECORD IS THIS, ONCE A FINISH IS CHOSEN ────────────────────────────────────
+    // Before anything is priced, the mill base resolves to the item that is actually sold: the /P
+    // paint rollup, the exact /EPn plating, the generic /EP on a fee. This is identity, not a
+    // pricing rule — but every rule below reads the RESOLVED record, because the mill item
+    // legitimately has no price, no tier and no pattern number, and pricing it was reporting "no
+    // price under any rule" for parts that are priced perfectly well under their real SKU.
+    const sold = finishVariantOf(part, finishCode, findByCode) || part;
+    const billedId = sold ? String(
+        (sold.legacyErpId && sold.legacyErpId !== 'PENDING' ? sold.legacyErpId : sold.itemId) || ''
+    ).trim() : '';
+    part = sold;
     const keys = customerId ? customerKeys(customerId, customer) : null;
     const row = (part && keys) ? findClientPriceRow(part.clientPricing, keys) : null;
     // Their part number, from the same box as their price — shown wherever the line is shown.
     const sku = row?.clientSku ? String(row.clientSku).trim() : '';
     const aliasCode = part ? (fabricutCodeOf(part, findByCode, outsourceCodes) || '') : '';
-    const out = (price, source, detail) => ({ price: price || 0, source, sku, aliasCode, detail: detail || '' });
+    const out = (price, source, detail) => ({ price: price || 0, source, sku, aliasCode, billedId, detail: detail || '' });
 
     // 1 — an authored override on the pin wins outright.
     const override = num(choice?.price);
@@ -109,6 +121,7 @@ export function priceConfiguration(model, ctx = {}) {
             name: entry.name,
             sku: p.sku,
             aliasCode: p.aliasCode,
+            billedId: p.billedId,   // the finished SKU that is actually sold and billed
             qty,
             unit: p.price,
             total: p.price * qty,
