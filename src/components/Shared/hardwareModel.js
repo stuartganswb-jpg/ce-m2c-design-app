@@ -495,6 +495,25 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     if (!skip('tier') && ctx.tier && choice.tier && choice.tier !== ctx.tier) {
         return no('tier', `tagged ${choice.tier}, this is the ${ctx.tier} rod`);
     }
+    // ── CUT FOR A PARTICULAR BRACKET (Stuart 2026-08-18, from the double sheet) ───────────────
+    // The rear rod is not one part used by every double. H1-138R appears THREE times in the
+    // designer's file — once cut for the 6.5"/3.25" bracket, once for the 8.5"/3.25" decorative,
+    // once for the traverse — same item number, different geometry, because the rod sits where the
+    // bracket puts it. Nothing in role, position or tier tells those apart.
+    //
+    // The depth PAIR does, and it is already on the bracket. So a part may carry the same pair to
+    // say "I am the piece cut for that bracket", and it is admitted only when that bracket is the
+    // one chosen. Traverse is separated before this by rod world, so the two families that share
+    // 6.5"/3.25" never collide.
+    if (!skip('proj') && choice.projTiers && ctx.tierProj) {
+        const off = Object.entries(choice.projTiers)
+            .find(([t, v]) => ctx.tierProj[t] !== undefined && !sameMeasure(v, ctx.tierProj[t]));
+        if (off) {
+            const mine = Object.entries(choice.projTiers).map(([t, v]) => `${t.toLowerCase()} ${v}"`).join(' / ');
+            const theirs = Object.entries(ctx.tierProj).map(([t, v]) => `${t.toLowerCase()} ${v}"`).join(' / ');
+            return no('bracket', `cut for ${mine} — this order's bracket is ${theirs}`);
+        }
+    }
     return { ok: true };
 }
 
@@ -787,6 +806,7 @@ export function slots(choices, answers = {}, selectedIds = []) {
             // return that needs 6" is offered on the front rod and refused on the back.
             const v = admits(c, {
                 ...ctx,
+                ...(Object.keys(tierProj).length ? { tierProj } : {}),
                 ...(tier && tierProj[tier] !== undefined ? { proj: tierProj[tier] } : {}),
                 position: pos ? pos : undefined, tier: tier || undefined,
             });
@@ -933,7 +953,9 @@ export function slots(choices, answers = {}, selectedIds = []) {
             : 'an inside mount carries the rod at that end';
         slot.options = [];
     });
-    // …and offered once per PART, however many pieces it is pinned as.
+    // …and offered once per PART, however many pieces it is pinned as — and however many BRACKETS
+    // it is cut for. H1-138R is one rod to the customer; which of its pins is the right geometry is
+    // the bracket's business, settled by the gate above before this ever runs.
     bucket.forEach(slot => {
         if (!ROD_ROLES.includes(slot.all[0]?.role)) return;
         const seen = new Set();
@@ -945,16 +967,20 @@ export function slots(choices, answers = {}, selectedIds = []) {
     });
     const rank = (s) => {
         let k = SLOT_ORDER.indexOf(s.kind === 'END' ? 'FINIAL' : s.kind);
+        if (k < 0) k = 99;                          // a kind nothing knows about sorts last
         // On a tiered assembly the bracket carries each rod's depth, so it must be answered BEFORE
         // the ends that depth gates — otherwise an end is chosen against no constraint and a later
         // bracket silently invalidates it. On a single nothing moves: projection is still its own
         // question, asked first, exactly as it always has been.
+        // …and before the RODS too, once a rear rod can be cut for a particular bracket: the
+        // bracket decides which rod geometry exists, so asking for the rod first asks a question
+        // whose answer set is not yet known.
         if (allTiers.length && (s.kind === 'BRACKET' || s.kind === 'BACKPLATE')) {
-            k = SLOT_ORDER.indexOf('FINIAL') - (s.kind === 'BRACKET' ? 0.6 : 0.5);
+            k = -1 + (s.kind === 'BRACKET' ? 0 : 0.1);
         }
         const t = TIER_POSITIONS.indexOf(s.tier);
         const p = POSITION_ORDER.indexOf(s.position);
-        return (k < 0 ? 99 : k) * 10000 + (t < 0 ? 0 : t) * 100 + (p < 0 ? 99 : p);
+        return k * 10000 + (t < 0 ? 0 : t) * 100 + (p < 0 ? 99 : p);
     };
     return [...bucket.values()].sort((a, b) => rank(a) - rank(b));
 }

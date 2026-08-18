@@ -1017,5 +1017,34 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('…and an end step per rod', dbl.filter(s => s.kind === 'END' && s.position === 'LEFT').length === 2);
 }
 
+// ── THE REAR ROD IS CUT FOR A BRACKET ────────────────────────────────────────────────────────
+// H1-138R appears three times in the designer's file: cut for the 6.5"/3.25" bracket, for the
+// 8.5"/3.25" decorative, and for the traverse. Same item number, different geometry.
+{
+    const cs = [
+        C({ id: 'FRONT', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['front'] }),
+        C({ id: 'BACK-65', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: 'FRONT:6.5, BACK:3.25', nodes: ['back65'] }),
+        C({ id: 'BACK-85', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: 'FRONT:8.5, BACK:3.25', nodes: ['back85'] }),
+        C({ id: 'BD', partId: 'H1-138BD', role: 'BRACKET', position: 'CENTER', proj: 'FRONT:6.5, BACK:3.25', nodes: ['bd'] }),
+        C({ id: 'DD', partId: 'H1-138DD', role: 'BRACKET', position: 'CENTER', proj: 'FRONT:8.5, BACK:3.25', nodes: ['dd'] }),
+    ];
+    const N = applyFitsDefaults(cs.map(normalizeChoice));
+    const backOpts = (sel) => slots(N, {}, sel).find(s => s.kind === 'ROD' && s.tier === 'BACK').options.map(o => o.id);
+
+    // One rod to the customer, however many brackets it is cut for.
+    eq('the rear rod is offered once', backOpts([]).length, 1);
+    eq('the basic bracket resolves it to its own geometry', backOpts(['BD']).join(), 'BACK-65');
+    eq('the decorative bracket resolves it to its own', backOpts(['DD']).join(), 'BACK-85');
+
+    // …and the bracket is asked before the rods whose geometry it decides.
+    const order = slots(N, {}, []).map(s => s.kind);
+    ok('bracket is asked before the rods', order.indexOf('BRACKET') < order.indexOf('ROD'));
+
+    // The rejection says which bracket the part was cut for.
+    const why = slots(N, {}, ['BD']).find(s => s.kind === 'ROD' && s.tier === 'BACK')
+        .rejected.find(r => r.choice.id === 'BACK-85');
+    ok('and the reason names both pairs', /8\.5/.test(why.detail) && /6\.5/.test(why.detail));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
