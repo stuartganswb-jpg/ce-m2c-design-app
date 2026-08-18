@@ -214,7 +214,11 @@ export function slotsFromSheet(rows2d = []) {
     patches.forEach((p, key) => {
         const name = p.__slot || p.__file;
         if (!name) return;
-        const id = slugOf(name);
+        // ⚠ THE FILE IS PART OF A SLOT'S IDENTITY, not just its name. The designer names several
+        // slots "steel rod" — one per .fbx — because the name describes the PART and the file is
+        // what says which piece of it. Keying on the name alone silently merged five slots into one
+        // and would have loaded one file over the top of the last four.
+        const id = slugOf(`${name}__${p.__file || ''}`);
         if (!bySlot.has(id)) bySlot.set(id, { id, label: name, file: p.__file, cats: new Set(), positions: new Set(), mounts: new Set(), nodes: [] });
         const sl = bySlot.get(id);
         sl.nodes.push(key);

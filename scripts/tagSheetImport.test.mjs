@@ -103,5 +103,16 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     eq('files nothing asked for are listed', m.extra, ['stray.fbx']);
 }
 
+// The designer names several slots the same thing — one per file. They are different slots.
+{
+    const H=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','ITEM ID'];
+    const r=(slot,file,node)=>[slot,file,'POLE',node,''];
+    const { slots } = slotsFromSheet([H,
+        r('steel rod','left.fbx','L:1'), r('steel rod','right.fbx','R:1'), r('steel rod','center.fbx','C:1')]);
+    eq('same name, three files, three slots', slots.length, 3);
+    eq('each keeps its own file', slots.map(s=>s.file).sort().join(), 'center.fbx,left.fbx,right.fbx');
+    ok('and their ids differ', new Set(slots.map(s=>s.id)).size === 3);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail?1:0);
