@@ -3888,7 +3888,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
           
-          <div style={{ width: newEngine && isSuperAdmin ? '320px' : '400px', display: 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
+          {/* Stuart 2026-08-17: "remove the left step 1 select flow, that can happen at the top,
+              that whole left side is going to be gone as soon as we delete the old flow, this way
+              the new area Live 3d engine spreads entirely from left to right." */}
+          <div style={{ width: '400px', display: newEngine && isSuperAdmin ? 'none' : 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
               
               {/* QUEUED LINES PANEL */}
               {activeMasterQuoteId && previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).length > 0 && (
@@ -4450,6 +4453,38 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       the left is inert while it is showing. */}
                   {newEngine && isSuperAdmin ? (
                       <div style={{ padding: '16px', background: '#fff', borderTop: '1px solid var(--line)' }}>
+                          {/* The flow lives here now, not in a column of its own — one line above the
+                              rail, so the engine has the full width the render needs. Same handler
+                              as the old picker: groups still ask for a diameter first. */}
+                          {(() => {
+                          // Same grouping the old picker used: flows stamped sizeGroupLabel collapse
+                          // into one entry that asks for the diameter first.
+                          const groups = {};
+                          cpqFlows.forEach(f => { if (f.sizeGroupLabel) (groups[f.sizeGroupLabel] = groups[f.sizeGroupLabel] || []).push(f); });
+                          Object.values(groups).forEach(list => list.sort((a, b) => (a.sizeGroupSort ?? 99) - (b.sizeGroupSort ?? 99)));
+                          const flat = cpqFlows.filter(f => !f.sizeGroupLabel);
+                          const activeGrouped = activeFlow?.sizeGroupLabel;
+                          return (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+                              <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Flow</span>
+                              <select value={activeGrouped ? activeFlowId : (pendingGroup ? `GROUP::${pendingGroup}` : activeFlowId)}
+                                  onChange={(e) => {
+                                      const v = e.target.value;
+                                      if (v.startsWith('GROUP::')) { setPendingGroup(v.slice(7)); launchFlow(''); return; }
+                                      setPendingGroup(''); launchFlow(v);
+                                  }}
+                                  style={{ flex: 1, maxWidth: '460px', padding: '8px 10px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '13px', background: '#fff' }}>
+                                  <option value="">— select a flow —</option>
+                                  {Object.keys(groups).sort().map(g => <option key={`GROUP::${g}`} value={`GROUP::${g}`}>{g} — pick rod diameter…</option>)}
+                                  {activeGrouped && <option value={activeFlowId}>{activeFlow.name}</option>}
+                                  {flat.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                              </select>
+                              {(pendingGroup && groups[pendingGroup] && !activeFlowId) && groups[pendingGroup].map(f => (
+                                  <button key={f.id} onClick={() => launchFlow(f.id)}
+                                      style={{ padding: '7px 11px', border: '1px solid var(--brass)', background: 'transparent', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em' }}>{f.name}</button>
+                              ))}
+                          </div>
+                          ); })()}
                           {activeAssembly ? (
                               /* Mounted for as long as the engine is on, and keyed on the assembly
                                  ID alone. Swapping it for a loading element — or keying it on an

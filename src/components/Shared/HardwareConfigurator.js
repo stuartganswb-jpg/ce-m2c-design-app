@@ -166,18 +166,35 @@ function HardwareConfiguratorInner({
     // the collar of a two-part finial takes the finish, the acrylic top never does.
     const textureOverrides = useMemo(() => {
         const out = {};
-        chosenList.forEach(c => {
-            if (c.noFinish) return;
+        // ⚠ PAINT WHAT RENDERS, NOT WHAT WAS CLICKED (Stuart 2026-08-17: "the right end treatment is
+        // not rendering the finish properly on the rod, only the end treatment is, the left side
+        // works"). A three-piece pole is three PINS but one decision: choosing the rod renders its
+        // left, core and right segments, yet only the pin the customer's answer points AT was in the
+        // chosen list — so the other segments rendered in mill finish beside a brass one. Painting
+        // per-click can only ever be right for parts that are one pin, which the pole is not.
+        //
+        // So the finish walks the VISIBLE set instead, the same set the renderer draws: every node
+        // that renders is painted by the finish of the part that OWNS it, and a segment inherits
+        // from the rod it belongs to — same partId, same decision, same finish, by construction.
+        const chosenIds = new Set(chosenList.map(c => c.id));
+        const byPart = new Map();
+        chosenList.forEach(c => { if (c.partId) byPart.set(String(c.partId).toUpperCase(), c); });
+        (resolved.visible ? [...resolved.visible] : []).forEach(node => {
+            const owner = resolved.ownership?.owner?.get(node);
+            if (!owner) return;
+            // The owner itself if it was chosen; otherwise the chosen part it is a piece of.
+            const c = chosenIds.has(owner.id) ? owner
+                : (owner.partId ? byPart.get(String(owner.partId).toUpperCase()) : null);
+            if (!c || c.noFinish || owner.noFinish) return;
             const f = finishByCode.get(String(finishFor(c)).toUpperCase());
             // The material gate, applied at the last moment: a global pick of a wood stain simply
             // does not land on the steel brackets, and nothing lands on the acrylic.
             if (!f || !finishesFor(c, [f]).length) return;
             const url = f.textureUrl || f.finalImageUrl;
-            if (!url) return;
-            c.nodes.forEach(n => { out[String(n).toLowerCase()] = url; });
+            if (url) out[String(node).toLowerCase()] = url;
         });
         return out;
-    }, [chosenList, finishByCode, finishFor]);
+    }, [resolved, chosenList, finishByCode, finishFor]);
 
     // ── PRICE ─────────────────────────────────────────────────────────────────────────────────
     const partIndex = useMemo(() => {
@@ -189,6 +206,17 @@ function HardwareConfiguratorInner({
         return m;
     }, [parts]);
     const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
+    // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
+    // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
+    // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
+    // the pin's id is resolved to the library item and OUR number read off it — never printed raw.
+    // 'PENDING' is the placeholder on an item that has not been numbered yet, so it never prints.
+    const ourId = useCallback((id) => {
+        const pt = findPart(id);
+        const legacy = String(pt?.legacyErpId || '').trim();
+        if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
+        return String(pt?.itemId || id || '').trim();
+    }, [findPart]);
     const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel, outsourceCodes,
         finishCode: globalFinish, findPart, findByCode: findPart,
@@ -306,8 +334,8 @@ function HardwareConfiguratorInner({
         if (st.kind === 'LENGTH') return lengthFeet ? `${lengthFeet} ft` : '';
         if (st.slot.suppressedBy) return 'not asked';
         const pick = st.slot.options.find(o => o.id === livePicks[st.slot.key]);
-        return pick ? (pick.partId || pick.name) : '';
-    }, [answers, livePicks, lengthFeet]);
+        return pick ? (ourId(pick.partId) || pick.name) : '';   // our number on the rail too
+    }, [answers, livePicks, lengthFeet, ourId]);
 
     // ── SEVERAL CONFIGURATIONS, ONE QUOTE ────────────────────────────────────────────────────
     // A room is a configuration; a job is several. Each is finished, memo'd and added, and the
@@ -363,7 +391,7 @@ function HardwareConfiguratorInner({
                         : <span style={{ ...mono, fontSize: '7px', color: 'var(--ink-faint)' }}>{thumbs[o.id] === null ? 'no geometry' : '···'}</span>}
                 </span>
                 <span style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' }}>
-                    <span style={{ ...mono, fontSize: '9.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)' }}>{o.partId}</span>
+                    <span style={{ ...mono, fontSize: '9.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)' }}>{ourId(o.partId)}</span>
                     {line?.sku && <span style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--brass)' }}>{line.sku}</span>}
                 </span>
                 <span style={{ fontSize: '10.5px', lineHeight: 1.25, color: 'var(--ink-soft)' }}>{desc}</span>
@@ -449,7 +477,7 @@ function HardwareConfiguratorInner({
                     if (!o || o.noFinish) return null;
                     return (
                         <div style={{ borderTop: '1px solid var(--line)', paddingTop: '9px' }}>
-                            <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Just this part · {o.partId}</span>
+                            <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>Just this part · {ourId(o.partId)}</span>
                             {swatchRow(finishesFor(o, finishes), partFinish[o.id] || globalFinish, (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
                         </div>
                     );
@@ -599,33 +627,49 @@ function HardwareConfiguratorInner({
                             list grows without a release; the qty and the note are per order.
                             Stuart 2026-08-17: "the splice should say default is center (add in
                             exact location if different)". */}
-                        {step?.kind === 'LENGTH' && (
+                        {/* THE ITEMS THIS FLOW SELLS, LISTED (Stuart 2026-08-17: "the add an item
+                            field on step 10 is literally showing add an item, rather than the item i
+                            added to the flow on 11"). He is right — a button that hides the list
+                            behind a click is a worse version of the list. Every item tab 11 offers is
+                            on screen with its price; typing a quantity is what adds it. The note is
+                            per line, and a splice's hint says what the shop assumes when it is blank. */}
+                        {step?.kind === 'LENGTH' && !!extraItems.length && (
                             <div>
-                                <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>Add an item</div>
-                                {!extraItems.length && <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>Nothing configured for this flow — add them in tab 11.</div>}
+                                <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '7px' }}>Add an item</div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-                                    {extras.map((x, i) => (
-                                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 56px auto', gap: '5px', alignItems: 'start' }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                                <select value={x.code} onChange={e => setExtras(a => a.map((y, j) => j === i ? { ...y, code: e.target.value } : y))}
-                                                    style={{ padding: '6px', border: '1px solid var(--line)', fontSize: '12px', background: '#fff', color: 'var(--ink)' }}>
-                                                    <option value="">— choose —</option>
-                                                    {extraItems.map(it => <option key={it.code} value={it.code}>{it.label || it.code}</option>)}
-                                                </select>
-                                                <input value={x.note} onChange={e => setExtras(a => a.map((y, j) => j === i ? { ...y, note: e.target.value } : y))}
-                                                    placeholder={(extraItems.find(it => it.code === x.code)?.notePlaceholder) || 'Default is centre — give the exact location if different'}
-                                                    style={{ padding: '6px', border: '1px solid var(--line)', fontSize: '11.5px', background: '#fff', color: 'var(--ink)' }} />
+                                    {extraItems.map(it => {
+                                        const row = extras.find(x => x.code === it.code);
+                                        const qty = row?.qty ?? '';
+                                        const set = (patch) => setExtras(a => {
+                                            const i = a.findIndex(x => x.code === it.code);
+                                            if (i < 0) return [...a, { code: it.code, qty: '1', note: '', ...patch }];
+                                            const next = [...a]; next[i] = { ...next[i], ...patch };
+                                            return next[i].qty === '' || Number(next[i].qty) <= 0 ? next.filter((_, j) => j !== i) : next;
+                                        });
+                                        const part = findPart(it.code);
+                                        const line = row ? extraLines.find(l => l.partId === it.code) : null;
+                                        return (
+                                            <div key={it.code} style={{ border: `1px solid ${row ? 'var(--ink)' : 'var(--line)'}`, background: '#fff', padding: '8px 9px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                                        <div style={{ ...mono, fontSize: '9.5px', textTransform: 'none', letterSpacing: '.02em', color: 'var(--ink)' }}>{ourId(it.code)}</div>
+                                                        <div style={{ fontSize: '11.5px', color: 'var(--ink-soft)', lineHeight: 1.25 }}>{it.label || part?.itemName || it.code}</div>
+                                                    </div>
+                                                    <input value={qty} onChange={e => set({ qty: e.target.value })} inputMode="numeric" placeholder="0"
+                                                        title="Quantity — leave it empty and the item is not on the order"
+                                                        style={{ width: '48px', padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '12px', textAlign: 'center', background: '#fff', color: 'var(--ink)' }} />
+                                                    <span style={{ ...mono, fontSize: '9px', color: line ? 'var(--brass)' : 'var(--ink-faint)', minWidth: '48px', textAlign: 'right', paddingTop: '6px' }}>
+                                                        {line ? `$${line.total.toFixed(2)}` : '—'}
+                                                    </span>
+                                                </div>
+                                                {!!row && (
+                                                    <input value={row.note || ''} onChange={e => set({ note: e.target.value })}
+                                                        placeholder={it.notePlaceholder || 'Anything the shop needs to know about it'}
+                                                        style={{ padding: '6px 7px', border: '1px solid var(--line)', fontSize: '11.5px', background: '#fff', color: 'var(--ink)' }} />
+                                                )}
                                             </div>
-                                            <input value={x.qty} onChange={e => setExtras(a => a.map((y, j) => j === i ? { ...y, qty: e.target.value } : y))}
-                                                inputMode="numeric" style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '12px', textAlign: 'center', background: '#fff', color: 'var(--ink)' }} />
-                                            <button onClick={() => setExtras(a => a.filter((_, j) => j !== i))} title="Remove"
-                                                style={{ ...mono, padding: '6px 8px', border: '1px solid var(--line)', background: '#fff', cursor: 'pointer', color: 'var(--ink-soft)' }}>×</button>
-                                        </div>
-                                    ))}
-                                    {!!extraItems.length && (
-                                        <button onClick={() => setExtras(a => [...a, { code: '', qty: '1', note: '' }])}
-                                            style={{ ...chip(false), fontSize: '9px' }}>+ Add item</button>
-                                    )}
+                                        );
+                                    })}
                                 </div>
                             </div>
                         )}
@@ -677,7 +721,7 @@ function HardwareConfiguratorInner({
                                                 <td style={{ padding: '3px 0', color: 'var(--ink)' }}>
                                                     {/* Our id, their alias beside it, our description under. */}
                                                     <span style={{ display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' }}>
-                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px' }}>{l.partId}</span>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px' }}>{ourId(l.partId)}</span>
                                                         {l.sku && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{l.sku}</span>}
                                                         {l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>×{l.qty}</span>}
                                                         {l.extra && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>added</span>}
