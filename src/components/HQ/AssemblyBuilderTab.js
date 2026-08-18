@@ -15,7 +15,7 @@ import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
 import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, normalizePosition, normalizeCategory, suggestTagsFromName } from '../Shared/assemblyTags';
 import { sheet2dChoiceNode } from '../Shared/sheet2d';
-import { planTagImport, applyTagPlan, slotsFromSheet, matchSlotFiles } from '../Shared/tagSheetImport';
+import { planTagImport, applyTagPlan, slotsFromSheet, matchSlotFiles, planSinglesFill, applySinglesFill } from '../Shared/tagSheetImport';
 
 // Step-by-step assembly builder: the designer uploads ONE .glb per slot (all the choices for that slot
 // stacked inside the file). We KNOW each slot's position/category/location, so there's nothing to
@@ -1487,8 +1487,27 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     };
     const applyTagSheet = () => {
         if (!tagPlan) return;
+        const n = tagPlan.plan.changed.length;
         setAssignData(prev => prev ? { ...prev, rows: applyTagPlan(prev.rows, tagPlan.plan) } : prev);
         setTagPlan(null);
+        // ⚠ SAY THAT IT HAPPENED. The panel used to just vanish, which is indistinguishable from a
+        // click that missed — and the fields it fills are three screens of scrolling away.
+        setTagDone(`Applied ${n} change(s) from the sheet. They are on screen only — Save Assignments writes them.`);
+    };
+    const [tagDone, setTagDone] = useState('');
+    // ── FINISH THE SINGLES BY CATEGORY (Stuart 2026-08-18) ───────────────────────────────────
+    // Their two tags never needed a node name, which is fortunate, because the built model calls a
+    // bracket "H1-138BS LEFT" and her sheet calls it "H1-138BS:2" and no amount of matching will
+    // reconcile three copies that collapse to one name. Blanks only: everything the sheet set —
+    // every DOUBLE, every BACK — is left exactly as it is.
+    const [singlesPlan, setSinglesPlan] = useState(null);
+    const previewSingles = () => setSinglesPlan(planSinglesFill(assignData?.rows || []));
+    const applySingles = () => {
+        if (!singlesPlan) return;
+        const n = singlesPlan.hits.length;
+        setAssignData(prev => prev ? { ...prev, rows: applySinglesFill(prev.rows, singlesPlan) } : prev);
+        setSinglesPlan(null);
+        setTagDone(`Filled ${n} blank tag(s) on the singles. On screen only — Save Assignments writes them.`);
     };
 
     const setChoicePatch = (clusterId, nodeName, patch) => setAssignData(prev => prev ? { ...prev, rows: prev.rows.map(r => r.clusterId !== clusterId ? r : { ...r, choices: r.choices.map(c => c.nodeName === nodeName ? { ...c, ...patch } : c) }) } : prev);
@@ -2187,6 +2206,51 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                 Matched by node name. Nothing is written until you save.
                             </span>
                         </div>
+                        {!!tagDone && (
+                            <div style={{ border: '1px solid #3a7d44', background: '#f2f8f2', padding: '10px 13px', fontFamily: 'var(--mono)', fontSize: '10px', color: '#2f6b38', display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center' }}>
+                                <span>✓ {tagDone}</span>
+                                <button onClick={() => setTagDone('')} style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', border: '1px solid var(--line)', background: '#fff', padding: '4px 8px', cursor: 'pointer', color: 'var(--ink-soft)' }}>×</button>
+                            </div>
+                        )}
+                        {/* THE SINGLES, BY CATEGORY. Not from the sheet — see planSinglesFill. */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Finish the singles</span>
+                            <button onClick={previewSingles}
+                                title="The singles need two tags that do not depend on a node name: SETUP=SINGLE on every bracket and backplate, ROD=FRONT on every pole. It fills BLANKS ONLY — everything the sheet already set (every DOUBLE, every BACK) is left exactly as it is, so it is safe to run twice."
+                                style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', border: '1px solid var(--brass)', background: '#fff', color: 'var(--brass)', padding: '7px 12px', cursor: 'pointer' }}>
+                                ⌗ What would it fill?
+                            </button>
+                            <span style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>
+                                SETUP=SINGLE on brackets &amp; backplates, ROD=FRONT on poles — blanks only, never over the sheet.
+                            </span>
+                        </div>
+                        {singlesPlan && (
+                            <div style={{ border: '1px solid var(--line)', background: 'var(--paper)', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '9px' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--ink)' }}>
+                                    <b style={{ color: 'var(--brass)' }}>{singlesPlan.hits.length}</b> choice(s) would be filled — {singlesPlan.brackets} bracket/backplate → SETUP=SINGLE, {singlesPlan.poles} pole → ROD=FRONT
+                                    {!singlesPlan.hits.length && <span style={{ color: '#3a7d44' }}> · nothing left to fill</span>}
+                                </div>
+                                {!!singlesPlan.hits.length && (
+                                    <div style={{ maxHeight: '150px', overflowY: 'auto', borderTop: '1px solid var(--line)', paddingTop: '6px' }}>
+                                        {singlesPlan.hits.slice(0, 50).map((h, i) => (
+                                            <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--ink-soft)', padding: '2px 0' }}>
+                                                <span style={{ color: 'var(--ink)' }}>{h.clusterName}</span> · {h.nodeName}
+                                                {h.diff.map((d, j) => <span key={j}> · {d.field} → <b style={{ color: 'var(--brass)', fontWeight: 400 }}>{d.to}</b></span>)}
+                                            </div>
+                                        ))}
+                                        {singlesPlan.hits.length > 50 && <div style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--ink-faint)' }}>…and {singlesPlan.hits.length - 50} more</div>}
+                                    </div>
+                                )}
+                                <div style={{ display: 'flex', gap: '9px' }}>
+                                    <button onClick={applySingles} disabled={!singlesPlan.hits.length}
+                                        style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '9px 16px', background: singlesPlan.hits.length ? 'var(--brass)' : 'var(--paper-2)', color: singlesPlan.hits.length ? '#fff' : 'var(--ink-faint)', border: 'none', cursor: singlesPlan.hits.length ? 'pointer' : 'not-allowed' }}>
+                                        Fill the {singlesPlan.hits.length} shown
+                                    </button>
+                                    <button onClick={() => setSinglesPlan(null)}
+                                        style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', padding: '9px 16px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer' }}>Discard</button>
+                                </div>
+                            </div>
+                        )}
                         {tagPlan && (() => {
                             const p = tagPlan.plan;
                             const line = { fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.03em' };

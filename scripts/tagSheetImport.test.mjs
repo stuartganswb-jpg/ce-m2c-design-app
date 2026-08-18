@@ -1,4 +1,4 @@
-import { parseTagRows, planTagImport, applyTagPlan, nodeKey, nodeTail, slotsFromSheet, matchSlotFiles } from '../src/components/Shared/tagSheetImport.js';
+import { parseTagRows, planTagImport, applyTagPlan, nodeKey, nodeTail, slotsFromSheet, matchSlotFiles, planSinglesFill, applySinglesFill } from '../src/components/Shared/tagSheetImport.js';
 let pass=0, fail=0;
 const ok=(n,c)=>{ if(c) pass++; else { fail++; console.error('  ✗',n); } };
 const eq=(n,a,b)=>{ if(JSON.stringify(a)===JSON.stringify(b)) pass++; else { fail++; console.error('  ✗',n,'\n    got ',JSON.stringify(a),'\n    want',JSON.stringify(b)); } };
@@ -193,6 +193,42 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
         ['TRV POLE DBL Back Carrier rings','c.fbx','RING','HTSLNTCAR:1','CARRIER']]);
     eq('the slot is what CAT says', slots[0].category, 'RING');
     ok('and nothing claims it mixes categories', !w.some(x=>/mixes categories/.test(x)));
+}
+
+// ── FINISHING THE SINGLES BY CATEGORY, NOT BY NAME ──────────────────────────────────────────
+{
+    const loaded=[
+      { clusterId:'c1', clusterName:'LEFT-BRACKET', category:'BRACKET', choices:[
+          { nodeName:'S4__1_H1138BSLEFT', trvSetup:'' },                 // untouched single
+          { nodeName:'S4__2_H1138ILSLEFT', trvSetup:'' },
+      ]},
+      { clusterId:'c2', clusterName:'DBL-BRACKET-CENTER', category:'BRACKET', choices:[
+          { nodeName:'S60__0_H1138BD', trvSetup:'DOUBLE' },              // the sheet already set it
+      ]},
+      { clusterId:'c3', clusterName:'SHORT-ROD', category:'POLE', choices:[
+          { nodeName:'S0__1_H1138inPOLEShortcenter', tier:'' },
+      ]},
+      { clusterId:'c4', clusterName:'METAL-POLE-DBL-BACK', category:'POLE', choices:[
+          { nodeName:'S59__0_H1138inPOLEDBLBackleft', tier:'BACK' },     // the sheet already set it
+      ]},
+      { clusterId:'c5', clusterName:'LEFT-END', category:'FINIAL', choices:[
+          { nodeName:'S16__1_H1138KF', trvSetup:'', tier:'' },           // a finial gets neither
+      ]},
+    ];
+    const plan=planSinglesFill(loaded);
+    eq('only the untagged brackets', plan.brackets, 2);
+    eq('only the untagged pole', plan.poles, 1);
+    eq('three choices in all', plan.hits.length, 3);
+
+    const after=applySinglesFill(loaded, plan);
+    eq('the single brackets are SINGLE', after[0].choices.map(c=>c.trvSetup).join(), 'SINGLE,SINGLE');
+    eq('the DOUBLE the sheet set is untouched', after[1].choices[0].trvSetup, 'DOUBLE');
+    eq('the single pole is FRONT', after[2].choices[0].tier, 'FRONT');
+    eq('the BACK the sheet set is untouched', after[3].choices[0].tier, 'BACK');
+    eq('a finial gets neither tag', [after[4].choices[0].trvSetup, after[4].choices[0].tier].join(), ',');
+
+    // Running it twice does nothing the second time.
+    eq('it is safe to run again', planSinglesFill(after).hits.length, 0);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

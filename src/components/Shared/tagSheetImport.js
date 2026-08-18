@@ -351,3 +351,58 @@ export function matchSlotFiles(slots, files = []) {
     const extra = files.filter(f => !used.has(String(f.name).toLowerCase())).map(f => f.name);
     return { paired, missing, extra };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// FINISHING THE SINGLES WITHOUT NAMING A SINGLE NODE (Stuart 2026-08-18)
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The singles cannot be tagged from the sheet, and the reason is not fixable by trying harder: the
+// built model names their three copies "H1-138BS LEFT / CENTER / RIGHT" while her sheet, written
+// from Fusion, calls them "H1-138BS:1 / :2 / :3". Once the instance number is cleaned off — and it
+// must be, or nothing matches at all — the three collapse into one name inside one slot. Matching
+// harder would only mean guessing which of three brackets a row meant, which is the failure this
+// import exists to avoid.
+//
+// But their two tags never needed a node name. They are facts about a CATEGORY:
+//
+//   a BRACKET or BACKPLATE that is not part of the double is a SINGLE one;
+//   a POLE that is not the back rod is the FRONT rod.
+//
+// So it fills BLANKS ONLY. Anything the sheet already set — every DOUBLE, every BACK — is left
+// exactly as it is, which makes this safe to run twice and impossible to run backwards. It is not a
+// rule the engine consults; it is a one-time edit to the same fields a person would have typed.
+
+const CAT_OF = (choice, cluster) => U(choice.catOverride || cluster.category || '');
+
+/** What "finish the singles" would change, without changing anything. */
+export function planSinglesFill(loaded = []) {
+    const hits = [];
+    loaded.forEach(r => (r.choices || []).forEach(ch => {
+        const cat = CAT_OF(ch, r);
+        const diff = [];
+        if (['BRACKET', 'BACKPLATE'].includes(cat) && !S(ch.trvSetup)) diff.push({ field: 'trvSetup', to: 'SINGLE' });
+        if (cat === 'POLE' && !S(ch.tier)) diff.push({ field: 'tier', to: 'FRONT' });
+        if (diff.length) hits.push({ clusterId: r.clusterId, clusterName: r.clusterName, nodeName: ch.nodeName, diff });
+    }));
+    return {
+        hits,
+        brackets: hits.filter(h => h.diff.some(d => d.field === 'trvSetup')).length,
+        poles: hits.filter(h => h.diff.some(d => d.field === 'tier')).length,
+    };
+}
+
+/** Apply it. Blanks only — never a value that is already there. */
+export function applySinglesFill(loaded, plan) {
+    const by = new Set(plan.hits.map(h => `${h.clusterId}::${nodeKey(h.nodeName)}`));
+    return loaded.map(r => ({
+        ...r,
+        choices: (r.choices || []).map(ch => {
+            if (!by.has(`${r.clusterId}::${nodeKey(ch.nodeName)}`)) return ch;
+            const cat = CAT_OF(ch, r);
+            const next = { ...ch };
+            if (['BRACKET', 'BACKPLATE'].includes(cat) && !S(next.trvSetup)) next.trvSetup = 'SINGLE';
+            if (cat === 'POLE' && !S(next.tier)) next.tier = 'FRONT';
+            return next;
+        }),
+    }));
+}
