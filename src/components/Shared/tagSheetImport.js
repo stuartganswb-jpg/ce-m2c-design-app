@@ -228,7 +228,18 @@ export function planTagImport(rows2d, loaded = []) {
             if (cands.length === 1) {
                 const rowCat = U(cands[0].catOverride);
                 const pinCat = U(ch.catOverride || r.category || '');
-                if (rowCat && pinCat && rowCat !== pinCat) {
+                // ⚠ NO CATEGORY MEANS NO NAME-ONLY MATCH (Stuart 2026-08-18, the wood ring, twice).
+                // A row that states its category can be checked against the part it landed on, and
+                // a POLE row is refused on a RING. A row that states NONE cannot be checked at all
+                // — and the rows with none are exactly the singles, stripped bare on purpose so an
+                // upload could not touch them. Letting those match on a bare name is the one way
+                // left for a rod's tag to reach a ring that happens to share its name.
+                //
+                // Nothing is lost by refusing: the singles' two tags are set by category, by
+                // "Finish the singles", which cannot mistake a ring for a rod because it never
+                // looks at a name.
+                if (!rowCat) { ambiguous.add(`${ch.nodeName} — the only row with that name states no category, so it cannot be checked`); return; }
+                if (pinCat && rowCat !== pinCat) {
                     ambiguous.add(`${ch.nodeName} — the only row with that name is a ${rowCat}, this is a ${pinCat}`);
                     return;
                 }

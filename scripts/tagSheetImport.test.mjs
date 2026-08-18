@@ -247,5 +247,18 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     eq('but it does tag the pole', planTagImport(rows5, pole).hits.length, 1);
 }
 
+// A row that states no category cannot be checked, so it never matches on a bare name.
+{
+    const H6=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','ROD','SETUP'];
+    const bare=[H6, ['wood rod','','','H1-138WR','FRONT','']];        // a singles row: no CAT
+    const ring=[{ clusterId:'c', clusterName:'RINGS', category:'RING', choices:[{ nodeName:'S3-RINGS__4_H1138WR', tier:'' }]}];
+    const p=planTagImport(bare, ring);
+    eq('a category-less row does not tag by name alone', p.hits.length, 0);
+    ok('and says why', p.ambiguous.some(a=>/states no category/.test(a)));
+    // …but the same row still matches when the SLOT identifies it.
+    const scoped=[{ clusterId:'c', clusterName:'WOOD-ROD', category:'POLE', choices:[{ nodeName:'S7-WOOD-ROD__0_H1138WR', tier:'' }]}];
+    eq('the slot is still enough', planTagImport([H6, ['WOOD ROD','','','H1-138WR','FRONT','']], scoped).hits.length, 1);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail?1:0);
