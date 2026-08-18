@@ -74,6 +74,12 @@ export function tagsFromPhrase(phrase) {
 
     // ── the rest ─────────────────────────────────────────────────────────────────────────────
     if (/\bCEILING\b/.test(p)) out.mount = 'CEILING';
+    // A FRENCH OR MITER RETURN IS A CHARGE (Stuart 2026-08-18: "for the french and miter returns
+    // please check off Fee: Y"). It is the one end treatment with no part of its own — what the
+    // customer buys is the BENDING of the pole, so it bills as a fee and the bent pole renders
+    // beside it. ⚠ The bent pole itself is NOT the fee: it is a POLE carrying the rod's item
+    // number, in its own slot. Two rows, two things, and only one of them is money.
+    if (out.cat === 'RETURN') out.fee = true;
     if (/\bHIDE\b|\bHIDDEN\b/.test(p)) out.hide = true;
     if (/\bBASIC\b/.test(p)) out.basic = true;
     if (/\bINL\b|\bIN-?L\b|\bINLINE\b|\bIN LINE\b/.test(p)) out.inline = true;
