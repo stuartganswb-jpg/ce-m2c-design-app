@@ -1081,5 +1081,48 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('…offering one item', slots(N, {}, []).find(s => s.kind === 'ROD' && s.tier === 'BACK').options.length, 1);
 }
 
+// ── A RETURN IS THE MOUNT, AND A MOUNT CARRIES BOTH RODS ────────────────────────────────────
+// "the rear rod is affixed to each return and follows the same rules with no left or right
+//  brackets as the front french return does the lifting for both."
+{
+    const cs = [
+        C({ id: 'F-L', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'LEFT', nodes: ['f-l'] }),
+        C({ id: 'F-C', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'CENTER', nodes: ['f-c'] }),
+        C({ id: 'F-R', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'RIGHT', nodes: ['f-r'] }),
+        C({ id: 'B', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', nodes: ['b'] }),
+        C({ id: 'RET-L', partId: 'H1-MRPF', role: 'RETURN', tier: 'FRONT', position: 'LEFT', nodes: ['ret-l'] }),
+        C({ id: 'FIN-F-L', partId: 'KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fin-f-l'] }),
+        C({ id: 'FIN-B-L', partId: 'CC', role: 'FINIAL', tier: 'BACK', position: 'LEFT', nodes: ['fin-b-l'] }),
+        C({ id: 'FIN-B-R', partId: 'CC', role: 'FINIAL', tier: 'BACK', position: 'RIGHT', nodes: ['fin-b-r'] }),
+        C({ id: 'BKT-L', partId: 'BD', role: 'BRACKET', position: 'LEFT', nodes: ['bkt-l'] }),
+    ];
+    const N = applyFitsDefaults(cs.map(normalizeChoice));
+    const sl = (sel) => slots(N, {}, sel);
+
+    // With no return, every rod is dressed at every end.
+    const open = sl([]);
+    ok('both rods are asked for a left end', open.filter(s => s.kind === 'END' && s.position === 'LEFT').length === 2);
+
+    // A return on the FRONT rod's left end speaks for that end on BOTH rods.
+    const withRet = sl(['F-C', 'B', 'RET-L']);
+    const backLeft = withRet.find(s => s.kind === 'END' && s.position === 'LEFT' && s.tier === 'BACK');
+    eq('the rear rod is offered no left end', backLeft.options.length, 0);
+    ok('and is told why', /carries both rods/.test(backLeft.suppressedReason || ''));
+    ok('named by the return', backLeft.suppressedBy === 'H1-MRPF');
+
+    // The rear rod is still dressed at the OTHER end.
+    const backRight = withRet.find(s => s.kind === 'END' && s.position === 'RIGHT' && s.tier === 'BACK');
+    ok('the far end of the rear rod still asks', backRight.options.length > 0);
+
+    // …and the bracket at that end is gone, for both rods, as it always was.
+    const bl = withRet.find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
+    ok('no bracket at the return end', !bl || !bl.options.length);
+
+    // A FINIAL, by contrast, dresses only its own rod.
+    const withFin = sl(['F-C', 'B', 'FIN-F-L']);
+    const backLeft2 = withFin.find(s => s.kind === 'END' && s.position === 'LEFT' && s.tier === 'BACK');
+    ok('a front finial leaves the rear rod its own end', backLeft2.options.length > 0);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

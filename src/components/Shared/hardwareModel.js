@@ -197,13 +197,26 @@ export const segmentOf = (choice) => (choice.position === 'LEFT' || choice.posit
 const END_ROLES = ['FINIAL', 'INSIDE_MOUNT', 'RETURN'];
 
 /** Does this end have a chosen treatment, and is it a return? */
-// Scoped to ONE ROD. On a double each rod has its own left and right end, and a french return on
-// the front rod must not shorten the rear one. An end tagged for no tier answers whichever rod is
-// asking — which is right for a finial style shared front and back.
+// AN END, PER ROD — EXCEPT WHEN THE END IS THE MOUNT (Stuart 2026-08-18) ──────────────────────
+// "the rear rod on the french return terminates directly into the bent portion of the front rod …
+//  the rear rod is affixed to each return and follows the same rules with no left or right
+//  brackets as the front french return does the lifting for both."
+//
+// So the two kinds of end treatment behave differently on a double, and the difference is not
+// arbitrary — it is what they ARE:
+//
+//   A FINIAL DRESSES ONE ROD. Each rod gets its own, they can differ, and the question is asked
+//     once per rod. Tier-scoped.
+//   A RETURN OR INSIDE MOUNT IS THE MOUNT AT THAT END. It carries every rod there — that is why
+//     it replaces the bracket — so it applies to the whole assembly at that end, whichever rod it
+//     was pinned on. Not tier-scoped, in either direction: the rear rod ends into the front rod's
+//     bend, and neither rod is offered a second end treatment there.
 function endState(selected, pos, tier = '') {
-    const picks = selected.filter(c => c.position === pos && END_ROLES.includes(c.role)
-        && (!tier || !c.tier || c.tier === tier));
-    return { answered: picks.length > 0, isReturn: picks.some(c => c.role === 'RETURN') };
+    const here = selected.filter(c => c.position === pos && END_ROLES.includes(c.role));
+    // The mount at this end belongs to the assembly, not to one rod.
+    const isReturn = here.some(c => c.role === 'RETURN');
+    const mine = here.filter(c => !tier || !c.tier || c.tier === tier);
+    return { answered: mine.length > 0 || isReturn, isReturn };
 }
 
 // MOUNT IS A PROPERTY OF MOUNTING HARDWARE, AND BLANK MEANS WALL (Stuart 2026-08-15: "all the
@@ -842,6 +855,31 @@ export function slots(choices, answers = {}, selectedIds = []) {
                 choice, ok: false, rule: 'pole construction',
                 detail: `${chosenRods[0].name} is a single-piece pole — a return replaces an end SEGMENT, and there is none to replace`,
             }))];
+        });
+    }
+
+    // ── A RETURN ANSWERS THAT END FOR EVERY ROD ────────────────────────────────────────────
+    // The front rod's french return does the lifting for both rods, so the rear rod is neither
+    // bracketed nor finialled there — it terminates into the bend. Without this the operator would
+    // be asked to dress an end that is already spoken for, and could put a finial on a rod that
+    // ends inside another rod's return.
+    const returnAt = new Set(choices
+        .filter(c => want.has(c.id) && c.role === 'RETURN' && c.position)
+        .map(c => `${c.position}|${c.tier || ''}`));
+    if (returnAt.size) {
+        const posWithReturn = new Set([...returnAt].map(k => k.split('|')[0]));
+        bucket.forEach(slot => {
+            if (slot.kind !== 'END' || !posWithReturn.has(slot.position)) return;
+            // the rod that owns the return keeps its slot — that IS where the return was chosen
+            if ([...returnAt].some(k => k === `${slot.position}|${slot.tier || ''}`)) return;
+            if (!slot.options.length) return;
+            const by = choices.find(c => want.has(c.id) && c.role === 'RETURN' && c.position === slot.position);
+            slot.suppressedBy = by?.partId || by?.name || 'the return';
+            slot.suppressedReason = 'the return at this end carries both rods — this rod terminates into it';
+            slot.rejected = [...slot.rejected, ...slot.options.map(choice => ({
+                choice, ok: false, rule: 'return carries both rods', detail: slot.suppressedReason,
+            }))];
+            slot.options = [];
         });
     }
 
