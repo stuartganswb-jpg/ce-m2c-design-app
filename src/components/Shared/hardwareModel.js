@@ -59,6 +59,26 @@ export const ROLES = [
 
 // The roles that ARE the rod — the answer that sets the world everything else lives in.
 export const ROD_ROLES = ['ROD', 'FASCIA', 'TRACK'];
+// ── TIER vs POSITION (Stuart 2026-08-17, planning the doubles) ────────────────────────────────
+// "for future doubles … we will just add more projection tags and control what is the front
+//  (longest projection) … we will need to add finials for the new rods that will be in the back."
+//
+// The second half is exactly right and the first half is a trap, so the vocabulary gains ONE word
+// instead. FRONT / BACK is a TIER — WHICH ROD of a double a part belongs to. LEFT / CENTER / RIGHT
+// is a POSITION — WHERE ALONG one rod a piece sits. They are different questions, and a back rod's
+// left finial answers both at once, which is why they cannot keep sharing a field.
+//
+// Projection cannot stand in for tier: `proj` means "this part is MADE IN these depths" and drives
+// a question with ONE answer per order. Tagging the back rod 4-5/8" and the front 6" would offer
+// them as ALTERNATIVES — pick one and the other rod vanishes from the order. A double is not
+// 4-5/8" or 6"; it is both, at once, on one bracket.
+export const TIER_POSITIONS = ['FRONT', 'BACK'];
+
+// WHAT A TIER SPLITS, AND WHAT IT DOES NOT. A double has two rods, so it has two of everything
+// that DRESSES a rod — the rod, its ends, its rings. It does NOT have two of everything that CARRIES
+// the rods: one bracket arm holds both, on one backplate, at one projection. Splitting those would
+// ask for the same physical bracket twice and bill it twice.
+const TIERED_ROLES = [...ROD_ROLES, 'FINIAL', 'INSIDE_MOUNT', 'RETURN', 'RING', 'TRV_END'];
 // Never a question: built and billed whenever their rod kind is active.
 export const RIDER_ROLES = ['CARRIER', 'FCLIP'];
 
@@ -242,6 +262,12 @@ export function normalizeChoice(input = {}) {
         // applyFitsDefaults(), because it depends on what the assembly distinguishes.
         fits: fitsTag.length ? fitsTag : (DEFAULT_FITS[role] || [SOLID, TRAVERSE]),
         fitsExplicit: fitsTag.length > 0,
+        // WHICH ROD OF A DOUBLE THIS BELONGS TO. Separate from position on purpose: a back rod's
+        // LEFT piece is BACK **and** LEFT, and one field cannot hold both. Tagging tier on the pin
+        // is the clean path; a part pinned FRONT/BACK in the position field is read as a tier and
+        // its position cleared, so the collections already tagged that way keep working.
+        tier: TIER_POSITIONS.includes(U(input.tier)) ? U(input.tier)
+            : (TIER_POSITIONS.includes(U(input.position)) ? U(input.position) : ''),
         setup: U(input.setup),                       // '' = suits every setup
         // Tri-state, and only carried when actually tagged — undefined means "let the role and the
         // position decide" (see carriesRings), which is the normal case for every existing pin.
@@ -255,7 +281,9 @@ export function normalizeChoice(input = {}) {
         // inherits its cluster's location. The steel rod, whose cluster is tagged ceiling, was duly
         // filtered out the moment Wall was chosen. A pole is not built for a wall or a ceiling.
         mount: MOUNTED_ROLES.includes(role) ? (mountTag || 'WALL') : '',
-        position: U(input.position),                 // '' = shared across positions
+        // WHERE ALONG the rod — LEFT / CENTER / RIGHT. A FRONT/BACK value has been lifted to tier
+        // above, so this field means one thing only.
+        position: TIER_POSITIONS.includes(U(input.position)) ? '' : U(input.position),
         // ⚠ A ROD IS NEVER A RIDER (Stuart 2026-08-17: "when solid pole is selected i am getting
         // offered only two choices of acrylic and wood, not metal"). The metal rod's centre piece
         // is tagged ALWAYS SHOWN — a fossil of the old engine, where the short centre rod was
@@ -420,6 +448,12 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     }
     if (!skip('position') && ctx.position && choice.position && choice.position !== ctx.position) {
         return no('position', `tagged ${choice.position}, this slot is ${ctx.position}`);
+    }
+    // A part tagged for one rod of a double never appears on the other. Untagged parts are shared
+    // by both, which is what a bracket carrying two rods, or one finial style used front and back,
+    // genuinely is.
+    if (!skip('tier') && ctx.tier && choice.tier && choice.tier !== ctx.tier) {
+        return no('tier', `tagged ${choice.tier}, this is the ${ctx.tier} rod`);
     }
     return { ok: true };
 }
@@ -649,7 +683,7 @@ export function carriesRings(rod, ctx = {}) {
     // Front-ness, from whichever tag carries it: the pin's own position, its own setup, or the
     // order's. A one-value setup axis is IMPLIED rather than asked, so it may never reach ctx —
     // reading the rod itself means the fact does not depend on whether a question was posed.
-    if (rod.role === 'FASCIA') return rod.position === 'FRONT' || rod.setup === 'DOUBLE' || ctx.setup === 'DOUBLE';
+    if (rod.role === 'FASCIA') return rod.tier === 'FRONT' || rod.setup === 'DOUBLE' || ctx.setup === 'DOUBLE';
     return true;   // a solid rod, and anything else that is a rod
 }
 
@@ -660,21 +694,43 @@ export function slots(choices, answers = {}, selectedIds = []) {
     const replaced = new Set(choices
         .filter(c => want.has(c.id) && BRACKET_REPLACING_ROLES.includes(c.role) && c.position)
         .map(c => c.position));
+    // The tiers this assembly actually has. Empty on every single — which is every collection
+    // today — so nothing about a single-rod order changes.
+    const allTiers = [...new Set(choices.map(c => c.tier).filter(Boolean))]
+        .sort((a, b) => TIER_POSITIONS.indexOf(a) - TIER_POSITIONS.indexOf(b));
     const bucket = new Map();
     choices.forEach(c => {
         if (c.always) return;                       // riders are never a question
         if (c.isCollar) return;                     // …and nor is a collar: it comes with its finial
         const kind = SLOT_OF_ROLE(c.role);
         if (!kind) return;
-        // A rod pinned per position is ONE part in three pieces, not three questions. Its pieces
-        // are resolved by visibleNodes from the ends; here it collapses to a single decision.
+        // A rod's position carries TWO different facts, and they must not be treated alike:
+        //
+        //   ALONG the pole — LEFT / CENTER / RIGHT — is one part in three pieces, not three
+        //     questions. It collapses to a single decision; the pieces are resolved by
+        //     visibleNodes from the ends.
+        //   ACROSS the pole — FRONT / BACK — is a genuinely separate rod. A double has a front rod
+        //     and a back rod, each chosen, each dressed, each with its own ends. Collapsing those
+        //     would let a double offer ONE rod decision and quietly drop the other.
+        //
+        // Today every solid family is single, so this reads '' and nothing changes; H1-2TRV's
+        // fascia and track already separate because their ROLES differ. It is here so that pinning
+        // a second rod BACK is all a double needs from the rod side — a tag, not a release.
         const pos = ROD_ROLES.includes(c.role) ? '' : (c.position || '');
-        const key = `${kind}|${pos}`;
-        if (!bucket.has(key)) bucket.set(key, { key, kind, position: pos, all: [], options: [], rejected: [] });
-        const slot = bucket.get(key);
-        slot.all.push(c);
-        const v = admits(c, { ...ctx, position: pos ? pos : undefined });
-        if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });
+        // A part that dresses a rod is asked once PER ROD; a part that carries them is asked once.
+        // An UNTAGGED part is offered in every tier — one finial style used front and back is the
+        // common case, and it must appear in both questions rather than inventing a third.
+        const tiers = TIERED_ROLES.includes(c.role)
+            ? (c.tier ? [c.tier] : (allTiers.length ? allTiers : ['']))
+            : [''];
+        tiers.forEach(tier => {
+            const key = `${kind}|${tier}|${pos}`;
+            if (!bucket.has(key)) bucket.set(key, { key, kind, tier, position: pos, all: [], options: [], rejected: [] });
+            const slot = bucket.get(key);
+            slot.all.push(c);
+            const v = admits(c, { ...ctx, position: pos ? pos : undefined, tier: tier || undefined });
+            if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });
+        });
     });
     // ── A RETURN NEEDS AN END SEGMENT TO REPLACE (Stuart 2026-08-17) ────────────────────────
     // "whenever there is not 3 poles — left, center and right — then there is no french return."

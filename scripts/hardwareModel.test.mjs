@@ -816,8 +816,8 @@ eq('nonsense is null', measureOf('n/a'), null);
     // A fascia at the FRONT is the face of a double — rings ride on it. (The H1-2TRV case.)
     {
         const cs = [
-            C({ id: 'F', partId: 'FA', role: 'FASCIA', rodKind: 'TRAVERSE', position: 'FRONT', nodes: ['fas'] }),
-            C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', position: 'BACK', nodes: ['trk'] }),
+            C({ id: 'F', partId: 'FA', role: 'FASCIA', rodKind: 'TRAVERSE', tier: 'FRONT', nodes: ['fas'] }),
+            C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', tier: 'BACK', nodes: ['trk'] }),
             ring,
         ];
         eq('a front fascia offers rings', ringSlot(cs, {}, ['F']).options.length, 1);
@@ -841,6 +841,78 @@ eq('nonsense is null', measureOf('n/a'), null);
         const cs = [C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', nodes: ['trk'] }), ring];
         eq('rings stand until a rod is picked', ringSlot(cs, {}, []).options.length, 1);
     }
+}
+
+// ── A DOUBLE IS TWO ROD DECISIONS, A THREE-PIECE POLE IS ONE ─────────────────────────────────
+{
+    const rodSlots = (choices, answers = {}, sel = []) =>
+        slots(applyFitsDefaults(choices.map(normalizeChoice)), answers, sel).filter(s => s.kind === 'ROD');
+
+    // Along the pole: one part in three pieces, one question.
+    {
+        const cs = [
+            C({ id: 'L', partId: 'SR', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['l'] }),
+            C({ id: 'C', partId: 'SR', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['c'] }),
+            C({ id: 'R', partId: 'SR', role: 'ROD', rodKind: 'SOLID', position: 'RIGHT', nodes: ['r'] }),
+        ];
+        eq('three segments are ONE rod decision', rodSlots(cs).length, 1);
+    }
+    // Across the pole: two rods, two questions — what a double needs.
+    {
+        const cs = [
+            C({ id: 'F', partId: 'FR', role: 'ROD', rodKind: 'SOLID', position: 'FRONT', nodes: ['f'] }),
+            C({ id: 'B', partId: 'BR', role: 'ROD', rodKind: 'SOLID', position: 'BACK', nodes: ['b'] }),
+        ];
+        const sl = rodSlots(cs);
+        eq('front and back are TWO rod decisions', sl.length, 2);
+        ok('each names its tier', sl.some(x => x.tier === 'FRONT') && sl.some(x => x.tier === 'BACK'));
+    }
+    // Both at once: a double whose rods are each three pieces stays two decisions.
+    {
+        // Each piece says BOTH facts: which rod (tier) and where along it (position).
+        const cs = ['FRONT', 'BACK'].flatMap(t => ['LEFT', 'CENTER', 'RIGHT'].map(seg =>
+            C({ id: `${t}-${seg}`, partId: t, role: 'ROD', rodKind: 'SOLID', tier: t, position: seg, nodes: [`${t}${seg}`] })));
+        eq('a segmented double is still two decisions', rodSlots(cs).length, 2);
+    }
+}
+
+// ── TIER: the back rod gets its own ends, its own everything ─────────────────────────────────
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    // The finials Stuart will have to tag: front-rod finials must not be offered on the back rod.
+    const cs = [
+        C({ id: 'RF', partId: 'FR', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['fr'] }),
+        C({ id: 'RB', partId: 'BR', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', nodes: ['br'] }),
+        C({ id: 'FIN-F', partId: 'FNF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fnf'] }),
+        C({ id: 'FIN-B', partId: 'FNB', role: 'FINIAL', tier: 'BACK', position: 'LEFT', nodes: ['fnb'] }),
+        C({ id: 'FIN-ANY', partId: 'FNA', role: 'FINIAL', position: 'LEFT', nodes: ['fna'] }),
+    ];
+    const sl = slots(N(cs), {}, []);
+    const endF = sl.find(x => x.kind === 'END' && x.tier === 'FRONT' && x.position === 'LEFT');
+    const endB = sl.find(x => x.kind === 'END' && x.tier === 'BACK' && x.position === 'LEFT');
+    ok('each rod gets its own left end', !!endF && !!endB);
+    ok('the front finial is only on the front rod', endF.options.some(o => o.partId === 'FNF') && !endB.options.some(o => o.partId === 'FNF'));
+    ok('the back finial is only on the back rod', endB.options.some(o => o.partId === 'FNB') && !endF.options.some(o => o.partId === 'FNB'));
+    ok('an untagged finial serves both', endF.options.some(o => o.partId === 'FNA') && endB.options.some(o => o.partId === 'FNA'));
+
+    // Collections already pinned FRONT/BACK in the position field keep working.
+    const legacy = N([C({ id: 'X', partId: 'FA', role: 'FASCIA', rodKind: 'TRAVERSE', position: 'FRONT', nodes: ['f'] })]);
+    eq('a FRONT position reads as a tier', legacy[0].tier, 'FRONT');
+    eq('…and stops pretending to be a segment', legacy[0].position, '');
+}
+
+// A double shares its bracket: one arm carries both rods, asked once, billed once.
+{
+    const cs = [
+        C({ id: 'RF', partId: 'FR', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['fr'] }),
+        C({ id: 'RB', partId: 'BR', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', nodes: ['br'] }),
+        C({ id: 'BKT', partId: 'D46', role: 'BRACKET', setup: 'DOUBLE', proj: '4-5/8', position: 'CENTER', nodes: ['bkt'] }),
+        C({ id: 'BP', partId: 'PL', role: 'BACKPLATE', position: 'CENTER', nodes: ['bp'] }),
+    ];
+    const sl = slots(applyFitsDefaults(cs.map(normalizeChoice)), { proj: 4.625 }, []);
+    eq('one bracket question for the pair', sl.filter(x => x.kind === 'BRACKET').length, 1);
+    eq('one backplate question for the pair', sl.filter(x => x.kind === 'BACKPLATE').length, 1);
+    eq('but two rod questions', sl.filter(x => x.kind === 'ROD').length, 2);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

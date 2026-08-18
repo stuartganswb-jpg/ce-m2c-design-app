@@ -116,6 +116,9 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         proj: pin.projInches || '',
         mount: U(pin.mountType) || normalizeLocation(cluster?.location) || '',
         position: normalizePosition(cluster?.position) || U(cluster?.position) || '',
+        // Which rod of a double. Read from the pin first, then the cluster — a whole cluster is
+        // usually the back rod's parts, but a single pin can be moved without re-grouping.
+        tier: U(pin.tier) || U(cluster?.tier) || '',
         always: isRider && !parked,
         // BOM-ONLY: real, picked and billed, but never drawn and never on a customer document.
         hidden,
