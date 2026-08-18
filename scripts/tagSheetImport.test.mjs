@@ -114,5 +114,39 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
     ok('and their ids differ', new Set(slots.map(s=>s.id)).size === 3);
 }
 
+// ── A BLANK CELL NEVER TOUCHES ANYTHING ─────────────────────────────────────────────────────
+// "her naming is a bit sloppy and all in the current assembly in the app are currently accurate and
+//  correct and only missing these new double tags, so other than these new double tags, don't touch
+//  em with the upload."
+{
+    const H2=['SLOT','SLOT FILE (.fbx)','CAT','NODE NAME','ITEM ID','ROD','PROJ','SETUP','TRV','MOUNT','MADE IN','BASIC','INL-BKT','FEE','HIDE','ALWAYS','COLLAR','NOTES'];
+    // A singles row: everything blank except the two tags the double needs.
+    const singleRow=['','','','H1-138BE:1','','', '', 'SINGLE','','','','','','','','','',''];
+    const before=[{ clusterId:'c1', clusterName:'BRACKETS', choices:[{
+        nodeName:'H1-138BE:1', itemNo:'H1-138BE', catOverride:'BRACKET', projInches:'4.625',
+        mountType:'WALL', materials:'METAL', isBasic:true, inlineOnly:true, isFee:false,
+        isHidden:false, alwaysShown:true, isCollar:false, requiresCollar:'H1-138FC2',
+        endTreatment:'FINIAL', note:'hand-written note', trvSetup:'', tier:'',
+    }]}];
+    const plan=planTagImport([H2, singleRow], before);
+    eq('exactly one field changes', plan.hits[0].diff.length, 1);
+    eq('…and it is the setup', plan.hits[0].diff[0].field, 'trvSetup');
+
+    const after=applyTagPlan(before, plan)[0].choices[0];
+    eq('the new tag landed', after.trvSetup, 'SINGLE');
+    // …and every single thing that was already right is still right.
+    const untouched = ['itemNo','catOverride','projInches','mountType','materials','requiresCollar','endTreatment','note'];
+    untouched.forEach(f => eq(`blank never rewrites ${f}`, after[f], before[0].choices[0][f]));
+    ok('a ticked BASIC survives a blank cell', after.isBasic === true);
+    ok('a ticked INL-BKT survives', after.inlineOnly === true);
+    ok('a ticked ALWAYS survives', after.alwaysShown === true);
+    ok('an unticked flag stays unticked', after.isFee === false && after.isHidden === false);
+
+    // An explicit N is an answer, and does clear it.
+    const off=[...singleRow]; off[11]='N';
+    const cleared=applyTagPlan(before, planTagImport([H2, off], before))[0].choices[0];
+    ok('an explicit N does untick', cleared.isBasic === false);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail?1:0);

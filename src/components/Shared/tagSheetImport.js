@@ -33,7 +33,18 @@
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 const S = (v) => String(v == null ? '' : v).trim();
-const yes = (v) => ['Y', 'YES', 'TRUE', 'X', '1'].includes(U(v));
+// ⚠ A FLAG IS TRI-STATE, AND BLANK MEANS "LEAVE IT ALONE" (Stuart 2026-08-18: "other than these
+// new double tags, don't touch em with the upload"). Reading a blank cell as FALSE is the obvious
+// implementation and it is wrong in the one way that matters: a sheet that says nothing about BASIC
+// would have UNTICKED basic on every part it touched. A person filling a partial sheet is saying
+// "here is what I know", never "everything I left out is false" — so only an explicit word decides.
+const flag = (v) => {
+    const u = U(v);
+    if (!u) return undefined;                                   // untouched
+    if (['Y', 'YES', 'TRUE', 'X', '1'].includes(u)) return true;
+    if (['N', 'NO', 'FALSE', '0', '-'].includes(u)) return false;
+    return undefined;                                           // anything else is not an answer
+};
 
 /** Header text → the field it fills. Tolerant of case, spacing and the (.fbx) suffix. */
 const COLUMN = {
@@ -89,16 +100,17 @@ export function parseTagRows(rows = []) {
             traverseRole: U(get(row, 'trv')) || (U(get(row, 'cat')) === 'CARRIER' ? 'CARRIER' : ''),
             mountType: U(get(row, 'mount')),
             materials: U(get(row, 'materials')).replace(/\s*\(NO FINISH\)\s*/i, ''),
-            isBasic: yes(get(row, 'basic')),
-            inlineOnly: yes(get(row, 'inline')),
-            isFee: yes(get(row, 'fee')),
-            isHidden: yes(get(row, 'hide')),
-            alwaysShown: yes(get(row, 'always')),
-            isCollar: yes(get(row, 'collar')),
             requiresCollar: get(row, 'requiresCollar'),
             note: get(row, 'note'),
             ...(get(row, 'endTreatment') ? { endTreatment: U(get(row, 'endTreatment')) } : {}),
         };
+        // Only the flags the sheet actually answers are carried; the rest are simply absent, so
+        // apply has nothing to write and the tick on screen survives untouched.
+        [['basic', 'isBasic'], ['inline', 'inlineOnly'], ['fee', 'isFee'], ['hide', 'isHidden'],
+         ['always', 'alwaysShown'], ['collar', 'isCollar']].forEach(([col, field]) => {
+            const f = flag(get(row, col));
+            if (f !== undefined) p[field] = f;
+        });
         // CLEAR is a material that takes no finish — the flag the renderer reads, set here so the
         // sheet says it once rather than the tagger remembering to tick two things.
         if (U(get(row, 'materials')).startsWith('CLEAR')) p.noFinish = true;
