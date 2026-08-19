@@ -6,6 +6,8 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/line
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans } from '../Shared/orderLifecycle';
+import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
+import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
@@ -40,7 +42,7 @@ const BRAND_NETSUITE_MAP = {
     'leyla': { subsidiary: "5", location: "18" }
 };
 
-const RTGDispatchTab = ({ currentUser, activeBrand }) => {
+const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // NETSUITE TRANSMIT LOG (Stuart 2026-07-17): live ns_outbox tail so THIS screen shows the
     // data actually leaving for NetSuite — one row per staged push with live status, and a loud
     // diagnosis when the queue isn't draining (PENDING >3 min with zero attempts means the
@@ -1267,6 +1269,110 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     // View / Config — so the pending work above it stays the thing you act on. Rows dispatched in
     // the last 7 days show by default; older ones sit behind the archive toggle at the foot of
     // the column, which is the weekly condense he asked for.
+    // ── CLOSE THE BALANCE (Eric 2026-08-18; decisions Stuart 2026-08-19) ────────────────────────
+    // "Scrap items are not allowed and must be pushed back to finishing or setup as required."
+    // His four scenarios are one mechanism: how many are GOOD, how many BAD physically exist, and
+    // are the bad ones salvageable. The arithmetic lives in Shared/scrapClose (tested); this is the
+    // conversation and the writes. It sits on RTG because these are ORDER-LIFECYCLE events — the
+    // order is being closed short — not packing events.
+    const [balanceModal, setBalanceModal] = useState(null);   // { order, kind, ordered, good, bad, salvage }
+    const mayCloseBalance = canCloseBalance(userRole);
+
+    const runBalanceClose = async () => {
+        const m = balanceModal;
+        if (!m) return;
+        const plan = planBalanceClose({ ordered: m.ordered, good: m.good, bad: m.bad, salvage: m.salvage });
+        const itemCode = woItemCodeOf(m.order) || m.order.id;
+        const rawCode = millBaseOf(itemCode);
+        const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || {};
+        if (!window.confirm(`Close ${itemCode} short?\n\n${describeBalanceClose(plan, { itemCode, rawCode })}\n\nThis writes to NetSuite. Continue?`)) return;
+        setBalanceModal(null);
+        try {
+            // The item ids come from the Master Library — without them nothing is guessed, the step
+            // is skipped and named, because a wrong internal id moves the wrong stock.
+            const findNsId = async (code) => {
+                try {
+                    const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', String(code).toUpperCase())));
+                    const hit = snap.docs.map(d => d.data()).find(x => x.netSuiteInternalId);
+                    return hit ? { id: String(hit.netSuiteInternalId), bin: (hit.manufacturingSpecs && hit.manufacturingSpecs.binLocation) || '' } : null;
+                } catch (e) { return null; }
+            };
+            const skipped = [];
+            const links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, m.order, m.kind);
+            const finEntry = [...links.fin.entries()][0] || null;
+            const alreadyBuilt = finEntry ? !!(finEntry[1].nsWoCompletionPosted || finEntry[1].nsBuildPosted) : false;
+
+            if (plan.buildQty > 0 && !alreadyBuilt) {
+                const it = await findNsId(itemCode);
+                if (!it) skipped.push(`build of ${itemCode} (no NetSuite id — sync the item)`);
+                else await enqueueNsWrite({
+                    kind: 'assemblybuild', label: `Partial build ${plan.buildQty} × ${itemCode} (${m.order.id})`,
+                    sourceApp: 'RTG', createdBy: currentUser || '',
+                    targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild',
+                    method: 'POST',
+                    payload: buildPayload({ nsItemId: it.id, qty: plan.buildQty, location: nsCfg.location, subsidiary: nsCfg.subsidiary, memo: `Partial build ${plan.buildQty} of ${plan.ordered} — balance closed from RTG (${m.order.id})` }),
+                    ...(finEntry ? { writeBack: { collection: 'fin_workorders', docId: finEntry[0], patch: { nsBuildPosted: true } } } : {}),
+                });
+            } else if (plan.buildQty > 0 && alreadyBuilt) {
+                skipped.push(`build of ${itemCode} — the floor already posted this order's build, so it is NOT built twice`);
+            }
+
+            const moveRaw = plan.toRawQty || -plan.adjustOutQty;
+            if (moveRaw !== 0) {
+                const raw = await findNsId(rawCode);
+                if (!raw) skipped.push(`${plan.toRawQty ? 'return to raw' : 'scrap'} of ${plan.bad} × ${rawCode} (no NetSuite id)`);
+                else await enqueueNsWrite({
+                    kind: 'inventoryadjustment',
+                    label: `${moveRaw > 0 ? 'Return to raw' : 'Scrap'} ${Math.abs(moveRaw)} × ${rawCode} (${m.order.id})`,
+                    sourceApp: 'RTG', createdBy: currentUser || '',
+                    targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                    method: 'POST',
+                    payload: adjustmentPayload({ nsItemId: raw.id, qty: moveRaw, bin: raw.bin, location: nsCfg.location, subsidiary: nsCfg.subsidiary, memo: `${moveRaw > 0 ? 'Salvaged back to raw' : 'Unusable — scrapped'} from ${m.order.id} (${itemCode})` }),
+                });
+            }
+
+            // Close everywhere, through the one closer, with the reason on the record.
+            const res = await closeEverywhere(
+                { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                { order: m.order, kind: m.kind, by: currentUser || '', from: 'RTG_BALANCE',
+                  reason: `built ${plan.good}/${plan.ordered}${plan.bad ? `, ${plan.bad} bad ${plan.toRawQty ? 'returned to raw' : 'scrapped'}` : ''}`, enqueueNsWrite }
+            );
+            await updateDoc(doc(db, m.kind === 'sales' ? 'hq_sales_orders' : 'hq_work_orders', m.order.id), {
+                builtQty: plan.good, badQty: plan.bad, balanceClosed: plan.balance,
+                balanceClosedBy: currentUser || '', balanceClosedAt: Date.now(),
+            }).catch(() => {});
+
+            addLog(`⚖ ${itemCode}: built ${plan.good}/${plan.ordered}, closed balance ${plan.balance}${plan.bad ? `, ${plan.bad} ${plan.toRawQty ? '→ raw' : 'scrapped'}` : ''}${skipped.length ? ` — SKIPPED: ${skipped.join('; ')}` : ''}.`, skipped.length ? 'warn' : 'success');
+
+            // Re-issue is PROMPTED, never automatic — the same shape as the make-up cascade.
+            if (plan.reissueQty > 0) {
+                const ans = window.prompt(`Re-issue the shortfall?\n\n${plan.balance} × ${itemCode} were not built.\n\nQuantity to re-issue (blank or 0 = none — adjust it for an efficient batch):`, String(plan.reissueQty));
+                const rq = parseInt(ans) || 0;
+                if (rq > 0) {
+                    const stamp = Date.now().toString().slice(-6);
+                    const newId = `WO-${String(itemCode).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}`;
+                    await setDoc(doc(db, 'hq_work_orders', newId), {
+                        id: newId, woId: newId, brand: activeBrand, status: 'Approved',
+                        customer: 'Internal Stock', type: String(itemCode), rootItem: String(itemCode).toUpperCase(),
+                        partErpId: String(itemCode).toUpperCase(), itemName: m.order.itemName || '',
+                        totalParts: rq, recipe: m.order.recipe || '',
+                        reqDate: m.order.needBy || m.order.reqDate || new Date(Date.now() + 6048e5).toISOString().split('T')[0],
+                        // LINEAGE — without it the board fills with replacements nobody can relate
+                        // to the order they came from.
+                        replacesWo: m.order.id, replacesReason: `balance closed, ${plan.balance} short`,
+                        ...(m.order.stockInternalId ? { stockInternalId: String(m.order.stockInternalId) } : {}),
+                        createdAt: Date.now(), createdBy: currentUser || '', source: 'RTG_REISSUE',
+                    });
+                    addLog(`↻ Re-issued ${rq} × ${itemCode} as ${newId} (replaces ${m.order.id}) — parked here for release.`, 'success');
+                }
+            }
+            alert(`⚖ ${itemCode} closed short.\n\nBuilt ${plan.good} of ${plan.ordered}; balance ${plan.balance} closed across ${res.fin} finishing / ${res.shop} shop / ${res.hq} RTG record(s).${skipped.length ? `\n\n⚠ NOT done: ${skipped.join('; ')}` : ''}${res.ns ? `\n\nNetSuite WO close queued (${res.ns}) — NOT confirmed; a non-WIP work order refuses it.` : ''}\n\nWatch the transmit log for the NetSuite writes.`);
+            loadRTGOrders();
+        } catch (e) {
+            alert('Balance close failed partway: ' + (e.message || e) + '\n\nCheck the transmit log — some NetSuite writes may already be queued.');
+        }
+    };
+
     // ── RECONCILIATION: WHERE THE BOARD AND THE FLOOR DISAGREE ──────────────────────────────────
     // (Stuart 2026-08-19: "this needs to be the single source of truth … no more orphans still open
     // on the floor.") RTG can only BE the authority if it can see where it is being contradicted.
@@ -1353,6 +1459,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             {kind === 'sales' && (
                 <button title="Re-run the split with the current routing rules — the floor docs use fixed ids (WO-… / SHOP-…), so this overwrites rather than duplicating."
                     style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => autoSplitSalesOrder(o)}>↻ Re-dispatch</button>
+            )}
+            {/* CLOSE SHORT — the scrap/partial-build path. Manager and above, because it moves
+                NetSuite inventory (Stuart 2026-08-19). Stock builds only: a custom sales order
+                cannot ship short, which the floor already enforces. */}
+            {kind !== 'sales' && mayCloseBalance && (
+                <button title="Built fewer than ordered? Record what was good, say what happened to the rest, close the balance and re-issue the shortfall."
+                    style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}
+                    onClick={() => setBalanceModal({ order: o, kind, ordered: Number(o.totalParts || o.qty || 0), good: '', bad: '', salvage: true })}>⚖ Close Short</button>
             )}
             <button title="Close this order EVERYWHERE — RTG, finishing floor, shop floor, and the NetSuite work order if one exists. Docs kept for history."
                 style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }} onClick={() => closeOrderEverywhere(o, kind)}>✕ Close</button>
@@ -1914,6 +2028,61 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     )}
                 </div>
             </div>
+            {/* ⚖ CLOSE SHORT — the four scenarios Eric described, as three numbers and one question. */}
+            {balanceModal && (() => {
+                const m2 = balanceModal;
+                const code = woItemCodeOf(m2.order) || m2.order.id;
+                const raw = millBaseOf(code);
+                const plan = planBalanceClose({ ordered: m2.ordered, good: m2.good, bad: m2.bad, salvage: m2.salvage });
+                const fld = { padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '1rem', width: '110px', outline: 'none' };
+                return (
+                    <div onClick={() => setBalanceModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.8)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '640px', maxWidth: '96vw', maxHeight: '92vh', overflowY: 'auto', border: '1px solid var(--line)', padding: '28px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                                <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)' }}>Close short</h2>
+                                <button onClick={() => setBalanceModal(null)} style={{ background: 'none', border: 'none', fontSize: '1.6rem', color: 'var(--ink-soft)', cursor: 'pointer' }}>×</button>
+                            </div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>{code} · ordered {plan.ordered} · {m2.order.nsWoTran || m2.order.id}</div>
+
+                            <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', marginBottom: '18px' }}>
+                                <label style={{ display: 'block' }}>
+                                    <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', marginBottom: '6px' }}>Good — built</span>
+                                    <input autoFocus type="number" min="0" max={plan.ordered} value={m2.good} onChange={e => setBalanceModal({ ...m2, good: e.target.value })} style={fld} />
+                                </label>
+                                <label style={{ display: 'block' }}>
+                                    <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', marginBottom: '6px' }}>Bad — pieces that exist</span>
+                                    <input type="number" min="0" value={m2.bad} onChange={e => setBalanceModal({ ...m2, bad: e.target.value })} style={fld} />
+                                    <span style={{ display: 'block', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '4px', maxWidth: '190px', lineHeight: 1.4 }}>Leave 0 for a plain shortage — nothing was made.</span>
+                                </label>
+                            </div>
+
+                            {/* The salvage question, asked only when there is something to salvage. */}
+                            {plan.hasPhysicalBad && (
+                                <div style={{ padding: '14px 16px', border: '1px solid var(--brass)', background: '#fdfaf3', marginBottom: '18px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)', marginBottom: '10px' }}>Are those {plan.bad} salvageable?</div>
+                                    <div style={{ display: 'flex', gap: '10px' }}>
+                                        <button onClick={() => setBalanceModal({ ...m2, salvage: true })} style={{ ...btnStyle, flex: 1, background: m2.salvage ? 'var(--ink)' : '#fff', color: m2.salvage ? '#fff' : 'var(--ink)', border: '1px solid var(--line)' }}>Yes — back to raw stock</button>
+                                        <button onClick={() => setBalanceModal({ ...m2, salvage: false })} style={{ ...btnStyle, flex: 1, background: !m2.salvage ? '#d9534f' : '#fff', color: !m2.salvage ? '#fff' : 'var(--ink)', border: `1px solid ${!m2.salvage ? '#d9534f' : 'var(--line)'}` }}>No — adjust out</button>
+                                    </div>
+                                    <div style={{ fontSize: '11px', color: 'var(--ink-soft)', marginTop: '8px', lineHeight: 1.5 }}>
+                                        {m2.salvage ? `+${plan.toRawQty} × ${raw} back into raw stock.` : `−${plan.adjustOutQty} × ${raw} written off as unusable.`}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div style={{ padding: '14px 16px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '20px', whiteSpace: 'pre-wrap', fontSize: '0.88rem', lineHeight: 1.7, color: 'var(--ink)' }}>
+                                {describeBalanceClose(plan, { itemCode: code, rawCode: raw })}
+                            </div>
+
+                            <button disabled={plan.nothingToDo} onClick={runBalanceClose}
+                                style={{ width: '100%', padding: '14px', background: plan.nothingToDo ? 'var(--paper-2)' : 'var(--ink)', color: plan.nothingToDo ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: plan.nothingToDo ? 'default' : 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                {plan.nothingToDo ? 'Enter what was built' : `⚖ Build ${plan.buildQty} · close balance ${plan.balance}`}
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
+
 
             {cfgQuote && <ConfiguredItemViewer quoteId={cfgQuote} onClose={() => setCfgQuote(null)} />}
 

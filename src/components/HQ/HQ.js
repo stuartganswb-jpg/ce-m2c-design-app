@@ -449,7 +449,7 @@ function HQ() {
                 />
             )}
             
-            {activeTab === '13. RTG Dispatch' && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '13. RTG Dispatch' && <RTGDispatchTab currentUser={user.name} activeBrand={activeBrand.id} userRole={safeUserRole} />}
             {activeTab === '14. Asset Gallery' && <AssetGalleryTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '14.5 Batch Processor' && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '14.6 Texture Processor' && <BatchTextureProcessor currentUser={user.name} />}
