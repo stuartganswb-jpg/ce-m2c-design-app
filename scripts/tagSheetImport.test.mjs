@@ -214,11 +214,16 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
       { clusterId:'c5', clusterName:'LEFT-END', category:'FINIAL', choices:[
           { nodeName:'S16__1_H1138KF', trvSetup:'', tier:'' },           // a finial gets neither
       ]},
+      // ⚠ a REAR pole whose tier has not landed yet — blank, but emphatically not the front rod
+      { clusterId:'c6', clusterName:'METAL-POLE-DBL-BACK-RIGHT', category:'POLE', choices:[
+          { nodeName:'S60__0_H1138inPOLEDBLBackright', tier:'', trvSetup:'DOUBLE' },
+      ]},
     ];
     const plan=planSinglesFill(loaded);
     eq('only the untagged brackets', plan.brackets, 2);
     eq('only the untagged pole', plan.poles, 1);
     eq('three choices in all', plan.hits.length, 3);
+    ok('a DOUBLE pole with no tier yet is left alone', !plan.hits.some(h => h.clusterId === 'c6'));
 
     const after=applySinglesFill(loaded, plan);
     eq('the single brackets are SINGLE', after[0].choices.map(c=>c.trvSetup).join(), 'SINGLE,SINGLE');

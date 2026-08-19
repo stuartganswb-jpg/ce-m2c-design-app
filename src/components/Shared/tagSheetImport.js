@@ -471,9 +471,19 @@ export function planSinglesFill(loaded = []) {
     const hits = [];
     loaded.forEach(r => (r.choices || []).forEach(ch => {
         const cat = CAT_OF(ch, r);
+        // ⚠ A BLANK IS NOT AN ANSWER (Stuart 2026-08-18, catching this before it ran). "The pole has
+        // no tier, so it is the front one" only holds for a pole that is not part of a double at
+        // all. Every REAR pole was also blank — because the tier tag was being dropped on save —
+        // and this would have stamped FRONT across all of them, which is the precise opposite of
+        // the truth and the hardest kind of wrong to see afterwards.
+        //
+        // A pole that says SETUP = DOUBLE belongs to the double. Its tier is either already set or
+        // not yet decided, and neither is this rule's business. That flag has always been saved, so
+        // it is something known rather than something assumed.
+        const isDoublePart = U(ch.trvSetup) === 'DOUBLE';
         const diff = [];
         if (['BRACKET', 'BACKPLATE'].includes(cat) && !S(ch.trvSetup)) diff.push({ field: 'trvSetup', to: 'SINGLE' });
-        if (cat === 'POLE' && !S(ch.tier)) diff.push({ field: 'tier', to: 'FRONT' });
+        if (cat === 'POLE' && !S(ch.tier) && !isDoublePart) diff.push({ field: 'tier', to: 'FRONT' });
         if (diff.length) hits.push({ clusterId: r.clusterId, clusterName: r.clusterName, nodeName: ch.nodeName, diff });
     }));
     return {
