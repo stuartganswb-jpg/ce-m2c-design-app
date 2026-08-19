@@ -1061,9 +1061,10 @@ export function slots(choices, answers = {}, selectedIds = []) {
     // bracket is preferred here, and only then the first.
     const cutKey = (x) => JSON.stringify(x.projTiers || null);
     const wantCut = JSON.stringify(Object.keys(tierProj).length ? tierProj : null);
+    // Every slot, not just rods and ends: a double pins its RINGS per family too, so the shared-ring
+    // step was listing the same ring two and three times over. Two pins of one part number are one
+    // product to the person choosing, wherever they sit.
     bucket.forEach(slot => {
-        const kindOf = slot.all[0]?.role;
-        if (!ROD_ROLES.includes(kindOf) && slot.kind !== 'END') return;
         const seen = new Map();
         slot.options.forEach(o => {
             const k = String(o.partId || o.id).toUpperCase();
@@ -1081,11 +1082,25 @@ export function slots(choices, answers = {}, selectedIds = []) {
         // the ends that depth gates — otherwise an end is chosen against no constraint and a later
         // bracket silently invalidates it. On a single nothing moves: projection is still its own
         // question, asked first, exactly as it always has been.
-        // …and before the RODS too, once a rear rod can be cut for a particular bracket: the
-        // bracket decides which rod geometry exists, so asking for the rod first asks a question
-        // whose answer set is not yet known.
-        if (allTiers.length && (s.kind === 'BRACKET' || s.kind === 'BACKPLATE')) {
-            k = -1 + (s.kind === 'BRACKET' ? 0 : 0.1);
+        // ── THE ORDER A PERSON ACTUALLY DECIDES IN (Stuart 2026-08-18) ──────────────────────
+        // "it needs to be the left and right end treatments then brackets, as the selection of a
+        //  return removes the selection of the left or right bracket — that decision should be
+        //  made first."
+        //
+        // Exactly right, and it is the same reasoning that put the bracket before the rods. Each
+        // question should come after the one that decides whether it EXISTS:
+        //
+        //   the END treatment decides whether that end HAS a bracket — a return or an inside mount
+        //     is the mount there, so the bracket question may not exist at all;
+        //   the BRACKET decides which rear rod and which ends were cut for it — its depth pair;
+        //   the RODS and everything else follow from those.
+        //
+        // So on a tiered assembly: ends, then bracket, then backplate, then rods. Asking for a
+        // bracket and then removing it two steps later is not a flow, it is a retraction.
+        if (allTiers.length) {
+            if (s.kind === 'END') k = -2;
+            else if (s.kind === 'BRACKET') k = -1;
+            else if (s.kind === 'BACKPLATE') k = -0.9;
         }
         const t = TIER_POSITIONS.indexOf(s.tier);
         const p = POSITION_ORDER.indexOf(s.position);
