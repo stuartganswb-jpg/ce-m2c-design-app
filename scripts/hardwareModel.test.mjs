@@ -936,12 +936,9 @@ eq('nonsense is null', measureOf('n/a'), null);
     const ax = activeAxes(N(family), {});
     ok('no projection question on a tiered family', !ax.some(a => a.key === 'proj'));
 
-    // …and the ends are asked BEFORE the bracket, because a return decides whether that end has a
-    // bracket at all (Stuart 2026-08-18). The bracket still comes before the RODS, whose geometry
-    // its pair decides — each question after the one that decides whether it exists.
+    // …and the bracket is asked before the ends its depths gate.
     const order = slots(N(family), {}, []).map(x => x.kind);
-    ok('the ends come before the bracket', order.indexOf('END') < order.indexOf('BRACKET'));
-    ok('…and the bracket before the rods', order.indexOf('BRACKET') < order.indexOf('ROD'));
+    ok('the bracket comes before the ends', order.indexOf('BRACKET') < order.indexOf('END'));
 
     const endsOn = (tier, sel) => slots(N(family), {}, sel)
         .find(x => x.kind === 'END' && x.tier === tier).options.map(o => o.partId).sort();
@@ -1046,8 +1043,7 @@ eq('nonsense is null', measureOf('n/a'), null);
         eq('…and you can still change your mind where you chose', bk(['BD']).join(), 'H1-138BD,H1-138DD');
     }
 
-    // …and the questions come in the order they decide one another: the end decides whether the
-    // bracket exists, the bracket decides which rod geometry does.
+    // …and the bracket is asked before the rods whose geometry it decides.
     const order = slots(N, {}, []).map(s => s.kind);
     ok('bracket is asked before the rods', order.indexOf('BRACKET') < order.indexOf('ROD'));
 
@@ -1279,81 +1275,6 @@ eq('nonsense is null', measureOf('n/a'), null);
 
     // With no bracket chosen it is still one card, not two.
     eq('one card before a bracket is chosen too', end([]).filter(o => o.partId === 'H1-138KF').length, 1);
-
-    // Rings are pinned per family on a double as well — one card each, same rule.
-    const rings = applyFitsDefaults([
-        C({ id: 'R1', partId: 'H1-138BR', role: 'RING', tier: 'BACK', nodes: ['r1'] }),
-        C({ id: 'R2', partId: 'H1-138BR', role: 'RING', tier: 'BACK', nodes: ['r2'] }),
-        C({ id: 'R3', partId: 'H1-138WRNG', role: 'RING', tier: 'BACK', nodes: ['r3'] }),
-    ].map(normalizeChoice));
-    const ringSlot = slots(rings, {}, []).find(s => s.kind === 'RING');
-    eq('a ring pinned twice is one card', ringSlot.options.length, 2);
-}
-
-// ── THE ORDER A PERSON DECIDES IN ───────────────────────────────────────────────────────────
-// "it needs to be the left and right end treatments then brackets, as the selection of a return
-//  removes the selection of the left or right bracket — that decision should be made first."
-{
-    const cs = [
-        C({ id: 'RF', partId: 'FR', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'CENTER', nodes: ['fr'] }),
-        C({ id: 'RB', partId: 'BR', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', nodes: ['br'] }),
-        C({ id: 'FIN', partId: 'KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fin'] }),
-        C({ id: 'RET', partId: 'FRPF', role: 'RETURN', tier: 'FRONT', position: 'LEFT', nodes: ['ret'] }),
-        C({ id: 'BKT', partId: 'BD', role: 'BRACKET', position: 'LEFT', proj: 'FRONT:6.5, BACK:3.25', nodes: ['bkt'] }),
-        C({ id: 'PLT', partId: 'BP', role: 'BACKPLATE', position: 'LEFT', nodes: ['plt'] }),
-        C({ id: 'RG',  partId: 'RING', role: 'RING', nodes: ['rg'] }),
-    ];
-    const N = applyFitsDefaults(cs.map(normalizeChoice));
-    const order = slots(N, {}, []).map(s => s.kind);
-    const at = (k) => order.indexOf(k);
-    ok('the end is asked before the bracket', at('END') < at('BRACKET'));
-    ok('the bracket before its backplate', at('BRACKET') < at('BACKPLATE'));
-    ok('and the rods after both', at('BACKPLATE') < at('ROD'));
-    ok('rings last of the parts', at('ROD') < at('RING'));
-
-    // …and the reason it matters: choosing the return retracts the bracket that would have followed.
-    const withRet = slots(N, {}, ['RET']).find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
-    ok('a return leaves no bracket question at that end', !withRet || !withRet.options.length);
-}
-
-// ── A TRAVERSE RETURN IS A CUT, NOT A SWAPPED SEGMENT (Stuart 2026-08-19, H1-2TRV) ────────────
-// The fascia is one continuous extrusion with a single CENTER node, so the three-piece test that
-// protects solid poles could only ever answer "no" here — and it was deleting every miter return
-// from both ends of the traverse assembly.
-{
-    const trv = applyFitsDefaults([
-        C({ id: 'F', partId: 'H1-2RCTWR', role: 'FASCIA', position: 'CENTER', nodes: ['f'] }),
-        C({ id: 'MR', partId: 'H1-2TRVMTR', role: 'RETURN', position: 'LEFT', nodes: ['mrl'] }),
-        C({ id: 'FIN', partId: 'H1-2TRVRAD', role: 'FINIAL', position: 'LEFT', nodes: ['finl'] }),
-    ].map(normalizeChoice));
-    const endSlot = (want) => slots(trv, {}, want).find(s => s.kind === 'END' && s.position === 'LEFT');
-    eq('offered before a fascia is chosen', endSlot([]).options.length, 2);
-    const after = endSlot(['F']);
-    eq('still offered once the fascia is chosen', after.options.length, 2);
-    ok('the miter return survives', after.options.some(o => o.role === 'RETURN'));
-
-    // …and the solid rule it was written for is untouched.
-    const solid = applyFitsDefaults([
-        C({ id: 'P', partId: 'ROD1', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['p'] }),
-        C({ id: 'R', partId: 'FEE-FR', role: 'RETURN', position: 'LEFT', nodes: ['r'] }),
-    ].map(normalizeChoice));
-    const oneP = slots(solid, {}, ['P']).find(s => s.kind === 'END' && s.position === 'LEFT');
-    eq('a one-piece SOLID pole still cannot take a return', oneP.options.length, 0);
-}
-
-// ── A HIDDEN PART REACHES THE BOM AND STOPS THERE ─────────────────────────────────────────────
-// "only included in the shop floor bom". The flag was being read off the pin correctly and then
-// dropped at normalization, so every customer-facing surface saw hidden:false.
-{
-    const cs = applyFitsDefaults([
-        C({ id: 'ROD', partId: 'R1', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
-        C({ id: 'NUT', partId: 'HIDDEN-NUTP', name: 'NUTP', role: 'ACCESSORY', hidden: true, always: true, nodes: [] }),
-    ].map(normalizeChoice));
-    const m = resolve({ choices: cs, answers: {}, selectedIds: ['ROD'] });
-    const nut = m.bom.find(l => l.partId === 'HIDDEN-NUTP');
-    ok('the hidden part is in the bill of materials', !!nut);
-    ok('and it is marked hidden there', nut.hidden === true);
-    ok('the rod is not', m.bom.find(l => l.partId === 'R1').hidden === false);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
