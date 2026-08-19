@@ -1048,17 +1048,31 @@ export function slots(choices, answers = {}, selectedIds = []) {
             : 'an inside mount carries the rod at that end';
         slot.options = [];
     });
-    // …and offered once per PART, however many pieces it is pinned as — and however many BRACKETS
-    // it is cut for. H1-138R is one rod to the customer; which of its pins is the right geometry is
-    // the bracket's business, settled by the gate above before this ever runs.
+    // …and offered once per PART, however many pieces it is pinned as, and however many BRACKET
+    // FAMILIES it is pinned for. H1-138R is one rod to the customer and H1-138KF is one finial —
+    // which of their pins is the right geometry is the bracket's business, not a question.
+    //
+    // ⚠ THE ENDS NEEDED THIS TOO (Stuart 2026-08-18: "step 11 back right end treatment is changing
+    // out front right treatment that was made in step 9"). The back-right step was listing every
+    // finial TWICE — once pinned for the 6.5" family and once for the 8.5" — because a double has
+    // one set of ends per bracket family. Two identical-looking cards, and whichever he picked
+    // second swapped the geometry the first had put on screen. When the pins carry their pair the
+    // gate above has already dropped the wrong one; when they do not, the one cut for the CHOSEN
+    // bracket is preferred here, and only then the first.
+    const cutKey = (x) => JSON.stringify(x.projTiers || null);
+    const wantCut = JSON.stringify(Object.keys(tierProj).length ? tierProj : null);
     bucket.forEach(slot => {
-        if (!ROD_ROLES.includes(slot.all[0]?.role)) return;
-        const seen = new Set();
-        slot.options = slot.options.filter(o => {
+        const kindOf = slot.all[0]?.role;
+        if (!ROD_ROLES.includes(kindOf) && slot.kind !== 'END') return;
+        const seen = new Map();
+        slot.options.forEach(o => {
             const k = String(o.partId || o.id).toUpperCase();
-            if (seen.has(k)) return false;
-            seen.add(k); return true;
+            const held = seen.get(k);
+            if (!held) { seen.set(k, o); return; }
+            // A tie is broken by the bracket: the piece cut for it wins over one cut for another.
+            if (cutKey(held) !== wantCut && cutKey(o) === wantCut) seen.set(k, o);
         });
+        slot.options = slot.options.filter(o => seen.get(String(o.partId || o.id).toUpperCase()) === o);
     });
     const rank = (s) => {
         let k = SLOT_ORDER.indexOf(s.kind === 'END' ? 'FINIAL' : s.kind);

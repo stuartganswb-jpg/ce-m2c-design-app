@@ -1252,5 +1252,30 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('one collar is still found', companionsFor(single, ['F']).map(x => x.id).join(), 'ONLY');
 }
 
+// ── ONE FINIAL PER PART, EVEN WHEN A DOUBLE PINS IT PER FAMILY ──────────────────────────────
+// "step 11 back right end treatment is changing out front right treatment that was made in step 9"
+// — the back-right step listed every finial twice, once per bracket family, and picking the second
+// copy swapped the geometry the first had drawn.
+{
+    const P65 = 'FRONT:6.5, BACK:3.25', P85 = 'FRONT:8.5, BACK:3.25';
+    const fin = (id, o) => C({ id, partId: 'H1-138KF', role: 'FINIAL', tier: 'BACK', position: 'RIGHT', nodes: [id.toLowerCase()], ...o });
+    const cs = [
+        C({ id: 'BK85', partId: 'H1-138D', role: 'BRACKET', position: 'CENTER', proj: P85, nodes: ['bk'] }),
+        fin('KF-65', { proj: P65 }),
+        fin('KF-85', { proj: P85 }),
+        C({ id: 'GF', partId: 'H1-138GF', role: 'FINIAL', tier: 'BACK', position: 'RIGHT', nodes: ['gf'] }),
+    ];
+    const N = applyFitsDefaults(cs.map(normalizeChoice));
+    const end = (sel) => slots(N, {}, sel).find(s => s.kind === 'END' && s.tier === 'BACK' && s.position === 'RIGHT').options;
+
+    const withBracket = end(['BK85']);
+    eq('the finial is listed once', withBracket.filter(o => o.partId === 'H1-138KF').length, 1);
+    eq('…and it is the one cut for the chosen bracket', withBracket.find(o => o.partId === 'H1-138KF').id, 'KF-85');
+    eq('other finials are unaffected', withBracket.filter(o => o.partId === 'H1-138GF').length, 1);
+
+    // With no bracket chosen it is still one card, not two.
+    eq('one card before a bracket is chosen too', end([]).filter(o => o.partId === 'H1-138KF').length, 1);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
