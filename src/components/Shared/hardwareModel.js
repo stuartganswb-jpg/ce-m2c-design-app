@@ -524,7 +524,13 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     // say "I am the piece cut for that bracket", and it is admitted only when that bracket is the
     // one chosen. Traverse is separated before this by rod world, so the two families that share
     // 6.5"/3.25" never collide.
-    if (!skip('proj') && choice.projTiers && ctx.tierProj) {
+    // ⚠ THE PART THAT DEFINES THE PAIR IS NOT FILTERED BY IT (Stuart 2026-08-18, found driving his
+    // assembly). A bracket CARRIES a depth pair; a rod or an end is CUT FOR one. Applying the same
+    // test to both meant that once a bracket was chosen it excluded every other bracket from its
+    // own step — "H1-138D: cut for front 8.5, this order's bracket is front 6.5" — so changing your
+    // mind about the bracket was impossible without first deselecting the one you had. A backplate
+    // is still filtered: it belongs to a bracket rather than defining one.
+    if (!skip('proj') && choice.projTiers && ctx.tierProj && choice.role !== 'BRACKET') {
         const off = Object.entries(choice.projTiers)
             .find(([t, v]) => ctx.tierProj[t] !== undefined && !sameMeasure(v, ctx.tierProj[t]));
         if (off) {

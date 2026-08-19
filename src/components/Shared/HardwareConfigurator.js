@@ -760,7 +760,16 @@ function HardwareConfiguratorInner({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                     <div style={{ height: '420px', background: 'var(--paper-2)', border: '1px solid var(--line)', position: 'relative' }}>
                         <div style={{ ...mono, position: 'absolute', left: '13px', top: '11px', zIndex: 2, color: 'var(--ink-soft)' }}>
-                            Live 3D · additive · {chosen.length} part(s)
+                            {/* ⚠ PARTS AND NODES ARE DIFFERENT NUMBERS, and only one of them draws.
+                                A part is a BOM line; a node is geometry. Under default-hidden an
+                                empty node set hides the whole model, so "14 parts, nothing on
+                                screen" and "14 parts, nothing TAGGED" look identical — until the
+                                second number is on the label. Stuart 2026-08-18, an empty canvas
+                                nobody could explain from the outside. */}
+                            Live 3D · additive · {chosen.length} part(s) · {Object.keys(visibleOverrides).length} node(s)
+                            {chosen.length > 0 && Object.keys(visibleOverrides).length === 0 && (
+                                <span style={{ color: '#b00020' }}> · nothing tagged to draw — the chosen parts own no geometry</span>
+                            )}
                         </div>
                         {cadUrl ? (
                             <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}>

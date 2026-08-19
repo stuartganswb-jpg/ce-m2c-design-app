@@ -1036,6 +1036,13 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('the basic bracket resolves it to its own geometry', backOpts(['BD']).join(), 'BACK-65');
     eq('the decorative bracket resolves it to its own', backOpts(['DD']).join(), 'BACK-85');
 
+    // A CHOSEN BRACKET MUST NOT HIDE THE OTHER BRACKETS. It defines the pair; it is not cut for one.
+    {
+        const bk = (sel) => slots(N, {}, sel).find(s => s.kind === 'BRACKET').options.map(o => o.partId).sort();
+        eq('both brackets stand before either is chosen', bk([]).join(), 'H1-138BD,H1-138DD');
+        eq('…and after one is chosen you can still change your mind', bk(['BD']).join(), 'H1-138BD,H1-138DD');
+    }
+
     // …and the bracket is asked before the rods whose geometry it decides.
     const order = slots(N, {}, []).map(s => s.kind);
     ok('bracket is asked before the rods', order.indexOf('BRACKET') < order.indexOf('ROD'));
