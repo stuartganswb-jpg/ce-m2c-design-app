@@ -122,6 +122,12 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         always: isRider && !parked,
         // BOM-ONLY: real, picked and billed, but never drawn and never on a customer document.
         hidden,
+        // ⚠ PARKED IS NOT A CHOICE (Stuart 2026-08-18: "hidden items are displaying"). A parked pin
+        // is a PLACEHOLDER — geometry whose item number does not exist yet — so it has no nodes, no
+        // price and nothing to sell. It was falling through as an ordinary option because it is
+        // hidden AND parked, and the rider test deliberately excludes parked. It must be neither: a
+        // question with `HIDDEN-83238L91253A1921` among the answers is a question nobody can answer.
+        parked,
         // Tri-state override for the ring rule: tagged true or false wins over what the rod's role
         // and position imply, so an exception to "what a ring rides on" is a tag, not a release.
         ...(pin.carriesRings === true || pin.carriesRings === false ? { carriesRings: pin.carriesRings } : {}),

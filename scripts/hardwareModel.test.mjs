@@ -1124,5 +1124,20 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('a front finial leaves the rear rod its own end', backLeft2.options.length > 0);
 }
 
+// ── A PARKED PIN IS A PLACEHOLDER, NOT AN ANSWER ────────────────────────────────────────────
+// "hidden items are displaying" — HIDDEN-83238L91253A1921 was being offered as a rod.
+{
+    const cs = [
+        C({ id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'PARK', partId: 'HIDDEN-83238L91253A1921', role: 'ROD', rodKind: 'SOLID', parked: true, nodes: [] }),
+    ];
+    const N = applyFitsDefaults(cs.map(normalizeChoice));
+    const slot = slots(N, {}, []).find(s => s.kind === 'ROD');
+    eq('only the real rod is offered', slot.options.map(o => o.partId).join(), 'H1-138R');
+    // …and it never bills, because there is nothing to bill.
+    const m = resolve({ choices: cs, answers: {}, selectedIds: ['ROD', 'PARK'] });
+    ok('a parked pin is not on the bill', !m.bom.some(b => /^HIDDEN-/.test(b.partId)));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

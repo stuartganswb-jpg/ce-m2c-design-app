@@ -337,6 +337,7 @@ export function normalizeChoice(input = {}) {
         // WHERE ALONG the rod — LEFT / CENTER / RIGHT. A FRONT/BACK value has been lifted to tier
         // above, so this field means one thing only.
         position: TIER_POSITIONS.includes(U(input.position)) ? '' : U(input.position),
+        parked: !!input.parked,                      // a placeholder, not an option
         // ⚠ A ROD IS NEVER A RIDER (Stuart 2026-08-17: "when solid pole is selected i am getting
         // offered only two choices of acrylic and wood, not metal"). The metal rod's centre piece
         // is tagged ALWAYS SHOWN — a fossil of the old engine, where the short centre rod was
@@ -789,6 +790,7 @@ export function slots(choices, answers = {}, selectedIds = []) {
     choices.forEach(c => {
         if (c.always) return;                       // riders are never a question
         if (c.isCollar) return;                     // …and nor is a collar: it comes with its finial
+        if (c.parked) return;                       // …nor a placeholder with no item number yet
         const kind = SLOT_OF_ROLE(c.role);
         if (!kind) return;
         // A rod's position carries TWO different facts, and they must not be treated alike:
@@ -1039,7 +1041,7 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const ownership = nodeOwnership(norm, modelNodes);
     const selected = norm.filter(c => selectedIds.includes(c.id));
     const bom = [
-        ...norm.filter(c => selectedIds.includes(c.id)),
+        ...norm.filter(c => selectedIds.includes(c.id) && !c.parked),
         ...riders,
         ...companions,          // the collar bills with its finial
     ].map(c => ({ partId: c.partId, name: c.name, qty: c.qty, price: c.price, raw: c.raw,
