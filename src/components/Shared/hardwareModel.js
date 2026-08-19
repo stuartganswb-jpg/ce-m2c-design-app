@@ -813,7 +813,12 @@ export function slots(choices, answers = {}, selectedIds = []) {
     // else — rods, ends, rings, plates — against all of them. Left then offers all three, centre
     // and right offer only what matches it, and the rear rod follows the same pair without a rule
     // of its own.
-    const chosenPairs = choices.filter(c => want.has(c.id) && c.projTiers);
+    // ⚠ ONLY A BRACKET DEFINES THE PAIR. A rod carries one to say which bracket it was CUT FOR;
+    // letting it vote turned the rule around — with the 8.5" rear rod chosen, the bracket step
+    // offered only the 8.5" arm, so changing family meant deselecting the rod first, and the rod
+    // step only ever shows one rod. The bracket is the authority on depth; everything else answers
+    // to it and nothing answers back.
+    const chosenPairs = choices.filter(c => want.has(c.id) && c.projTiers && c.role === 'BRACKET');
     const tierProj = {};
     chosenPairs.forEach(c => Object.assign(tierProj, c.projTiers));
     const pairExcept = (position) => {

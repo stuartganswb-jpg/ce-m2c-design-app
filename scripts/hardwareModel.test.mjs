@@ -1183,6 +1183,11 @@ eq('nonsense is null', measureOf('n/a'), null);
     // …and the rear rod follows the same pair, with no rule of its own.
     eq('the rear rod follows the 6.5 bracket', backRod(['L-WDB']), 'R65');
     eq('…and the 8.5 bracket', backRod(['L-D']), 'R85');
+
+    // ⚠ AND THE ROD NEVER ANSWERS BACK. With a rear rod chosen, every bracket is still on offer —
+    // otherwise changing family means deselecting the rod first, and the rod step shows one rod.
+    eq('a chosen rear rod does not narrow the brackets', at('LEFT', ['R85']), 'H1-138B6,H1-138D,H1-138WDB');
+    eq('…nor at the other positions', at('CENTER', ['R85']), 'H1-138B6,H1-138D,H1-138WDB');
     // With no bracket chosen it is one rod to the customer — which of its two cuts is right is the
     // bracket's business, settled above before the de-duplication ever runs.
     eq('the rear rod is one choice until a bracket decides which cut', backRod([]).split(',').length, 1);
