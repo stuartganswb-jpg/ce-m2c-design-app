@@ -2,8 +2,9 @@ import React, { useState, useRef } from 'react';
 import { isFloorSupervisor } from '../Shared/finishingRoles';
 import { runningStepsOf, activityOf, activityTone } from '../Shared/floorActivity';
 import { finishingDb as db } from '../../firebase';
-import { doc, updateDoc, addDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from "firebase/firestore";
+import { doc, updateDoc, addDoc, collection, getDoc, getDocs, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingTime';
+import { propagateFloorState } from '../Shared/orderLifecycle';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { pickGateOf } from '../Shared/orderStatus';
 
@@ -171,6 +172,13 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // same coat is the ideal, never a gate. Small parts advance on currentStepIndex; poles advance
   // on poleStepIndex (defaults to currentStepIndex on legacy docs). Orders without real poles
   // never see pole cards or pole gates at all.
+  // One call, so every completion path reports the same way and none can forget.
+  const tellRtg = async (wo, phase) => {
+      try {
+          await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+              { finWo: wo, phase, by: (user && user.name) || '' });
+      } catch (e) { console.warn('RTG propagate failed (floor state stands):', e); }
+  };
   const woHasPoles = (wo) => Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0 || wo.type === 'Poles';
   // A POLE-ONLY ORDER HAS NO SMALL PARTS (Grace 2026-08-18: "with orders that are only Poles, an
   // option to spray small parts shows up … in this instance there are no small parts and it's only
@@ -252,6 +260,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
           if (polesFinished) { updates.currentPhase = 'Complete'; updates.stepStatus = 'Complete'; updates.completedAt = Date.now(); }
       }
       await updateDoc(doc(db,"fin_workorders", wo.id), updates);
+      // TELL THE BOARD (Stuart 2026-08-19: "no more orphans still open on the floor"). RTG is the
+      // single source of truth, which only holds if the floor reports back — a job finished here
+      // used to leave the dispatch board showing live work forever.
+      if (updates.currentPhase === 'Complete') await tellRtg(wo, 'Complete');
   };
   // FINAL-STEP QC GATE (Stuart 2026-07-20 — restored): completing the order's LAST step first
   // asks good-vs-scrap (QcModal): stock builds record completedParts/scrapReported (the NetSuite
@@ -287,6 +299,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       };
       if (next >= len && partsFinished) { updates.currentPhase = 'Complete'; updates.stepStatus = 'Complete'; updates.completedAt = Date.now(); }
       await updateDoc(doc(db,"fin_workorders", wo.id), updates);
+      // TELL THE BOARD (Stuart 2026-08-19: "no more orphans still open on the floor"). RTG is the
+      // single source of truth, which only holds if the floor reports back — a job finished here
+      // used to leave the dispatch board showing live work forever.
+      if (updates.currentPhase === 'Complete') await tellRtg(wo, 'Complete');
   };
   const handleCompletePoleStep = async (wo) => {
       const len = poleRecipeLen(wo);

@@ -5,6 +5,7 @@ import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, dele
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
+import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans } from '../Shared/orderLifecycle';
 import { woRecipeCode } from '../Shared/finishingTime';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
@@ -1238,61 +1239,22 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     // (doc id, woId, soId, orderKey, hqJobId → fin id / orderKey / SHOP-<key>).
     const closeOrderEverywhere = async (order, kind) => {
         const isSales = kind === 'sales';
-        const hqColl = isSales ? 'hq_sales_orders' : 'hq_work_orders';
         const ref = isSales ? `SO ${order.soId || order.id}` : `WO ${order.nsWoTran || order.woId || order.id}`;
-        const keys = [...new Set([order.id, order.woId, order.soId, order.orderKey, order.hqJobId].filter(Boolean).map(String))];
-        const finDocs = new Map(), shopDocs = new Map();
+        let links;
         try {
-            await Promise.all(keys.map(async (k) => {
-                const [f, s] = await Promise.all([getDoc(doc(db, 'fin_workorders', k)), getDoc(doc(db, 'shop_custom_orders', `SHOP-${k}`))]);
-                if (f.exists()) finDocs.set(f.id, f.data());
-                if (s.exists()) shopDocs.set(s.id, s.data());
-            }));
-            const [fq, sq] = await Promise.all([
-                getDocs(query(collection(db, 'fin_workorders'), where('orderKey', 'in', keys.slice(0, 10)))),
-                getDocs(query(collection(db, 'shop_custom_orders'), where('orderKey', 'in', keys.slice(0, 10)))),
-            ]);
-            fq.forEach(d => finDocs.set(d.id, d.data()));
-            sq.forEach(d => shopDocs.set(d.id, d.data()));
+            links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, order, kind);
         } catch (e) { return alert('Could not look up the linked floor documents: ' + (e.message || e)); }
-
-        const finList = [...finDocs.entries()];
-        const finNs = finList.find(([, d]) => d.nsWoId && !d.nsWoClosed && !d.nsWoCompletionPosted);
-        const ns = finNs
-            ? { docId: finNs[0], coll: 'fin_workorders', nsWoId: finNs[1].nsWoId, tran: finNs[1].nsWoTran }
-            : (order.nsWoId && !order.nsWoClosed ? { docId: order.id, coll: hqColl, nsWoId: order.nsWoId, tran: order.nsWoTran } : null);
-
-        const nsLine = ns ? `\n• NetSuite WO ${ns.tran || ns.nsWoId} → CLOSE queued (releases the component commitment)\n  ⚠ QUEUED, NOT DONE — NetSuite refuses the close on a non-WIP work order. Check the transmit log below; if it fails, the WO stays open in NetSuite and must be closed there.` : '';
-        if (!window.confirm(`✕ CLOSE ${ref} EVERYWHERE?\n\n• RTG record → Closed (leaves this board)\n• ${finDocs.size} finishing floor job(s) → Closed (leave the Setup Queue, Active Floor & WMS pick)\n• ${shopDocs.size} shop floor job(s) → closed out of the shop queues${nsLine}\n\nDocuments are kept for history — nothing is deleted.`)) return;
+        const nsOpen = [...links.fin.values()].some(d => d.nsWoId && !d.nsWoClosed && !d.nsWoCompletionPosted) || (order.nsWoId && !order.nsWoClosed);
+        const nsLine = nsOpen ? `\n• NetSuite work order → CLOSE queued (releases the component commitment)\n  ⚠ QUEUED, NOT DONE — NetSuite refuses the close on a non-WIP work order. Check the transmit log below; if it fails, the WO stays open in NetSuite.` : '';
+        if (!window.confirm(`✕ CLOSE ${ref} EVERYWHERE?\n\n• RTG record → Closed (leaves this board)\n• ${links.fin.size} finishing floor job(s) → Closed (leave the Setup Queue, Active Floor & WMS pick)\n• ${links.shop.size} shop floor job(s) → closed out of the shop queues${nsLine}\n\nDocuments are kept for history — nothing is deleted.`)) return;
         try {
-            const stamp = { closedAt: Date.now(), closedBy: currentUser || '', closedFrom: 'RTG' };
-            for (const [id] of finList) {
-                await updateDoc(doc(db, 'fin_workorders', id), { currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', ...stamp });
-            }
-            for (const [id] of shopDocs) {
-                // The shop queues exit on 'Completed'; `closed: true` records it was closed, not built.
-                await updateDoc(doc(db, 'shop_custom_orders', id), { status: 'Completed', closed: true, ...stamp });
-            }
-            await updateDoc(doc(db, hqColl, order.id), { status: 'Closed', ...stamp });
-            if (ns) {
-                await enqueueNsWrite({
-                    kind: 'workorderclose', label: `Close NS WO ${ns.tran || ns.nsWoId} — ${ref}`,
-                    sourceApp: 'RTG', createdBy: currentUser || '',
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${ns.nsWoId}/!transform/workorderclose`,
-                    method: 'POST', payload: { memo: `Closed from RTG (${ref})` },
-                    // `nsWoClosed` is set by the WRITE-BACK, i.e. only when NetSuite actually accepts
-                    // it. The PENDING flag below is stamped now and cleared by that same write-back.
-                    writeBack: { collection: ns.coll, docId: ns.docId, patch: { nsWoClosed: true, nsWoClosePending: false } }
-                });
-                // THE APP MUST NOT CLAIM NETSUITE IS CLOSED (Eric 2026-08-18: "removes order from
-                // queue, but does not close on Netsuite side"). The close is a QUEUED REQUEST, and
-                // for a non-WIP work order NetSuite refuses the transform outright — so the order
-                // carries "close pending" until the write-back proves otherwise, and every screen
-                // that shows it can say so instead of everyone assuming it went through.
-                await updateDoc(doc(db, hqColl, order.id), { nsWoClosePending: true, nsWoCloseQueuedAt: Date.now() }).catch(() => {});
-                try { await updateDoc(doc(db, ns.coll, ns.docId), { nsWoClosePending: true }); } catch (e) { /* non-fatal */ }
-            }
-            addLog(`✕ ${ref} closed in the app — ${finDocs.size} finishing, ${shopDocs.size} shop${ns ? `. NetSuite close QUEUED for ${ns.tran || ns.nsWoId} — confirm it lands in the transmit log below; a non-WIP work order will refuse the close.` : ''}`, ns ? 'warn' : 'success');
+            // THE one closer, shared with the Setup Queue and Stock View so a close means the same
+            // thing wherever it is pressed (Stuart 2026-08-19).
+            const res = await closeEverywhere(
+                { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                { order, kind, by: currentUser || '', from: 'RTG', enqueueNsWrite }
+            );
+            addLog(`✕ ${ref} closed — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `. NetSuite close QUEUED for ${res.ns} — confirm it lands in the transmit log; a non-WIP work order will refuse it.` : ''}`, res.ns ? 'warn' : 'success');
             loadRTGOrders();
         } catch (e) {
             alert('Close failed partway: ' + (e.message || e) + '\n\nRe-run Close — docs already closed are unaffected.');
@@ -1305,6 +1267,72 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     // View / Config — so the pending work above it stays the thing you act on. Rows dispatched in
     // the last 7 days show by default; older ones sit behind the archive toggle at the foot of
     // the column, which is the weekly condense he asked for.
+    // ── RECONCILIATION: WHERE THE BOARD AND THE FLOOR DISAGREE ──────────────────────────────────
+    // (Stuart 2026-08-19: "this needs to be the single source of truth … no more orphans still open
+    // on the floor.") RTG can only BE the authority if it can see where it is being contradicted.
+    // The four live feeds it already subscribes to are exactly what the audit needs, so this costs
+    // no extra reads. Every finding names the document and offers the close that settles it.
+    const orphanFindings = useMemo(
+        () => auditOrphans({ hqOrders: [...liveWO, ...liveSO], finWos: liveFin, shopJobs: liveShop }),
+        [liveWO, liveSO, liveFin, liveShop]
+    );
+    const ORPHAN_COPY = {
+        ORPHAN_FLOOR:   { label: 'On the floor, not on this board', why: 'A live floor job with no RTG record — nothing here can dispatch, close or report it.' },
+        FLOOR_CLOSED:   { label: 'Closed on the floor, open here',  why: 'The floor finished with it; the board still lists it as live work.' },
+        BOARD_CLOSED:   { label: 'Closed here, still live on the floor', why: 'The board closed it; the floor never heard, so it is still queued or being worked.' },
+        NS_UNCONFIRMED: { label: 'NetSuite never confirmed the close', why: 'The app closed it and queued the NetSuite close, which has not come back. A non-WIP work order refuses it.' },
+    };
+    const reconcileOne = async (f) => {
+        const target = f.parent || f.floor;
+        if (!target) return;
+        const kind = (f.parent && f.parent.soId) ? 'sales' : 'stock';
+        if (!window.confirm(`Reconcile ${target.id}?\n\n${ORPHAN_COPY[f.type].why}\n\nThis closes it EVERYWHERE — RTG, finishing, shop, and it queues the NetSuite close if one is open. Documents are kept.`)) return;
+        try {
+            const res = await closeEverywhere(
+                { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                { order: target, kind, by: currentUser || '', from: 'RTG_RECONCILE', reason: f.type, enqueueNsWrite }
+            );
+            addLog(`⇄ Reconciled ${target.id} (${f.type}) — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `, NetSuite close queued (${res.ns})` : ''}.`, 'success');
+            loadRTGOrders();
+        } catch (e) { alert('Reconcile failed: ' + (e.message || e)); }
+    };
+    const reconcilePanel = () => {
+        if (!orphanFindings.length) return (
+            <div style={{ padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: '#3a7d44' }}>
+                ✓ BOARD AND FLOOR AGREE — no orphans, no unconfirmed closes.
+            </div>
+        );
+        const byType = orphanFindings.reduce((m, f) => { (m[f.type] = m[f.type] || []).push(f); return m; }, {});
+        return (
+            <div style={{ padding: '4px 0 10px' }}>
+                {Object.entries(byType).map(([type, list]) => (
+                    <div key={type} style={{ padding: '10px 24px', borderTop: '1px solid var(--paper-2)' }}>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>
+                            {ORPHAN_COPY[type].label} · {list.length}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--ink-soft)', margin: '4px 0 8px', lineHeight: 1.5 }}>{ORPHAN_COPY[type].why}</div>
+                        {list.slice(0, 12).map((f, i) => {
+                            const t = f.parent || f.floor;
+                            const code = woItemCodeOf(f.floor || f.parent);
+                            return (
+                                <div key={(t && t.id) + i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{(f.floor && (f.floor.nsWoTran || f.floor.displayId)) || (t && t.id)}</span>
+                                    {code && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{code}</span>}
+                                    {f.coll && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{f.coll === 'fin_workorders' ? 'FINISHING' : 'SHOP'}</span>}
+                                    {type !== 'NS_UNCONFIRMED' && (
+                                        <button onClick={() => reconcileOne(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }}>⇄ Close everywhere</button>
+                                    )}
+                                    {type === 'NS_UNCONFIRMED' && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>check the transmit log below</span>}
+                                </div>
+                            );
+                        })}
+                        {list.length > 12 && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '4px' }}>…and {list.length - 12} more</div>}
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
     const dispatchedRow = (o, kind) => (
         <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '6px', background: '#fff', border: '1px solid var(--line)', borderLeft: `4px solid ${(o.nsWoClosePending && !o.nsWoClosed) ? '#d9534f' : '#5a8f5a'}`, borderRadius: '2px' }}>
             {/* The close was queued and NetSuite has not confirmed it. Silence here is what let
@@ -1764,6 +1792,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     return bits.join(' · ');
                 };
                 return (
+                    <>
+                    {/* RECONCILIATION sits directly above the transmit log: together they are the
+                        two ways this board can be contradicted — by the floor, and by NetSuite. */}
+                    <div style={{ background: '#fff', border: `1px solid ${orphanFindings.length ? '#d9534f' : 'var(--line)'}`, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>
+                        <div style={{ padding: '14px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                            <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Board vs Floor</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: orphanFindings.length ? '#d9534f' : 'var(--ink-soft)' }}>
+                                {orphanFindings.length ? `${orphanFindings.length} disagreement${orphanFindings.length === 1 ? '' : 's'} — RTG is the record; settle them here` : 'this board is the single source of truth'}
+                            </span>
+                        </div>
+                        {reconcilePanel()}
+                    </div>
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>
                         <div style={{ padding: '14px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>NetSuite Transmit Log</span>
@@ -1801,6 +1841,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                             ))}
                         </div>
                     </div>
+                    </>
                 );
             })()}
 

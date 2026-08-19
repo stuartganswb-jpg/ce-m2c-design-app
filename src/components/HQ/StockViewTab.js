@@ -6,6 +6,7 @@ import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '
 import { SOURCING, sourcingOf } from '../Shared/sourcing';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
+import { closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
@@ -1207,21 +1208,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const nsNote = (fin && fin.nsWoId && !fin.nsWoClosed && !fin.nsWoCompletionPosted) ? `\n\nIts NetSuite work order (${fin.nsWoTran || fin.nsWoId}) gets a CLOSE queued too.` : '';
         if (!window.confirm(`✕ CLOSE ${ref}?\n\nIt leaves every queue (docs kept for history).${nsNote}`)) return;
         try {
-            // Closing has to clear the PICK fields too, not just the phase — otherwise the job stays
-            // in the WMS pick queue for a pick nobody should do (Sandra 2026-08-17). RTG's
-            // close-everywhere has always done this; this one and the Setup Queue's did not.
-            if (fin) await updateDoc(doc(db, 'fin_workorders', fin.id), { currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', closedAt: Date.now(), closedBy: currentUser || 'StockView' });
-            if (hq) await updateDoc(doc(db, 'hq_work_orders', hq.id), { status: 'Closed', closedAt: Date.now() }).catch(() => {});
-            if (fin && fin.nsWoId && !fin.nsWoClosed && !fin.nsWoCompletionPosted) {
-                await enqueueNsWrite({
-                    kind: 'workorderclose', label: `Close NS WO ${fin.nsWoTran || fin.nsWoId} — ${fin.stockErpId || fin.id}`,
-                    sourceApp: 'STOCKVIEW', createdBy: currentUser || '',
-                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${fin.nsWoId}/!transform/workorderclose`,
-                    method: 'POST', payload: { memo: `Closed from Open WOs cleanup (app WO ${fin.id})` },
-                    writeBack: { collection: 'fin_workorders', docId: fin.id, patch: { nsWoClosed: true } }
-                });
-            }
-            addLog(`✕ Closed ${ref}.`, 'info');
+            // ONE CLOSER (Stuart 2026-08-19). This reached the finishing job and the RTG record but
+            // never the SHOP sibling, so a custom order closed here left its shop half live.
+            const res = await closeOrderEverywhere(
+                { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                { order: fin || hq, kind: 'stock', by: currentUser || 'StockView', from: 'STOCK_VIEW', enqueueNsWrite }
+            );
+            addLog(`✕ Closed ${ref} — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `, NetSuite close queued (${res.ns}) — NOT confirmed` : ''}.`, res.ns ? 'warn' : 'info');
             loadOpenWos();
         } catch (e) { alert('Close failed: ' + (e.message || e)); }
     };

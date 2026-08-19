@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc, setDoc, getDocs, query, where, collection, onSnapshot } from "firebase/firestore";
+import { doc, updateDoc, setDoc, getDoc, getDocs, query, where, collection, onSnapshot } from "firebase/firestore";
 import { btnStyle, cardStyle } from './finishingStyles';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { nsProxyFetch } from '../Shared/nsProxy';
 import { makeFullTasks, woItemCodeOf, woItemNameOf, isPlaceholderDims } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
+import { closeOrderEverywhere } from '../Shared/orderLifecycle';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
@@ -236,23 +237,17 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           : '\n\n(App-side only — no NetSuite work order attached.)';
       if (!window.confirm(`✕ CLOSE work order ${wo.displayId || wo.id}?\n\n${wo.recipe || 'no recipe'} · ${wo.totalParts || 0} pcs · ${wo.customer || wo.clientName || ''}\n\nIt leaves every queue (the record is kept for history). This does not undo picking/staging already done.${nsNote}`)) return;
       try {
-          // Clearing the PICK fields is part of closing — a job that only had its phase stamped
-          // stayed in the WMS pick queue afterwards (Sandra 2026-08-17). Same shape as RTG's close.
-          await updateDoc(doc(db, "fin_workorders", wo.id), { currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', closedAt: Date.now(), closedBy: 'Setup Queue' });
-          if (wo.nsWoId && !wo.nsWoClosed && !wo.nsCompletionQueued) {
-              try {
-                  await enqueueNsWrite({
-                      kind: 'workorderclose',
-                      label: `Close NS WO ${wo.nsWoTran || wo.nsWoId} — ${wo.stockErpId || wo.displayId || wo.id}`,
-                      sourceApp: 'FINISHING', createdBy: 'Setup Queue',
-                      targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${wo.nsWoId}/!transform/workorderclose`,
-                      method: 'POST',
-                      payload: { memo: `Closed from Setup Queue (app WO ${wo.id})` },
-                      writeBack: { collection: 'fin_workorders', docId: wo.id, patch: { nsWoClosed: true } }
-                  });
-              } catch (e) { alert('App WO closed, but queueing the NetSuite close failed: ' + (e.message || e)); }
-          }
-          if (writeLog) writeLog(`Closed WO ${wo.displayId || wo.id} from the Setup Queue`, 'setup');
+          // ONE CLOSER FOR EVERY SCREEN (Stuart 2026-08-19). This used to close the finishing job
+          // and nothing else — not the shop sibling, and crucially not the RTG record, which went
+          // on listing the order as live work. That is the orphan. closeOrderEverywhere reaches all
+          // four (fin · shop · RTG · NetSuite) from whichever screen presses it.
+          const res = await closeOrderEverywhere(
+              { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+              { order: wo, kind: wo.orderType === 'sales' ? 'sales' : 'stock', by: currentUser || 'Setup Queue', from: 'SETUP_QUEUE', enqueueNsWrite }
+          );
+          if (writeLog) writeLog(`Closed WO ${wo.displayId || wo.id} from the Setup Queue — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `, NetSuite close queued (${res.ns})` : ''}`, 'setup');
+          if (!res.hqFound) alert(`✕ ${wo.displayId || wo.id} is closed on the floor.\n\n⚠ No RTG record was found for it, so there is nothing on the dispatch board to close. Tell Stuart — an order the board never knew about is worth understanding.`);
+          else if (res.ns) alert(`✕ ${wo.displayId || wo.id} closed — floor, shop and RTG.\n\nThe NetSuite close for ${res.ns} is QUEUED, not confirmed: NetSuite refuses the close on a non-WIP work order. Check HQ 11.1 → NetSuite Sync Queue; if it fails, the WO is still open in NetSuite.`);
       } catch (err) { alert(`Close failed: ${err.message}`); }
   };
 
