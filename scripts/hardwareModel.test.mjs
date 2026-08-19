@@ -1316,5 +1316,45 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('a return leaves no bracket question at that end', !withRet || !withRet.options.length);
 }
 
+// ── A TRAVERSE RETURN IS A CUT, NOT A SWAPPED SEGMENT (Stuart 2026-08-19, H1-2TRV) ────────────
+// The fascia is one continuous extrusion with a single CENTER node, so the three-piece test that
+// protects solid poles could only ever answer "no" here — and it was deleting every miter return
+// from both ends of the traverse assembly.
+{
+    const trv = applyFitsDefaults([
+        C({ id: 'F', partId: 'H1-2RCTWR', role: 'FASCIA', position: 'CENTER', nodes: ['f'] }),
+        C({ id: 'MR', partId: 'H1-2TRVMTR', role: 'RETURN', position: 'LEFT', nodes: ['mrl'] }),
+        C({ id: 'FIN', partId: 'H1-2TRVRAD', role: 'FINIAL', position: 'LEFT', nodes: ['finl'] }),
+    ].map(normalizeChoice));
+    const endSlot = (want) => slots(trv, {}, want).find(s => s.kind === 'END' && s.position === 'LEFT');
+    eq('offered before a fascia is chosen', endSlot([]).options.length, 2);
+    const after = endSlot(['F']);
+    eq('still offered once the fascia is chosen', after.options.length, 2);
+    ok('the miter return survives', after.options.some(o => o.role === 'RETURN'));
+
+    // …and the solid rule it was written for is untouched.
+    const solid = applyFitsDefaults([
+        C({ id: 'P', partId: 'ROD1', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['p'] }),
+        C({ id: 'R', partId: 'FEE-FR', role: 'RETURN', position: 'LEFT', nodes: ['r'] }),
+    ].map(normalizeChoice));
+    const oneP = slots(solid, {}, ['P']).find(s => s.kind === 'END' && s.position === 'LEFT');
+    eq('a one-piece SOLID pole still cannot take a return', oneP.options.length, 0);
+}
+
+// ── A HIDDEN PART REACHES THE BOM AND STOPS THERE ─────────────────────────────────────────────
+// "only included in the shop floor bom". The flag was being read off the pin correctly and then
+// dropped at normalization, so every customer-facing surface saw hidden:false.
+{
+    const cs = applyFitsDefaults([
+        C({ id: 'ROD', partId: 'R1', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'NUT', partId: 'HIDDEN-NUTP', name: 'NUTP', role: 'ACCESSORY', hidden: true, always: true, nodes: [] }),
+    ].map(normalizeChoice));
+    const m = resolve({ choices: cs, answers: {}, selectedIds: ['ROD'] });
+    const nut = m.bom.find(l => l.partId === 'HIDDEN-NUTP');
+    ok('the hidden part is in the bill of materials', !!nut);
+    ok('and it is marked hidden there', nut.hidden === true);
+    ok('the rod is not', m.bom.find(l => l.partId === 'R1').hidden === false);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
