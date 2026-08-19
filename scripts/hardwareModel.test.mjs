@@ -1188,5 +1188,39 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('the rear rod is one choice until a bracket decides which cut', backRod([]).split(',').length, 1);
 }
 
+// ── ONE REAR ROD, NOT BOTH CUTS OF IT ───────────────────────────────────────────────────────
+// "when i chose round steel or wood both rear projection rods still entered."
+{
+    const P65 = 'FRONT:6.5, BACK:3.25', P85 = 'FRONT:8.5, BACK:3.25';
+    const cs = [
+        C({ id: 'BK', partId: 'H1-138D', role: 'BRACKET', position: 'CENTER', proj: P85, nodes: ['bk'] }),
+        C({ id: 'B65', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: P65, nodes: ['back-65'] }),
+        C({ id: 'B85', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: P85, nodes: ['back-85'] }),
+        // the acrylic has only one cut, which is why it looked correct all along
+        C({ id: 'A85', partId: 'H1-138AR', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: P85, nodes: ['acr-85'] }),
+    ];
+    const vis = (sel) => resolve({ choices: cs, answers: {}, selectedIds: sel }).visible;
+
+    const steel = vis(['BK', 'B85']);
+    ok('the rod cut for this bracket renders', steel.has('back-85'));
+    ok('…and the other cut of the same rod does NOT', !steel.has('back-65'));
+
+    // Choosing the 6.5 cut shows that one and only that one.
+    const other = vis(['B65']);
+    ok('the 6.5 cut renders alone', other.has('back-65') && !other.has('back-85'));
+
+    // A rod with a single cut is unaffected.
+    ok('the acrylic still renders', vis(['BK', 'A85']).has('acr-85'));
+
+    // And a rod with NO pair still brings all its own segments — the singles, untouched.
+    const plain = [
+        C({ id: 'P-C', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'CENTER', nodes: ['f-c'] }),
+        C({ id: 'P-L', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'LEFT', nodes: ['f-l'] }),
+        C({ id: 'FIN', partId: 'KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fin'] }),
+    ];
+    const front = resolve({ choices: plain, answers: {}, selectedIds: ['P-C', 'FIN'] }).visible;
+    ok('an untagged three-piece pole still assembles', front.has('f-c') && front.has('f-l'));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

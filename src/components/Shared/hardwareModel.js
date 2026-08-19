@@ -668,6 +668,16 @@ export function visibleNodes(choices, answers = {}, selectedIds = []) {
     const selected = choices.filter(c => want.has(c.id));
     const on = new Set();
     const take = (c) => c.nodes.forEach(n => on.add(n));
+    // ⚠ …AND CUT FOR THE SAME BRACKET (Stuart 2026-08-18: "when i chose round steel or wood both
+    // rear projection rods still entered"). H1-138R exists TWICE at tier BACK — once cut for the
+    // 6.5" bracket and once for the 8.5" — because the rear rod sits at a different distance behind
+    // the front rod on each. Same number, same tier, different geometry, so pulling in every
+    // sibling drew both rear rods at once. The acrylic looked right only because it does not have
+    // two. The pair the chosen rod carries is what separates them, exactly as it does when the
+    // OPTION is offered — the same fact, applied one step later.
+    const cutOf = (x) => JSON.stringify(x.projTiers || null);
+    const sameCut = (a, b) => cutOf(a) === cutOf(b);
+
     // A chosen ROD brings every segment of the SAME PART **ON THE SAME ROD**, each judged by that
     // rod's own end. ⚠ THE TIER IS PART OF THE IDENTITY (Stuart 2026-08-17, tagging the double):
     // front and back are frequently the SAME item number — H1-138R is both rods — so grouping by
@@ -682,7 +692,7 @@ export function visibleNodes(choices, answers = {}, selectedIds = []) {
         if (!ROD_ROLES.includes(c.role)) { take(c); return; }
         choices
             .filter(x => ROD_ROLES.includes(x.role) && x.partId && x.partId === c.partId
-                && (x.tier || '') === (c.tier || ''))
+                && (x.tier || '') === (c.tier || '') && sameCut(x, c))
             .forEach(seg => { if (segmentShows(seg, c.tier || '')) take(seg); });
         if (!c.partId) take(c);   // an unidentified rod is only ever itself
     });
