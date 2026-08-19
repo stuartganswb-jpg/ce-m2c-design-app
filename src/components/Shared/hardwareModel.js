@@ -337,7 +337,12 @@ export function normalizeChoice(input = {}) {
         // WHERE ALONG the rod — LEFT / CENTER / RIGHT. A FRONT/BACK value has been lifted to tier
         // above, so this field means one thing only.
         position: TIER_POSITIONS.includes(U(input.position)) ? '' : U(input.position),
-        parked: !!input.parked,                      // a placeholder, not an option
+        // A PLACEHOLDER, NOT AN OPTION — by the flag, and by the NAME. The flag is written when a
+        // pin is parked, but a pin that has been re-saved since can carry the minted id without it,
+        // and `HIDDEN-83238L91253A1921` is never a part anybody can choose or buy whatever its
+        // flags happen to say. The id is minted by this app for exactly one purpose, so reading it
+        // is not a guess.
+        parked: !!input.parked || /^HIDDEN-/i.test(String(input.partId || '')),
         // ⚠ A ROD IS NEVER A RIDER (Stuart 2026-08-17: "when solid pole is selected i am getting
         // offered only two choices of acrylic and wood, not metal"). The metal rod's centre piece
         // is tagged ALWAYS SHOWN — a fossil of the old engine, where the short centre rod was

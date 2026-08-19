@@ -1130,6 +1130,8 @@ eq('nonsense is null', measureOf('n/a'), null);
     const cs = [
         C({ id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
         C({ id: 'PARK', partId: 'HIDDEN-83238L91253A1921', role: 'ROD', rodKind: 'SOLID', parked: true, nodes: [] }),
+        // …and one that lost its flag but kept the minted id — still not a choice.
+        C({ id: 'PARK2', partId: 'HIDDEN-H1138STDOFF', role: 'ROD', rodKind: 'SOLID', nodes: [] }),
     ];
     const N = applyFitsDefaults(cs.map(normalizeChoice));
     const slot = slots(N, {}, []).find(s => s.kind === 'ROD');
@@ -1137,6 +1139,8 @@ eq('nonsense is null', measureOf('n/a'), null);
     // …and it never bills, because there is nothing to bill.
     const m = resolve({ choices: cs, answers: {}, selectedIds: ['ROD', 'PARK'] });
     ok('a parked pin is not on the bill', !m.bom.some(b => /^HIDDEN-/.test(b.partId)));
+    const m2 = resolve({ choices: cs, answers: {}, selectedIds: ['ROD', 'PARK2'] });
+    ok('nor one that kept only the minted id', !m2.bom.some(b => /^HIDDEN-/.test(b.partId)));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
