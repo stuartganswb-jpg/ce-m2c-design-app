@@ -9,6 +9,7 @@ update it, not around it.**
 | **A — Portal / CPQ integration** | `PORTAL_CPQ_SESSION_BRIEF.md` | `portal/`, portal Cloud Functions (`portal*` exports in `functions/index.js`, `functions/portalEngine.js`, `functions/portalRequestLines.js`), `ExternalCoopTab.js`, `FormPreview.js`, Quick Ship tab 7, CRM quote/SO surfaces |
 | **B — Floors / WMS** | `FLOORS_WMS_HANDOFF_BRIEF.md` | FinishingFloor, ShopFloor, PickPack, RTGDispatchTab, NetSuiteSyncTab, `onStockBuildDone`, the floor/WMS `Shared/*` modules, `netsuite/ce_convert_build_restlet.js` |
 | **C — Traverse / Vision** | `TRAVERSE_HANDOFF_BRIEF.md` | `traverseTags.js`, `traverseFlow.js`, `AssemblyBuilderTab.js` (1.6), `AdminTab.js` (flow generator), `CPQTab.js`, `assemblyTags.js`, Vision Hardware |
+| **D — Fees / Checkout / 4.6** | `FEES_CHECKOUT_SESSION_BRIEF.md` | `CustomerCollectionsTab.js` (4.6), `feeRules.js`, `clientPricing.js`, `aliasIdentity.js`, checkout data model. ⚠ `CPQTab.js` / `QuickShipTab.js` / `ERPPushPullTab.js` edits coordinate with Session C |
 
 **If your bug traces into another session's territory: stop, report, let Stuart route it.**
 Shared modules read by CPQ (`plateRules`, `sizeMatrix*`, `finishLabel`, `configQty`) are Session C's
