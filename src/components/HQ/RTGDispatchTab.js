@@ -1262,7 +1262,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
             ? { docId: finNs[0], coll: 'fin_workorders', nsWoId: finNs[1].nsWoId, tran: finNs[1].nsWoTran }
             : (order.nsWoId && !order.nsWoClosed ? { docId: order.id, coll: hqColl, nsWoId: order.nsWoId, tran: order.nsWoTran } : null);
 
-        const nsLine = ns ? `\n• NetSuite WO ${ns.tran || ns.nsWoId} → CLOSE queued (releases the component commitment)` : '';
+        const nsLine = ns ? `\n• NetSuite WO ${ns.tran || ns.nsWoId} → CLOSE queued (releases the component commitment)\n  ⚠ QUEUED, NOT DONE — NetSuite refuses the close on a non-WIP work order. Check the transmit log below; if it fails, the WO stays open in NetSuite and must be closed there.` : '';
         if (!window.confirm(`✕ CLOSE ${ref} EVERYWHERE?\n\n• RTG record → Closed (leaves this board)\n• ${finDocs.size} finishing floor job(s) → Closed (leave the Setup Queue, Active Floor & WMS pick)\n• ${shopDocs.size} shop floor job(s) → closed out of the shop queues${nsLine}\n\nDocuments are kept for history — nothing is deleted.`)) return;
         try {
             const stamp = { closedAt: Date.now(), closedBy: currentUser || '', closedFrom: 'RTG' };
@@ -1280,10 +1280,19 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                     sourceApp: 'RTG', createdBy: currentUser || '',
                     targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${ns.nsWoId}/!transform/workorderclose`,
                     method: 'POST', payload: { memo: `Closed from RTG (${ref})` },
-                    writeBack: { collection: ns.coll, docId: ns.docId, patch: { nsWoClosed: true } }
+                    // `nsWoClosed` is set by the WRITE-BACK, i.e. only when NetSuite actually accepts
+                    // it. The PENDING flag below is stamped now and cleared by that same write-back.
+                    writeBack: { collection: ns.coll, docId: ns.docId, patch: { nsWoClosed: true, nsWoClosePending: false } }
                 });
+                // THE APP MUST NOT CLAIM NETSUITE IS CLOSED (Eric 2026-08-18: "removes order from
+                // queue, but does not close on Netsuite side"). The close is a QUEUED REQUEST, and
+                // for a non-WIP work order NetSuite refuses the transform outright — so the order
+                // carries "close pending" until the write-back proves otherwise, and every screen
+                // that shows it can say so instead of everyone assuming it went through.
+                await updateDoc(doc(db, hqColl, order.id), { nsWoClosePending: true, nsWoCloseQueuedAt: Date.now() }).catch(() => {});
+                try { await updateDoc(doc(db, ns.coll, ns.docId), { nsWoClosePending: true }); } catch (e) { /* non-fatal */ }
             }
-            addLog(`✕ ${ref} closed everywhere — ${finDocs.size} finishing, ${shopDocs.size} shop${ns ? ', NetSuite close queued' : ''}.`, 'success');
+            addLog(`✕ ${ref} closed in the app — ${finDocs.size} finishing, ${shopDocs.size} shop${ns ? `. NetSuite close QUEUED for ${ns.tran || ns.nsWoId} — confirm it lands in the transmit log below; a non-WIP work order will refuse the close.` : ''}`, ns ? 'warn' : 'success');
             loadRTGOrders();
         } catch (e) {
             alert('Close failed partway: ' + (e.message || e) + '\n\nRe-run Close — docs already closed are unaffected.');
@@ -1297,7 +1306,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
     // the last 7 days show by default; older ones sit behind the archive toggle at the foot of
     // the column, which is the weekly condense he asked for.
     const dispatchedRow = (o, kind) => (
-        <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '6px', background: '#fff', border: '1px solid var(--line)', borderLeft: '4px solid #5a8f5a', borderRadius: '2px' }}>
+        <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', marginBottom: '6px', background: '#fff', border: '1px solid var(--line)', borderLeft: `4px solid ${(o.nsWoClosePending && !o.nsWoClosed) ? '#d9534f' : '#5a8f5a'}`, borderRadius: '2px' }}>
+            {/* The close was queued and NetSuite has not confirmed it. Silence here is what let
+                WO11434 read as closed in the app while it stayed open in NetSuite (Eric). */}
+            {o.nsWoClosePending && !o.nsWoClosed && (
+                <span title="The NetSuite close was queued but has not been confirmed. A non-WIP work order refuses the close transform — check the transmit log; it may still be open in NetSuite." style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '2px 7px', border: '1px solid #d9534f', color: '#d9534f', whiteSpace: 'nowrap' }}>NS CLOSE UNCONFIRMED</span>
+            )}
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={o.id}>
                     {kind === 'sales' ? `SO: ${o.soId || o.id}${o.customer ? ` · ${o.customer}` : ''}` : `WO: ${o.nsWoTran || o.woId || o.id}`}
@@ -1589,7 +1603,24 @@ const RTGDispatchTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                                         <div>
                                             <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(wo) ? '#d9534f' : 'var(--ink)' }} title={`${wo.id}${wo.nsWoTran ? ` · NetSuite ${wo.nsWoTran}` : ''}`}>WO: {wo.nsWoTran || wo.woId || wo.id}</div>
-                                            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Build to Stock</div>
+                                            {/* WHAT THE ORDER IS, WITHOUT OPENING IT (Eric 2026-08-18: "they sit in RTG as
+                                                WO-STK-11941-1787076774248. You must click view to see what the order is.
+                                                Can it display the item, finish, quantity, and date"). Everything here was
+                                                already on the doc — the card just said "Build to Stock". */}
+                                            {(() => {
+                                                const code = woItemCodeOf(wo);
+                                                const fin = String(wo.recipe || '').trim();
+                                                const qty = Number(wo.totalParts || wo.qty || 0);
+                                                const need = wo.needBy || wo.reqDate || '';
+                                                return (
+                                                    <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                                        {code
+                                                            ? <><span style={{ fontFamily: 'var(--mono)', fontSize: '0.95rem', fontWeight: 600, color: 'var(--ink)' }}>{code}</span>{qty ? ` (×${qty})` : ''}{fin && !code.toUpperCase().endsWith(`/${fin.toUpperCase()}`) ? ` · ${fin}` : ''}{need ? ` · Need by ${need}` : ''}</>
+                                                            : <>Build to Stock{qty ? ` (×${qty})` : ''}{need ? ` · Need by ${need}` : ''}</>}
+                                                        {wo.itemName ? <div style={{ fontSize: '0.8rem' }}>{wo.itemName}</div> : null}
+                                                    </div>
+                                                );
+                                            })()}
                                             {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}
                                             {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
                                             {urgentControls(wo, 'hq_work_orders')}
