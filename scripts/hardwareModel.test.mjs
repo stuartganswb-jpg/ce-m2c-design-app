@@ -1277,5 +1277,62 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('one card before a bracket is chosen too', end([]).filter(o => o.partId === 'H1-138KF').length, 1);
 }
 
+// ── A TRAVERSE RETURN IS A CUT, NOT A SWAPPED SEGMENT (Stuart 2026-08-19, H1-2TRV) ────────────
+// The fascia is one continuous extrusion with a single CENTER node, so the three-piece test that
+// protects solid poles could only ever answer "no" — and it deleted every miter return from both
+// traverse ends. The rule is about poles, so it now only asks about poles.
+{
+    const trv = applyFitsDefaults([
+        C({ id: 'F', partId: 'H1-2RCTWR', role: 'FASCIA', position: 'CENTER', nodes: ['f'] }),
+        C({ id: 'MR', partId: 'H1-2TRVMTR', role: 'RETURN', position: 'LEFT', nodes: ['mrl'] }),
+        C({ id: 'FIN', partId: 'H1-2TRVRAD', role: 'FINIAL', position: 'LEFT', nodes: ['finl'] }),
+    ].map(normalizeChoice));
+    const endAt = (want) => slots(trv, {}, want).find(s => s.kind === 'END' && s.position === 'LEFT');
+    eq('offered before a fascia is chosen', endAt([]).options.length, 2);
+    eq('still offered once the fascia is chosen', endAt(['F']).options.length, 2);
+    ok('the miter return survives', endAt(['F']).options.some(o => o.role === 'RETURN'));
+
+    // ⚠ THE SOLID RULE IS UNTOUCHED — this is the H1-138 side, and it must not move.
+    const solid = applyFitsDefaults([
+        C({ id: 'P', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['p'] }),
+        C({ id: 'R', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', nodes: ['r'] }),
+    ].map(normalizeChoice));
+    const oneP = slots(solid, {}, ['P']).find(s => s.kind === 'END' && s.position === 'LEFT');
+    eq('a one-piece SOLID pole still cannot take a return', oneP.options.length, 0);
+
+    // …and a three-piece solid pole still CAN, which is the H1-138 french return.
+    const threeP = applyFitsDefaults([
+        C({ id: 'PC', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['pc'] }),
+        C({ id: 'PL', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['pl'] }),
+        C({ id: 'R2', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', nodes: ['r2'] }),
+    ].map(normalizeChoice));
+    const ok3 = slots(threeP, {}, ['PC']).find(s => s.kind === 'END' && s.position === 'LEFT');
+    ok('a three-piece SOLID pole still offers its return', ok3.options.some(o => o.role === 'RETURN'));
+
+    // The ring rule reads the same list and must not have been narrowed with it.
+    const trk = applyFitsDefaults([
+        C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', nodes: ['trk'] }),
+        C({ id: 'RG', partId: 'RG', role: 'RING', nodes: ['ring'] }),
+    ].map(normalizeChoice));
+    eq('a track still offers no rings', slots(trk, {}, ['T']).find(s => s.kind === 'RING').options.length, 0);
+}
+
+// ── A HIDDEN PART REACHES THE BOM AND STOPS THERE ─────────────────────────────────────────────
+// "only included in the shop floor bom". The flag was read off the pin correctly and then dropped
+// at normalization, so every customer-facing surface saw hidden:false.
+{
+    const cs = applyFitsDefaults([
+        C({ id: 'ROD', partId: 'R1', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'NUT', partId: 'HIDDEN-NUTP', name: 'NUTP', role: 'ACCESSORY', hidden: true, always: true, nodes: [] }),
+    ].map(normalizeChoice));
+    const m = resolve({ choices: cs, answers: {}, selectedIds: ['ROD'] });
+    const nut = m.bom.find(l => l.partId === 'HIDDEN-NUTP');
+    ok('the hidden part is in the bill of materials', !!nut);
+    ok('and it is marked hidden there', nut.hidden === true);
+    ok('a normal part is not', m.bom.find(l => l.partId === 'R1').hidden === false);
+    // It must not change what is ASKED or what RENDERS — only who reads it.
+    eq('no slot appears for it', slots(cs, {}, ['ROD']).filter(s => s.options.some(o => o.id === 'NUT')).length, 0);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

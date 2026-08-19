@@ -343,6 +343,14 @@ export function normalizeChoice(input = {}) {
         // flags happen to say. The id is minted by this app for exactly one purpose, so reading it
         // is not a guess.
         parked: !!input.parked || /^HIDDEN-/i.test(String(input.partId || '')),
+        // ⚠ BUILT, BILLED, NEVER READ BY THE CUSTOMER (Stuart: "the hidden, if they are actually
+        // hidden items, can be hidden from these pages as well, only included in the shop floor
+        // bom"). The adapter works this out from the pin; this line carries it the last inch.
+        // Without it the flag died here, `bom` stamped every line hidden:false, and the panels that
+        // filter on it had nothing to filter — so a nut plate with no item number was being read
+        // out to the customer at $0.00. Read ONLY by customer-facing filters, never by slots,
+        // selection or render, so it cannot move a question.
+        hidden: !!input.hidden,
         // ⚠ A ROD IS NEVER A RIDER (Stuart 2026-08-17: "when solid pole is selected i am getting
         // offered only two choices of acrylic and wood, not metal"). The metal rod's centre piece
         // is tagged ALWAYS SHOWN — a fossil of the old engine, where the short centre rod was
@@ -894,12 +902,22 @@ export function slots(choices, answers = {}, selectedIds = []) {
     //
     // Only applies once a rod is chosen. Before that the engine does not know which pole it is, and
     // guessing would hide a legitimate choice.
+    //
+    // ⚠ IT IS A RULE ABOUT POLES, SO IT ONLY ASKS ABOUT POLES (Stuart 2026-08-19, H1-2TRV).
+    // A traverse fascia is ONE continuous extrusion by construction — it has no left, centre and
+    // right pieces and never will, so this test could only ever answer "no" and was silently
+    // deleting every miter return from both traverse ends. On a traverse rod the return is a CUT on
+    // the fascia plus its own arm, not an end segment swapped out.
+    //
+    // Scoped to a SEPARATE name on purpose: `chosenRods` is read again below by the ring rule, and
+    // narrowing it there stopped a track suppressing rings. One rule, one variable.
     const chosenRods = choices.filter(c => want.has(c.id) && ROD_ROLES.includes(c.role));
-    if (chosenRods.length) {
+    const chosenPoles = chosenRods.filter(c => c.rodKind !== TRAVERSE);
+    if (chosenPoles.length) {
         // Same identity rule as the renderer: a segment belongs to a rod only if it shares BOTH the
         // part number and the tier.
         const segmentsAt = (pos, tier) => choices.some(c => ROD_ROLES.includes(c.role)
-            && chosenRods.some(r => r.partId && r.partId === c.partId && (r.tier || '') === (c.tier || '')
+            && chosenPoles.some(r => r.partId && r.partId === c.partId && (r.tier || '') === (c.tier || '')
                 && (!tier || (r.tier || '') === tier))
             && (c.position === pos));
         bucket.forEach(slot => {
@@ -910,7 +928,7 @@ export function slots(choices, answers = {}, selectedIds = []) {
             slot.options = slot.options.filter(o => o.role !== 'RETURN');
             slot.rejected = [...slot.rejected, ...dropped.map(choice => ({
                 choice, ok: false, rule: 'pole construction',
-                detail: `${chosenRods[0].name} is a single-piece pole — a return replaces an end SEGMENT, and there is none to replace`,
+                detail: `${chosenPoles[0].name} is a single-piece pole — a return replaces an end SEGMENT, and there is none to replace`,
             }))];
         });
     }
