@@ -546,10 +546,16 @@ function HardwareConfiguratorInner({
         </div>
     );
 
+    // ⚠ minWidth 0 ON EVERY GRID AND FLEX CHILD (Stuart 2026-08-18: "something strange on how it
+    // page scaled as well, i had to zoom way out to get all the windows to show complete"). A grid
+    // or flex child's min-width defaults to AUTO — "never smaller than my content" — so a rail of
+    // fifteen steps, or one long pricing line, pushes its column and with it the entire page, and
+    // no amount of overflow on the inner element helps, because the column itself has already
+    // grown. The steps went from eleven to fifteen on a double and the page went wide with them.
     return (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 300px) 1fr', gap: '14px', alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 300px) minmax(0, 1fr)', gap: '14px', alignItems: 'start', maxWidth: '100%' }}>
           {finishPanel}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', minWidth: 0 }}>
 
             {/* CONFIGURATIONS — a job is several rooms. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', background: '#fff', border: '1px solid var(--line)', padding: '10px 14px' }}>
@@ -581,11 +587,11 @@ function HardwareConfiguratorInner({
             </div>
 
             {/* THE RAIL — the whole product at a glance, every answer visible. */}
-            <div style={{ display: 'flex', border: '1px solid var(--line)', background: '#fff', overflowX: 'auto' }}>
+            <div style={{ display: 'flex', border: '1px solid var(--line)', background: '#fff', overflowX: 'auto', maxWidth: '100%', minWidth: 0 }}>
                 {steps.map(railCell)}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px,390px) 1fr', gap: '14px', alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px,390px) minmax(0, 1fr)', gap: '14px', alignItems: 'start', maxWidth: '100%' }}>
 
                 {/* ── THE STEP ────────────────────────────────────────────────────────────── */}
                 <div style={{ background: '#fff', border: '1px solid var(--line)' }}>
@@ -775,7 +781,7 @@ function HardwareConfiguratorInner({
 
                     {/* PRICING left at its own size, GUIDANCE given the room it needs — the finish
                         moved to its own column, so this space belongs to the two that were cramped. */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.5fr)', gap: '14px', maxWidth: '100%' }}>
 
                         <div style={boxStyle}>
                             {boxHead('Pricing', priceLevel !== 'STANDARD' ? priceLevel.replace('FAB_', 'Fabricut ').toLowerCase() : '')}
