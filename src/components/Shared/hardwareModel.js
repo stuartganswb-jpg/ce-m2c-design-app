@@ -604,13 +604,26 @@ export function companionsFor(choices, selectedIds = []) {
     const collars = choices.filter(c => c.isCollar);
     if (!collars.length) return [];
     const out = [];
+    // ⚠ THE COLLAR HAS TO BE THE ONE THAT FITS THIS ROD (Stuart 2026-08-18: "check out the acrylic
+    // collar, it appears that it is showing the collar of a different projection"). A collar is
+    // pinned once per end, per rod, and once per bracket family — so on a double there are several
+    // of the same part, and matching only by code and position picked whichever came first. Same
+    // fault the rear rod had: a name is not enough when the same name exists at several depths.
+    //
+    // Narrowed most specific first, and each filter is only kept if it leaves something — a
+    // collection with ONE collar still finds it, which is every single-rod family.
+    const narrow = (pool, pred) => { const n = pool.filter(pred); return n.length ? n : pool; };
+    const cutOf = (x) => JSON.stringify(x.projTiers || null);
     choices.filter(c => want.has(c.id) && c.requiresCollar).forEach(c => {
         const key = c.requiresCollar;
-        // By the code it names, then by position — a left finial takes the left collar. Falling back
-        // to position matters because the tag names a PART and the same collar is pinned per end.
+        // By the code it names, then which ROD it is on, then which BRACKET it was cut for, then
+        // which end. The tag names a PART; everything after it says WHICH of that part.
         const byCode = collars.filter(x => [x.partId, x.name, x.id].some(v => U(v) === key));
-        const pool = byCode.length ? byCode : collars;
-        const hit = pool.find(x => !c.position || !x.position || x.position === c.position) || (byCode.length ? byCode[0] : null);
+        let pool = byCode.length ? byCode : collars;
+        pool = narrow(pool, x => !x.tier || !c.tier || x.tier === c.tier);
+        pool = narrow(pool, x => !x.projTiers || cutOf(x) === cutOf(c));
+        pool = narrow(pool, x => !c.position || !x.position || x.position === c.position);
+        const hit = pool[0] || null;
         if (hit && !out.includes(hit)) out.push(hit);
     });
     return out;

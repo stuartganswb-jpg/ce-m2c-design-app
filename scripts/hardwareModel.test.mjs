@@ -9,7 +9,7 @@
 // projection on singles, a 3rd on doubles — which must pass with NO code change.
 
 import {
-    resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults
+    resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults, companionsFor
 } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
@@ -1225,6 +1225,31 @@ eq('nonsense is null', measureOf('n/a'), null);
     ];
     const front = resolve({ choices: plain, answers: {}, selectedIds: ['P-C', 'FIN'] }).visible;
     ok('an untagged three-piece pole still assembles', front.has('f-c') && front.has('f-l'));
+}
+
+// ── THE COLLAR THAT FITS THIS ROD, NOT THE FIRST ONE FOUND ──────────────────────────────────
+// "check out the acrylic collar, it appears that it is showing the collar of a different projection"
+{
+    const P65 = 'FRONT:6.5, BACK:3.25', P85 = 'FRONT:8.5, BACK:3.25';
+    const collar = (id, o) => C({ id, partId: 'H1-138WFCON2', role: 'FINIAL', isCollar: true, nodes: [id.toLowerCase()], ...o });
+    const cs = [
+        C({ id: 'FIN', partId: 'H1-138ACGF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT',
+            requiresCollar: 'H1-138WFCON2', proj: P85, nodes: ['fin'] }),
+        collar('C-FRONT-85-LEFT',  { tier: 'FRONT', position: 'LEFT',  proj: P85 }),
+        collar('C-FRONT-65-LEFT',  { tier: 'FRONT', position: 'LEFT',  proj: P65 }),
+        collar('C-BACK-85-LEFT',   { tier: 'BACK',  position: 'LEFT',  proj: P85 }),
+        collar('C-FRONT-85-RIGHT', { tier: 'FRONT', position: 'RIGHT', proj: P85 }),
+    ];
+    const N = applyFitsDefaults(cs.map(normalizeChoice));
+    const got = companionsFor(N, ['FIN']).map(x => x.id);
+    eq('the collar for this rod, this cut, this end', got.join(), 'C-FRONT-85-LEFT');
+
+    // A family with ONE collar still finds it, however it is tagged.
+    const single = applyFitsDefaults([
+        C({ id: 'F', partId: 'ACGF', role: 'FINIAL', position: 'LEFT', requiresCollar: 'WFCON', nodes: ['f'] }),
+        C({ id: 'ONLY', partId: 'WFCON', role: 'FINIAL', isCollar: true, nodes: ['only'] }),
+    ].map(normalizeChoice));
+    eq('one collar is still found', companionsFor(single, ['F']).map(x => x.id).join(), 'ONLY');
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
