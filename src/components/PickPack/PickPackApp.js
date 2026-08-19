@@ -1482,7 +1482,33 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             if (!r.ok) throw new Error(typeof body === 'object' ? JSON.stringify(body) : String(body));
             await updateDoc(doc(db, "rod_cut_orders", o.id), { status: 'DONE', sourceBin: srcBin, destBin, nsAdjustmentId: body.id || null, completedAt: Date.now(), completedBy: operator?.name || '' });
             writeLog(`Rod cut ${o.id}: -${o.qtySource} ${o.sourceItemId} (${srcBin}) → +${o.qtyTarget} ${o.targetItemId} (${destBin}).`, 'wms');
-            alert(`✅ Rod cut posted to NetSuite:\n\n−${o.qtySource} × ${o.sourceItemId} from ${srcBin}\n+${o.qtyTarget} × ${o.targetItemId} into ${destBin}${o.scrapFt ? `\n(${o.scrapFt} ft scrap — not tracked)` : ''}`);
+
+            // ── A CUT FOR FINISHING RELEASES ITS WORK ORDER (Stuart 2026-08-19) ─────────────────
+            // "Once confirmed as cut and complete it prints the work order label there for the
+            // finishing of the 4ft poles just the same as if it was any normal piece."
+            // The pieces now exist, so the order stops waiting and the label goes onto the cart with
+            // them — the same setup label every other job carries, which is what makes the rest of
+            // the journey ordinary.
+            const isFinishingCut = o.purpose === 'FINISHING' || o.createdVia === 'FINISHING_WO';
+            if (isFinishingCut && o.finWoId) {
+                try {
+                    await updateDoc(doc(db, 'hq_work_orders', o.finWoId), {
+                        awaitingRodCut: false, rodCutDoneAt: Date.now(), rodCutDoneBy: operator?.name || '',
+                        rodCutDestBin: destBin,
+                    });
+                } catch (e) { console.warn('Could not clear the cut gate on', o.finWoId, e); }
+                printSetupLabel({
+                    kind: 'SETUP · POLES (CUT)',
+                    woRef: o.finWoId, orderKey: o.finWoId,
+                    item: o.finWoErpId || o.targetItemId,
+                    qty: o.finWoQty || o.qtyTarget,
+                    finish: o.finWoRecipe || '',
+                    customer: 'Internal Stock',
+                });
+                writeLog(`Cut ${o.id} released WO ${o.finWoId} to finishing — label printed.`, 'wms');
+            }
+
+            alert(`✅ Rod cut posted to NetSuite:\n\n−${o.qtySource} × ${o.sourceItemId} from ${srcBin}\n+${o.qtyTarget} × ${o.targetItemId} into ${destBin}${o.scrapFt ? `\n(${o.scrapFt} ft scrap — not tracked)` : ''}${isFinishingCut && o.finWoId ? `\n\n▶ WO ${o.finWoId} is released to finishing and its setup label is printing — send the cut poles with it.${Number(o.overrun) > 0 ? `\n(${o.overrun} spare ${o.targetItemId} stay in ${destBin}.)` : ''}` : ''}`);
             setActiveCut(null); setCutSrcScan(''); setCutDestScan(''); setCutConfirmed(false); setCutMemo('');
             pullNetSuiteStock();
         } catch (e) {
@@ -4132,7 +4158,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 {/* ✂ TAB: ROD CUTS (cut 8 ft rods down to 6 ft / 4 ft — scan source bin, confirm cut, scan dest bin) */}
                 {activeTab === 'ROD CUTS' && rodTabMode === 'CUTS' && (() => {
                     const cuts = rodCutOrders.filter(o => (o.brand || 'ce') === activeBrand);
-                    const openCuts = cuts.filter(o => o.status === 'OPEN').sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                    const allOpen = cuts.filter(o => o.status === 'OPEN').sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                    // TWO QUEUES, TWO PURPOSES (Stuart 2026-08-19). A cut raised by the Sales
+                    // Snapshot tops up shelf stock; a cut raised BY A WORK ORDER is the first step
+                    // of finishing that order — the poles do not exist until it is done, and the
+                    // finishing label prints here when it is. Same tool, different reason, so they
+                    // are never mixed up on the bench.
+                    const finishingCuts = allOpen.filter(o => o.purpose === 'FINISHING' || o.createdVia === 'FINISHING_WO');
+                    const openCuts = allOpen.filter(o => !(o.purpose === 'FINISHING' || o.createdVia === 'FINISHING_WO'));
                     const doneCuts = cuts.filter(o => o.status === 'DONE').sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)).slice(0, 10);
                     const fmtD = (t) => t ? new Date(t).toLocaleDateString() : '';
                     const stepLbl = { display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' };
@@ -4222,7 +4255,43 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 </button>
                             </div>
 
-                            {/* OPEN ORDERS */}
+                            {/* CUTS FOR FINISHING — a work order is waiting on each of these. */}
+                            {finishingCuts.length > 0 && (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                    <div style={{ padding: '12px 18px', background: theme.ink, color: '#fff' }}>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>✂ Cuts for Finishing · {finishingCuts.length}</span>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', opacity: 0.85, marginLeft: '12px' }}>a work order is waiting on each of these — completing the cut prints its finishing label</span>
+                                    </div>
+                                    {finishingCuts.map(o => (
+                                        <div key={o.id} style={{ background: '#fff', border: `1px solid ${theme.ink}`, borderLeft: `4px solid ${theme.brass}`, padding: '20px 24px', display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+                                            <div style={{ flex: 1, minWidth: '280px' }}>
+                                                <div style={{ fontFamily: theme.serif, fontSize: '1.25rem', color: theme.ink }}>
+                                                    {o.qtySource} × {o.sourceItemId} → {o.qtyTarget} × {o.targetItemId}
+                                                </div>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, marginTop: '5px' }}>
+                                                    for WO {o.finWoId} · {o.finWoQty} × {o.finWoErpId}{o.finWoRecipe ? ` · ${o.finWoRecipe}` : ''}{o.finWoReqDate ? ` · need by ${o.finWoReqDate}` : ''}
+                                                </div>
+                                                {Number(o.overrun) > 0 && (
+                                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, marginTop: '4px' }}>
+                                                        +{o.overrun} spare {o.targetItemId} to stock — the order needs {o.finWoQty}, the cut yields {o.qtyTarget}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <button onClick={() => { setActiveCut(o); setCutSrcScan(''); setCutDestScan(''); setCutConfirmed(false); setCutMemo(''); }}
+                                                style={{ padding: '12px 22px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>✂ Cut &amp; release to finishing</button>
+                                            <button onClick={() => cancelRodCut(o)} style={{ padding: '12px 16px', background: 'transparent', color: '#d9534f', border: `1px solid #d9534f`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase' }}>Cancel</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* CUTS FOR SALES ORDERS — shelf top-ups from the snapshot. */}
+                            {(finishingCuts.length > 0 || openCuts.length > 0) && (
+                                <div style={{ padding: '12px 18px', background: theme.paper2, border: `1px solid ${theme.line}` }}>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600, color: theme.ink }}>✂ Cuts for Sales Orders · {openCuts.length}</span>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>shelf top-ups issued from the Stocked Sales Snapshot</span>
+                                </div>
+                            )}
                             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                                 {openCuts.length === 0 && (
                                     <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '48px', textAlign: 'center', color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif, fontSize: '1.1rem' }}>No open rod cut orders. They're issued from HQ → Global Inventory → Stocked Sales Snapshot (✂ on 8 ft rod rows).</div>

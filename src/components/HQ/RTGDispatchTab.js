@@ -958,6 +958,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     };
 
     const pushToFinishing = async (hqOrder, orderType) => {
+        // THE POLES DO NOT EXIST YET (Stuart 2026-08-19). A 4 ft order is cut from stocked 8 ft rods,
+        // and until WMS → ROD CUTS → Cuts for Finishing has done it there is nothing to pick or
+        // spray. Releasing early sends the floor after rods nobody has made.
+        if (hqOrder.awaitingRodCut && !window.confirm(`⏳ ${hqOrder.id} is waiting on a rod cut.\n\n${hqOrder.rodCutNote || 'The 8 ft rods have not been cut yet.'}\n\nUntil WMS → ROD CUTS → "Cuts for Finishing" completes it, the ${woItemCodeOf(hqOrder) || 'cut'} poles do not exist to pick or finish — and that cut prints this order's label when it's done.\n\nRelease it to the floor anyway?`)) return;
         if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
         // STOP MECHANISM (Stuart 2026-07-21): a second tap must never quietly duplicate the
         // floor card — an already-dispatched order needs an explicit, scary re-confirm.
@@ -1763,6 +1767,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                                     </div>
                                                 );
                                             })()}
+                                            {wo.awaitingRodCut && (
+                                                <div title={`WMS → ROD CUTS → Cuts for Finishing. ${wo.rodCutNote || ''}`} style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>
+                                                    ✂ AWAITING ROD CUT{wo.rodCutNote ? <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}> · {wo.rodCutNote}</span> : ''}
+                                                </div>
+                                            )}
                                             {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}
                                             {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
                                             {urgentControls(wo, 'hq_work_orders')}

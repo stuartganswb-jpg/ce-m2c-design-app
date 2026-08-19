@@ -7,6 +7,7 @@ import { SOURCING, sourcingOf } from '../Shared/sourcing';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
+import { poleCutPlan } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
@@ -1141,6 +1142,50 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     paintSize: info.size || null, customer: 'Internal Stock',
                     createdAt: Date.now(), createdBy: currentUser || ''
                 }, { merge: true });
+
+                // ── POLES ARE STOCKED AT 8 FT — CUT BEFORE FINISH (Stuart 2026-08-19) ──────────
+                // A 4 ft order used to send the warehouse looking for raw 4 ft rods, which nobody
+                // stocks (Sandra: "debería pedir 10 tubos de 8 FT en vez de 20"). The pieces have to
+                // be MADE, and the cut is a real inventory movement NetSuite must see — so the work
+                // order gets a CUT ORDER in front of it rather than a pull it can never satisfy.
+                // It lands in WMS → ROD CUTS under "Cuts for Finishing"; completing it prints this
+                // order's finishing label, and from there it is an ordinary job.
+                const cut = poleCutPlan(r.itemid, qty);
+                if (cut) {
+                    const srcPart = partByKey['erp:' + cut.sourceItemId.toUpperCase()];
+                    const tgtPart = partByKey['erp:' + cut.targetItemId.toUpperCase()];
+                    const srcRow = (salesHist?.rows || []).find(x => String(x.itemid).toUpperCase() === cut.sourceItemId.toUpperCase());
+                    const srcNs = (srcRow && srcRow.internalId) || (srcPart && srcPart.netSuiteInternalId) || null;
+                    const tgtRow = (salesHist?.rows || []).find(x => String(x.itemid).toUpperCase() === cut.targetItemId.toUpperCase());
+                    const tgtNs = (tgtRow && tgtRow.internalId) || (tgtPart && tgtPart.netSuiteInternalId) || null;
+                    if (srcNs && tgtNs) {
+                        const cutId = `RC-${woId}`;                       // one cut per WO, re-runnable
+                        await setDoc(doc(db, 'rod_cut_orders', cutId), {
+                            id: cutId, brand: activeBrand, status: 'OPEN',
+                            sourceItemId: cut.sourceItemId, sourceInternalId: String(srcNs),
+                            targetItemId: cut.targetItemId, targetInternalId: String(tgtNs),
+                            qtySource: cut.sourceQty, qtyTarget: cut.targetQty,
+                            cutTo: cut.cutTo, scrapFt: cut.scrapFt,
+                            sourceBin: null, destBin: null, nsAdjustmentId: null,
+                            // WHAT MAKES IT A "CUT FOR FINISHING" rather than one for a sales order:
+                            // it belongs to a work order, and finishing waits on it.
+                            purpose: 'FINISHING', createdVia: 'FINISHING_WO',
+                            finWoId: woId, finWoErpId: r.itemid, finWoQty: qty,
+                            finWoRecipe: finish || '', finWoReqDate: reqDate,
+                            overrun: cut.overrun,
+                            createdAt: Date.now(), createdBy: currentUser || '',
+                            completedAt: null, completedBy: null
+                        }, { merge: true });
+                        await updateDoc(doc(db, 'hq_work_orders', woId), {
+                            awaitingRodCut: true, rodCutId: cutId,
+                            rodCutNote: `${cut.sourceQty} × ${cut.sourceItemId} → ${cut.targetQty} × ${cut.targetItemId}`,
+                        }).catch(() => {});
+                        addLog(`✂ ${r.itemid} ×${qty} needs cutting first — cut order ${cutId}: ${cut.sourceQty} × ${cut.sourceItemId} → ${cut.targetQty} × ${cut.targetItemId}${cut.overrun ? ` (+${cut.overrun} spare to stock)` : ''}. WMS → ROD CUTS → Cuts for Finishing.`, 'warn');
+                    } else {
+                        // Never invent an id — say which side is missing and leave the WO alone.
+                        addLog(`⚠ ${r.itemid} is a ${cut.lengthFt} ft pole needing ${cut.sourceQty} × ${cut.sourceItemId}, but no NetSuite id was found for ${!srcNs ? cut.sourceItemId : cut.targetItemId} — NO cut order raised. Sync that item, then raise the cut from the snapshot's ✂ button.`, 'error');
+                    }
+                }
                 n++;
             }
         }
