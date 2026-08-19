@@ -524,13 +524,7 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     // say "I am the piece cut for that bracket", and it is admitted only when that bracket is the
     // one chosen. Traverse is separated before this by rod world, so the two families that share
     // 6.5"/3.25" never collide.
-    // ⚠ THE PART THAT DEFINES THE PAIR IS NOT FILTERED BY IT (Stuart 2026-08-18, found driving his
-    // assembly). A bracket CARRIES a depth pair; a rod or an end is CUT FOR one. Applying the same
-    // test to both meant that once a bracket was chosen it excluded every other bracket from its
-    // own step — "H1-138D: cut for front 8.5, this order's bracket is front 6.5" — so changing your
-    // mind about the bracket was impossible without first deselecting the one you had. A backplate
-    // is still filtered: it belongs to a bracket rather than defining one.
-    if (!skip('proj') && choice.projTiers && ctx.tierProj && choice.role !== 'BRACKET') {
+    if (!skip('proj') && choice.projTiers && ctx.tierProj) {
         const off = Object.entries(choice.projTiers)
             .find(([t, v]) => ctx.tierProj[t] !== undefined && !sameMeasure(v, ctx.tierProj[t]));
         if (off) {
@@ -795,8 +789,28 @@ export function slots(choices, answers = {}, selectedIds = []) {
     // THE DEPTH AT EACH ROD, from the bracket that was actually chosen. Before a bracket is
     // picked this is empty and nothing is filtered by projection — the same restraint the return
     // and ring rules use, because guessing hides legitimate choices.
+    // THE DEPTH AT EACH ROD, from the brackets that were actually chosen — but WHICH brackets
+    // depends on where you are standing (Stuart 2026-08-18):
+    //
+    //   "once you select a bracket that has a different projection we need to gate off the others…
+    //    2 have same projection so those 2 can be offered in steps 4, 5. the one with the longer
+    //    projection on front rod if selected is only choice for steps 4, 5. then step 7 rear rod
+    //    follows the same logic."
+    //
+    // Three brackets carry one order, so they must agree — but a step cannot be filtered by its OWN
+    // answer, or choosing the 8.5" arm on the left would remove the 8.5" arm from the left. So a
+    // BRACKET slot is judged against the brackets chosen at the OTHER positions, and everything
+    // else — rods, ends, rings, plates — against all of them. Left then offers all three, centre
+    // and right offer only what matches it, and the rear rod follows the same pair without a rule
+    // of its own.
+    const chosenPairs = choices.filter(c => want.has(c.id) && c.projTiers);
     const tierProj = {};
-    choices.filter(c => want.has(c.id) && c.projTiers).forEach(c => Object.assign(tierProj, c.projTiers));
+    chosenPairs.forEach(c => Object.assign(tierProj, c.projTiers));
+    const pairExcept = (position) => {
+        const o = {};
+        chosenPairs.filter(c => (c.position || '') !== (position || '')).forEach(c => Object.assign(o, c.projTiers));
+        return o;
+    };
     const bucket = new Map();
     choices.forEach(c => {
         if (c.always) return;                       // riders are never a question
@@ -830,10 +844,12 @@ export function slots(choices, answers = {}, selectedIds = []) {
             slot.all.push(c);
             // Each tier is judged at ITS OWN depth. One bracket choice, two projections, and a
             // return that needs 6" is offered on the front rod and refused on the back.
+            // A bracket answers to its siblings, not to itself.
+            const pair = (kind === 'BRACKET') ? pairExcept(pos) : tierProj;
             const v = admits(c, {
                 ...ctx,
-                ...(Object.keys(tierProj).length ? { tierProj } : {}),
-                ...(tier && tierProj[tier] !== undefined ? { proj: tierProj[tier] } : {}),
+                ...(Object.keys(pair).length ? { tierProj: pair } : {}),
+                ...(tier && pair[tier] !== undefined ? { proj: pair[tier] } : {}),
                 position: pos ? pos : undefined, tier: tier || undefined,
             });
             if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });

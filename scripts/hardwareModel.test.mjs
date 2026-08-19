@@ -1036,11 +1036,11 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('the basic bracket resolves it to its own geometry', backOpts(['BD']).join(), 'BACK-65');
     eq('the decorative bracket resolves it to its own', backOpts(['DD']).join(), 'BACK-85');
 
-    // A CHOSEN BRACKET MUST NOT HIDE THE OTHER BRACKETS. It defines the pair; it is not cut for one.
+    // A CHOSEN BRACKET MUST NOT HIDE THE OTHER BRACKETS AT ITS OWN POSITION — but must at the rest.
     {
         const bk = (sel) => slots(N, {}, sel).find(s => s.kind === 'BRACKET').options.map(o => o.partId).sort();
         eq('both brackets stand before either is chosen', bk([]).join(), 'H1-138BD,H1-138DD');
-        eq('…and after one is chosen you can still change your mind', bk(['BD']).join(), 'H1-138BD,H1-138DD');
+        eq('…and you can still change your mind where you chose', bk(['BD']).join(), 'H1-138BD,H1-138DD');
     }
 
     // …and the bracket is asked before the rods whose geometry it decides.
@@ -1148,6 +1148,44 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('a parked pin is not on the bill', !m.bom.some(b => /^HIDDEN-/.test(b.partId)));
     const m2 = resolve({ choices: cs, answers: {}, selectedIds: ['ROD', 'PARK2'] });
     ok('nor one that kept only the minted id', !m2.bom.some(b => /^HIDDEN-/.test(b.partId)));
+}
+
+// ── THREE BRACKETS CARRY ONE ORDER, SO THEY MUST AGREE ──────────────────────────────────────
+// "once you select a bracket that has a different projection we need to gate off the others… the
+//  one with the longer projection on front rod if selected is only choice for steps 4, 5. then
+//  step 7 rear rod follows the same logic."
+{
+    const P65 = 'FRONT:6.5, BACK:3.25', P85 = 'FRONT:8.5, BACK:3.25';
+    const cs = [
+        C({ id: 'L-WDB', partId: 'H1-138WDB', role: 'BRACKET', position: 'LEFT',   proj: P65, nodes: ['lw'] }),
+        C({ id: 'L-B6',  partId: 'H1-138B6',  role: 'BRACKET', position: 'LEFT',   proj: P65, nodes: ['lb'] }),
+        C({ id: 'L-D',   partId: 'H1-138D',   role: 'BRACKET', position: 'LEFT',   proj: P85, nodes: ['ld'] }),
+        C({ id: 'C-WDB', partId: 'H1-138WDB', role: 'BRACKET', position: 'CENTER', proj: P65, nodes: ['cw'] }),
+        C({ id: 'C-B6',  partId: 'H1-138B6',  role: 'BRACKET', position: 'CENTER', proj: P65, nodes: ['cb'] }),
+        C({ id: 'C-D',   partId: 'H1-138D',   role: 'BRACKET', position: 'CENTER', proj: P85, nodes: ['cd'] }),
+        C({ id: 'R65',   partId: 'H1-138R',   role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: P65, nodes: ['r65'] }),
+        C({ id: 'R85',   partId: 'H1-138R',   role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: P85, nodes: ['r85'] }),
+    ];
+    const N = applyFitsDefaults(cs.map(normalizeChoice));
+    const at = (pos, sel) => slots(N, {}, sel).find(s => s.kind === 'BRACKET' && s.position === pos).options.map(o => o.partId).sort().join();
+    const backRod = (sel) => slots(N, {}, sel).find(s => s.kind === 'ROD' && s.tier === 'BACK').options.map(o => o.id).join();
+
+    eq('every bracket is offered at the left to begin with', at('LEFT', []), 'H1-138B6,H1-138D,H1-138WDB');
+
+    // Choose the 6.5" arm on the left: the other 6.5" arm is still offered in the centre, the 8.5" is not.
+    eq('centre keeps the arms that agree', at('CENTER', ['L-WDB']), 'H1-138B6,H1-138WDB');
+    // …and the left step still shows all three, so he can change his mind where he chose.
+    eq('the left step is not filtered by its own answer', at('LEFT', ['L-WDB']), 'H1-138B6,H1-138D,H1-138WDB');
+
+    // Choose the LONGER one and it is the only thing the other positions will take.
+    eq('the 8.5 arm is the only choice elsewhere', at('CENTER', ['L-D']), 'H1-138D');
+
+    // …and the rear rod follows the same pair, with no rule of its own.
+    eq('the rear rod follows the 6.5 bracket', backRod(['L-WDB']), 'R65');
+    eq('…and the 8.5 bracket', backRod(['L-D']), 'R85');
+    // With no bracket chosen it is one rod to the customer — which of its two cuts is right is the
+    // bracket's business, settled above before the de-duplication ever runs.
+    eq('the rear rod is one choice until a bracket decides which cut', backRod([]).split(',').length, 1);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
