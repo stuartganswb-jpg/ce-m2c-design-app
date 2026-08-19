@@ -1334,5 +1334,39 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('no slot appears for it', slots(cs, {}, ['ROD']).filter(s => s.options.some(o => o.id === 'NUT')).length, 0);
 }
 
+// ── AN UNTIERED RETURN OWNS THE FRONT END IT WAS CHOSEN IN ────────────────────────────────────
+// "def broke the f returns, french and miter no longer working normal or traverse." A return fee
+// carries no tier, so its key was `LEFT|` and matched no tiered slot — including its own. Every
+// end option was struck out and the step read "not asked", so the return could not be seen or
+// changed once picked. Needs a return SELECTED to appear at all, which is why it hid for so long.
+{
+    const mk = (extra = []) => applyFitsDefaults([
+        C({ id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'CENTER', nodes: ['rc'] }),
+        C({ id: 'RODL', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'LEFT', nodes: ['rl'] }),
+        C({ id: 'FIN', partId: 'H1-138KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fl'] }),
+        C({ id: 'RET', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', nodes: ['ret'] }),
+        ...extra,
+    ].map(normalizeChoice));
+    const endsAt = (cs, sel, tier) => slots(cs, {}, sel).find(s => s.kind === 'END' && s.position === 'LEFT' && (s.tier || '') === tier);
+
+    const single = mk();
+    ok('the end keeps its options once the return is chosen', endsAt(single, ['ROD', 'RODL', 'RET'], 'FRONT').options.length > 0);
+    ok('and is not marked suppressed', !endsAt(single, ['ROD', 'RODL', 'RET'], 'FRONT').suppressedBy);
+    ok('with no return it is unchanged', endsAt(single, ['ROD', 'RODL'], 'FRONT').options.length > 0);
+
+    // On a double the rule still does its job: the front return carries both rods.
+    const dbl = mk([
+        C({ id: 'RODB', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', position: 'CENTER', nodes: ['bc'] }),
+        C({ id: 'FINB', partId: 'H1-138KF', role: 'FINIAL', tier: 'BACK', position: 'LEFT', nodes: ['bfl'] }),
+    ]);
+    const sel = ['ROD', 'RODL', 'RODB', 'RET'];
+    ok('the front end is still asked', endsAt(dbl, sel, 'FRONT').options.length > 0);
+    ok('the back end terminates into it', !!endsAt(dbl, sel, 'BACK').suppressedBy);
+
+    // And the return is still the mount — no left bracket either way.
+    const lb = slots(dbl, {}, sel).find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
+    ok('a return still removes the bracket at that end', !lb || !lb.options.length);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

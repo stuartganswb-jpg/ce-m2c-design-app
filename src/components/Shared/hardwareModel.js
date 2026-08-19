@@ -943,10 +943,33 @@ export function slots(choices, answers = {}, selectedIds = []) {
         .map(c => `${c.position}|${c.tier || ''}`));
     if (returnAt.size) {
         const posWithReturn = new Set([...returnAt].map(k => k.split('|')[0]));
+        // ⚠ A RETURN WITH NO TIER STILL LIVES SOMEWHERE (Stuart 2026-08-19: "def broke the f
+        // returns, french and miter no longer working normal or traverse").
+        //
+        // Blank tier means "serves both rods", so an untiered return's key is `LEFT|` and it
+        // matched NO tiered slot — including the one it was chosen in. Every end option was struck
+        // out and the step read "not asked", so the operator could not see or change the return
+        // they had just picked. It needs a return SELECTED to show at all, which is why it sat
+        // here unnoticed.
+        //
+        // A return serving both rods is the FRONT rod's return — that is the whole premise of the
+        // rule above: the front bend does the lifting and the rear terminates into it. So an
+        // untiered return owns the front-most end at its position, and suppresses the rest.
+        const frontTierAt = {};
+        bucket.forEach(slot => {
+            if (slot.kind !== 'END' || !slot.position) return;
+            const t = slot.tier || '';
+            const held = frontTierAt[slot.position];
+            const rank = (x) => (x ? TIER_POSITIONS.indexOf(x) : -1);
+            if (held === undefined || rank(t) < rank(held)) frontTierAt[slot.position] = t;
+        });
         bucket.forEach(slot => {
             if (slot.kind !== 'END' || !posWithReturn.has(slot.position)) return;
             // the rod that owns the return keeps its slot — that IS where the return was chosen
-            if ([...returnAt].some(k => k === `${slot.position}|${slot.tier || ''}`)) return;
+            const here = `${slot.position}|${slot.tier || ''}`;
+            const ownedUntiered = returnAt.has(`${slot.position}|`)
+                && (slot.tier || '') === (frontTierAt[slot.position] || '');
+            if (returnAt.has(here) || ownedUntiered) return;
             if (!slot.options.length) return;
             const by = choices.find(c => want.has(c.id) && c.role === 'RETURN' && c.position === slot.position);
             slot.suppressedBy = by?.partId || by?.name || 'the return';
