@@ -424,7 +424,22 @@ function HardwareConfiguratorInner({
         });
         plates.filter(p => !nested.has(p.key) && p.options.length)
             .forEach(p => out.push({ kind: 'SLOT', key: p.key, slot: p, label: slotLabel(p) }));
-        out.push({ kind: 'LENGTH', key: 'length', label: 'Pole length' });
+        // ── PHASE 2 OF THE RESHUFFLE (Stuart 2026-08-20) ────────────────────────────────────
+        // "after these selections will come pole length (as it helps determine # of brackets)
+        //  then lastly the brackets and shared items."
+        //
+        // Length stops being the last thing asked and becomes the last thing asked BEFORE the
+        // brackets, because it is an input to them: 6.5 ft of heavy blackout wants a different
+        // number of arms than 6.5 ft of sheer, and the span advice from 6.5 cannot say so until it
+        // knows the length. Asked afterwards, the advice arrived when the decision was already made.
+        //
+        // Placed by the ENDS rather than by a fixed index, so it lands correctly whatever the
+        // collection offers: right after the last end treatment, or at the back if a collection has
+        // no end steps at all.
+        const lengthStep = { kind: 'LENGTH', key: 'length', label: 'Pole length' };
+        let lastEnd = -1;
+        out.forEach((st, i) => { if (st.kind === 'SLOT' && st.slot.kind === 'END') lastEnd = i; });
+        if (lastEnd >= 0) out.splice(lastEnd + 1, 0, lengthStep); else out.push(lengthStep);
         return out;
     }, [model]);
 

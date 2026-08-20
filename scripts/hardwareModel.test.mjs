@@ -1522,5 +1522,32 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('a pick with no twin is dropped', gone['END|FRONT|LEFT'] === undefined);
 }
 
+// ── THE ROD SWITCHES WITH THE BRACKET TOO ─────────────────────────────────────────────────────
+// "make sure to use same rule so that the rods will switch out to the correct ones based on
+//  bracket selection (for doubles same you just did above)." reseatPicks is keyed on the part
+// number in a slot, so it never needed to know a rod from a finial — but a double has TWO rods to
+// carry across, and that is worth holding still.
+{
+    const family = [
+        { id: 'BK-65', partId: 'H1-138D', role: 'BRACKET', position: 'LEFT', proj: 'FRONT:6.5, BACK:3.25', nodes: ['b65'] },
+        { id: 'BK-85', partId: 'H1-138BD', role: 'BRACKET', position: 'LEFT', proj: 'FRONT:8.5, BACK:3.25', nodes: ['b85'] },
+        { id: 'RF-65', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', proj: 'FRONT:6.5, BACK:3.25', nodes: ['rf65'] },
+        { id: 'RF-85', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', proj: 'FRONT:8.5, BACK:3.25', nodes: ['rf85'] },
+        { id: 'RB-65', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: 'FRONT:6.5, BACK:3.25', nodes: ['rb65'] },
+        { id: 'RB-85', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', proj: 'FRONT:8.5, BACK:3.25', nodes: ['rb85'] },
+    ];
+    const picks = { 'ROD|FRONT|': 'RF-65', 'ROD|BACK|': 'RB-65', 'BRACKET||LEFT': 'BK-85' };
+    let sel = Object.values(picks);
+    let m = resolve({ choices: family, answers: {}, selectedIds: sel });
+    for (let i = 0; i < 4; i++) {
+        const next = Object.values(reseatPicks(m, picks));
+        if (next.length === sel.length && next.every(x => sel.includes(x))) break;
+        sel = next; m = resolve({ choices: family, answers: {}, selectedIds: sel });
+    }
+    ok('the front rod follows the bracket', m.visible.has('rf85') && !m.visible.has('rf65'));
+    ok('and so does the back rod', m.visible.has('rb85') && !m.visible.has('rb65'));
+    eq('both rods still bill as the same part', m.bom.filter(b => b.partId === 'H1-138R').length, 2);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
