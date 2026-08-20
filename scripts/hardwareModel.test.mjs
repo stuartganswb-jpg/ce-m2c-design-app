@@ -1368,5 +1368,31 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('a return still removes the bracket at that end', !lb || !lb.options.length);
 }
 
+// ── ONE CARD PER PART, IN EVERY SLOT ──────────────────────────────────────────────────────────
+// "you are showing all backplates and coverplates ignoring inline tags." The in-line tag WAS
+// filtering; the survivors were pinned four times each (per projection, per bracket family, per
+// position), so four plates read as sixteen.
+{
+    const plate = (id, proj, inl) => C({ id, partId: `H1-138BP-${id[0]}`, role: 'BACKPLATE', position: 'LEFT',
+        proj, inlineOnly: inl, nodes: [id] });
+    const cs = applyFitsDefaults([
+        C({ id: 'ARM', partId: 'H1-138IL6', role: 'BRACKET', position: 'LEFT', proj: '6', usesReturnPlates: true, nodes: ['arm'] }),
+        plate('R1', '6', true), plate('R2', '6', true), plate('R3', '6', true),
+        plate('S1', '6', true), plate('S2', '6', true),
+        plate('X1', '6', false), plate('X2', '6', false),
+    ].map(normalizeChoice));
+    const bp = slots(cs, { proj: '6' }, ['ARM']).find(s => s.kind === 'BACKPLATE');
+    eq('four pins of one plate are one card', bp.options.length, 2);
+    ok('and the in-line tag still decides which', bp.options.every(o => o.inlineOnly));
+
+    // Rings were the other victim — a double pins them per bracket family.
+    const rings = applyFitsDefaults([
+        C({ id: 'G1', partId: 'H1-138BR', role: 'RING', nodes: ['g1'] }),
+        C({ id: 'G2', partId: 'H1-138BR', role: 'RING', nodes: ['g2'] }),
+        C({ id: 'G3', partId: 'H1-138WRNG', role: 'RING', nodes: ['g3'] }),
+    ].map(normalizeChoice));
+    eq('a ring pinned twice is one card', slots(rings, {}, []).find(s => s.kind === 'RING').options.length, 2);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

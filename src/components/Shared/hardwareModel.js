@@ -1102,9 +1102,16 @@ export function slots(choices, answers = {}, selectedIds = []) {
     // bracket is preferred here, and only then the first.
     const cutKey = (x) => JSON.stringify(x.projTiers || null);
     const wantCut = JSON.stringify(Object.keys(tierProj).length ? tierProj : null);
+    //
+    // ⚠ EVERY SLOT, NOT JUST RODS AND ENDS (Stuart 2026-08-20: "you are showing all backplates and
+    // coverplates"). H1-138 carries 113 BACKPLATE pins for FOUR real plates — each pinned per
+    // projection, per bracket family and per position — so the matching-plate panel listed the same
+    // four products sixteen times. The in-line tag was doing its job; there were simply four copies
+    // of each survivor. A plate is one product to the person choosing it, wherever it is pinned.
+    //
+    // (This shipped once inside the step-reorder commit and was lost when that was reverted. It is
+    // on its own here so the two can never take each other down again.)
     bucket.forEach(slot => {
-        const kindOf = slot.all[0]?.role;
-        if (!ROD_ROLES.includes(kindOf) && slot.kind !== 'END') return;
         const seen = new Map();
         slot.options.forEach(o => {
             const k = String(o.partId || o.id).toUpperCase();
