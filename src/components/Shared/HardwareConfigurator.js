@@ -725,11 +725,32 @@ function HardwareConfiguratorInner({
                                     Not asked — {step.slot.suppressedReason} ({step.slot.suppressedBy})
                                 </div>
                             )}
-                            {!!step.slot.options.length && (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '7px' }}>
-                                    {step.slot.options.map(o => optionCard(o, livePicks[step.slot.key] === o.id, () => setPick(step.slot.key, o.id)))}
-                                </div>
-                            )}
+                            {!!step.slot.options.length && (() => {
+                                // ── A CHOSEN RETURN COLLAPSES THE REST (Stuart 2026-08-20) ──────────
+                                // "whenever a french return is selected, hide the rest of the finial
+                                //  thumbnail choices so that it is easier to see the backplates since
+                                //  they are way down the page. if you click on return a second time it
+                                //  would unselect and show them again."
+                                //
+                                // A return is the only end treatment that brings a plate picker with
+                                // it, and on H1-138 that picker sits under sixteen finial thumbnails.
+                                // Once the answer is a return, the other fifteen are just distance.
+                                // Nothing is hidden that has not been decided, and the way back is the
+                                // card itself — clicking it deselects, which is what it already did.
+                                const picked = step.slot.options.find(o => o.id === livePicks[step.slot.key]);
+                                const collapsed = !!(picked && picked.role === 'RETURN' && step.sub);
+                                const shown = collapsed ? [picked] : step.slot.options;
+                                return (<>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '7px' }}>
+                                        {shown.map(o => optionCard(o, livePicks[step.slot.key] === o.id, () => setPick(step.slot.key, o.id)))}
+                                    </div>
+                                    {collapsed && (
+                                        <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
+                                            {step.slot.options.length - 1} other end treatment{step.slot.options.length - 1 === 1 ? '' : 's'} hidden — click the return again to show them
+                                        </div>
+                                    )}
+                                </>);
+                            })()}
                             {/* PAIRED: the plate that goes with the arm above, nested under it. */}
                             {step.sub && (
                                 <div style={{ marginLeft: '10px', paddingLeft: '11px', borderLeft: '2px solid var(--brass)' }}>
