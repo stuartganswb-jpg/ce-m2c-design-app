@@ -1096,10 +1096,27 @@ export function slots(choices, answers = {}, selectedIds = []) {
         // standard included, cover plate the upgrade — and no collection needs re-tagging for it.
         if (arm.isInline || arm.role === 'RETURN') {
             const inl = slot.options.filter(o => o.inlineOnly);
-            slot.options = inl.length ? inl : slot.options.filter(o => o.returnOnly);
+            let pool = inl.length ? inl : slot.options.filter(o => o.returnOnly);
+            // ⚠ A RETURN ALWAYS MEETS THE WALL (Stuart 2026-08-20: "on double when i choose double
+            // french return … it should be showing the backplate options"). H1-138 has in-line
+            // copies for the 6.5/3.25 pair and NONE for 8.5/3.25, so on that double the in-line
+            // pool comes back empty — and an empty pool was read as "this assembly has no such
+            // plates", which is the right answer for an IN-LINE BRACKET and the wrong one here.
+            //
+            // An in-line bracket is a STYLE: choose it where the plates for it exist, and where
+            // they do not, do not offer a mismatched pair. A return is not a style. It is the
+            // mount, it is bolted to the wall, and it needs a plate behind it whatever the
+            // collection happens to stock — so it falls back to the plain plates rather than
+            // leaving the customer with an explanation and nothing to pick.
+            if (!pool.length && arm.role === 'RETURN') {
+                pool = slot.options.filter(o => !o.inlineOnly && !o.returnOnly);
+            }
+            slot.options = pool;
             if (!slot.options.length) {
                 slot.suppressedBy = arm.name;
-                slot.suppressedReason = 'an in-line bracket takes in-line plates, and this assembly has neither in-line nor return copies';
+                slot.suppressedReason = arm.role === 'RETURN'
+                    ? 'a return needs a plate and this assembly has no plate made at this depth'
+                    : 'an in-line bracket takes in-line plates, and this assembly has neither in-line nor return copies';
             }
             return;
         }

@@ -385,7 +385,14 @@ const threePiece = [
 
     ok('with a finial the left bracket is offered', bktL(['ROD-C', 'FIN-L']).options.length === 1);
     eq('a RETURN takes the left bracket off the table', bktL(['ROD-C', 'RET-L']).options.map(o => o.id), []);
-    eq('and its backplate with it', bpL(['ROD-C', 'RET-L']).options.map(o => o.id), []);
+    // ⚠ NOT its backplate. That was true until 2026-08-20 — and only ever by accident here, since
+    // this fixture has no in-line plates and the plate was being cleared by the empty-pool path
+    // rather than by any rule about returns. Stuart: "on double when i choose double french return
+    // … it should be showing the backplate options." A return is the mount; it meets the wall and
+    // needs a plate behind it.
+    eq('but NOT its backplate — the return takes that over', bpL(['ROD-C', 'RET-L']).options.map(o => o.id), ['BP-L']);
+    // an INSIDE MOUNT still clears both: it sits in the frame with nothing behind it
+    eq('an inside mount still clears the plate', bpL(['ROD-C', 'IM-L']).options.map(o => o.id), []);
     eq('an INSIDE MOUNT does the same', bktL(['ROD-C', 'IM-L']).options.map(o => o.id), []);
     ok('and says why', /inside mount carries the rod/.test(bktL(['ROD-C', 'IM-L']).suppressedReason || ''));
     ok('the OTHER end is untouched', slotsFor(['ROD-C', 'IM-L']).find(s => s.kind === 'BRACKET' && s.position === 'RIGHT').options.length === 1);
@@ -1547,6 +1554,41 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('the front rod follows the bracket', m.visible.has('rf85') && !m.visible.has('rf65'));
     ok('and so does the back rod', m.visible.has('rb85') && !m.visible.has('rb65'));
     eq('both rods still bill as the same part', m.bom.filter(b => b.partId === 'H1-138R').length, 2);
+}
+
+// ── A RETURN FALLS BACK TO THE PLAIN PLATES ───────────────────────────────────────────────────
+// "on double when i choose double french return … it is giving a reason but it should be showing
+//  the backplate options." H1-138 stocks in-line plate copies for the 6.5/3.25 pair and none for
+// 8.5/3.25, so on that double the in-line pool is empty. Empty means "no such plates here", which
+// is the right answer for an in-line BRACKET — a style you can decline — and the wrong one for a
+// return, which is the mount and has to bolt to something.
+{
+    const mk = (plates) => [
+        { id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+        { id: 'RET', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', nodes: ['ret'] },
+        { id: 'INLARM', partId: 'H1-138IL6', role: 'BRACKET', position: 'RIGHT', usesReturnPlates: true, nodes: ['ia'] },
+        ...plates,
+    ];
+    const plainOnly = [
+        { id: 'P-L', partId: 'H1-138BP-R', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl'] },
+        { id: 'P-R', partId: 'H1-138BP-R', role: 'BACKPLATE', position: 'RIGHT', nodes: ['pr'] },
+    ];
+    const bp = (choices, sel, pos) => resolve({ choices, answers: {}, selectedIds: sel })
+        .slots.find(s => s.kind === 'BACKPLATE' && s.position === pos);
+
+    const only = mk(plainOnly);
+    ok('a return gets the plain plates when there are no in-line copies',
+        bp(only, ['ROD', 'RET'], 'LEFT').options.length === 1);
+    // …while an in-line ARM in the same assembly still declines them
+    const armSlot = bp(only, ['ROD', 'INLARM'], 'RIGHT');
+    ok('an in-line bracket still refuses a mismatched plate', !armSlot.options.length);
+    ok('and says so', /in-line/.test(armSlot.suppressedReason || ''));
+
+    // where in-line copies DO exist, the return still prefers them over the plain ones
+    const withInline = mk([...plainOnly,
+        { id: 'P-L-INL', partId: 'H1-138BP-S', role: 'BACKPLATE', position: 'LEFT', inlineOnly: true, nodes: ['pli'] }]);
+    eq('and prefers the in-line copy where one exists',
+        bp(withInline, ['ROD', 'RET'], 'LEFT').options.map(o => o.id), ['P-L-INL']);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
