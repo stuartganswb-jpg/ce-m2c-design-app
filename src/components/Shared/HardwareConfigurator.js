@@ -128,9 +128,35 @@ function HardwareConfiguratorInner({
     const choices = useMemo(() => choicesFromAssembly(assembly, pins), [assembly, pins]);
     const modelNodes = useMemo(() => modelNodesOf(assembly), [assembly]);
 
-    const model = useMemo(
-        () => resolveHardware({ choices, answers, selectedIds: Object.values(picks).filter(Boolean), modelNodes }),
-        [choices, answers, picks, modelNodes]);
+    // ⚠ A PICK IS ONLY JUSTIFIED BY THE MODEL IT APPEARS IN, AND DROPPING ONE CHANGES THAT MODEL
+    // (Stuart 2026-08-20: "it deletes the bracket arms which is correct but it leaves the
+    //  backplates"). Pick brackets, then a return, and the plate stayed on the quote — three
+    // BP-S lines for two brackets.
+    //
+    // The filter below has always dropped a pick that is no longer offered, but it read a model
+    // built from the RAW picks — so the suppressed bracket was still "chosen" as far as the model
+    // was concerned, the plate pool was still the bracket's plain pool, and the stale plate was
+    // still a valid option. One pass cannot see this: it is DROPPING THE BRACKET that makes the
+    // plate invalid, and that only becomes true on the next pass.
+    //
+    // So it settles. Each pass keeps the picks the current model still offers and re-resolves;
+    // when a pass drops nothing, the selection and the model agree and we stop. In the steady
+    // state — nothing to drop — this is exactly one resolve, as before.
+    const model = useMemo(() => {
+        let sel = Object.values(picks).filter(Boolean);
+        let m = resolveHardware({ choices, answers, selectedIds: sel, modelNodes });
+        for (let pass = 0; pass < 4; pass++) {
+            const keep = [];
+            m.slots.forEach(sl => {
+                const want = picks[sl.key];
+                if (want && sl.options.some(o => o.id === want)) keep.push(want);
+            });
+            if (keep.length === sel.length) break;   // nothing dropped — settled
+            sel = keep;
+            m = resolveHardware({ choices, answers, selectedIds: sel, modelNodes });
+        }
+        return m;
+    }, [choices, answers, picks, modelNodes]);
 
     // An answer higher up can invalidate a pick below it — choose the traverse rod and the standard
     // arm you had chosen is not offered any more. Rather than police that with a sweep (the thing
