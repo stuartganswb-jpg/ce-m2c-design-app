@@ -351,7 +351,29 @@ function HardwareConfiguratorInner({
     // inside the bracket step, which is also where the pairing rules can be seen doing their work.
     const steps = useMemo(() => {
         const out = [];
-        model.axes.filter(a => !a.implied && a.values.length > 1)
+        // ── THE FRAMING QUESTIONS ARE ONE STEP (Stuart 2026-08-20) ───────────────────────────
+        // "combine steps 1, 2 and 3 into one step … below the rod type box another box for single
+        //  or double and then another box below that for mount … that will help keep the rail from
+        //  being too long as well."
+        //
+        // Rod type, single-or-double, drive and mount are all the same kind of question: how is
+        // this rod framed, before a single part is chosen. Each is two or three chips, so each was
+        // spending a whole step and a whole rail cell on one line of buttons.
+        //
+        // ⚠ BRACKET PROJECTION IS NOT ONE OF THEM and keeps its own step. It is the one axis with
+        // consequences — it gates which brackets exist, and pairs the plates to the arm — so it is
+        // a decision, not framing. Grouping everything BELOW it also means nothing is reordered:
+        // projection already sorts last of the axes, so the group is the contiguous block in front
+        // of it and every question stays exactly where it was.
+        const liveAxes = model.axes.filter(a => !a.implied && a.values.length > 1);
+        const framing = liveAxes.filter(a => a.key !== 'proj');
+        if (framing.length === 1) {
+            const a = framing[0];
+            out.push({ kind: 'AXIS', key: `axis:${a.key}`, axis: a, label: AXIS_LABEL[a.key] || a.key });
+        } else if (framing.length) {
+            out.push({ kind: 'AXES', key: 'axes:framing', axes: framing, label: 'Rod Setup' });
+        }
+        liveAxes.filter(a => a.key === 'proj')
             .forEach(a => out.push({ kind: 'AXIS', key: `axis:${a.key}`, axis: a, label: AXIS_LABEL[a.key] || a.key }));
         const plates = model.slots.filter(s => s.kind === 'BACKPLATE');
         const nested = new Set();
@@ -387,6 +409,13 @@ function HardwareConfiguratorInner({
     // What the rail shows under each heading: the answer, once there is one.
     const answerOf = useCallback((st) => {
         if (st.kind === 'AXIS') { const v = answers[st.axis.key]; return v == null || v === '' ? '' : valueLabel(st.axis.key, v); }
+        // One cell, every answer in it — the rail still shows the whole product at a glance.
+        if (st.kind === 'AXES') {
+            return st.axes.map(a => {
+                const v = answers[a.key];
+                return v == null || v === '' ? '' : valueLabel(a.key, v);
+            }).filter(Boolean).join(' \u00b7 ');
+        }
         if (st.kind === 'LENGTH') return lengthFeet ? `${lengthFeet} ft` : '';
         if (st.slot.suppressedBy) return 'not asked';
         const pick = st.slot.options.find(o => o.id === livePicks[st.slot.key]);
@@ -631,6 +660,23 @@ function HardwareConfiguratorInner({
                                 ))}
                             </div>
                         )}
+
+                        {/* The framing questions, each in its own labelled box, stacked down the
+                            step — the vertical room below the first one was going spare. */}
+                        {step?.kind === 'AXES' && step.axes.map(a => (
+                            <div key={a.key}>
+                                <div style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)', marginBottom: '7px' }}>
+                                    {AXIS_LABEL[a.key] || a.key}
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                    {a.values.map(v => (
+                                        <button key={String(v)} onClick={() => setAnswer(a.key, v)} style={chip(answers[a.key] === v)}>
+                                            {valueLabel(a.key, v)}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
 
                         {step?.kind === 'SLOT' && (<>
                             {step.slot.suppressedBy && (
