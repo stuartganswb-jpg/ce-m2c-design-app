@@ -269,10 +269,34 @@ function HardwareConfiguratorInner({
     const effectiveLevel = (priceLevel && priceLevel !== 'STANDARD') ? priceLevel
         : (customerId ? 'FAB_COST' : 'STANDARD');
     const levelIsDefault = effectiveLevel !== 'STANDARD' && (!priceLevel || priceLevel === 'STANDARD');
+    // ⚠ HOISTED ABOVE priceCtx (2026-08-20). Rod stock prices by the foot, so the price context
+    // needs the billed feet — and a const read before its declaration is a ReferenceError, not
+    // undefined, which React answers by unmounting the tree. That is the white screen of
+    // 2026-08-17. These depend only on the poleIn/poleFrac state at the top, so they belong here.
+    // ── LENGTH, AND WHAT IT IMPLIES ──────────────────────────────────────────────────────────
+    // Typed the way an installer measures — whole inches and a fraction — and the FOOT figure is
+    // derived, because feet is what prices. One typed number, one shown consequence, no chance of
+    // the two disagreeing.
+    const lengthInches = useMemo(() => {
+        const whole = parseFloat(poleIn);
+        const m = String(poleFrac).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+        const frac = m ? Number(m[1]) / Number(m[2]) : (parseFloat(poleFrac) || 0);
+        const total = (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(frac) ? frac : 0);
+        return total > 0 ? total : null;
+    }, [poleIn, poleFrac]);
+    // ⚠ WE BILL IN FULL FEET, ROUNDED UP (Stuart 2026-08-17: "even if .25\" over we bill next foot
+    // size"). A pole is cut from stock in whole feet, so 90 1/2" is eight feet of material however
+    // the arithmetic reads. Showing the exact figure beside it keeps the operator honest about what
+    // was measured versus what is being charged.
+    const lengthFeetExact = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
+    const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
+
     const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
         finishCode: globalFinish, findPart, findByCode: findPart,
-    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, findPart]);
+        // What the rods are cut from — see the per-foot rule in priceConfiguration.
+        billedFeet: lengthFeet || 0,
+    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, findPart, lengthFeet]);
     const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
@@ -298,23 +322,6 @@ function HardwareConfiguratorInner({
     }), [extras, findPart, priceCtx]);
     const grandTotal = priced.total + extraLines.reduce((s2, l) => s2 + l.total, 0);
 
-    // ── LENGTH, AND WHAT IT IMPLIES ──────────────────────────────────────────────────────────
-    // Typed the way an installer measures — whole inches and a fraction — and the FOOT figure is
-    // derived, because feet is what prices. One typed number, one shown consequence, no chance of
-    // the two disagreeing.
-    const lengthInches = useMemo(() => {
-        const whole = parseFloat(poleIn);
-        const m = String(poleFrac).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
-        const frac = m ? Number(m[1]) / Number(m[2]) : (parseFloat(poleFrac) || 0);
-        const total = (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(frac) ? frac : 0);
-        return total > 0 ? total : null;
-    }, [poleIn, poleFrac]);
-    // ⚠ WE BILL IN FULL FEET, ROUNDED UP (Stuart 2026-08-17: "even if .25\" over we bill next foot
-    // size"). A pole is cut from stock in whole feet, so 90 1/2" is eight feet of material however
-    // the arithmetic reads. Showing the exact figure beside it keeps the operator honest about what
-    // was measured versus what is being charged.
-    const lengthFeetExact = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
-    const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
 
     // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
     //
@@ -937,7 +944,9 @@ function HardwareConfiguratorInner({
                                                             clientSku first, else the item's resolved pattern #. */}
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px' }}>{l.billedId || ourId(l.partId)}</span>
                                                         {(l.sku || l.aliasCode) && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{l.sku || l.aliasCode}</span>}
-                                                        {l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>×{l.qty}</span>}
+                                                        {/* Rod stock bills by the foot, so say so — a $125 line beside a $12.50
+                                                            item reads as a mistake unless the arithmetic is on screen. */}
+                                                        {l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>{l.perFoot ? `${l.qty} ft × $${l.unit.toFixed(2)}` : `×${l.qty}`}</span>}
                                                         {l.extra && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>added</span>}
                                                     </span>
                                                     <span style={{ display: 'block', fontSize: '11px', color: 'var(--ink-soft)', lineHeight: 1.25 }}>

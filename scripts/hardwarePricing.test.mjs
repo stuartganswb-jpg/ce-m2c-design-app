@@ -91,5 +91,31 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
         warn.length === 1 && /Unpriceable/.test(warn[0].msg), JSON.stringify(warn));
 }
 
+// ── ROD STOCK IS SOLD BY THE FOOT ─────────────────────────────────────────────────────────────
+// "it needs to take billed ft qty on step 6 and multiply it times price of selected rod in 10 and
+//  11 if double." H1-138R is "Round Hollow Rod Stock" at 12.50 — a foot of it, not a pole of it.
+{
+    const part = (code, price) => ({ id: code, itemId: code, legacyErpId: code,
+        manufacturingSpecs: { basePrice: String(price) } });
+    const lib = { 'H1-138R': part('H1-138R', 12.5), 'H1-138KF': part('H1-138KF', 28) };
+    const model = { bom: [
+        { partId: 'H1-138R', name: 'front rod', role: 'ROD', qty: 1 },
+        { partId: 'H1-138R', name: 'back rod', role: 'ROD', qty: 1 },
+        { partId: 'H1-138KF', name: 'finial', role: 'FINIAL', qty: 2 },
+    ] };
+    const ctx = (feet) => ({ findPart: (id) => lib[id] || null, priceLevel: 'STANDARD', billedFeet: feet });
+
+    const none = priceConfiguration(model, ctx(0));
+    eq('with no length answered a rod bills once', none.lines[0].total, 12.5);
+
+    const ten = priceConfiguration(model, ctx(10));
+    eq('ten feet of rod bills ten times', ten.lines[0].total, 125);
+    eq('and so does the second rod of a double', ten.lines[1].total, 125);
+    ok('the rod line says it is per foot', ten.lines[0].perFoot === true);
+    eq('the finial is untouched — it does not grow with the pole', ten.lines[2].total, 56);
+    ok('and is not marked per foot', !ten.lines[2].perFoot);
+    eq('the total adds up', ten.total, 125 + 125 + 56);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

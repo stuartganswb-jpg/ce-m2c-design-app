@@ -37,6 +37,7 @@
 import { customerKeys, clientPriceFor, findClientPriceRow } from './clientPricing.js';
 import { fabricutPriceOf, fabricutCodeOf, priceLevelShort } from './priceLevels.js';
 import { finishVariantOf } from './finishVariant.js';
+import { ROD_ROLES } from './hardwareModel.js';
 
 export const PRICE_SOURCES = {
     OVERRIDE: 'authored override',
@@ -115,7 +116,18 @@ export function priceConfiguration(model, ctx = {}) {
         const choice = entry.raw && entry.raw.__choice ? entry.raw.__choice : entry;
         const part = typeof findPart === 'function' ? findPart(entry.partId) : null;
         const p = priceChoice(choice, part, ctx);
-        const qty = Number(entry.qty) > 0 ? Number(entry.qty) : 1;
+        // ⚠ ROD STOCK IS SOLD BY THE FOOT (Stuart 2026-08-20: "it needs to take billed ft qty on
+        // step 6 and multiply it times price of selected rod in 10 and 11 if double"). H1-138R is
+        // "Round Hollow Rod Stock" at 12.50 — a foot of it, not a pole of it — so a ten-foot order
+        // was billing 12.50 for the whole rod. Same for a fascia and a track: all three are cut
+        // from linear stock, and all three are ROD_ROLES.
+        //
+        // Only rods. A finial does not get longer with the pole. And only where the length has
+        // actually been answered — before that this multiplies by nothing and the line reads as it
+        // always did, rather than quietly showing a per-foot price as if it were the total.
+        const feet = Number(ctx.billedFeet) > 0 ? Number(ctx.billedFeet) : 0;
+        const perFoot = feet > 0 && ROD_ROLES.includes(entry.role);
+        const qty = (Number(entry.qty) > 0 ? Number(entry.qty) : 1) * (perFoot ? feet : 1);
         return {
             partId: entry.partId,
             name: entry.name,
@@ -123,6 +135,7 @@ export function priceConfiguration(model, ctx = {}) {
             aliasCode: p.aliasCode,
             billedId: p.billedId,   // the finished SKU that is actually sold and billed
             qty,
+            perFoot,                  // the line is priced by the foot — the panel says so
             unit: p.price,
             total: p.price * qty,
             source: p.source,
