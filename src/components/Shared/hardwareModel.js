@@ -1132,12 +1132,26 @@ export function slots(choices, answers = {}, selectedIds = []) {
     // on its own here so the two can never take each other down again.)
     bucket.forEach(slot => {
         const seen = new Map();
+        // ⚠ A PIN THAT DECLARES ITS TIER BEATS ONE THAT DOES NOT (Stuart 2026-08-20: "when i select
+        // rear it actually replaces the front finial"). H1-138 pins H1-138GF six times — four
+        // tagged BACK with real rear geometry, two UNTAGGED carrying the FRONT nodes. An untagged
+        // pin means "serves both rods", so it lands in the back slot too, where it has the same
+        // part number as the real back pin. Whichever came first in the array won, and when that
+        // was the untagged one the rear choice rendered at the FRONT — the finial appeared to swap
+        // rather than a second one appear.
+        //
+        // Which pin is right was never a question of array order. In a slot that HAS a tier, the
+        // pin that names that tier is the one cut for it. Only where they tie does the bracket
+        // break it, exactly as before — so nothing moves on a collection whose pins are tagged.
+        const tierFit = (o) => ((o.tier || '') === (slot.tier || '') ? 1 : 0);
+        const cutFit = (o) => (cutKey(o) === wantCut ? 1 : 0);
         slot.options.forEach(o => {
             const k = String(o.partId || o.id).toUpperCase();
             const held = seen.get(k);
             if (!held) { seen.set(k, o); return; }
+            if (tierFit(o) !== tierFit(held)) { if (tierFit(o) > tierFit(held)) seen.set(k, o); return; }
             // A tie is broken by the bracket: the piece cut for it wins over one cut for another.
-            if (cutKey(held) !== wantCut && cutKey(o) === wantCut) seen.set(k, o);
+            if (cutFit(held) < cutFit(o)) seen.set(k, o);
         });
         slot.options = slot.options.filter(o => seen.get(String(o.partId || o.id).toUpperCase()) === o);
     });

@@ -1459,5 +1459,30 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('and the rings last of all', at('RING:FRONT') > at('ROD:FRONT'));
 }
 
+// ── A PIN THAT DECLARES ITS TIER BEATS ONE THAT DOES NOT ──────────────────────────────────────
+// "when i select rear it actually replaces the front finial." H1-138 pins H1-138GF six times —
+// four tagged BACK with rear geometry, two UNTAGGED carrying the front nodes. Untagged means
+// "serves both rods", so it reaches the back slot as well, with the same part number; whichever
+// came first in the array won the dedupe. Array order is not an opinion about geometry.
+{
+    const rods = [
+        C({ id: 'RF', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'CENTER', nodes: ['rf'] }),
+        C({ id: 'RB', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', position: 'CENTER', nodes: ['rb'] }),
+    ];
+    const untiered = C({ id: 'GF-UNTIERED', partId: 'H1-138GF', role: 'FINIAL', position: 'LEFT', nodes: ['H1138GFLEFT'] });
+    const backPin = C({ id: 'GF-BACK', partId: 'H1-138GF', role: 'FINIAL', tier: 'BACK', position: 'LEFT', nodes: ['3_H1138GF'] });
+    const backKeeps = (order) => {
+        const cs = applyFitsDefaults([...rods, ...order].map(normalizeChoice));
+        return slots(cs, {}, []).find(s => s.kind === 'END' && s.tier === 'BACK').options.map(o => o.id);
+    };
+    eq('the back pin wins when it comes first', backKeeps([backPin, untiered]), ['GF-BACK']);
+    eq('and when it comes second', backKeeps([untiered, backPin]), ['GF-BACK']);
+
+    // …and the front slot still gets the untagged one, which is where its geometry actually is.
+    const cs = applyFitsDefaults([...rods, untiered, backPin].map(normalizeChoice));
+    const front = slots(cs, {}, []).find(s => s.kind === 'END' && s.tier === 'FRONT');
+    eq('the front slot keeps the untagged pin', front.options.map(o => o.id), ['GF-UNTIERED']);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
