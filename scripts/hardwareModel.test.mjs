@@ -1394,5 +1394,37 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('a ring pinned twice is one card', slots(rings, {}, []).find(s => s.kind === 'RING').options.length, 2);
 }
 
+// ── A RETURN IS THE ARM AT ITS OWN END ────────────────────────────────────────────────────────
+// "these returns are supposed to use the same call for backplates … the same backplate options as
+// the inline." A return replaces the bracket, so the plate question moved to the return rather
+// than vanishing with the bracket it displaced.
+{
+    const plate = (id, inl) => C({ id, partId: `P-${id}`, role: 'BACKPLATE', position: 'LEFT',
+        proj: '6', inlineOnly: inl, nodes: [id] });
+    const base = [
+        C({ id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] }),
+        C({ id: 'RODL', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rl'] }),
+        C({ id: 'RET', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', proj: '6', nodes: ['ret'] }),
+        C({ id: 'BKT', partId: 'H1-138D6', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['bkt'] }),
+        plate('INL', true), plate('PLAIN', false),
+    ];
+    const cs = applyFitsDefaults(base.map(normalizeChoice));
+    const bpFor = (sel) => slots(cs, { proj: '6' }, sel).find(s => s.kind === 'BACKPLATE');
+
+    // the return takes the end, and takes the IN-LINE plate pool with it
+    const withReturn = bpFor(['ROD', 'RODL', 'RET']);
+    eq('a return is offered a plate', withReturn.options.length, 1);
+    ok('and it is the in-line copy', withReturn.options[0].inlineOnly === true);
+
+    // a plain bracket is untouched — it still gets the plain pool
+    const withBracket = bpFor(['ROD', 'RODL', 'BKT']);
+    eq('a standard bracket still gets its own pool', withBracket.options.length, 1);
+    ok('and it is the plain plate', withBracket.options[0].inlineOnly === false);
+
+    // a chosen bracket still governs its own plate even if a return is also selected elsewhere
+    const both = bpFor(['ROD', 'RODL', 'BKT', 'RET']);
+    ok('the bracket wins where one is chosen', both.options[0].inlineOnly === false);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

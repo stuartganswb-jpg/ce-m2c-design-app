@@ -357,7 +357,20 @@ function HardwareConfiguratorInner({
         const nested = new Set();
         model.slots.filter(s => s.kind !== 'BACKPLATE').forEach(s => {
             if (!s.options.length && !s.suppressedBy) return;
-            const sub = s.kind === 'BRACKET' ? plates.find(p => (p.position || '') === (s.position || '')) : null;
+            // A plate belongs to the arm that carries it. Normally that is the bracket — but when a
+            // RETURN has taken that end the bracket step is suppressed, and the return is the arm
+            // (see bracketAt in hardwareModel), so the plate travels to the END step instead. Left
+            // under the suppressed bracket it rendered nowhere and the plate could not be chosen.
+            const plateHere = () => plates.find(p => (p.position || '') === (s.position || ''));
+            let sub = null;
+            if (s.kind === 'BRACKET' && !s.suppressedBy) sub = plateHere();
+            else if (s.kind === 'END' && s.position) {
+                const bkt = model.slots.find(x => x.kind === 'BRACKET' && (x.position || '') === (s.position || ''));
+                if (!bkt || bkt.suppressedBy) sub = plateHere();
+            }
+            // A double has a front and a back end at each position; the plate is shared, so the
+            // first to claim it keeps it rather than both drawing the same picker.
+            if (sub && nested.has(sub.key)) sub = null;
             if (sub) nested.add(sub.key);
             out.push({ kind: 'SLOT', key: s.key, slot: s, sub, label: slotLabel(s) });
         });

@@ -1010,11 +1010,20 @@ export function slots(choices, answers = {}, selectedIds = []) {
     // be pinned SHARED — or the reverse — so an exact match found no arm, and with no arm the pool
     // is left untouched by design. Same position first, then a shared arm, then any chosen arm when
     // the plate itself is shared.
+    //
+    // ⚠ A RETURN IS THE ARM AT ITS OWN END (Stuart 2026-08-20: "these returns are supposed to use
+    // the same call for backplates standard included and then the same upgrade fee to cover
+    // plates … these should have the same backplate options as the inline"). A return replaces the
+    // bracket there — the rule below suppresses it — and something still has to hold the rod to the
+    // wall, so the plate question does not disappear with the bracket. It moves to the return.
+    // Only where there is no bracket: a bracket that IS chosen still governs its own plate.
     const bracketAt = (pos) => {
         const chosen = choices.filter(c => want.has(c.id) && c.role === 'BRACKET');
-        return chosen.find(c => (c.position || '') === pos)
+        const bkt = chosen.find(c => (c.position || '') === pos)
             || chosen.find(c => !c.position)
             || (!pos ? chosen[0] : null) || null;
+        if (bkt) return bkt;
+        return choices.find(c => want.has(c.id) && c.role === 'RETURN' && (c.position || '') === pos) || null;
     };
     bucket.forEach(slot => {
         if (slot.kind !== 'BACKPLATE') return;
@@ -1057,7 +1066,10 @@ export function slots(choices, answers = {}, selectedIds = []) {
         //                 has no in-line ones (1.6: "flows without inl-only plates fall back to
         //                 rtn-only for In Line brackets");
         //   any other  → the plain plates, neither in-line nor return.
-        if (arm.isInline) {
+        // A RETURN DRAWS THE IN-LINE POOL. His words: "the same backplate options as the inline".
+        // It sits against the wall the same way an in-line arm does, so it takes the same plates —
+        // standard included, cover plate the upgrade — and no collection needs re-tagging for it.
+        if (arm.isInline || arm.role === 'RETURN') {
             const inl = slot.options.filter(o => o.inlineOnly);
             slot.options = inl.length ? inl : slot.options.filter(o => o.returnOnly);
             if (!slot.options.length) {
@@ -1079,6 +1091,13 @@ export function slots(choices, answers = {}, selectedIds = []) {
         if (!['BRACKET', 'BACKPLATE'].includes(slot.kind) || !slot.position) return;
         if (!replaced.has(slot.position)) return;
         const by = choices.find(c => want.has(c.id) && BRACKET_REPLACING_ROLES.includes(c.role) && c.position === slot.position);
+        // ⚠ A RETURN TAKES THE PLATE WITH IT (Stuart 2026-08-20). It replaces the BRACKET — the arm
+        // is gone — but the rod still meets the wall there and still needs a plate behind it, at
+        // the same standard-included / cover-plate-upgrade prices as an in-line arm. So the plate
+        // question survives the bracket it displaced, and the pairing rule above has already handed
+        // it the in-line pool. An INSIDE MOUNT is different: it sits in the frame with nothing
+        // behind it, so that still clears both.
+        if (slot.kind === 'BACKPLATE' && by && by.role === 'RETURN') return;
         // ⚠ NAME IT BY OUR PATTERN ID (Stuart 2026-08-17: "step 9 is referring to the id from the
         // node H1138inPOLEMTR6Right1 — never use these, always our pattern id"). A pin's name is
         // sometimes the node it was built from, which is an artefact of the .fbx and means nothing
