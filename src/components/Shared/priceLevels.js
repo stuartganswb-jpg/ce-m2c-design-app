@@ -101,7 +101,29 @@ export function fabricutPriceOf(part, levelId, finishCode, outsourceCodes, findB
     // the finish picked on that step (french return $35 painted / $43 plated on ONE record).
     const fcU = String(finishCode || '').toUpperCase();
     const tier = (isPlatedSuffix(suffix, outsourceCodes) || (!suffix && isPlatedSuffix(fcU, outsourceCodes))) ? 'plated' : 'painted';
-    const tiered = (f) => (!tierOnly && fab[f] !== undefined) ? fab[f] : fab[`${tier}${f[0].toUpperCase()}${f.slice(1)}`];
+    // ⚠ A NULL BARE COLUMN IS NOT ALWAYS "INCLUDED" (Stuart 2026-08-20: the french and miter return
+    // fees quoting $0). Two different shapes were being read the same way:
+    //
+    //   a BACKPLATE has cost UNDEFINED and paintedCost NULL — nothing anywhere, which is the
+    //     deliberate "included in the arm price" case the null → 0 rule below exists for;
+    //   a FEE like H1-FRPF has cost NULL but paintedCost 35 and platedCost 43 — priced only in the
+    //     tier columns, because /P and /EP genuinely cost different amounts and one bare column
+    //     cannot hold both.
+    //
+    // The old test asked `!== undefined`, so a NULL bare column won and never reached the tier
+    // beside it — then null → 0 read it as free. Five items were quoting $0 with real money in the
+    // painted and plated columns: both return fees and all three acrylic finials.
+    //
+    // A real bare value still wins; a real TIER value now beats a null bare one; and when neither
+    // holds anything this returns exactly what it always did, so the plates stay included.
+    const tiered = (f) => {
+        const tierKey = `${tier}${f[0].toUpperCase()}${f.slice(1)}`;
+        const bare = tierOnly ? undefined : fab[f];
+        if (bare !== undefined && bare !== null) return bare;
+        const tv = fab[tierKey];
+        if (tv !== undefined && tv !== null) return tv;
+        return (!tierOnly && fab[f] !== undefined) ? fab[f] : tv;
+    };
 
     let v = tiered(lvl.field);
     if (lvl.field === 'wholesale' && (v === undefined || v === null)) {
