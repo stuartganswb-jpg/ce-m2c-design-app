@@ -147,6 +147,8 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         materials: String(pin.materials || cluster?.materials || '').toUpperCase(),
         noFinish: !!(pin.noFinish || cluster?.noFinish),
         isBasic: !!(pin.isBasic || cluster?.isBasic),
+        // NO PLATE — the traverse returns clamp to the fascia; the solid ones bolt to the wall.
+        noBackplate: !!(pin.noBackplate || cluster?.noBackplate),
         usesReturnPlates: !!(pin.usesReturnPlates || cluster?.usesReturnPlates),
         inlineOnly: !!(pin.inlineOnly || cluster?.inlineOnly),
         returnOnly: !!(pin.returnOnly || cluster?.returnOnly),

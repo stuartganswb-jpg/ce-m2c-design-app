@@ -1591,5 +1591,37 @@ eq('nonsense is null', measureOf('n/a'), null);
         bp(withInline, ['ROD', 'RET'], 'LEFT').options.map(o => o.id), ['P-L-INL']);
 }
 
+// ── SOME ENDS MOUNT WITHOUT A PLATE, AND ONLY THE ITEM KNOWS ──────────────────────────────────
+// "in certain cases returns get backplates and in others they do not … if we choose traverse
+//  rather than solid then the traverse french and miter return do not get backplates."
+// Same role, same position, opposite answer — so the part carries it and nothing is derived.
+{
+    const base = (extra) => [
+        { id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+        { id: 'PLATE', partId: 'H1-138BP-R', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl'] },
+        extra,
+    ];
+    const bp = (choices, sel) => resolve({ choices, answers: {}, selectedIds: sel })
+        .slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT');
+
+    // the solid return — bolts to the wall, takes a plate
+    const solid = bp(base({ id: 'RET', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', nodes: ['r'] }), ['ROD', 'RET']);
+    eq('a plain return still gets its plate', solid.options.map(o => o.partId), ['H1-138BP-R']);
+
+    // the traverse one — clamps to the fascia, and says so on the item
+    const trv = bp(base({ id: 'RET', partId: '138TRVFR', role: 'RETURN', position: 'LEFT', noBackplate: true, nodes: ['r'] }), ['ROD', 'RET']);
+    eq('one tagged NO PLATE gets none', trv.options.length, 0);
+    ok('and names the part that decided it', trv.suppressedBy === '138TRVFR');
+    ok('with a reason that is not the basic one', /without a backplate/.test(trv.suppressedReason || ''));
+
+    // the tag only speaks for the end it is on — an untagged end elsewhere is unaffected
+    const other = resolve({
+        choices: [...base({ id: 'RET', partId: '138TRVFR', role: 'RETURN', position: 'LEFT', noBackplate: true, nodes: ['r'] }),
+            { id: 'PLATE-R', partId: 'H1-138BP-R', role: 'BACKPLATE', position: 'RIGHT', nodes: ['pr'] }],
+        answers: {}, selectedIds: ['ROD', 'RET'],
+    }).slots.find(s => s.kind === 'BACKPLATE' && s.position === 'RIGHT');
+    ok('the other end keeps its plate', other.options.length === 1);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

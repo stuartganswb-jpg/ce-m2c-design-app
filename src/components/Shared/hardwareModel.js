@@ -383,6 +383,8 @@ export function normalizeChoice(input = {}) {
                 ? String(input.materials).split(/[,;|]+/).every(x => /CLEAR|NO\s*FINISH/i.test(x.trim()))
                 : false),
         isBasic: input.isBasic === true,
+        // "this end treatment mounts without a backplate" — see the plate pairing in slots().
+        noBackplate: input.noBackplate === true,
         // ⚠ THE TWO SIDES OF "IN LINE" ARE DIFFERENT FIELDS, and 1.6 says so. On a BRACKET the flag
         // is `usesReturnPlates` — "this tag is how the system knows a bracket is In Line". On a
         // BACKPLATE it is `inlineOnly` — "the INLINE-bracket copy of a shared return-style plate".
@@ -1059,6 +1061,23 @@ export function slots(choices, answers = {}, selectedIds = []) {
         if (basic) {
             slot.suppressedBy = basic.name;
             slot.suppressedReason = 'it is one piece — the arm and backplate are the same part';
+            slot.options = [];
+            return;
+        }
+        // ⚠ SOME ENDS MOUNT WITHOUT A PLATE, AND ONLY THE ITEM KNOWS (Stuart 2026-08-20: "in
+        // certain cases returns get backplates and in others they do not … if we choose traverse
+        // rather than solid then the traverse french and miter return do not get backplates").
+        //
+        // True, and it is not a rule the engine can derive. A solid french return bolts to the wall
+        // and needs a plate; the traverse one clamps to the fascia and does not. Same role, same
+        // position, opposite answer — so the part says which, and nothing here guesses. Read the
+        // same way BASIC is: whatever is chosen at this position, if it says it takes no plate,
+        // there is no plate question.
+        const noPlate = choices.find(c => want.has(c.id) && c.noBackplate
+            && ((c.position || '') === slot.position || !c.position || !slot.position));
+        if (noPlate) {
+            slot.suppressedBy = noPlate.partId || noPlate.name;
+            slot.suppressedReason = 'this end treatment mounts without a backplate';
             slot.options = [];
             return;
         }
