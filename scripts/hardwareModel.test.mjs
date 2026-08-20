@@ -936,9 +936,13 @@ eq('nonsense is null', measureOf('n/a'), null);
     const ax = activeAxes(N(family), {});
     ok('no projection question on a tiered family', !ax.some(a => a.key === 'proj'));
 
-    // …and the bracket is asked before the ends its depths gate.
+    // …and from 2026-08-20 the ENDS are asked first, then the bracket (Stuart's reshuffle, phase 1:
+    // "move the front left and right end selections to be the next selections after bracket
+    //  projection"). This reverses the older rule that the bracket should lead because its pair
+    // gates the ends — the ends now show every depth until a bracket narrows them, and a bracket
+    // chosen afterwards drops an end it cannot carry, which the settling selection does cleanly.
     const order = slots(N(family), {}, []).map(x => x.kind);
-    ok('the bracket comes before the ends', order.indexOf('BRACKET') < order.indexOf('END'));
+    ok('the ends come before the bracket', order.indexOf('END') < order.indexOf('BRACKET'));
 
     const endsOn = (tier, sel) => slots(N(family), {}, sel)
         .find(x => x.kind === 'END' && x.tier === tier).options.map(o => o.partId).sort();
@@ -1424,6 +1428,35 @@ eq('nonsense is null', measureOf('n/a'), null);
     // a chosen bracket still governs its own plate even if a return is also selected elsewhere
     const both = bpFor(['ROD', 'RODL', 'BKT', 'RET']);
     ok('the bracket wins where one is chosen', both.options[0].inlineOnly === false);
+}
+
+// ── PHASE 1 OF THE RESHUFFLE: THE ENDS LEAD ───────────────────────────────────────────────────
+// "move the front left and right end selections to be the next selections after bracket
+//  projection. remember to move the rear options as well if it is double selected."
+{
+    const dbl = applyFitsDefaults([
+        C({ id: 'RF', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'CENTER', nodes: ['rf'] }),
+        C({ id: 'RB', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', position: 'CENTER', nodes: ['rb'] }),
+        C({ id: 'FL', partId: 'H1-138KF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', nodes: ['fl'] }),
+        C({ id: 'FR', partId: 'H1-138KF', role: 'FINIAL', tier: 'FRONT', position: 'RIGHT', nodes: ['fr'] }),
+        C({ id: 'BL', partId: 'H1-138KF', role: 'FINIAL', tier: 'BACK', position: 'LEFT', nodes: ['bl'] }),
+        C({ id: 'BR', partId: 'H1-138KF', role: 'FINIAL', tier: 'BACK', position: 'RIGHT', nodes: ['br'] }),
+        C({ id: 'BK', partId: 'H1-138D6', role: 'BRACKET', position: 'CENTER', nodes: ['bk'] }),
+        C({ id: 'PL', partId: 'H1-138BP-R', role: 'BACKPLATE', position: 'CENTER', nodes: ['pl'] }),
+        C({ id: 'RG', partId: 'H1-138BR', role: 'RING', tier: 'FRONT', nodes: ['rg'] }),
+    ].map(normalizeChoice));
+    const seq = slots(dbl, {}, []).map(s => [s.kind, s.tier, s.position].filter(Boolean).join(':'));
+    const at = (x) => seq.indexOf(x);
+
+    ok('front left end leads', at('END:FRONT:LEFT') === 0);
+    ok('then front right', at('END:FRONT:RIGHT') === 1);
+    // the rear ends follow their own front ones, with no rule of their own
+    ok('then back left', at('END:BACK:LEFT') === 2);
+    ok('then back right', at('END:BACK:RIGHT') === 3);
+    ok('the bracket comes after every end', at('BRACKET:CENTER') > at('END:BACK:RIGHT'));
+    ok('its plate after it', at('BACKPLATE:CENTER') > at('BRACKET:CENTER'));
+    ok('the rods after the mounting', at('ROD:FRONT') > at('BACKPLATE:CENTER'));
+    ok('and the rings last of all', at('RING:FRONT') > at('ROD:FRONT'));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

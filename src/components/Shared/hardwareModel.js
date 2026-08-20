@@ -1151,8 +1151,25 @@ export function slots(choices, answers = {}, selectedIds = []) {
         // …and before the RODS too, once a rear rod can be cut for a particular bracket: the
         // bracket decides which rod geometry exists, so asking for the rod first asks a question
         // whose answer set is not yet known.
-        if (allTiers.length && (s.kind === 'BRACKET' || s.kind === 'BACKPLATE')) {
-            k = -1 + (s.kind === 'BRACKET' ? 0 : 0.1);
+        // ── PHASE 1 OF THE RESHUFFLE (Stuart 2026-08-20) ────────────────────────────────
+        // "move the front left and right end selections to be the next selections after bracket
+        //  projection. remember to move the rear options as well if it is double selected."
+        //
+        // The ends go first, then the bracket, then its plate — everything else keeps the place it
+        // already had. The rear ends need no rule of their own: within a kind the sort already runs
+        // FRONT before BACK, so a double gets front left, front right, back left, back right in
+        // that order for free.
+        //
+        // ⚠ THIS IS THE SAME RANK CHANGE THAT BROKE H1-138 ON TUESDAY, and it is worth being
+        // honest about why it is being made again. It was not the ordering that broke: it was that
+        // moving the ends to the FRONT exposed two bugs sitting underneath them — an untiered
+        // return suppressed the very end step it had been chosen in (30804a9), and a pick outlived
+        // the arm that justified it (e96131c). Both are fixed and tested now, so the ends can lead
+        // without opening on a step that answers "not asked". Tagged engine-good-2026-08-20 first.
+        if (allTiers.length) {
+            if (s.kind === 'END') k = -2;
+            else if (s.kind === 'BRACKET') k = -1;
+            else if (s.kind === 'BACKPLATE') k = -0.9;
         }
         const t = TIER_POSITIONS.indexOf(s.tier);
         const p = POSITION_ORDER.indexOf(s.position);
