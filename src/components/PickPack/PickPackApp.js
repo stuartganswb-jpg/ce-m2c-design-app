@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
@@ -17,6 +17,7 @@ import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woIt
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
+import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i18n';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
 import { readConvertDiag, diagSummary, isHealthyState } from '../Shared/convertDiag';
@@ -719,6 +720,48 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // the finishing floor is already painting/baking (or done) has been OVERTAKEN — the queue must
     // say so instead of presenting it as ordinary waiting work. Derived from the SAME canonical
     // status module the chips use, so the two can never disagree.
+    // ── LANGUAGE (Stuart 2026-08-20) ────────────────────────────────────────────────────────────
+    // Per-device, because the bench tablet and the office desktop are used by different people.
+    // Untranslated phrases fall through to English, so this can grow one screen at a time.
+    const [lang, setLangState] = useState(readLang);
+    const t = useMemo(() => translator(lang), [lang]);
+    const setLang = (l) => { setLangState(l); writeLang(l); };
+
+    // ── PENDING QUEUE — WHAT IS COMING, BEFORE IT IS HERS (Stuart 2026-08-20) ──────────────────
+    // Sandra: custom orders appear in her pick queue "sin haberlo solicitado". The release is
+    // deliberate — starting the fab frees the small parts so picking runs in PARALLEL (§A1) — but
+    // from the warehouse end it reads as work arriving unannounced, with no way to see what is
+    // behind it. So the pipeline gets its own window: orders dispatched to finishing whose parts
+    // have NOT been released yet. Collapsed by default — it is for looking at, not for working —
+    // and she can pull one forward herself if she would rather pick ahead.
+    const [pendingOpen, setPendingOpen] = useState(false);
+    const pendingQueue = useMemo(() => finAll.filter(j =>
+        !j.sentToPickPack
+        && (j.brand || 'ce') === activeBrand
+        && j.currentPhase !== 'Closed' && j.stepStatus !== 'Closed' && j.status !== 'Closed'
+        && j.packStatus !== 'Packed'
+        // Something to pick, eventually: either real BOM lines or a stock pull the Setup Queue
+        // will synthesize. An order with neither is never going to reach her.
+        && ((Array.isArray(j.partsList) && j.partsList.length > 0) || j.stockErpId || j.orderType === 'stock')
+    ).sort((a, b) => String(a.reqDate || '').localeCompare(String(b.reqDate || ''))), [finAll, activeBrand]);
+    // Why it is still upstream — so the window explains itself rather than just listing ids.
+    const pendingReasonOf = (j) => {
+        if (j.awaitingRodCut) return 'poles being cut';
+        if (j.hasCustomSibling && j.customFabStatus !== 'Complete') return `shop fab ${String(j.customFabStatus || 'not started').toLowerCase()}`;
+        return 'not released by finishing yet';
+    };
+    const releasePendingNow = async (job) => {
+        if (!job) return;
+        if (!window.confirm(`▶ Pick ${packRef(job)} now?\n\nIt is still upstream (${pendingReasonOf(job)}), so this is picking AHEAD of the floor asking for it.\n\nIt moves into Awaiting Pick and you can send it back at any time.`)) return;
+        try {
+            await updateDoc(packDocOf(job), {
+                sentToPickPack: true, pickStatus: job.pickStatus || 'Pending',
+                sentToPickPackAt: Date.now(), releasedEarlyBy: operator?.name || 'WMS', releasedEarlyAt: Date.now(),
+            });
+            writeLog(`▶ ${packRef(job)} pulled forward into the pick queue from Pending (${pendingReasonOf(job)}).`, 'wms');
+        } catch (e) { alert('Could not release it: ' + (e.message || e)); }
+    };
+
     // RETURN A PICKED ORDER TO THE QUEUE (Sandra 2026-08-20). Picking was a one-way door: the only
     // exits from Picked_Awaiting_Staging were staging it or closing the order, so anything picked
     // early — which is most of what she is looking at, since the shop START releases the pick — had
@@ -2889,7 +2932,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: theme.paper, fontFamily: theme.sans }}>
             
-            <header style={{ backgroundColor: '#fff', borderBottom: `1px solid ${theme.line}`, padding: '18px 30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            {/* TABLET-FIRST HEADER (Stuart 2026-08-20: "the warehouse app is not filling the android
+                tablet screen well and she often zooms in and out"). The title and a dozen tabs on one
+                un-wrapping row are wider than a 1024 px tablet, so the PAGE scrolled sideways — which
+                is what the zooming was working around. It wraps now, and the tab strip scrolls
+                within itself rather than dragging the whole screen with it. */}
+            <header style={{ backgroundColor: '#fff', borderBottom: `1px solid ${theme.line}`, padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                 <div>
                     <h1 style={{ fontFamily: theme.serif, margin: '0', fontSize: '1.6rem', fontWeight: 500, color: theme.ink, letterSpacing: '0.05em' }}>WMS: Pick & Pack</h1>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' }}>
@@ -2902,17 +2950,28 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </select>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%', overflowX: 'auto' }}>
                     {/* 'APP IMP' is force-included — feedback stays reachable by every role. */}
                     {TABS.filter(t => myTabs.includes(t) || t === 'APP IMP').map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
-                            {pickTabLabel(tab)}
+                            {t(pickTabLabel(tab))}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
                     <WhereIsIt orders={finAll} compact />
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
-                    <button onClick={handleLogout} style={{ padding: '8px 16px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', background: theme.ink, color: '#fff', border: 'none', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>HUB / LOGOUT</button>
+                    {/* ES / EN — per device. The tooltip is honest about partial coverage rather
+                        than claiming the whole app is translated. */}
+                    <div style={{ display: 'flex', border: `1px solid ${theme.line}` }}>
+                        {Object.entries(LANGS).map(([code, label]) => (
+                            <button key={code} onClick={() => setLang(code)}
+                                title={code === 'en' ? 'Show the app in English' : `Mostrar la aplicación en español — ${coverageOf('es')} frases traducidas; lo que falte se queda en inglés`}
+                                style={{ padding: '8px 12px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer', border: 'none', background: lang === code ? theme.ink : 'transparent', color: lang === code ? '#fff' : theme.inkSoft }}>
+                                {label === 'English' ? 'EN' : 'ES'}
+                            </button>
+                        ))}
+                    </div>
+                    <button onClick={handleLogout} style={{ padding: '8px 16px', fontSize: '10px', fontFamily: theme.mono, letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', background: theme.ink, color: '#fff', border: 'none', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>{t('HUB / LOGOUT')}</button>
                 </div>
             </header>
 
@@ -2920,9 +2979,37 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 
                 {/* 📦 TAB: PICK QUEUE */}
                 {activeTab === 'QUEUE' && (
-                    <div style={{ display: 'flex', gap: '30px', height: '100%' }}>
-                        <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
-                            <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>Awaiting Pick (Small Parts)</div>
+                    <div style={{ display: 'flex', gap: '30px', height: '100%', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                        <div style={{ flex: '1 1 380px', minWidth: 0, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                            <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>{t('Awaiting Pick (Small Parts)')}</div>
+
+                            {/* PENDING — the pipeline, collapsed. Visibility without noise. */}
+                            <div style={{ borderBottom: `1px solid ${theme.line}`, background: theme.paper }}>
+                                <div onClick={() => setPendingOpen(v => !v)} title="Orders on their way to you — still being fabricated, cut, or not yet released by finishing."
+                                    style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', userSelect: 'none' }}>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{pendingOpen ? '▾' : '▸'}</span>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.ink, fontWeight: 600 }}>{t('Pending')} · {pendingQueue.length}</span>
+                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>{t('coming — not released to pick yet')}</span>
+                                </div>
+                                {pendingOpen && (
+                                    <div style={{ padding: '0 20px 14px' }}>
+                                        {pendingQueue.length === 0 && (
+                                            <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif, fontSize: '0.9rem' }}>{t('Nothing upstream — everything raised has reached you.')}</div>
+                                        )}
+                                        {pendingQueue.map(j => (
+                                            <div key={j.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', padding: '9px 0', borderTop: `1px solid ${theme.paper2}` }}>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '0.85rem', color: theme.ink }}>{packRef(j)}</span>
+                                                {woItemCodeOf(j) && <span style={{ fontFamily: theme.mono, fontSize: '0.8rem', color: theme.ink, fontWeight: 600 }}>{woItemCodeOf(j)}</span>}
+                                                <span style={{ fontFamily: theme.sans, fontSize: '0.8rem', color: theme.inkSoft }}>×{j.totalParts || 0}{j.recipe ? ` · ${j.recipe}` : ''}</span>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.brass, border: `1px solid ${theme.brass}`, padding: '2px 7px' }}>{t(pendingReasonOf(j))}</span>
+                                                {j.reqDate && <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft }}>{t('need by')} {j.reqDate}</span>}
+                                                <button onClick={() => releasePendingNow(j)} title="Pick it now, ahead of the floor asking — it moves to Awaiting Pick and can be sent back at any time."
+                                                    style={{ marginLeft: 'auto', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '6px 12px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>▶ {t('Pick now')}</button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
                             <div style={{ padding: '20px', overflowY: 'auto' }}>
                                 {jobs.filter(isOpenPick).sort((a, b) => Number(isOvertakenPick(a)) - Number(isOvertakenPick(b))).map(job => {
                                     const overtaken = isOvertakenPick(job);
@@ -3040,7 +3127,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             </div>
                         </div>
 
-                        <div style={{ width: '400px', background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
+                        <div style={{ flex: '1 1 360px', minWidth: 0, maxWidth: '100%', background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>Staging Handshake</div>
                             <div style={{ padding: '20px' }}>
                                 <p style={{ color: theme.inkSoft, fontFamily: theme.sans, fontSize: '0.9rem', marginBottom: '20px' }}>Scan both labels. They must resolve to the <strong>same</strong> order — small-only orders need only the first scan.</p>
@@ -3088,7 +3175,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                                 orders en la lista"). A pick was one-way: once it flipped to
                                                                 Picked_Awaiting_Staging nothing could put it back, so anything picked
                                                                 early or in error sat in this list until it was staged. */}
-                                                            <button onClick={(e) => { e.stopPropagation(); returnToPickQueue(job); }} title="Send this order back to Awaiting Pick — use it when it was picked early, picked in error, or the parts went back on the shelf." style={{ background: 'transparent', border: `1px solid ${theme.brass}`, color: theme.brass, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>↩ Back to Pick Queue</button>
+                                                            <button onClick={(e) => { e.stopPropagation(); returnToPickQueue(job); }} title="Send this order back to Awaiting Pick — use it when it was picked early, picked in error, or the parts went back on the shelf." style={{ background: 'transparent', border: `1px solid ${theme.brass}`, color: theme.brass, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>↩ {t('Back to Pick Queue')}</button>
                                                             <span style={{ fontSize: '9px', color: theme.inkSoft }}>{job.id}</span>
                                                         </div>
                                                     </div>
@@ -3275,7 +3362,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     return (
                         <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ borderBottom: `1px solid ${theme.line}`, paddingBottom: '15px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '10px' }}>
-                                <h2 style={{ color: theme.ink, fontFamily: theme.serif, fontWeight: 500, margin: 0 }}>Packing Station</h2>
+                                <h2 style={{ color: theme.ink, fontFamily: theme.serif, fontWeight: 500, margin: 0 }}>{t('Packing Station')}</h2>
                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em' }}>small parts first (brackets · rings · finials) → small box · poles last → large box · photo required</span>
                             </div>
 
@@ -3330,7 +3417,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 <button onClick={noPolesOnOrder}
                                                     title="Use this only when the order genuinely has no poles — it is recorded against the order with your name and reason."
                                                     style={{ marginTop: '10px', padding: '9px 12px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
-                                                    This order has no poles — say why &amp; continue
+                                                    {t('This order has no poles — say why & continue')}
                                                 </button>
                                             )}
                                         </div>
@@ -3468,7 +3555,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         {/* SYNAPSIS MODAL */}
                         {showSynapsis && (
                             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <div style={{ background: '#fff', padding: '40px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: 'min(800px, 96vw)', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
                                     <h2 style={{ margin: '0 0 20px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Count Synapsis Review</h2>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '20px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
                                         Target: Subsidiary {BRAND_NETSUITE_MAP[activeBrand]?.subsidiary} | Location {BRAND_NETSUITE_MAP[activeBrand]?.location}
@@ -3749,7 +3836,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         {/* CONVERT MODAL */}
                         {convertBase && (
                             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <div style={{ background: '#fff', padding: '40px', width: '720px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: 'min(720px, 96vw)', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
                                     <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Convert to Phosphated</h2>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '24px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
                                         Posts a NetSuite assembly build · Subsidiary {BRAND_NETSUITE_MAP[activeBrand]?.subsidiary} | Location {BRAND_NETSUITE_MAP[activeBrand]?.location}
@@ -4209,7 +4296,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 const destHome = destPart ? binOf(destPart) : '';
                                 return (
                                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <div style={{ background: '#fff', padding: '40px', width: '720px', maxHeight: '92vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                        <div style={{ background: '#fff', padding: '40px', width: 'min(720px, 96vw)', maxHeight: '92vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
                                             <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>✂ Rod Cut</h2>
                                             <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '24px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
                                                 {o.id} · Location {BRAND_NETSUITE_MAP[activeBrand]?.location} · posts a NetSuite inventory adjustment on confirm
@@ -4359,7 +4446,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         {/* TRANSFER MODAL */}
                         {transferBase && (
                             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <div style={{ background: '#fff', padding: '40px', width: '680px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: 'min(680px, 96vw)', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
                                     <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Bin Transfer</h2>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '24px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
                                         Moves stock between bins · Location {BRAND_NETSUITE_MAP[activeBrand]?.location} · total on hand unchanged
@@ -4534,7 +4621,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         {/* PULL MODAL */}
                         {platingBase && (
                             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <div style={{ background: '#fff', padding: '40px', width: '680px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: 'min(680px, 96vw)', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
                                     <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Pull to Plating WIP</h2>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '24px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
                                         Status change Good → WIP-Plating · Subsidiary {BRAND_NETSUITE_MAP[activeBrand]?.subsidiary} | Location {BRAND_NETSUITE_MAP[activeBrand]?.location} · drops from Available
@@ -4707,7 +4794,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         {/* SHIP PALLET MODAL */}
                         {showShipModal && (
                             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <div style={{ background: '#fff', padding: '40px', width: '760px', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
+                                <div style={{ background: '#fff', padding: '40px', width: 'min(760px, 96vw)', maxHeight: '90vh', overflowY: 'auto', border: `1px solid ${theme.line}`, boxShadow: '0 4px 24px rgba(0,0,0,0.1)' }}>
                                     <h2 style={{ margin: '0 0 6px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink }}>Ship Plating Pallet</h2>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginBottom: '20px', letterSpacing: '.1em', textTransform: 'uppercase' }}>
                                         Vendor: Dayton Grey · NetSuite PO summary line "Weekly Plating Shipment" · $/ea defaults to each item's outsourced Base Cost
