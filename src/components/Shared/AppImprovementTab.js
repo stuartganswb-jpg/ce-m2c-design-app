@@ -191,6 +191,7 @@ const FlowView = ({ flow }) => {
 };
 
 const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
+    const [lightbox, setLightbox] = useState(null);             // { list, idx, ref } — screenshot viewer
     const [tabScope, setTabScope] = useState('EXISTING');       // EXISTING | NEW
     const [section, setSection] = useState(SECTIONS.includes(currentApp) ? currentApp : 'OTHER');
     const [tabRef, setTabRef] = useState('');
@@ -424,10 +425,18 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
                         {(en.flow?.boxes || []).length > 0 && <FlowView flow={en.flow} />}
                         {(en.screenshots || []).length > 0 && (
                             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+                                {/* OPEN IT HERE, NOT IN A NEW TAB (Stuart 2026-08-21). A thumbnail
+                                    linked straight to Firebase Storage: fine for a person, useless to
+                                    anyone reading this page through the app's own domain — and at 70px
+                                    nobody can read a NetSuite error in it anyway. Clicking now opens the
+                                    full image ON THIS PAGE, so a screenshot is evidence everyone looking
+                                    at the card can actually use. The original still has a link, for
+                                    downloading. */}
                                 {en.screenshots.map((s, i) => (
-                                    <a key={i} href={s.url} target="_blank" rel="noreferrer" title={s.name}>
-                                        <img src={s.url} alt={s.name} style={{ height: '70px', border: `1px solid ${theme.line}`, borderRadius: '2px' }} />
-                                    </a>
+                                    <button key={i} onClick={() => setLightbox({ list: en.screenshots, idx: i, ref: en.id })} title={`${s.name} — click to view full size`}
+                                        style={{ padding: 0, border: `1px solid ${theme.line}`, borderRadius: '2px', background: 'none', cursor: 'zoom-in', lineHeight: 0 }}>
+                                        <img src={s.url} alt={s.name} style={{ height: '110px', display: 'block' }} />
+                                    </button>
                                 ))}
                             </div>
                         )}
@@ -485,6 +494,34 @@ const AppImprovementTab = ({ currentUser, currentApp, canManage }) => {
                     </div>
                 );
             })}
+
+            {/* SCREENSHOT VIEWER — full size, on this page. */}
+            {lightbox && (() => {
+                const list = lightbox.list || [];
+                const i = Math.max(0, Math.min(lightbox.idx || 0, list.length - 1));
+                const shot = list[i];
+                if (!shot) return null;
+                const go = (d) => setLightbox({ ...lightbox, idx: (i + d + list.length) % list.length });
+                return (
+                    <div onClick={() => setLightbox(null)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(20,18,15,.92)', zIndex: 12000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '20px' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '14px', color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.06em', flexWrap: 'wrap', justifyContent: 'center' }}>
+                            <span>{shot.name}</span>
+                            {list.length > 1 && <span style={{ opacity: .7 }}>{i + 1} / {list.length}</span>}
+                            {list.length > 1 && <button onClick={() => go(-1)} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.4)', color: '#fff', padding: '6px 12px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px' }}>‹ Prev</button>}
+                            {list.length > 1 && <button onClick={() => go(1)} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.4)', color: '#fff', padding: '6px 12px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px' }}>Next ›</button>}
+                            <a href={shot.url} target="_blank" rel="noreferrer" style={{ color: '#fff', opacity: .8 }}>open original ↗</a>
+                            <button onClick={() => setLightbox(null)} style={{ background: '#fff', border: 'none', color: theme.ink, padding: '6px 14px', cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Close</button>
+                        </div>
+                        {/* Scroll rather than shrink: a full-resolution screenshot squeezed to fit is
+                            the reason these were unreadable in the first place. */}
+                        <div onClick={e => e.stopPropagation()} style={{ maxWidth: '96vw', maxHeight: '84vh', overflow: 'auto', background: '#fff' }}>
+                            <img src={shot.url} alt={shot.name} style={{ display: 'block', maxWidth: 'none' }} />
+                        </div>
+                    </div>
+                );
+            })()}
+
         </div>
     );
 };
