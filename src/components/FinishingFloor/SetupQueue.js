@@ -112,7 +112,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
   const pickableCount = (wo) => (wo.partsList || []).filter(l => {
       if (l && (l.isFee || l.lineIsFee)) return false;
       const pid = String((l && (l.legacyErpId || l.partId)) || '');
-      const hasRealId = pid && pid !== 'PENDING' && pid !== 'N/A' && pid !== 'UNASSIGNED' && !/(^|-)(FEE|HIDDEN)-/.test(pid);
+      // OPT- = a configurator option (flush cut, bend, miter), never a pickable part — dropped
+      // OUTRIGHT rather than left to the name test below, which only catches fee-ish wording and
+      // would happily pass "Flush Cut" through (Eric 2026-08-20). See usablePin in
+      // finishedGoodsRun for the full reasoning.
+      if (/(^|-)OPT-/i.test(pid)) return false;
+      const hasRealId = pid && pid !== 'PENDING' && pid !== 'N/A' && pid !== 'UNASSIGNED' && !/(^|-)(FEE|HIDDEN)-/i.test(pid);
       return hasRealId || !FEEISH_RE.test(String((l && l.name) || ''));
   }).length;
   // Release the small-parts pick to the WMS pick app (its queue = sentToPickPack +

@@ -33,7 +33,13 @@ export const usablePin = (pin) => {
     if (!pin || pin.isHiddenPart || pin.isFee) return false;
     const pid = String(pin.legacyErpId || pin.partId || '');
     if (!pid || pid === 'PENDING' || pid === 'N/A' || pid === 'UNASSIGNED') return false;
-    if (/(^|-)(FEE|HIDDEN)-/.test(pid.toUpperCase())) return false;
+    // OPT- IS A FLOW OPTION, NOT A PART (Eric 2026-08-20: "this order has Flush Cut ends. The
+    // system appears to be treating this a part to pick, when it is a production indicator").
+    // OPT-FLUSH-LEFT / OPT-BEND / OPT-MITER and the rest are the CONFIGURATOR's option ids — they
+    // tell the shop what to DO to a piece, and no part record will ever carry that code. The pick
+    // list already said so in its own words ("not in the library … fix the flow step, do not make
+    // stock") and then listed them anyway.
+    if (/(^|-)(FEE|HIDDEN|OPT)-/.test(pid.toUpperCase())) return false;
     if (!pin.legacyErpId && FEEISH_RE.test(String(pin.partName || ''))) return false;
     return true;
 };

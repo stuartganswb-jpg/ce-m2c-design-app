@@ -459,6 +459,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const lineIsFeeish = (l) => {
         if (l && (l.isFee || l.lineIsFee)) return true;
         const pid = String((l && (l.legacyErpId || l.partId)) || '');
+        // A CONFIGURATOR OPTION IS NOT A PART (Eric 2026-08-20). OPT-FLUSH-LEFT told the warehouse
+        // to find a "flush cut left" on a shelf; it is an instruction to the shop about what to do
+        // to the pole. No part record will ever carry an OPT- code — the shortage panel said as
+        // much ("not in the library … fix the flow step, do not make stock") while the pick list
+        // went on asking for it.
+        if (/(^|-)OPT-/i.test(pid)) return true;
         const hasRealId = pid && pid !== 'PENDING' && pid !== 'N/A' && pid !== 'UNASSIGNED' && !/(^|-)(FEE|HIDDEN)-/.test(pid);
         return !hasRealId && FEEISH_NAME_RE.test(String((l && l.name) || ''));
     };
