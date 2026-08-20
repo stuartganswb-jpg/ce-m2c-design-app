@@ -9,7 +9,7 @@
 // projection on singles, a 3rd on doubles — which must pass with NO code change.
 
 import {
-    resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults, companionsFor
+    resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults, companionsFor, reseatPicks
 } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
@@ -1482,6 +1482,44 @@ eq('nonsense is null', measureOf('n/a'), null);
     const cs = applyFitsDefaults([...rods, untiered, backPin].map(normalizeChoice));
     const front = slots(cs, {}, []).find(s => s.kind === 'END' && s.tier === 'FRONT');
     eq('the front slot keeps the untagged pin', front.options.map(o => o.id), ['GF-UNTIERED']);
+}
+
+// ── REPLACE THE PIN, KEEP THE PART ────────────────────────────────────────────────────────────
+// "if i chose the other double, the bracket behaves correct and the incorrect finial disappears —
+//  you just need to replace with the correct one." A finial is pinned once per bracket family, so
+// changing bracket invalidates the PIN, never the PART.
+{
+    const family = [
+        { id: 'RF', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', position: 'CENTER', nodes: ['rf'] },
+        { id: 'BK-65', partId: 'H1-138D', role: 'BRACKET', position: 'LEFT', proj: 'FRONT:6.5, BACK:3.25', nodes: ['b65'] },
+        { id: 'BK-85', partId: 'H1-138BD', role: 'BRACKET', position: 'LEFT', proj: 'FRONT:8.5, BACK:3.25', nodes: ['b85'] },
+        { id: 'FIN-65', partId: 'H1-138ACKF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', proj: 'FRONT:6.5, BACK:3.25', nodes: ['f65'] },
+        { id: 'FIN-85', partId: 'H1-138ACKF', role: 'FINIAL', tier: 'FRONT', position: 'LEFT', proj: 'FRONT:8.5, BACK:3.25', nodes: ['f85'] },
+    ];
+    // picked the 6.5 finial, then changed to the 8.5 bracket
+    const picks = { 'ROD|FRONT|': 'RF', 'END|FRONT|LEFT': 'FIN-65', 'BRACKET||LEFT': 'BK-85' };
+    const settle = () => {
+        let sel = Object.values(picks);
+        let m = resolve({ choices: family, answers: {}, selectedIds: sel });
+        for (let i = 0; i < 4; i++) {
+            const next = Object.values(reseatPicks(m, picks));
+            if (next.length === sel.length && next.every(x => sel.includes(x))) break;
+            sel = next; m = resolve({ choices: family, answers: {}, selectedIds: sel });
+        }
+        return m;
+    };
+    const m = settle();
+    ok('the finial cut for the chosen bracket renders', m.visible.has('f85'));
+    ok('and the one cut for the other does not', !m.visible.has('f65'));
+    ok('the part is still on the bill', m.bom.some(b => b.partId === 'H1-138ACKF'));
+
+    // a pick the model still offers is left exactly alone
+    const same = resolve({ choices: family, answers: {}, selectedIds: ['RF', 'FIN-65', 'BK-65'] });
+    eq('an unaffected pick is untouched', reseatPicks(same, { 'END|FRONT|LEFT': 'FIN-65' })['END|FRONT|LEFT'], 'FIN-65');
+
+    // and a pick with no twin at all is dropped, not invented
+    const gone = reseatPicks(same, { 'END|FRONT|LEFT': 'NOT-A-CHOICE' });
+    ok('a pick with no twin is dropped', gone['END|FRONT|LEFT'] === undefined);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

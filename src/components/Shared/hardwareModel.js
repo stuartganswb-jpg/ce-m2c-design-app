@@ -601,6 +601,31 @@ export function ridersFor(choices, answers = {}, selectedIds = []) {
 }
 
 /**
+ * The picks that survive a model, with a pin swapped for its twin where the part still stands.
+ *
+ * ⚠ REPLACE THE PIN, KEEP THE PART (Stuart 2026-08-20: "the incorrect finial disappears — you just
+ * need to replace with the correct one"). A finial is pinned once per bracket family, so choosing
+ * the OTHER double bracket invalidates the PIN that was picked — but not the PART. Dropping it
+ * empties a step the customer already answered and blames them for the bracket they just changed.
+ * The same part number, cut for the bracket now chosen, is sitting in the slot; the pick moves.
+ *
+ * Pure, and keyed on slots, so the caller can settle with it: keep what the model offers, swap what
+ * it can, re-resolve, and stop when a pass changes nothing.
+ */
+export function reseatPicks(model, picks = {}) {
+    const out = {};
+    (model?.slots || []).forEach(slot => {
+        const want = picks[slot.key];
+        if (!want) return;
+        if (slot.options.some(o => o.id === want)) { out[slot.key] = want; return; }
+        const had = (model.choices || []).find(c => c.id === want);
+        const twin = had && had.partId && slot.options.find(o => o.partId === had.partId);
+        if (twin) out[slot.key] = twin.id;
+    });
+    return out;
+}
+
+/**
  * The collars the selected parts require — matched to the finial that asks for them.
  *
  * A two-part acrylic finial is a metal collar plus an acrylic top: the customer picks the finial,

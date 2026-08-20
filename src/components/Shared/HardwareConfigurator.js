@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor, reseatPicks } from './hardwareModel';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort } from './priceLevels';
@@ -142,35 +142,35 @@ function HardwareConfiguratorInner({
     // So it settles. Each pass keeps the picks the current model still offers and re-resolves;
     // when a pass drops nothing, the selection and the model agree and we stop. In the steady
     // state — nothing to drop — this is exactly one resolve, as before.
+    // ⚠ REPLACE THE PIN, KEEP THE PART (Stuart 2026-08-20: "the incorrect finial disappears — you
+    // just need to replace with the correct one"). A finial is pinned once per bracket family, so
+    // choosing the OTHER double bracket invalidates the pin the customer picked — but not the part
+    // they chose. Dropping it empties a step they already answered and blames them for the
+    // bracket. The same part number, cut for the bracket now chosen, is sitting right there in the
+    // slot; the pick moves to it.
+    //
+    // Used for BOTH the settling below and the live picks the UI reads, so what renders, what is
+    // billed and what shows as chosen can never disagree about which pin won.
+    const resolvePicks = useCallback((m, raw) => reseatPicks(m, raw), []);
+
     const model = useMemo(() => {
         let sel = Object.values(picks).filter(Boolean);
         let m = resolveHardware({ choices, answers, selectedIds: sel, modelNodes });
         for (let pass = 0; pass < 4; pass++) {
-            const keep = [];
-            m.slots.forEach(sl => {
-                const want = picks[sl.key];
-                if (want && sl.options.some(o => o.id === want)) keep.push(want);
-            });
-            if (keep.length === sel.length) break;   // nothing dropped — settled
-            sel = keep;
+            const next = Object.values(resolvePicks(m, picks));
+            if (next.length === sel.length && next.every(id => sel.includes(id))) break;
+            sel = next;
             m = resolveHardware({ choices, answers, selectedIds: sel, modelNodes });
         }
         return m;
-    }, [choices, answers, picks, modelNodes]);
+    }, [choices, answers, picks, modelNodes, resolvePicks]);
 
     // An answer higher up can invalidate a pick below it — choose the traverse rod and the standard
     // arm you had chosen is not offered any more. Rather than police that with a sweep (the thing
     // that deadlocked twice), the picks are simply FILTERED THROUGH the live options at render
     // time: a pick that is no longer offered is not shown as chosen and contributes no geometry.
     // Nothing to clear, nothing to re-seed, no order of operations to get wrong.
-    const livePicks = useMemo(() => {
-        const out = {};
-        model.slots.forEach(s => {
-            const want = picks[s.key];
-            if (want && s.options.some(o => o.id === want)) out[s.key] = want;
-        });
-        return out;
-    }, [model, picks]);
+    const livePicks = useMemo(() => resolvePicks(model, picks), [model, picks, resolvePicks]);
 
     const resolved = useMemo(
         () => resolveHardware({ choices, answers, selectedIds: Object.values(livePicks), modelNodes }),
