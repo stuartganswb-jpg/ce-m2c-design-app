@@ -719,6 +719,30 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // the finishing floor is already painting/baking (or done) has been OVERTAKEN — the queue must
     // say so instead of presenting it as ordinary waiting work. Derived from the SAME canonical
     // status module the chips use, so the two can never disagree.
+    // RETURN A PICKED ORDER TO THE QUEUE (Sandra 2026-08-20). Picking was a one-way door: the only
+    // exits from Picked_Awaiting_Staging were staging it or closing the order, so anything picked
+    // early — which is most of what she is looking at, since the shop START releases the pick — had
+    // nowhere to go and the list only grew. This puts it back where it came from, and says on the
+    // record that it was returned and by whom, rather than quietly rewinding a step someone did.
+    const returnToPickQueue = async (job) => {
+        if (!job) return;
+        const why = window.prompt(`↩ Send ${packRef(job)} back to Awaiting Pick?\n\nUse this when it was picked early, picked in error, or the parts have gone back on the shelf.\n\nReason (recorded on the order):`, 'picked early — parts returned to shelf');
+        if (why === null) return;
+        const reason = String(why).trim();
+        if (!reason) return alert('A reason is needed — it is what makes the rewind accountable. Nothing was changed.');
+        try {
+            await updateDoc(packDocOf(job), {
+                pickStatus: 'Pending',
+                // The pick is being undone, so its results go with it — otherwise the next picker
+                // inherits someone else's skips and shorts as if they were their own.
+                pickedAt: null, pickedBy: null, pickHadSkips: false, pickSkips: [], pickShorts: [],
+                returnedToQueueAt: Date.now(), returnedToQueueBy: operator?.name || 'WMS',
+                returnedToQueueReason: reason,
+            });
+            writeLog(`↩ ${packRef(job)} returned to the pick queue — "${reason}"`, 'wms');
+        } catch (e) { alert('Could not return it: ' + (e.message || e)); }
+    };
+
     // A CLOSED ORDER LEAVES THE PICK QUEUE (Sandra 2026-08-17: "esta orden fue reemplazada porque
     // tenía el item incorrecto … ya la orden fue cerrada, así que debería desaparecer de la lista").
     //
@@ -3059,6 +3083,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         {job.hasCustomSibling && <div>Shop custom parts: {job.customFabStatus || 'Pending'}</div>}
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
                                                             <button onClick={(e) => { e.stopPropagation(); printZebraLabel(job, 'SMALL_PARTS'); }} title="Reprint the setup label — scanned at the handshake, then rides the fixture into finishing" style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>🖨 Setup Label</button>
+                                                            {/* THE WAY BACK (Sandra 2026-08-20: "necesito agregar un botón para poder
+                                                                regresar las órdenes al pick queue nuevamente y así no acumular work
+                                                                orders en la lista"). A pick was one-way: once it flipped to
+                                                                Picked_Awaiting_Staging nothing could put it back, so anything picked
+                                                                early or in error sat in this list until it was staged. */}
+                                                            <button onClick={(e) => { e.stopPropagation(); returnToPickQueue(job); }} title="Send this order back to Awaiting Pick — use it when it was picked early, picked in error, or the parts went back on the shelf." style={{ background: 'transparent', border: `1px solid ${theme.brass}`, color: theme.brass, padding: '5px 10px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>↩ Back to Pick Queue</button>
                                                             <span style={{ fontSize: '9px', color: theme.inkSoft }}>{job.id}</span>
                                                         </div>
                                                     </div>
