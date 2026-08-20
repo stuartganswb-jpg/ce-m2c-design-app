@@ -291,11 +291,17 @@ function HardwareConfiguratorInner({
     const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
 
     // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
+    //
+    // ⚠ 6.5 IS KEYED ON OUR ITEM CODE, AND A PIN CARRIES THE LIBRARY DOC ID (Stuart 2026-08-20:
+    // "the fabric weight for bracket span states nothing is set up, but it is set up"). It IS set
+    // up — `H1-1.375 → H1-138R` — but this asked for `CE-INV-61954`, which no family claims, so
+    // every rod reported itself unlisted. ourId() is the same resolver the cards and the quote
+    // lines use, so what we look up is now what he typed in 6.5.
     const advice = useMemo(() => {
         const rod = chosenList.find(c => ['ROD', 'FASCIA', 'TRACK'].includes(c.role));
         if (!rod || !lengthInches) return null;
-        return bracketAdviceFor({ itemCode: rod.partId, map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
-    }, [chosenList, lengthInches, spanMap, spanCaps, fabricId]);
+        return bracketAdviceFor({ itemCode: ourId(rod.partId) || rod.name || rod.partId, map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
+    }, [chosenList, lengthInches, spanMap, spanCaps, fabricId, ourId]);
 
     const chosen = useMemo(() => {
         const ids = new Set(Object.values(livePicks));
