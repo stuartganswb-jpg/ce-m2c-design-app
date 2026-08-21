@@ -201,7 +201,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   const [legacyFlowTools, setLegacyFlowTools] = useState(false);
   const [genSingleAsm, setGenSingleAsm] = useState(false); // 🎯 single-assembly mode: this assembly's tags only — no union/review/SIZE steps
   const [genBayConfig, setGenBayConfig] = useState("STRAIGHT"); // bay configuration the generated flow is stamped with (drives fabShape + the pole calculatorTemplate so Vision Hardware math matches)
-  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
+  const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [], fallbackPrices: {} });
   const [isSavingFlowSettings, setIsSavingFlowSettings] = useState(false);
   const [zoomImg, setZoomImg] = useState(null);   // {url,label} for the cluster-image lightbox
   // 🔍 Generate-time REVIEW GATE payload — non-null renders the review modal, whose buttons call
@@ -379,7 +379,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           fabProjection: flow.fabProjection !== undefined && flow.fabProjection !== null ? flow.fabProjection : '',
           fabShape: flow.fabShape || '',
           defaultFinishOptions: flow.defaultFinishOptions || [],
-          hiddenClusters: flow.hiddenClusters || []
+          hiddenClusters: flow.hiddenClusters || [],
+          // Per-kind last-resort prices — see the editor below the finish list.
+          fallbackPrices: flow.fallbackPrices || {}
       });
       setNewStep({ id: null, title: '', type: 'DROPDOWN', dataSource: '', required: true, priceMap: {}, geometryMap: {}, targetNodes: '', allowedOptions: [], useClientPricing: false, priceOverride: '', partHandling: '', calculatorTemplate: '', qtyHelperText: '', basePrice: '', linkedItemId: '' });
   }, [activeFlowId, cpqFlows]);
@@ -2027,7 +2029,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           }
           await deleteDoc(doc(db, "cpq_flows", activeFlowId));
           setActiveFlowId(null);
-          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
+          setFlowSettings({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [], fallbackPrices: {} });
       } catch (err) {
           console.error("Error deleting flow:", err);
           alert("Failed to delete the CPQ Flow.");
@@ -2462,6 +2464,36 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', display: 'block', marginTop: '10px' }}>{(flowSettings.hiddenClusters || []).length} cluster(s) hidden in this flow · Save and Cascade to apply</span>
                                 </div>
                                 )}
+
+                                {/* ── A LAST-RESORT PRICE, PER KIND OF PART (Stuart 2026-08-21) ────────────
+                                    "an area to apply a default back up price per step." A collection
+                                    mid-set-up has items nobody has priced yet, and a $0 line is worse
+                                    than a rough one: it goes out under cost and nothing objects.
+                                    ⚠ IT CANNOT OVERRULE A REAL PRICE. The chain is pin override →
+                                    price level → the customer's row → the item's base price, and this
+                                    is reached only when every one of those has failed. A line quoted
+                                    this way says so on the quote panel, in amber, with the item to fix. */}
+                                <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
+                                    <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Backup price per kind of part</label>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Used ONLY where a part has no price under any rule — no pin override, no 4.6 tier, no customer row, no base price. Leave a box empty and an unpriced part of that kind keeps quoting $0 and saying so in red. Anything quoted from here is flagged amber on the quote until the item itself is priced.</span>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
+                                        {['ROD', 'FASCIA', 'TRACK', 'BRACKET', 'BACKPLATE', 'FINIAL', 'RETURN', 'INSIDE_MOUNT', 'RING', 'CARRIER', 'ACCESSORY'].map(kind => (
+                                            <label key={kind} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>{kind.replace('_', ' ')}</span>
+                                                <input type="number" step="0.01" min="0"
+                                                    value={(flowSettings.fallbackPrices || {})[kind] ?? ''}
+                                                    onChange={e => {
+                                                        const v = e.target.value;
+                                                        const next = { ...(flowSettings.fallbackPrices || {}) };
+                                                        if (v === '' || parseFloat(v) <= 0) delete next[kind]; else next[kind] = parseFloat(v);
+                                                        setFlowSettings({ ...flowSettings, fallbackPrices: next });
+                                                    }}
+                                                    placeholder="—"
+                                                    style={{ padding: '8px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--mono)', fontSize: '0.85rem', background: '#fff' }} />
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
 
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: flowSettings.nsRollupItemId ? 'var(--paper)' : '#fff7ed', border: `1px solid ${flowSettings.nsRollupItemId ? 'var(--line)' : 'var(--brass)'}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
                                     <div>

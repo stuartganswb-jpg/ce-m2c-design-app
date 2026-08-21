@@ -44,6 +44,13 @@ export const PRICE_SOURCES = {
     LEVEL: 'price level (4.6 tier)',
     CLIENT: 'customer price (4.6)',
     BASE: 'item base price',
+    // ⚠ LAST RESORT, AND IT SAYS SO ON THE LINE (Stuart 2026-08-21: "an area to apply a default
+    // back up price per step"). A collection mid-set-up has items nobody has priced yet, and a $0
+    // line is worse than a rough one — it goes out under cost and nothing about the quote objects.
+    // So a flow may carry a fallback PER KIND OF PART, used only where every real rule has failed.
+    // It can never overrule a price somebody actually set, and a line quoted this way is called out
+    // in the warnings, because a number nobody chose per item must not pass quietly as one.
+    FALLBACK: 'flow default (no price on the item)',
     NONE: 'no price on this item',
 };
 
@@ -103,6 +110,13 @@ export function priceChoice(choice, part, ctx = {}) {
     // 4 — the item's own price.
     const base = num(part.manufacturingSpecs?.basePrice);
     if (base !== null && base > 0) return out(base, PRICE_SOURCES.BASE, '');
+
+    // 5 — the flow's fallback for this KIND of part, where it has one. Keyed on the role rather
+    //     than the item, because that is the only thing known about a part nobody has priced.
+    const kind = String(choice?.role || '').toUpperCase();
+    const fb = kind ? num((ctx.fallbackPrices || {})[kind]) : null;
+    if (fb !== null && fb > 0) return out(fb, PRICE_SOURCES.FALLBACK, `${kind.toLowerCase().replace('_', ' ')} default on this flow — ${billedId || 'this item'} has no price of its own`);
+
     return out(0, PRICE_SOURCES.NONE, `nothing on ${billedId || 'this item'} at ${priceLevel === 'STANDARD' ? 'standard pricing' : priceLevelShort(priceLevel)} — no override, no tier, no customer row, no base price`);
 }
 
@@ -185,6 +199,10 @@ export function pricingWarnings({ lines }) {
     const out = [];
     lines.filter(l => l.source === PRICE_SOURCES.NONE).forEach(l =>
         out.push({ sev: 'red', msg: `${l.name}${l.billedId || l.partId ? ` (${l.billedId || l.partId})` : ''} has no price under any rule — ${l.detail}. It is quoting at $0.` }));
+    // A fallback is a placeholder that reached a customer. Not an error — it was chosen
+    // deliberately — but it must never be mistaken for a price somebody set on the item.
+    lines.filter(l => l.source === PRICE_SOURCES.FALLBACK).forEach(l =>
+        out.push({ sev: 'amber', msg: `${l.name}${l.billedId || l.partId ? ` (${l.billedId || l.partId})` : ''} is quoting the flow's ${l.detail.split(' default')[0]} default at $${(l.unit || 0).toFixed(2)} — price the item in 4.6 to make it real.` }));
     return out;
 }
 

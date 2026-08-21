@@ -163,5 +163,35 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     eq('and the line says it has none', clear.lines.map(l => l.finishCode), ['', '']);
 }
 
+// ── THE FLOW'S FALLBACK IS A LAST RESORT, AND IT SAYS SO ─────────────────────────────────────
+// Stuart 2026-08-21: "an area to apply a default back up price per step". A collection mid-set-up
+// has items nobody has priced, and a $0 line goes out under cost without objecting. A rough number
+// that announces itself beats a silent zero — but it must never overrule a real price.
+{
+    const fb = { BRACKET: 25, RING: 2 };
+    const unpriced = { id: 'U', itemId: 'H1-UNPRICED', legacyErpId: 'H1-UNPRICED', itemName: 'Unpriced', manufacturingSpecs: {}, clientPricing: [] };
+
+    const hit = priceChoice({ role: 'BRACKET' }, unpriced, { fallbackPrices: fb });
+    eq('an unpriced part takes its kind default', [hit.price, hit.source], [25, PRICE_SOURCES.FALLBACK]);
+    ok('and the line says where the number came from', /bracket default on this flow/.test(hit.detail));
+
+    const noKind = priceChoice({ role: 'FINIAL' }, unpriced, { fallbackPrices: fb });
+    eq('a kind with no default still quotes nothing', [noKind.price, noKind.source], [0, PRICE_SOURCES.NONE]);
+
+    const untyped = priceChoice({}, unpriced, { fallbackPrices: fb });
+    eq('and a line with no role cannot match one', untyped.source, PRICE_SOURCES.NONE);
+
+    // ⚠ IT NEVER OVERRULES A REAL PRICE — that is the whole safety of it.
+    const real = priceChoice({ role: 'BRACKET' }, { ...unpriced, manufacturingSpecs: { basePrice: 9 } }, { fallbackPrices: fb });
+    eq('an item with a base price is untouched', [real.price, real.source], [9, PRICE_SOURCES.BASE]);
+    const over = priceChoice({ role: 'BRACKET', price: 4 }, unpriced, { fallbackPrices: fb });
+    eq('and a pin override still wins outright', [over.price, over.source], [4, PRICE_SOURCES.OVERRIDE]);
+
+    // …and it is called out, because a placeholder reached a customer.
+    const warn = pricingWarnings({ lines: [{ name: 'Bracket', billedId: 'H1-UNPRICED', unit: 25, source: PRICE_SOURCES.FALLBACK, detail: 'bracket default on this flow — H1-UNPRICED has no price of its own' }] });
+    eq('a fallback line warns, in amber not red', warn.map(w => w.sev), ['amber']);
+    ok('and it says how to make it real', /price the item in 4\.6/.test(warn[0].msg));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -477,11 +477,13 @@ function HardwareConfiguratorInner({
     const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
         finishCode: globalFinish, finishFor: lineFinishFor, findPart, findByCode: findPart,
+        // The flow's per-kind fallback, used only where a part has no price under any rule (tab 11).
+        fallbackPrices: flow?.fallbackPrices || null,
         // What the rods are cut from — see the per-foot rule in priceConfiguration. The
         // inches travel too: they become the line's cutLength, which is what the bench reads.
         billedFeet: lengthFeet || 0,
         lengthInches: lengthInches || 0,
-    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, lineFinishFor, findPart, lengthFeet, lengthInches]);
+    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, lineFinishFor, findPart, lengthFeet, lengthInches, flow]);
     const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
@@ -1412,7 +1414,9 @@ function HardwareConfiguratorInner({
                                         )}
                                     </tbody>
                                 </table>
-                                {priceWarnings.map((w, i) => <div key={i} style={{ color: '#b00020', fontSize: '9px' }}>● {w.msg}</div>)}
+                                {/* An amber warning is a placeholder that reached a customer, not an
+                                    error — it must be visible without reading as a fault. */}
+                                {priceWarnings.map((w, i) => <div key={i} style={{ color: w.sev === 'amber' ? '#8a6508' : '#b00020', fontSize: '9px' }}>{w.sev === 'amber' ? '○' : '●'} {w.msg}</div>)}
                                 {!!priced.lines.length && <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>Hover a line for the rule that set it{customerId ? '' : ' · no customer, so no client pricing'}</div>}
                             </div>
                         </div>
