@@ -30,6 +30,9 @@ const item = handoffItem(resolved, {
     findPart, assembly: { id: 'A1', itemName: 'H1-138' }, flow: { id: 'F1', name: 'H1-138 flow' },
     sidemark: 'Living Room 1', finishes: [{ code: 'P07', name: 'Gold Brass' }], finishLabel: 'Gold Brass (P07)',
     priceLevel: 'STANDARD', lengthInches: 96.5, lengthFeet: 9,
+    // The configurator's price context travels with the item, finish included — that is what the
+    // lines are priced AND finished off.
+    finishCode: 'P07',
     extras: [{ code: 'H1-138R', qty: '1', note: 'splice at 48"' }],
     // The traverse step's answer, in the shape the configurator hands over.
     trvComponents: [
@@ -77,6 +80,18 @@ ok('…and it is not charged for', inc?.total === 0);
 ok('a billable accessory is charged', bill?.total === 78);
 ok('both route as small parts', inc?.partHandling === 'Small Parts' && bill?.partHandling === 'Small Parts');
 ok('the billable is in the money', item.pricing.finalPrice >= 78);
+
+// ── THE FINISH REACHES FINISHING PER LINE (Stuart 2026-08-21) ────────────────────────────────
+// "of course in the bom to send along to finishing … in case people do choose different finishes
+// for different parts." The item-level label still says what the configuration is; a line with an
+// exception on it cannot be sprayed off that label, so each line says what IT wears.
+{
+    const finished = b.filter(l => l.finishCode);
+    ok('lines carry their own finish code', finished.length > 0);
+    ok('…and the name the floor reads, not just the code', finished.every(l => !!l.finishLabel));
+    ok('the code is the one that was chosen', finished.every(l => l.finishCode === 'P07'));
+    ok('and it resolves to the finish name', finished.every(l => l.finishLabel === 'Gold Brass'));
+}
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

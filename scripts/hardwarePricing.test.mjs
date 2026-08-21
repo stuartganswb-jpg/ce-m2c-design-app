@@ -128,5 +128,40 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     eq('and the rod bills once', unmeasured.lines[0].qty, 1);
 }
 
+// ── A FINISH PER PART, NOT PER CONFIGURATION (Stuart 2026-08-21) ─────────────────────────────
+// "in case people do choose different finishes for different parts." The render already painted
+// per part; the PRICE read one code for the whole configuration, so brass rings on a black pole
+// billed the black ring and told finishing black.
+{
+    const p = (code, price) => ({ id: code, itemId: code, legacyErpId: code, itemName: code,
+        manufacturingSpecs: { basePrice: String(price) } });
+    const lib = {
+        'ROD': p('ROD', 10), 'ROD/P': p('ROD/P', 14),
+        'RING': p('RING', 2), 'RING/P': p('RING/P', 3),
+    };
+    const find = (c) => lib[String(c).toUpperCase()] || null;
+    const model = { bom: [
+        { partId: 'ROD', name: 'Rod', qty: 1, raw: { __choice: { id: 'c-rod', partId: 'ROD' } } },
+        { partId: 'RING', name: 'Ring', qty: 10, raw: { __choice: { id: 'c-ring', partId: 'RING' } } },
+    ] };
+    const base = { findPart: find, findByCode: find };
+
+    // one finish for everything — both lines bill the painted variant, as they always have
+    const whole = priceConfiguration(model, { ...base, finishCode: 'P20' });
+    eq('the configuration finish bills the variant', whole.lines.map(l => l.billedId), ['ROD/P', 'RING/P']);
+    eq('…and the finish is ON the line now', whole.lines.map(l => l.finishCode), ['P20', 'P20']);
+
+    // an exception on the rings only — the rings go brass, the rod stays where it was
+    const split = priceConfiguration(model, { ...base, finishCode: 'P20',
+        finishFor: (choice) => (choice.id === 'c-ring' ? 'P07' : 'P20') });
+    eq('an exception prices off ITS finish', split.lines.map(l => l.finishCode), ['P20', 'P07']);
+    ok('and the untouched line is unmoved', split.lines[0].unit === whole.lines[0].unit);
+
+    // a part that wears nothing carries nothing, and bills the mill item
+    const clear = priceConfiguration(model, { ...base, finishCode: 'P20', finishFor: () => '' });
+    eq('no finish means the mill item', clear.lines.map(l => l.billedId), ['ROD', 'RING']);
+    eq('and the line says it has none', clear.lines.map(l => l.finishCode), ['', '']);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

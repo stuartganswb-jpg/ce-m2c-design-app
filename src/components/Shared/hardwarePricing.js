@@ -56,6 +56,8 @@ const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : nu
  * @param part     the Approved_Designs doc for that part — the carrier of basePrice,
  *                 clientPricing[] and the manufacturingSpecs tier box
  * @param ctx      { customerId, customer, priceLevel, finishCode, outsourceCodes, findByCode }
+ *                 …and optionally `finishFor(choice, entry)` — the per-part finish, where the
+ *                 caller allows a part to be finished differently from the configuration.
  * @returns { price, source, sku, aliasCode, detail }
  */
 export function priceChoice(choice, part, ctx = {}) {
@@ -115,7 +117,19 @@ export function priceConfiguration(model, ctx = {}) {
     const lines = (model?.bom || []).map(entry => {
         const choice = entry.raw && entry.raw.__choice ? entry.raw.__choice : entry;
         const part = typeof findPart === 'function' ? findPart(entry.partId) : null;
-        const p = priceChoice(choice, part, ctx);
+        // ⚠ THE FINISH IS A PER-PART DECISION (Stuart 2026-08-21: "in case people do choose
+        // different finishes for different parts"). One `finishCode` for the whole configuration
+        // priced every line off the configuration's finish — so brass rings on a black pole billed
+        // the black variant of the ring, and the sheet that reaches finishing said black too.
+        //
+        // `ctx.finishFor(choice, entry)` is the caller's per-part answer, falling back to the
+        // configuration's own. It arrives as a FUNCTION rather than a map because the caller is the
+        // only thing that knows the material gate — a wood stain does not land on a steel bracket,
+        // and a clear acrylic finial wears nothing at all.
+        const finishCode = typeof ctx.finishFor === 'function'
+            ? (ctx.finishFor(choice, entry) || '')
+            : ctx.finishCode;
+        const p = priceChoice(choice, part, finishCode === ctx.finishCode ? ctx : { ...ctx, finishCode });
         // ⚠ ROD STOCK IS SOLD BY THE FOOT (Stuart 2026-08-20: "it needs to take billed ft qty on
         // step 6 and multiply it times price of selected rod in 10 and 11 if double"). H1-138R is
         // "Round Hollow Rod Stock" at 12.50 — a foot of it, not a pole of it — so a ten-foot order
@@ -145,6 +159,12 @@ export function priceConfiguration(model, ctx = {}) {
             // What the shop cuts to. Read by RTG, the floor, the labels and packaging — and never
             // set by this engine until now, so a pole reached the bench with no length on it.
             ...(perFoot && inches ? { cutLength: inches } : {}),
+            // WHAT THIS LINE IS FINISHED IN — on the line, not only on the configuration, so the
+            // quote panel can show it per part and the finishing floor is told per part.
+            finishCode: finishCode || '',
+            // …and WHY it has none, where it has none: a clear acrylic finial takes no finish at
+            // all, which is a different fact from a steel part left in mill.
+            noFinish: !!choice.noFinish,
             unit: p.price,
             total: p.price * qty * (perFoot ? feet : 1),
             source: p.source,

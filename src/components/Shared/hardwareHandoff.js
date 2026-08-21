@@ -56,7 +56,7 @@ const codeOf = (part, fallback) => String(
  *   cutLength      the shop cuts to this; absent on anything that is not cut
  *   dimensions     wall measurements for returns, read by fabrication
  */
-function handoffLine(l, part) {
+function handoffLine(l, part, finishName = '') {
     return {
         name: l.name || codeOf(part, l.partId) || '',
         qty: l.qty || 1,
@@ -70,6 +70,13 @@ function handoffLine(l, part) {
         ...(l.sku || l.aliasCode ? { clientSku: l.sku || l.aliasCode } : {}),
         ...(l.hidden ? { hidden: true } : {}),
         ...(l.isFee ? { isFee: true } : {}),
+        // ⚠ THE FINISH, PER LINE (Stuart 2026-08-21: "of course in the bom to send along to
+        // finishing … in case people do choose different finishes for different parts"). The item
+        // has carried `finishes`/`finishLabel` for the whole configuration since the old engine and
+        // still does — RTG reads those for the recipe. But a configuration with an exception in it
+        // cannot be sprayed off one label, so the line says what IT is finished in. A part that
+        // wears nothing carries nothing, and the floor reads that as mill.
+        ...(l.finishCode ? { finishCode: l.finishCode, finishLabel: finishName || l.finishCode } : {}),
         ...(l.cutLength ? { cutLength: l.cutLength } : {}),
         ...(l.dimensions ? { dimensions: l.dimensions } : {}),
     };
@@ -91,7 +98,13 @@ export function handoffItem(resolved, ctx = {}) {
     } = ctx;
 
     const priced = priceConfiguration(resolved, ctx);
-    const lines = priced.lines.map(l => handoffLine(l, typeof findPart === 'function' ? findPart(l.partId) : null));
+    // Code → the name a human reads. The finish objects are already here for the item-level label;
+    // the lines borrow the same list rather than a second one that could disagree with it.
+    const finishNameOf = (code) => {
+        const f = (finishes || []).find(x => String(x.code || '').toUpperCase() === String(code || '').toUpperCase());
+        return f ? (f.name || f.code || '') : '';
+    };
+    const lines = priced.lines.map(l => handoffLine(l, typeof findPart === 'function' ? findPart(l.partId) : null, finishNameOf(l.finishCode)));
 
     // Added by hand — real lines, so they route and bill like everything else. They carry their own
     // note because a splice's location is the whole point of adding one.

@@ -306,6 +306,39 @@ function HardwareConfiguratorInner({
     // and the configuration's otherwise, so the common order is one click and the mixed one is two.
     const finishFor = useCallback((c) => partFinish[c.id] || globalFinish, [partFinish, globalFinish]);
 
+    // ── THE FINISH A LINE IS ACTUALLY BILLED AND SPRAYED IN (Stuart 2026-08-21) ───────────────
+    // "once the finish is chosen to the left it needs to list the chosen color in the pricing
+    // window as well of course in the bom to send along to finishing … in case people do choose
+    // different finishes for different parts."
+    //
+    // Three things had to agree and only two did. The RENDER already painted per part; the PRICE
+    // and the sheet that reaches finishing read one code for the whole configuration. So brass
+    // rings on a black pole rendered brass, billed the black variant and told the floor black.
+    //
+    // ⚠ AN EXCEPTION IS KEYED ON THE CHOICE, AND A PART IS OFTEN SEVERAL PINS. A pole is three —
+    // left, core, right — so a finish set on the one the customer clicked would leave its own other
+    // two segments billing the configuration finish. The exception therefore travels by PART: same
+    // part number, same finish, which is what "just this part" means to the person clicking it.
+    const partFinishByPart = useMemo(() => {
+        const m = {};
+        Object.entries(partFinish).forEach(([id, code]) => {
+            const c = model.choices.find(x => x.id === id);
+            if (c?.partId) m[String(c.partId).toUpperCase()] = code;
+        });
+        return m;
+    }, [partFinish, model]);
+    // …and the MATERIAL GATE is applied here, exactly as the renderer applies it: a part wears only
+    // a finish its material can take, so a wood stain chosen for the configuration does not bill a
+    // stained bracket, and clear acrylic bills and sprays as nothing at all.
+    const lineFinishFor = useCallback((choice) => {
+        if (!choice || choice.noFinish) return '';
+        const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || globalFinish;
+        if (!code) return '';
+        const f = finishByCode.get(String(code).toUpperCase());
+        if (!f || !finishesFor(choice, [f]).length) return '';
+        return code;
+    }, [partFinish, partFinishByPart, globalFinish, finishByCode]);
+
     // NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
     // the collar of a two-part finial takes the finish, the acrylic top never does.
     const textureOverrides = useMemo(() => {
@@ -359,12 +392,12 @@ function HardwareConfiguratorInner({
 
     const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
-        finishCode: globalFinish, findPart, findByCode: findPart,
+        finishCode: globalFinish, finishFor: lineFinishFor, findPart, findByCode: findPart,
         // What the rods are cut from — see the per-foot rule in priceConfiguration. The
         // inches travel too: they become the line's cutLength, which is what the bench reads.
         billedFeet: lengthFeet || 0,
         lengthInches: lengthInches || 0,
-    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, findPart, lengthFeet, lengthInches]);
+    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, lineFinishFor, findPart, lengthFeet, lengthInches]);
     const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
@@ -386,8 +419,11 @@ function HardwareConfiguratorInner({
         const qty = Number(x.qty) > 0 ? Number(x.qty) : 1;
         const p = priceChoice({ partId: x.code }, part, priceCtx);
         return { partId: x.code, name: part?.itemName || x.code, qty, unit: p.price, total: p.price * qty,
-                 sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true };
-    }), [extras, findPart, priceCtx]);
+                 sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true,
+                 // Priced at the configuration's finish, so it says so — a row with no finish under
+                 // it beside rows that have one reads as an oversight rather than a fact.
+                 finishCode: globalFinish };
+    }), [extras, findPart, priceCtx, globalFinish]);
 
     // ── TRAVERSE COMPONENTS ARE THE LAST QUESTION A TRACK ASKS (Stuart 2026-08-21) ────────────
     // "integrate that simple configurator at the last step of any traverse rod … it basically has
@@ -1153,6 +1189,25 @@ function HardwareConfiguratorInner({
                                                     <span style={{ display: 'block', fontSize: '11px', color: 'var(--ink-soft)', lineHeight: 1.25 }}>
                                                         {findPart(l.partId)?.itemName || l.name}
                                                     </span>
+                                                    {/* ⚠ THE FINISH, ON EVERY LINE (Stuart 2026-08-21: "ideally under each item id and
+                                                        description list the finish, this way we are covered in case people do choose
+                                                        different finishes for different parts"). Naming it once at the top of the quote
+                                                        is only honest while there are no exceptions — and the whole point of the finish
+                                                        rail is that there can be. A part that wears nothing says so rather than going
+                                                        quiet, because a blank line and an unfinished part look identical otherwise. */}
+                                                    {(() => {
+                                                        const f = l.finishCode ? finishByCode.get(String(l.finishCode).toUpperCase()) : null;
+                                                        if (f) return (
+                                                            <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)' }}>
+                                                                {`${f.name || f.code}`}<span style={{ color: 'var(--ink-faint)' }}>{` · ${f.code}`}</span>
+                                                            </span>
+                                                        );
+                                                        return (
+                                                            <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
+                                                                {l.extra ? '' : (l.noFinish ? 'clear · takes no finish' : 'mill · no finish')}
+                                                            </span>
+                                                        );
+                                                    })()}
                                                 </td>
                                                 <td style={{ padding: '3px 0', textAlign: 'right', whiteSpace: 'nowrap', verticalAlign: 'top', color: l.unit ? 'var(--ink)' : 'var(--ink-faint)' }}>${l.total.toFixed(2)}</td>
                                             </tr>
