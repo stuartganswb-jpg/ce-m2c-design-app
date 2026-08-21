@@ -321,9 +321,11 @@ function HardwareConfiguratorInner({
     const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
         finishCode: globalFinish, findPart, findByCode: findPart,
-        // What the rods are cut from — see the per-foot rule in priceConfiguration.
+        // What the rods are cut from — see the per-foot rule in priceConfiguration. The
+        // inches travel too: they become the line's cutLength, which is what the bench reads.
         billedFeet: lengthFeet || 0,
-    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, findPart, lengthFeet]);
+        lengthInches: lengthInches || 0,
+    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, findPart, lengthFeet, lengthInches]);
     const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
@@ -997,7 +999,9 @@ function HardwareConfiguratorInner({
                                                         {(l.sku || l.aliasCode) && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>{l.sku || l.aliasCode}</span>}
                                                         {/* Rod stock bills by the foot, so say so — a $125 line beside a $12.50
                                                             item reads as a mistake unless the arithmetic is on screen. */}
-                                                        {l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>{l.perFoot ? `${l.qty} ft × $${l.unit.toFixed(2)}` : `×${l.qty}`}</span>}
+                                                        {l.perFoot
+                                                            ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>{`one pole · ${l.cutLength ? `${l.cutLength}"` : ''} ${l.feet} ft × $${l.unit.toFixed(2)}`}</span>
+                                                            : (l.qty > 1 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint)' }}>×{l.qty}</span>)}
                                                         {l.extra && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-faint)' }}>added</span>}
                                                     </span>
                                                     <span style={{ display: 'block', fontSize: '11px', color: 'var(--ink-soft)', lineHeight: 1.25 }}>

@@ -108,13 +108,24 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     const none = priceConfiguration(model, ctx(0));
     eq('with no length answered a rod bills once', none.lines[0].total, 12.5);
 
-    const ten = priceConfiguration(model, ctx(10));
+    const ten = priceConfiguration(model, { ...ctx(10), lengthInches: 119 });
     eq('ten feet of rod bills ten times', ten.lines[0].total, 125);
     eq('and so does the second rod of a double', ten.lines[1].total, 125);
     ok('the rod line says it is per foot', ten.lines[0].perFoot === true);
     eq('the finial is untouched — it does not grow with the pole', ten.lines[2].total, 56);
     ok('and is not marked per foot', !ten.lines[2].perFoot);
     eq('the total adds up', ten.total, 125 + 125 + 56);
+
+    // ⚠ ONE POLE, NOT TEN. The footage is how it is PRICED, never how many there are — the router
+    // must not read a ten-foot pole as ten poles.
+    eq('the pole is one line item', ten.lines[0].qty, 1);
+    eq('the feet ride alongside', ten.lines[0].feet, 10);
+    eq('and the bench gets the cut', ten.lines[0].cutLength, 119);
+    ok('the finial carries no cut length', ten.lines[2].cutLength === undefined);
+    // …and with no length answered, nothing pretends to know one
+    const unmeasured = priceConfiguration(model, ctx(0));
+    ok('no cut length before a length is typed', unmeasured.lines[0].cutLength === undefined);
+    eq('and the rod bills once', unmeasured.lines[0].qty, 1);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

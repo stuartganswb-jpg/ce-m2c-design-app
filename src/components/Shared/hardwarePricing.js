@@ -125,9 +125,14 @@ export function priceConfiguration(model, ctx = {}) {
         // Only rods. A finial does not get longer with the pole. And only where the length has
         // actually been answered — before that this multiplies by nothing and the line reads as it
         // always did, rather than quietly showing a per-foot price as if it were the total.
+        // ⚠ THE POLE IS ONE LINE (Stuart 2026-08-20: "the pole should be on the bom as one line
+        // item, one pole 119\" - 10ft"). The footage is how it is PRICED, not how many there are —
+        // billing ten feet must never read as ten poles on the router. So the quantity stays at
+        // one, the feet multiply the money, and the length travels as the cut.
         const feet = Number(ctx.billedFeet) > 0 ? Number(ctx.billedFeet) : 0;
         const perFoot = feet > 0 && ROD_ROLES.includes(entry.role);
-        const qty = (Number(entry.qty) > 0 ? Number(entry.qty) : 1) * (perFoot ? feet : 1);
+        const qty = Number(entry.qty) > 0 ? Number(entry.qty) : 1;
+        const inches = Number(ctx.lengthInches) > 0 ? Number(ctx.lengthInches) : 0;
         return {
             partId: entry.partId,
             name: entry.name,
@@ -136,8 +141,12 @@ export function priceConfiguration(model, ctx = {}) {
             billedId: p.billedId,   // the finished SKU that is actually sold and billed
             qty,
             perFoot,                  // the line is priced by the foot — the panel says so
+            ...(perFoot ? { feet } : {}),
+            // What the shop cuts to. Read by RTG, the floor, the labels and packaging — and never
+            // set by this engine until now, so a pole reached the bench with no length on it.
+            ...(perFoot && inches ? { cutLength: inches } : {}),
             unit: p.price,
-            total: p.price * qty,
+            total: p.price * qty * (perFoot ? feet : 1),
             source: p.source,
             detail: p.detail,
             hidden: !!entry.hidden,   // built and billed, never shown on a customer document
