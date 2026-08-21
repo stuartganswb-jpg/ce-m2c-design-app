@@ -3,7 +3,9 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
+import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
+import { configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort } from './priceLevels';
@@ -105,7 +107,7 @@ class EngineBoundary extends React.Component {
 function HardwareConfiguratorInner({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], onAdd = null, onCheckout = null, cartCount = 0, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
+    outsourceCodes = [], onAdd = null, onCheckout = null, cartCount = 0, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [], trvRules = null,
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -386,7 +388,59 @@ function HardwareConfiguratorInner({
         return { partId: x.code, name: part?.itemName || x.code, qty, unit: p.price, total: p.price * qty,
                  sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true };
     }), [extras, findPart, priceCtx]);
-    const grandTotal = priced.total + extraLines.reduce((s2, l) => s2 + l.total, 0);
+
+    // ── TRAVERSE COMPONENTS ARE THE LAST QUESTION A TRACK ASKS (Stuart 2026-08-21) ────────────
+    // "integrate that simple configurator at the last step of any traverse rod … it basically has
+    // two options, the manual components and the motorized components, that is what decides what
+    // is shown."
+    //
+    // The old engine interposed this as a MODAL on Add to Cart, and the new engine's onAdd went
+    // straight to the cart — so a traverse configuration reached a quote with no track components
+    // on it at all, silently. It is not a checkout interruption here: it is the last step of the
+    // walk, because that is what it is. A track without its carriers is not a finished decision.
+    //
+    // DRIVE IS ALREADY AN ANSWER. The engine asks manual vs motorised as a world axis (AXES, order
+    // 25) wherever a collection stocks both, so nothing new is asked — the answer already given is
+    // what gates the list, exactly as the rules doc gates it.
+    const isTraverse = useMemo(() => {
+        const ids = new Set(Object.values(livePicks));
+        return model.choices.some(c => ids.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind === TRAVERSE);
+    }, [model, livePicks]);
+    // MANUAL unless the answer says motorised — the rules doc speaks MANUAL / MOTORIZED / BOTH, and
+    // a collection that never asks the question is manual by construction.
+    const trvDrive = /MOTOR/.test(String(answers.drive || '').toUpperCase()) ? 'MOTORIZED' : 'MANUAL';
+    const trvFeet = Math.max(lengthFeet || 4, 4);
+    const trvTracks = String(answers.setup || '').toUpperCase() === 'DOUBLE' ? 2 : 1;
+    const trvPriceOf = useCallback((code) => {
+        const part = findPart(code);
+        return part ? (priceChoice({ partId: code }, part, priceCtx).price || 0) : 0;
+    }, [findPart, priceCtx]);
+    const trvItemInfo = useCallback((code) => {
+        const part = findPart(code);
+        if (!part) return null;
+        const p = priceChoice({ partId: code }, part, priceCtx);
+        return { name: part.itemName || code, sku: p.sku || p.aliasCode || '' };
+    }, [findPart, priceCtx]);
+    // The selection SEEDS from the chart and stays seeded until it is touched: a length typed after
+    // the panel was first drawn re-seeds it, because the chart quantity IS a function of length and
+    // a stale count is a wrong count. Once the operator has answered, their answer stands.
+    const [trvSel, setTrvSel] = useState(null);
+    const trvSeed = useMemo(() => (trvRules && isTraverse
+        ? { carrierStyle: '', carrierQty: '', picks: defaultPicks({ rules: trvRules, drive: trvDrive, feet: trvFeet, trackCount: trvTracks }), accessories: {} }
+        : null), [trvRules, isTraverse, trvDrive, trvFeet, trvTracks]);
+    const trvLive = trvSel || trvSeed;
+    const trvComponents = useMemo(() => ((trvRules && isTraverse && trvLive)
+        ? configuratorLines({ rules: trvRules, drive: trvDrive, feet: trvFeet, sel: trvLive, priceOf: trvPriceOf })
+        : []), [trvRules, isTraverse, trvLive, trvDrive, trvFeet, trvPriceOf]);
+    // On the quote the same way they land on the cart item: an included component rides at $0 so
+    // the documents and the BOM still show every part the order carries.
+    const trvLines = useMemo(() => trvComponents.map(c => ({
+        partId: c.code, name: c.why || c.code, qty: c.qty,
+        unit: c.billable ? c.rate : 0, total: c.billable ? c.rate * c.qty : 0,
+        source: 'traverse components', detail: c.billable ? c.why : `included — ${c.why}`, extra: true,
+    })), [trvComponents]);
+
+    const grandTotal = priced.total + extraLines.reduce((s2, l) => s2 + l.total, 0) + configuratorTotal(trvComponents);
 
 
 
@@ -501,8 +555,14 @@ function HardwareConfiguratorInner({
         let lastEnd = -1;
         out.forEach((st, i) => { if (st.kind === 'SLOT' && st.slot.kind === 'END') lastEnd = i; });
         if (lastEnd >= 0) out.splice(lastEnd + 1, 0, lengthStep); else out.push(lengthStep);
+        // …and the track's own components last of all, which is where they belong: every one of
+        // them is a function of a decision above (the drive, the length, one track or two), so it
+        // is the only step that can be asked once and asked correctly. No rules doc, no step — a
+        // collection whose components have never been charted is not asked a question it cannot
+        // answer, and says so on the step rather than offering an empty list.
+        if (isTraverse && trvRules) out.push({ kind: 'TRV', key: 'traverse', label: 'Traverse components' });
         return out;
-    }, [model]);
+    }, [model, isTraverse, trvRules]);
 
     const [stepIx, setStepIx] = useState(0);
     const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
@@ -519,10 +579,17 @@ function HardwareConfiguratorInner({
             }).filter(Boolean).join(' \u00b7 ');
         }
         if (st.kind === 'LENGTH') return lengthFeet ? `${lengthFeet} ft` : '';
+        // The rail says what was decided, so a traverse quote can be read back at a glance: the
+        // carrier style is the decision, the count is the consequence.
+        if (st.kind === 'TRV') {
+            if (!trvLive?.carrierStyle) return '';
+            const style = (trvRules?.usage || []).find(u => String(u.itemId || '').toUpperCase() === trvLive.carrierStyle);
+            return `${style?.label || trvLive.carrierStyle} · ${trvComponents.length}`;
+        }
         if (st.slot.suppressedBy) return 'not asked';
         const pick = st.slot.options.find(o => o.id === livePicks[st.slot.key]);
         return pick ? (ourId(pick.partId) || pick.name) : '';   // our number on the rail too
-    }, [answers, livePicks, lengthFeet, ourId]);
+    }, [answers, livePicks, lengthFeet, ourId, trvLive, trvRules, trvComponents]);
 
     // ── SEVERAL CONFIGURATIONS, ONE QUOTE ────────────────────────────────────────────────────
     // A room is a configuration; a job is several. Each is finished, memo'd and added, and the
@@ -545,11 +612,15 @@ function HardwareConfiguratorInner({
             finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
             priceLevel: effectiveLevel, lengthInches, lengthFeet,
             extras, stepNotes, answers, picks: livePicks, partFinish,
+            // The track's components, in the shape the cart has always carried them — the ERP push
+            // reads `trvComponents` off the item and the documents read the breakdown rows, so
+            // neither can tell which engine asked the question.
+            trvComponents,
         });
         if (typeof onAdd === 'function') onAdd(item);
         setSaved(s => [...s, { memo: configMemo || `Configuration ${s.length + 1}`, total: grandTotal, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
-        setStepNotes({}); setExtras([]); setPartFinish({}); setStepIx(0);
+        setStepNotes({}); setExtras([]); setPartFinish({}); setTrvSel(null); setStepIx(0);
     };
 
     const railCell = (st, i) => {
@@ -887,6 +958,25 @@ function HardwareConfiguratorInner({
                             )}
                         </>)}
 
+                        {step?.kind === 'TRV' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                {/* WHAT DECIDES THE LIST, said out loud. The drive was answered
+                                    several steps back, and "why am I being shown motor accessories"
+                                    is the first question anyone asks of a list they did not expect. */}
+                                <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
+                                    <b style={{ fontWeight: 400, color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.08em' }}>{trvDrive}</b>
+                                    {` · ${trvFeet} ft · ${trvTracks === 2 ? 'two tracks' : 'one track'} — the drive decides which components exist; the chart quantity for this length is included in the per-foot price, and raising a count bills the difference.`}
+                                </div>
+                                <TraverseConfiguratorPanel rules={trvRules} drive={trvDrive} feet={trvFeet} trackCount={trvTracks}
+                                    itemInfo={trvItemInfo} priceOf={trvPriceOf} sel={trvLive} onSel={setTrvSel} />
+                                {!trvLive?.carrierStyle && (
+                                    <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)' }}>
+                                        Pick a carrier style — the rest of the order is already priced, but a track with no carriers is not a finished configuration.
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {step?.kind === 'LENGTH' && (<>
                             <div>
                                 <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '6px' }}>Finished length</div>
@@ -1043,7 +1133,7 @@ function HardwareConfiguratorInner({
                                     <tbody>
                                         {/* Hidden parts are BILLED but not SHOWN: they are in the
                                             total and on the shop's BOM, off the customer's quote. */}
-                                        {[...priced.lines.filter(l => !l.hidden), ...extraLines].map((l, i) => (
+                                        {[...priced.lines.filter(l => !l.hidden), ...extraLines, ...trvLines].map((l, i) => (
                                             <tr key={i} title={`${l.source || 'added by hand'}${l.detail ? ` — ${l.detail}` : ''}`}>
                                                 <td style={{ padding: '3px 0', color: 'var(--ink)' }}>
                                                     {/* Our id, their alias beside it, our description under. */}

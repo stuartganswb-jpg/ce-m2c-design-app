@@ -31,6 +31,11 @@ const item = handoffItem(resolved, {
     sidemark: 'Living Room 1', finishes: [{ code: 'P07', name: 'Gold Brass' }], finishLabel: 'Gold Brass (P07)',
     priceLevel: 'STANDARD', lengthInches: 96.5, lengthFeet: 9,
     extras: [{ code: 'H1-138R', qty: '1', note: 'splice at 48"' }],
+    // The traverse step's answer, in the shape the configurator hands over.
+    trvComponents: [
+        { code: 'HTRF80-500', qty: 34, rate: 0.5, billable: false, why: 'chart at 9ft' },
+        { code: 'HSOM-19', qty: 1, rate: 78, billable: true, why: 'accessory' },
+    ],
 });
 
 // ── the cart item every consumer reads ───────────────────────────────────────────────────────
@@ -60,6 +65,18 @@ const splice = b.find(l => l.addedByHand);
 ok('add-by-hand line exists', !!splice);
 ok('its note rides to the floor', splice?.customNote === 'splice at 48"');
 ok('it routes like any other line', classifyLine(splice, findPart('H1-138R')) === DIVISION_CUSTOM);
+
+// ── traverse components (Stuart 2026-08-21: asked at the last step, not at checkout) ─────────
+// Where they are ASKED moved; what the cart carries did not. The push reads item.trvComponents and
+// the documents read the breakdown rows, so both have to survive the handoff.
+ok('the components ride the item for the push', item.trvComponents.length === 2);
+const inc = b.find(l => l.legacyErpId === 'HTRF80-500');
+const bill = b.find(l => l.legacyErpId === 'HSOM-19');
+ok('an included component is on the list', !!inc && inc.qty === 34);
+ok('…and it is not charged for', inc?.total === 0);
+ok('a billable accessory is charged', bill?.total === 78);
+ok('both route as small parts', inc?.partHandling === 'Small Parts' && bill?.partHandling === 'Small Parts');
+ok('the billable is in the money', item.pricing.finalPrice >= 78);
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

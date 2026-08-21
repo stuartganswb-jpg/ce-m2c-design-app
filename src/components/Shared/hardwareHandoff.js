@@ -87,7 +87,7 @@ export function handoffItem(resolved, ctx = {}) {
     const {
         assembly, flow, findPart, qty = 1, sidemark = '', finishes = [], finishLabel = '',
         priceLevel = 'STANDARD', lengthInches = null, lengthFeet = null,
-        extras = [], stepNotes = {}, memo = '',
+        extras = [], stepNotes = {}, memo = '', trvComponents = [],
     } = ctx;
 
     const priced = priceConfiguration(resolved, ctx);
@@ -106,7 +106,20 @@ export function handoffItem(resolved, ctx = {}) {
         };
     });
 
-    const breakdown = [...lines, ...extraRows];
+    // ── TRAVERSE COMPONENTS, IN THE SHAPE THE CART HAS ALWAYS CARRIED THEM ───────────────────
+    // Stuart 2026-08-21: the new engine asks for these at its last step rather than in a modal on
+    // add. Where they are ASKED changed; what rides the cart item did not — the ERP push reads
+    // `trvComponents` off the item (ERPPushPullTab) and every document reads these breakdown rows,
+    // so the field names and the row shape are copied from the old path deliberately rather than
+    // improved. An included component rides at $0: it is on the BOM and on the pick list without
+    // being charged twice, because the per-foot price already carried it.
+    const trvRows = (trvComponents || []).map(c => ({
+        name: `${c.code} — ${c.why}`, qty: c.qty,
+        price: c.billable ? c.rate : 0, total: c.billable ? c.rate * c.qty : 0,
+        partHandling: 'Small Parts', partId: c.code, legacyErpId: c.code,
+    }));
+
+    const breakdown = [...lines, ...extraRows, ...trvRows];
     const total = breakdown.reduce((s, l) => s + (l.total || 0), 0);
 
     return {
@@ -134,6 +147,8 @@ export function handoffItem(resolved, ctx = {}) {
             memo,
         },
         engineeringNotes: ctx.engineeringNotes || null,
+        // The push reads this list directly, not the breakdown rows — same field, same contents.
+        trvComponents,
         // What the engine is: the flag that tells a consumer which shape to expect.
         engine: 'TAGS',
     };

@@ -6,12 +6,19 @@
 import React, { useMemo, useState } from 'react';
 import { configuratorOffer, configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
 
-export default function TraverseConfiguratorModal({ rules, drive, feet, trackCount = 1, kitLabel, itemInfo, priceOf, onCancel, onApply }) {
-    // Opens with his defaults, not an empty form: end stops 2 per track, chart-included splice.
-    const [sel, setSel] = useState(() => ({ carrierStyle: '', carrierQty: '', picks: defaultPicks({ rules, drive, feet, trackCount }), accessories: {} }));
+// ── THE QUESTIONS THEMSELVES, WITHOUT THE POPUP AROUND THEM ──────────────────────────────────
+// Stuart 2026-08-21: "integrate that simple configurator at the last step of any traverse rod".
+// The new engine asks it as a STEP rather than interposing a modal on Add to Cart, so the body
+// splits from its chrome and becomes a controlled panel: the caller owns `sel`, because in a step
+// the answers have to survive walking back to step 3 and forward again — a modal could keep them
+// in its own head only because it lived and died in one breath.
+//
+// ONE IMPLEMENTATION, TWO SURFACES. Quick Ship and the old CPQ path still mount the modal below;
+// it now owns the state and renders this. Neither surface re-derives what is offered or what it
+// bills — that has always been Shared/traverseConfigurator, and still is.
+export function TraverseConfiguratorPanel({ rules, drive, feet, trackCount = 1, itemInfo, priceOf, sel, onSel }) {
+    const setSel = (fn) => onSel(typeof fn === 'function' ? fn(sel) : fn);
     const offer = useMemo(() => configuratorOffer({ rules, drive, feet }), [rules, drive, feet]);
-    const lines = useMemo(() => configuratorLines({ rules, drive, feet, sel, priceOf }), [rules, drive, feet, sel, priceOf]);
-    const addTotal = configuratorTotal(lines);
     const info = (id) => (typeof itemInfo === 'function' && itemInfo(id)) || { name: id, sku: '' };
     const mono = { fontFamily: 'var(--mono)', fontSize: '11px' };
     const lbl = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
@@ -20,13 +27,7 @@ export default function TraverseConfiguratorModal({ rules, drive, feet, trackCou
     const selStyle = offer.carrierStyles.find(s => s.itemId === sel.carrierStyle);
 
     return (
-        <div onClick={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 12000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
-            <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '860px', maxWidth: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)' }}>
-                <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
-                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.35rem', color: 'var(--ink)' }}>Traverse components — {kitLabel}</div>
-                    <div style={{ ...lbl, marginTop: '4px' }}>{drive} · {feet}ft · chart quantities included in the per-foot price — raising a count bills the difference</div>
-                </div>
-                <div style={{ padding: '18px 24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                     <div>
                         <div style={{ ...lbl, marginBottom: '8px' }}>Carrier style — pick one; {feet}ft includes the chart count</div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '10px' }}>
@@ -100,6 +101,30 @@ export default function TraverseConfiguratorModal({ rules, drive, feet, trackCou
                             })}
                         </div>
                     </div>
+        </div>
+    );
+}
+
+// ── THE POPUP, WHICH IS NOW THE PANEL PLUS ITS CHROME ────────────────────────────────────────
+// Unchanged from the outside: same props, same defaults, same Skip / Add components. Quick Ship
+// and the old CPQ path mount this exactly as they did — the split is invisible to them.
+export default function TraverseConfiguratorModal({ rules, drive, feet, trackCount = 1, kitLabel, itemInfo, priceOf, onCancel, onApply }) {
+    // Opens with his defaults, not an empty form: end stops 2 per track, chart-included splice.
+    const [sel, setSel] = useState(() => ({ carrierStyle: '', carrierQty: '', picks: defaultPicks({ rules, drive, feet, trackCount }), accessories: {} }));
+    const lines = useMemo(() => configuratorLines({ rules, drive, feet, sel, priceOf }), [rules, drive, feet, sel, priceOf]);
+    const addTotal = configuratorTotal(lines);
+    const lbl = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' };
+
+    return (
+        <div onClick={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.72)', zIndex: 12000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '860px', maxWidth: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)' }}>
+                <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.35rem', color: 'var(--ink)' }}>Traverse components — {kitLabel}</div>
+                    <div style={{ ...lbl, marginTop: '4px' }}>{drive} · {feet}ft · chart quantities included in the per-foot price — raising a count bills the difference</div>
+                </div>
+                <div style={{ padding: '18px 24px', overflowY: 'auto' }}>
+                    <TraverseConfiguratorPanel rules={rules} drive={drive} feet={feet} trackCount={trackCount}
+                        itemInfo={itemInfo} priceOf={priceOf} sel={sel} onSel={setSel} />
                 </div>
                 <div style={{ padding: '14px 24px', borderTop: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: '14px', background: 'var(--paper)' }}>
                     <span style={{ fontFamily: 'var(--serif)', fontSize: '1.1rem', color: 'var(--ink)', flex: 1 }}>Adds ${addTotal.toFixed(2)}{sel.carrierStyle ? '' : ' — pick a carrier style'}</span>

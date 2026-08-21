@@ -4506,6 +4506,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                      the count is passed so the button can say what is waiting. */
                                   onCheckout={() => setShowCheckoutModal(true)}
                                   cartCount={cart.length}
+                                  /* THE TRAVERSE COMPONENT CHART (system/traverse_rules_H1-2TRV),
+                                     already live here for the old path's checkout modal. The new
+                                     engine asks the same questions from the same rules as its last
+                                     step on a traverse rod — no rules doc, no step. */
+                                  trvRules={trvRules}
                                   spanMap={spanMap}
                                   spanCaps={spanCaps}
                                   /* ADD-BY-HAND ITEMS for this flow (splices, extra rings …), set
