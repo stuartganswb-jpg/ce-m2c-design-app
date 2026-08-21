@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor, reseatPicks } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor, reseatPicks, recommendedQty, takesQty } from './hardwareModel';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort } from './priceLevels';
@@ -124,6 +124,30 @@ function HardwareConfiguratorInner({
     // 2026-08-17: "once i hit new engine … goes full blank on me". Every hook lives in this block.
     const [stepNotes, setStepNotes] = useState({});   // step key → note, stamped with the step
     const [extras, setExtras] = useState([]);         // [{ code, qty, note }] — added by hand
+    // How many, per decision. Empty means "use the recommendation"; a typed number always wins.
+    const [stepQty, setStepQty] = useState({});       // slot key → count
+
+    // ⚠ HOISTED ABOVE priceCtx (2026-08-20). Rod stock prices by the foot, so the price context
+    // needs the billed feet — and a const read before its declaration is a ReferenceError, not
+    // undefined, which React answers by unmounting the tree. That is the white screen of
+    // 2026-08-17. These depend only on the poleIn/poleFrac state at the top, so they belong here.
+    // ── LENGTH, AND WHAT IT IMPLIES ──────────────────────────────────────────────────────────
+    // Typed the way an installer measures — whole inches and a fraction — and the FOOT figure is
+    // derived, because feet is what prices. One typed number, one shown consequence, no chance of
+    // the two disagreeing.
+    const lengthInches = useMemo(() => {
+        const whole = parseFloat(poleIn);
+        const m = String(poleFrac).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
+        const frac = m ? Number(m[1]) / Number(m[2]) : (parseFloat(poleFrac) || 0);
+        const total = (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(frac) ? frac : 0);
+        return total > 0 ? total : null;
+    }, [poleIn, poleFrac]);
+    // ⚠ WE BILL IN FULL FEET, ROUNDED UP (Stuart 2026-08-17: "even if .25\" over we bill next foot
+    // size"). A pole is cut from stock in whole feet, so 90 1/2" is eight feet of material however
+    // the arithmetic reads. Showing the exact figure beside it keeps the operator honest about what
+    // was measured versus what is being charged.
+    const lengthFeetExact = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
+    const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
 
     const choices = useMemo(() => choicesFromAssembly(assembly, pins), [assembly, pins]);
     const modelNodes = useMemo(() => modelNodesOf(assembly), [assembly]);
@@ -172,9 +196,33 @@ function HardwareConfiguratorInner({
     // Nothing to clear, nothing to re-seed, no order of operations to get wrong.
     const livePicks = useMemo(() => resolvePicks(model, picks), [model, picks, resolvePicks]);
 
+    // ── HOW MANY OF EACH (Stuart 2026-08-20) ─────────────────────────────────────────────────
+    // Rings and carriers are spaced along the pole, so their count follows its length: four a foot
+    // plus the pair at the ends. That is a RECOMMENDATION — it seeds the field so the ordinary
+    // order needs no typing, and anything typed wins and is never overwritten.
+    //
+    // Carriers are riders: never offered, always built. They still need the right count, so they
+    // are seeded here rather than at a step that does not exist.
+    const quantities = useMemo(() => {
+        const q = {};
+        model.slots.forEach(sl => {
+            const id = livePicks[sl.key];
+            if (!id) return;
+            const typed = Number(stepQty[sl.key]);
+            if (typed > 0) { q[id] = typed; return; }
+            const rec = recommendedQty(sl.options.find(o => o.id === id), lengthFeet);
+            if (rec) q[id] = rec;
+        });
+        (model.riders || []).forEach(r => {
+            const rec = recommendedQty(r, lengthFeet);
+            if (rec) q[r.id] = rec;
+        });
+        return q;
+    }, [model, livePicks, stepQty, lengthFeet]);
+
     const resolved = useMemo(
-        () => resolveHardware({ choices, answers, selectedIds: Object.values(livePicks), modelNodes }),
-        [choices, answers, livePicks, modelNodes]);
+        () => resolveHardware({ choices, answers, selectedIds: Object.values(livePicks), modelNodes, quantities }),
+        [choices, answers, livePicks, modelNodes, quantities]);
     const visibleOverrides = useMemo(() => {
         const o = {};
         resolved.visible.forEach(n => { o[String(n).toLowerCase()] = true; });
@@ -269,27 +317,6 @@ function HardwareConfiguratorInner({
     const effectiveLevel = (priceLevel && priceLevel !== 'STANDARD') ? priceLevel
         : (customerId ? 'FAB_COST' : 'STANDARD');
     const levelIsDefault = effectiveLevel !== 'STANDARD' && (!priceLevel || priceLevel === 'STANDARD');
-    // ⚠ HOISTED ABOVE priceCtx (2026-08-20). Rod stock prices by the foot, so the price context
-    // needs the billed feet — and a const read before its declaration is a ReferenceError, not
-    // undefined, which React answers by unmounting the tree. That is the white screen of
-    // 2026-08-17. These depend only on the poleIn/poleFrac state at the top, so they belong here.
-    // ── LENGTH, AND WHAT IT IMPLIES ──────────────────────────────────────────────────────────
-    // Typed the way an installer measures — whole inches and a fraction — and the FOOT figure is
-    // derived, because feet is what prices. One typed number, one shown consequence, no chance of
-    // the two disagreeing.
-    const lengthInches = useMemo(() => {
-        const whole = parseFloat(poleIn);
-        const m = String(poleFrac).trim().match(/^(\d+)\s*\/\s*(\d+)$/);
-        const frac = m ? Number(m[1]) / Number(m[2]) : (parseFloat(poleFrac) || 0);
-        const total = (Number.isFinite(whole) ? whole : 0) + (Number.isFinite(frac) ? frac : 0);
-        return total > 0 ? total : null;
-    }, [poleIn, poleFrac]);
-    // ⚠ WE BILL IN FULL FEET, ROUNDED UP (Stuart 2026-08-17: "even if .25\" over we bill next foot
-    // size"). A pole is cut from stock in whole feet, so 90 1/2" is eight feet of material however
-    // the arithmetic reads. Showing the exact figure beside it keeps the operator honest about what
-    // was measured versus what is being charged.
-    const lengthFeetExact = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
-    const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
 
     const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
@@ -758,6 +785,30 @@ function HardwareConfiguratorInner({
                                     )}
                                 </>);
                             })()}
+                            {/* HOW MANY — only where the count is a real decision: the centre
+                                bracket repeats along the pole, and rings and carriers are spaced
+                                by the foot. An end has one treatment and each side has one arm, so
+                                neither asks. The placeholder carries the recommendation, so an
+                                empty field means "use it" rather than "none". */}
+                            {takesQty(step.slot) && livePicks[step.slot.key] && (() => {
+                                const picked = step.slot.options.find(o => o.id === livePicks[step.slot.key]);
+                                const rec = recommendedQty(picked, lengthFeet);
+                                return (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
+                                        <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>How many</span>
+                                        <input value={stepQty[step.slot.key] ?? ''} inputMode="numeric"
+                                            onChange={e => setStepQty(q => ({ ...q, [step.slot.key]: e.target.value.replace(/[^0-9]/g, '') }))}
+                                            placeholder={rec ? String(rec) : '1'}
+                                            style={{ width: '62px', padding: '5px 7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', background: '#fff' }} />
+                                        {rec != null && (
+                                            <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
+                                                {`recommended ${rec} — four a foot over ${lengthFeet} ft, plus the pair at the ends`}
+                                            </span>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+
                             {/* PAIRED: the plate that goes with the arm above, nested under it. */}
                             {step.sub && (
                                 <div style={{ marginLeft: '10px', paddingLeft: '11px', borderLeft: '2px solid var(--brass)' }}>

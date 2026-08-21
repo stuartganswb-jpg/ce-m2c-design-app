@@ -10,7 +10,7 @@
 
 import {
     resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults, companionsFor, reseatPicks
-} from '../src/components/Shared/hardwareModel.js';
+, recommendedQty, takesQty } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -1621,6 +1621,39 @@ eq('nonsense is null', measureOf('n/a'), null);
         answers: {}, selectedIds: ['ROD', 'RET'],
     }).slots.find(s => s.kind === 'BACKPLATE' && s.position === 'RIGHT');
     ok('the other end keeps its plate', other.options.length === 1);
+}
+
+// ── HOW MANY ──────────────────────────────────────────────────────────────────────────────────
+// "rings set a recommended amount at 4 per ft plus 2 per rod, same for carriers on track it is 4
+//  per ft and 1 extra for the ends which is the plus 2."
+{
+    const ring = normalizeChoice({ id: 'R', partId: 'H1-138BR', role: 'RING', nodes: ['r'] });
+    const carrier = normalizeChoice({ id: 'C', partId: 'HTSLNTCAR', role: 'CARRIER', nodes: ['c'] });
+    const finial = normalizeChoice({ id: 'F', partId: 'H1-138KF', role: 'FINIAL', nodes: ['f'] });
+
+    eq('ten feet of rings', recommendedQty(ring, 10), 42);
+    eq('carriers follow the same rule', recommendedQty(carrier, 10), 42);
+    eq('a part-foot rounds up to the foot we bill', recommendedQty(ring, 7.2), 34);
+    eq('a finial does not count by the foot', recommendedQty(finial, 10), null);
+    eq('and nothing counts before a length is known', recommendedQty(ring, 0), null);
+
+    // which decisions carry the field at all
+    ok('the shared ring asks', takesQty({ kind: 'RING' }));
+    ok('the centre bracket asks', takesQty({ kind: 'BRACKET', position: 'CENTER' }));
+    ok('the left bracket does not', !takesQty({ kind: 'BRACKET', position: 'LEFT' }));
+    ok('the right bracket does not', !takesQty({ kind: 'BRACKET', position: 'RIGHT' }));
+    ok('an end treatment does not', !takesQty({ kind: 'END', position: 'LEFT' }));
+
+    // and the count reaches the BOM, which is what the shop reads
+    const cs = [
+        { id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] },
+        { id: 'R', partId: 'H1-138BR', role: 'RING', nodes: ['r'] },
+    ];
+    const plain = resolve({ choices: cs, answers: {}, selectedIds: ['ROD', 'R'] });
+    eq('without a quantity the pin default stands', plain.bom.find(b => b.partId === 'H1-138BR').qty, 1);
+    const counted = resolve({ choices: cs, answers: {}, selectedIds: ['ROD', 'R'], quantities: { R: 42 } });
+    eq('with one, the BOM carries it', counted.bom.find(b => b.partId === 'H1-138BR').qty, 42);
+    eq('and the rod is untouched', counted.bom.find(b => b.partId === 'H1-138R').qty, 1);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

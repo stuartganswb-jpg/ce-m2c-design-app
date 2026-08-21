@@ -1257,7 +1257,36 @@ export function slots(choices, answers = {}, selectedIds = []) {
  * THE ONE ENTRY POINT. Everything — the generator, the configurator, the portal, the spec sheet —
  * calls this and nothing else, which is what makes it impossible for two surfaces to disagree.
  */
-export function resolve({ choices = [], answers = {}, selectedIds = [], modelNodes = [] } = {}) {
+// ── HOW MANY (Stuart 2026-08-20) ──────────────────────────────────────────────────────────────
+// "rings set a recommended amount at 4 per ft plus 2 per rod, same for carriers on track it is 4
+//  per ft and 1 extra for the ends which is the plus 2."
+//
+// One rule, two parts that obey it: a ring rides a rod and a carrier rides a track, and both are
+// spaced along the length rather than counted per assembly. The +2 is the pair at the ends, not a
+// fudge — which is why it does not scale with the pole.
+//
+// A RECOMMENDATION, not a constraint. It seeds the quantity field so the common order needs no
+// typing; anything the operator types wins and is never overwritten.
+export const QTY_PER_FOOT = { RING: 4, CARRIER: 4 };
+export const QTY_END_ALLOWANCE = { RING: 2, CARRIER: 2 };
+
+/** The count this part wants for a pole of `feet`, or null where length does not decide it. */
+export function recommendedQty(choice, feet) {
+    const per = QTY_PER_FOOT[choice?.role];
+    if (!per || !(Number(feet) > 0)) return null;
+    return per * Math.ceil(Number(feet)) + (QTY_END_ALLOWANCE[choice.role] || 0);
+}
+
+/** Does this decision carry a count the operator can set? */
+export function takesQty(slot) {
+    if (!slot) return false;
+    if (slot.kind === 'RING') return true;
+    // "the left and right bracket choices and left and right treatment choices do not need qty" —
+    // an end has one treatment and each side has one arm. The CENTRE is the one that repeats.
+    return slot.kind === 'BRACKET' && String(slot.position || '').toUpperCase() === 'CENTER';
+}
+
+export function resolve({ choices = [], answers = {}, selectedIds = [], modelNodes = [], quantities = {} } = {}) {
     const norm = applyFitsDefaults(choices.map(normalizeChoice).filter(c => c.role));
     const axes = activeAxes(norm, answers);
     const ctx = contextOf(norm, answers);
@@ -1272,7 +1301,12 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
         ...norm.filter(c => selectedIds.includes(c.id) && !c.parked),
         ...riders,
         ...companions,          // the collar bills with its finial
-    ].map(c => ({ partId: c.partId, name: c.name, qty: c.qty, price: c.price, raw: c.raw,
+        // ⚠ THE COUNT REACHES THE BOM, NOT JUST THE QUOTE (Stuart: "bom and router, there is
+        // nothing ever that would only stay on the quote"). Pricing and the shop both read these
+        // lines, so the quantity belongs here — set it in one place and neither can disagree.
+    ].map(c => ({ partId: c.partId, name: c.name,
+        qty: Number(quantities[c.id]) > 0 ? Number(quantities[c.id]) : c.qty,
+        price: c.price, raw: c.raw,
         // BOM-only parts stay IN the bill of materials — the shop picks them — but every
         // customer-facing surface filters on this. One list, two audiences.
         hidden: !!c.hidden, role: c.role, position: c.position }));
