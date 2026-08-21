@@ -742,6 +742,25 @@ function HardwareConfiguratorInner({
         let lastEnd = -1;
         out.forEach((st, i) => { if (st.kind === 'SLOT' && st.slot.kind === 'END') lastEnd = i; });
         if (lastEnd >= 0) out.splice(lastEnd + 1, 0, lengthStep); else out.push(lengthStep);
+        // ── WHAT RIDES ON THE ROD IS ONE QUESTION (Stuart 2026-08-21) ───────────────────────
+        // "if the selection for front track is track then the carriers should be presented at 13,
+        // if the front is omitted then rings should be presented … it could made in one step since
+        // there again is only one answer here."
+        //
+        // Rings and carriers are the same job done by two parts, and WHICH of them an order needs
+        // was already decided upstairs: a track takes carriers, a fascia takes rings (carriesRings,
+        // in the model). The engine has always known that — it builds the carriers as riders — but
+        // it built them SILENTLY, so a double that chose the front track reached the end of the
+        // walk having never been shown the things that will hang the drapery.
+        //
+        // So where there is no ring question, the carriers take that place in the walk and are
+        // SHOWN rather than merely billed. It is not a decision — there is one answer and the drive
+        // and the track already gave it — so nothing is asked; it is the step saying what is
+        // included, at the count the length works out to.
+        const ringSlot = out.find(st => st.kind === 'SLOT' && st.slot.kind === 'RING');
+        const carriers = (model.riders || []).filter(r => r.role === 'CARRIER');
+        if (!ringSlot && carriers.length) out.push({ kind: 'CARRIERS', key: 'carriers', label: 'Carriers', carriers });
+
         // …and the track's own components last of all, which is where they belong: every one of
         // them is a function of a decision above (the drive, the length, one track or two), so it
         // is the only step that can be asked once and asked correctly. No rules doc, no step — a
@@ -751,9 +770,18 @@ function HardwareConfiguratorInner({
         return out;
     }, [model, isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys]);
 
+    // The one thing a rod step cannot say for itself: that leaving it empty is an ANSWER. A track
+    // omitted is a fascia wearing rings, which is a different product rather than a blank.
+    const hintFor = useCallback((st) => {
+        if (!st || st.kind !== 'SLOT') return '';
+        if (st.slot.kind === 'TRACK') return 'Choose the front track for traverse — omit it to use rings on the fascia.';
+        return '';
+    }, []);
+
     const [stepIx, setStepIx] = useState(0);
     const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
     const step = steps[ix];
+    const stepHint = hintFor(step);
 
     // What the rail shows under each heading: the answer, once there is one.
     const answerOf = useCallback((st) => {
@@ -768,6 +796,10 @@ function HardwareConfiguratorInner({
         if (st.kind === 'SIZE') {
             const opt = (st.sizeStep.styleOptions || []).find(o => o.optId === sizePick[st.sizeStep.id]);
             return opt ? (opt.partName || opt.label || opt.optId) : '';
+        }
+        if (st.kind === 'CARRIERS') {
+            const n = st.carriers.reduce((sum, c) => sum + (recommendedQty(c, lengthFeet) || c.qty || 1), 0);
+            return n ? `${n} included` : 'included';
         }
         if (st.kind === 'LENGTH') return lengthFeet ? `${lengthFeet} ft` : '';
         // The rail says what was decided, so a traverse quote can be read back at a glance: the
@@ -1066,6 +1098,19 @@ function HardwareConfiguratorInner({
                     <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
                         <div style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)', marginBottom: '3px' }}>Step {ix + 1} of {steps.length}</div>
                         <div style={{ fontFamily: 'var(--serif)', fontSize: '1.12rem' }}>{step?.label}</div>
+                        {/* ── WHAT OMITTING A STEP MEANS (Stuart 2026-08-21) ───────────────────────
+                            "we also need to mention that in the step: Choose front track for
+                            traverse, omit it to use rings on the fascia."
+                            Skipping a step is normally how you say "not this one", but here it is
+                            the OTHER answer — leave the track out and the fascia takes rings
+                            instead. Nothing on screen said so, and an operator who does not know it
+                            reads an unanswered step rather than a choice. It is said on the step
+                            that carries the consequence, not in a note beside it. */}
+                        {stepHint && (
+                            <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-soft)', marginTop: '5px', lineHeight: 1.5 }}>
+                                {stepHint}
+                            </div>
+                        )}
                     </div>
                     <div style={{ padding: '15px 16px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
 
@@ -1193,6 +1238,25 @@ function HardwareConfiguratorInner({
                                 </div>
                             )}
                         </>)}
+
+                        {step?.kind === 'CARRIERS' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+                                <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
+                                    A track carries its drapery on carriers rather than rings — there is nothing to choose here,
+                                    and they are on the order already. The count follows the length.
+                                </div>
+                                {step.carriers.map(c => {
+                                    const n = recommendedQty(c, lengthFeet) || c.qty || 1;
+                                    return (
+                                        <div key={c.id} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', padding: '9px 11px', border: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px' }}>{ourId(c.partId)}</span>
+                                            <span style={{ flex: 1, fontSize: '11.5px', color: 'var(--ink-soft)' }}>{findPart(c.partId)?.itemName || c.name}</span>
+                                            <span style={{ ...mono, fontSize: '9px', color: 'var(--brass)' }}>×{n}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
 
                         {step?.kind === 'SIZE' && (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>

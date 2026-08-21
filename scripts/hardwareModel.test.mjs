@@ -10,7 +10,7 @@
 
 import {
     resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults, companionsFor, reseatPicks
-, recommendedQty, takesQty, bearingEnds, centreBracketsFor, projectionAudit } from '../src/components/Shared/hardwareModel.js';
+, recommendedQty, takesQty, bearingEnds, centreBracketsFor, projectionAudit, ridersFor } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -1835,6 +1835,31 @@ eq('nonsense is null', measureOf('n/a'), null);
     const twoManual = [...cs, C({ id: 'E-MAN2', partId: 'H1-2TRVEM2', role: 'TRV_END', position: 'LEFT', drive: 'MANUAL', nodes: ['em2'] })];
     eq('two manual ends and it is a question again',
         slots(applyFitsDefaults(twoManual.map(normalizeChoice)), { drive: 'MANUAL' }, ['TRK']).find(s => s.kind === 'TRV_END').options.length, 2);
+}
+
+// ── RINGS OR CARRIERS, DECIDED BY WHAT THE ROD IS ────────────────────────────────────────────
+// Stuart 2026-08-21, on the H1-2TRV double: "if the selection for front track is track then the
+// carriers should be presented at 13, if the front is omitted then rings should be presented."
+//
+// The configurator shows one step for both, and picks which by asking the model what is on offer.
+// THIS is the property that makes that correct — carriesRings already knows, from the tags.
+{
+    const cs = [
+        C({ id: 'FASCIA', partId: 'H1-2TRVF', role: 'FASCIA', tier: 'FRONT', setup: 'DOUBLE', nodes: ['f'] }),
+        C({ id: 'TRACK', partId: 'H1-2TRVT', role: 'TRACK', tier: 'FRONT', setup: 'DOUBLE', nodes: ['t'] }),
+        C({ id: 'RING', partId: 'H1-2TRVRING', role: 'RING', nodes: ['r'] }),
+        C({ id: 'CAR', partId: 'H1-2TRVCAR', role: 'CARRIER', nodes: ['c'] }),
+    ];
+    const norm = applyFitsDefaults(cs.map(normalizeChoice));
+    const ringsFor = (sel) => slots(norm, { setup: 'DOUBLE' }, sel).find(s => s.kind === 'RING');
+
+    // A fascia at the front of a double IS a surface a ring hangs on.
+    ok('omit the track and rings are offered', (ringsFor(['FASCIA'])?.options || []).length === 1);
+    // A track is not — what rides in a track is a carrier, and the engine builds those itself.
+    eq('choose the track and the ring question is gone', (ringsFor(['TRACK'])?.options || []).length, 0);
+    ok('…and the carrier is built without being asked',
+        ridersFor(norm, { setup: 'DOUBLE' }, ['TRACK']).some(r => r.role === 'CARRIER'));
+    ok('a carrier is never a slot of its own', !slots(norm, { setup: 'DOUBLE' }, ['TRACK']).some(s => s.kind === 'CARRIER'));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
