@@ -3,6 +3,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
 import { pinProjectionOf } from '../Shared/hardwareAdapter';
+import { platePoolFrom, plateStillOffered } from '../Shared/platePool';
 import { computeBayMath } from '../Shared/bayMath';
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
@@ -451,7 +452,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const partOfOpt = (o) => { if (!o) return null; const find = (k) => k && libraryParts.find(p => p.id === k || p.itemId === k || p.legacyErpId === k); return find(o.partId) || find(o.partName) || null; };
   const optLabel = (o) => { const p = sizeSwapPart(partOfOpt(o)); return p ? `${p.itemName}${p.legacyErpId && p.legacyErpId !== 'PENDING' ? ` - ${p.legacyErpId}` : ''}` : (o.partName || o.optId); };
   const returnChosenAt = (pos) => pos === 'LEFT' ? optIsReturn(optSel(stepEndL)) : pos === 'RIGHT' ? optIsReturn(optSel(stepEndR)) : false;
-  const brLockedAt = (step, pos) => !!(step && (step.subOptions || []).some(o => o.returnOnly) && returnChosenAt(pos));
+  // ⚠ A RETURN REPLACES THAT END'S BRACKET — FULL STOP (Stuart 2026-08-21: "return selected then
+  // left and right bracket choices grey out"). This used to fire only where the bracket step
+  // happened to carry `returnOnly` plates, which is a fact about PLATES and says nothing about who
+  // carries the rod. H1-138 has no rtn-only plates on that step, so its brackets stayed selectable
+  // beside a french return — the drawing offering hardware the quote had already replaced.
+  // The engine's rule has no such precondition (BRACKET_REPLACING_ROLES), and neither has this now.
+  // An inside mount counts too: optIsReturn covers it, and it carries the rod the same way.
+  const brLockedAt = (step, pos) => !!(step && returnChosenAt(pos));
   // END RETURN ARM (Flat Iron pattern): a bracket option flagged isReturnArm (or whose part carries
   // customData.isReturnBracket) IS the end treatment — that side's End Style greys + clears.
   const armOfOpt = (o) => !!(o && (o.isReturnArm || partOfOpt(o)?.manufacturingSpecs?.customData?.isReturnBracket));
@@ -460,21 +468,23 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // raw partName AND the resolved LIBRARY part's name both backstop it — linked pins carry the
   // bare item code as partName, so an item NAMED "Basic Bracket" must still grey the plates.
   const basicSelAt = (step) => { const o = optSel(step); return !!(o && (o.isBasic || /basic/i.test(o.partName || '') || /basic/i.test(partOfOpt(o)?.itemName || ''))); };
+  // ── WHICH PLATES THIS ARM SITS ON ────────────────────────────────────────────────────────
+  // ⚠ THE PICKER AND THE SWEEP MUST NOT DISAGREE (Stuart 2026-08-21: "when backplate choices are
+  // made, the math in the vision correctly adjusts but the selection does not stick"). They each
+  // had their own copy of this rule and the copies had drifted: the picker fell back to the plain
+  // plates when no return plate survived the size gate, the sweep did not — so a plate was OFFERED,
+  // chosen, read by the fabrication math, and deleted a moment later. The drawing adjusted, the
+  // dropdown blanked, and nothing could push back to CPQ because the selection was gone.
+  //
+  // It lives in Shared/platePool now and BOTH readers call it, in the engine's own order.
+  const subPoolFrom = (subs, flags) => platePoolFrom(subs, flags, (o) => optAllowedAtSize(o) && projTagOk(o));
   const subPoolAt = (step, pos) => {
       const subs = step?.subOptions || [];
-      if (!subs.some(o => o.returnOnly || o.inlineOnly)) return subs;
-      // Three pools (see CPQTab): return chosen/arm -> returnOnly; In Line bracket -> inlineOnly
-      // (fallback returnOnly when the flow has no inline copies); else regular.
       const sel = optSel(step);
-      const returnChosen = returnChosenAt(pos) || !!sel?.isReturnArm;
-      const inlineBracket = !!sel?.usesReturnPlates;
-      const hasInl = subs.some(o => o.inlineOnly);
-      // Return plates exist only at their native diameter (RBP/RCP = ¾"); at 1"/1-3/8" a return
-      // uses the STANDARD plates — fall back to the regular pool when none survive the size gate.
-      const retPoolLive = subs.some(o => o.returnOnly && optAllowedAtSize(o) && projTagOk(o));
-      return subs.filter(o => (returnChosen ? (retPoolLive ? o.returnOnly : (!o.returnOnly && !o.inlineOnly))
-          : inlineBracket ? (hasInl ? o.inlineOnly : o.returnOnly)
-          : (!o.returnOnly && !o.inlineOnly)) && optAllowedAtSize(o) && projTagOk(o));
+      return subPoolFrom(subs, {
+          returnChosen: returnChosenAt(pos) || !!sel?.isReturnArm,
+          inlineBracket: !!sel?.usesReturnPlates,
+      });
   };
   const pickStep = (stepId, optId) => setDynamicConfigParams(prev => {
       const next = { ...prev };
@@ -545,7 +555,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               if (!st) return;
               const endSt = pos === 'LEFT' ? stepEndL : pos === 'RIGHT' ? stepEndR : null;
               const endOpt = endSt ? optOf(endSt, next[endSt.id]) : null;
-              const locked = !!((st.subOptions || []).some(o => o.returnOnly) && optIsReturn(endOpt));
+              const locked = !!optIsReturn(endOpt);      // the return carries the rod — see brLockedAt
               if (locked && next[st.id]) { delete next[st.id]; changed = true; }
               const bo = optOf(st, next[st.id]);
               // A selected END RETURN ARM clears that side's End Treatment (the arm IS the end).
@@ -554,14 +564,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               if (basic && next[`${st.id}__sub`]) { delete next[`${st.id}__sub`]; changed = true; }
               const subs = st.subOptions || [];
               if (subs.some(o => o.returnOnly || o.inlineOnly) && next[`${st.id}__sub`]) {
-                  const returnChosen = optIsReturn(endOpt) || !!bo?.isReturnArm;
-                  const inlineBracket = !!bo?.usesReturnPlates;
-                  const hasInl = subs.some(o => o.inlineOnly);
+                  // THE SAME POOL THE PICKER OFFERED. Re-deriving it here is what let the two
+                  // disagree; a plate that is on screen is a plate that stays chosen.
+                  const pool = subPoolFrom(subs, {
+                      returnChosen: optIsReturn(endOpt) || !!bo?.isReturnArm,
+                      inlineBracket: !!bo?.usesReturnPlates,
+                  });
                   const so = subOf(st, next[`${st.id}__sub`]);
-                  const inPool = so && (returnChosen ? so.returnOnly
-                      : inlineBracket ? (hasInl ? so.inlineOnly : so.returnOnly)
-                      : (!so.returnOnly && !so.inlineOnly));
-                  if (so && !inPool) { delete next[`${st.id}__sub`]; changed = true; }
+                  if (so && !plateStillOffered(pool, so)) { delete next[`${st.id}__sub`]; changed = true; }
               }
           });
           return changed ? next : prev;
