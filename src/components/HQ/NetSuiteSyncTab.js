@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch, onSnapshot, updateDoc, query, orderBy, limit } from "firebase/firestore";
+import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch, onSnapshot, updateDoc, query, where, orderBy, limit } from "firebase/firestore";
 import { parseFabricutWorkbook, buildFabricutPlan, buildPremiumTierRepairPlan } from '../Shared/fabricutImport';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { buildNsItemBody } from "../Shared/nsItemFields";
@@ -754,6 +754,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             }
             let successCount = 0;
             let stockedCount = 0, inHouseCount = 0, oldCount = 0, tempCount = 0;
+            let prunedPins = 0; const prunedDetail = [];   // BOM lines NetSuite no longer has
 
             // 2. Process and Push to Firebase
             for (const item of records) {
@@ -964,7 +965,38 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         }, { merge: true });
                     });
                     
+                    // ── THE BOM IS A REPLACEMENT, NOT AN ADDITION (Eric 2026-08-21) ────────────
+                    // "The app is bringing in BOM changes as additive instead of replacing/updating
+                    // the items … the now updated HCUMP410/CP rod. Updated to only use the raw
+                    // HCUMP410 item. Still shows the HCUMP810/CP and STD-HCUMP810/CP 8-ft rods from
+                    // the prior BOMs."
+                    //
+                    // Every component NetSuite reports got a pin; nothing ever removed the pins for
+                    // components NetSuite had DROPPED, so a re-engineered assembly accumulated every
+                    // version of itself. That is what sent the warehouse looking for item 48171 on
+                    // WO11461 — a bracket that left the BOM months ago.
+                    //
+                    // Two things this refuses to do:
+                    //   • touch a HAND-ADDED pin — only `syncedFromErp` ones are ours to remove;
+                    //     someone's manual BOM line is not NetSuite's to overwrite.
+                    //   • prune on an EMPTY read — a join that returns no components is far more
+                    //     likely a bad query than a genuinely emptied BOM, and wiping a live BOM is
+                    //     not recoverable from this screen. Stale pins are the safer failure.
                     if (physicalComponents.length > 0) {
+                        try {
+                            const keep = new Set(physicalComponents.map(c => `PIN-${docId}-${c.internalId}`));
+                            const existingPins = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', docId)));
+                            existingPins.forEach(d => {
+                                const pin = d.data() || {};
+                                if (!pin.syncedFromErp) return;          // hand-added — leave it alone
+                                if (keep.has(d.id)) return;              // still in NetSuite's BOM
+                                batch.delete(d.ref);
+                                prunedPins++;
+                                prunedDetail.push(`${item.itemid}: ${pin.partId || d.id}`);
+                            });
+                        } catch (pruneErr) {
+                            addLog(`⚠ Could not check ${item.itemid} for dropped BOM lines (${pruneErr.message || pruneErr}) — its components were updated, but stale ones may remain.`, 'warn');
+                        }
                         await batch.commit();
                     }
                 }
@@ -973,6 +1005,9 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             }
 
             addLog(`✅ Successfully synced and mapped ${successCount} library items. App structure preserved.`, 'success');
+            if (prunedPins > 0) {
+                addLog(`🧹 Removed ${prunedPins} BOM line(s) NetSuite no longer carries: ${prunedDetail.slice(0, 12).join(' · ')}${prunedDetail.length > 12 ? ` …+${prunedDetail.length - 12} more` : ''}. Hand-added lines were left untouched.`, 'success');
+            }
             addLog(`🏷️ Flagged ${stockedCount} STOCKED (custitem27), ${inHouseCount} IN-HOUSE (custitem26), ${oldCount} OLD/hidden (custitem28)${hasTempField ? `, ${tempCount} ⏳TEMP (custitem_app_temp)` : ''} of ${successCount} items.`, stockedCount > 0 ? 'success' : 'info');
 
         } catch (err) {

@@ -2956,7 +2956,13 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </select>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%', overflowX: 'auto' }}>
+                {/* NO overflow HERE (Eric 2026-08-21: "Item/Order lookup renders the results under the
+                    menu and menu returns scroll bars"). My tablet fix put overflowX:auto on this row
+                    — but WhereIsIt lives in it, and an absolutely-positioned dropdown inside a
+                    scroll container gets clipped into scrollbars instead of floating over the page.
+                    flexWrap alone already stops the row pushing the page sideways, which was the
+                    whole point; the overflow was belt-and-braces and cost more than it bought. */}
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', maxWidth: '100%' }}>
                     {/* 'APP IMP' is force-included — feedback stays reachable by every role. */}
                     {TABS.filter(t => myTabs.includes(t) || t === 'APP IMP').map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '10px 16px', background: 'transparent', color: activeTab === tab ? theme.ink : theme.inkSoft, borderBottom: activeTab === tab ? `2px solid ${theme.brass}` : '2px solid transparent', borderTop: 'none', borderLeft: 'none', borderRight: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }}>
