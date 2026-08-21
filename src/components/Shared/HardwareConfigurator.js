@@ -112,6 +112,7 @@ function HardwareConfiguratorInner({
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
     const [showDiag, setShowDiag] = useState(false);
+    const [showGeo, setShowGeo] = useState(false);   // the untagged-node list, behind its count
     const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
     const [globalFinish, setGlobalFinish] = useState('');
     const [poleIn, setPoleIn] = useState('');            // finished length, whole inches
@@ -504,8 +505,23 @@ function HardwareConfiguratorInner({
         // blank item is not a fault under one. Same two fields Vision reads, in the same order.
         flow?.fabProjection !== undefined && flow?.fabProjection !== '' && flow?.fabProjection !== null
             ? flow.fabProjection : (flow?.impliedProjInches ?? null),
-    ), [model, findPart, flow]);
-    const tagNotes = useMemo(() => [...diagnosis, ...projNotes], [diagnosis, projNotes]);
+        // OUR number, never the doc id (Stuart 2026-08-21: "it is showing app internal id which i
+        // have no idea what they are"). Same resolver the cards, the quote lines and the rail use.
+        (partId) => ourId(partId),
+    ), [model, findPart, flow, ourId]);
+    // ── THE IMPORTANT NOTE MUST NOT BE THE 250TH ─────────────────────────────────────────────
+    // H1-138 reports 243 untagged nodes, and the thirteen projection notes sat underneath them
+    // where nobody would ever scroll. Untagged geometry is ONE fact about the assembly — a list of
+    // nodes nothing claims — so it is collapsed to one line that carries its own count, and the
+    // notes that name a part stay where they can be read.
+    const tagNotes = useMemo(() => {
+        const geo = diagnosis.filter(d => d.kind === 'UNTAGGED GEOMETRY');
+        const rest = diagnosis.filter(d => d.kind !== 'UNTAGGED GEOMETRY');
+        return [...rest, ...projNotes, ...(geo.length ? [{
+            sev: 'amber', kind: 'UNTAGGED GEOMETRY', collapsed: geo,
+            msg: `${geo.length} node(s) in the .glb that no choice claims — they never render. Tag them in 1.6 or remove them.`,
+        }] : [])];
+    }, [diagnosis, projNotes]);
     const cadUrl = assembly?.manufacturingSpecs?.cadUrl;
 
     // ── THUMBNAILS, PHOTOGRAPHED FROM THIS ASSEMBLY'S OWN .GLB ───────────────────────────────
@@ -1312,7 +1328,24 @@ function HardwareConfiguratorInner({
                                         {showDiag && (
                                             <div style={{ marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', lineHeight: 1.55 }}>
                                                 {!tagNotes.length && <div style={{ color: '#2a7' }}>Every slot has options, the chosen parts agree, every tagged node exists, and Vision engineers the same projection this engine offers.</div>}
-                                                {tagNotes.map((d, i) => <div key={i} style={{ color: d.sev === 'red' ? '#b00020' : '#8a6508' }}>{d.sev === 'red' ? '●' : '○'} {d.kind} — {d.msg}</div>)}
+                                                {tagNotes.map((d, i) => (
+                                                    <div key={i} style={{ color: d.sev === 'red' ? '#b00020' : '#8a6508' }}>
+                                                        {d.sev === 'red' ? '●' : '○'} {d.kind} — {d.msg}
+                                                        {/* The nodes themselves, behind one click: the count is
+                                                            what you need to know, the names are what you need to
+                                                            fix them. */}
+                                                        {d.collapsed && (
+                                                            <>
+                                                                <span onClick={() => setShowGeo(v => !v)} style={{ marginLeft: '6px', color: 'var(--brass)', cursor: 'pointer', textDecoration: 'underline' }}>{showGeo ? 'hide' : 'list them'}</span>
+                                                                {showGeo && (
+                                                                    <div style={{ marginTop: '4px', paddingLeft: '10px', borderLeft: '1px solid var(--line)', color: 'var(--ink-faint)', maxHeight: '220px', overflowY: 'auto' }}>
+                                                                        {d.collapsed.map((g, j) => <div key={j}>{g.msg.split(':')[0]}</div>)}
+                                                                    </div>
+                                                                )}
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                ))}
                                             </div>
                                         )}
                                     </div>

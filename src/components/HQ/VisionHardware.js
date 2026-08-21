@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
+import { pinProjectionOf } from '../Shared/hardwareAdapter';
 import { computeBayMath } from '../Shared/bayMath';
 
 const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession }) => {
@@ -170,7 +171,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               const part = libraryParts.find(p => p.id === pin.partId || p.legacyErpId === pin.legacyErpId);
               if (part) {
                   const cData = part.manufacturingSpecs?.customData || {};
-                  if (detectedProj === null && cData.projection) detectedProj = parseFloat(cData.projection);
+                  // ⚠ THE TAG IS THE PROJECTION (Stuart 2026-08-21). The pin's projInches is what
+                  // gates the new engine and what renders; the item's customData.projection is the
+                  // older field, unmaintained on collections tagged since 1.6 arrived. Read the tag
+                  // first so both tools engineer the same depth, and keep the item as a fallback
+                  // only for collections pinned before the tag existed.
+                  if (detectedProj === null) {
+                      const tagged = pinProjectionOf([pin], part);
+                      if (tagged != null) detectedProj = tagged;
+                      else if (cData.projection) detectedProj = parseFloat(cData.projection);
+                  }
                   if (!detectedEndStyle && cData.feeType === 'BENT_RETURN') detectedEndStyle = 'RETURN_BEND';
                   if (!detectedEndStyle && cData.feeType === 'MITER_RETURN') detectedEndStyle = 'RETURN_MITER';
                   if (!detectedEndStyle && part.manufacturingSpecs?.productType === 'FINIAL') detectedEndStyle = 'FINIAL';
@@ -207,7 +217,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               const pData = part.manufacturingSpecs?.parametric || {};
               // Flow preset projection wins; otherwise take it from the selected bracket.
               const hasPresetProj = activeFlow?.fabProjection !== undefined && activeFlow?.fabProjection !== '' && activeFlow?.fabProjection !== null;
-              const proj = hasPresetProj ? parseFloat(activeFlow.fabProjection) : (parseFloat(cData.projection) || parseFloat(engData.proj) || 0);
+              // ⚠ THE SELECTED BRACKET'S 1.6 TAG IS THE DEPTH THIS DRAWING IS ENGINEERED AT
+              // (Stuart 2026-08-21: "make it use the projection for the 1.6 tags"). It is the same
+              // number the configurator gates that bracket by and the same number the render is
+              // built from, so the drawing, the quote and the model cannot describe three different
+              // poles. The item's own field stands in only where a collection has no tag.
+              const taggedProj = pinProjectionOf(flowPins, part);
+              const proj = hasPresetProj ? parseFloat(activeFlow.fabProjection)
+                  : (taggedProj != null ? taggedProj : (parseFloat(cData.projection) || parseFloat(engData.proj) || 0));
               const bw = parseFloat(cData.bracketW || pData.width || pData.bracketW) || 3.0;
               const bt = parseFloat(cData.bracketThickness || pData.thickness || pData.bracketThickness) || 0.25;
 
@@ -222,7 +239,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               if (proj) setIsCustomProj(false);
           }
       }
-  }, [engData.bracketId, libraryParts, activeFlow]);
+  }, [engData.bracketId, libraryParts, activeFlow, flowPins]);
 
   // Auto-set each end's End Style from its mount + bracket: an INSIDE mount is a flush cut; otherwise
   // an Is-Return bracket miters back into the wall. Leaves the style alone when neither applies, so a

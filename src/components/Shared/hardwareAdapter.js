@@ -28,6 +28,53 @@
 //   nodes        pin.targetNode (the canonical delimiter-aware split)
 
 import { splitNodes } from './nodeList.js';
+import { measureOf, measureList, parseProjTiers } from './hardwareModel.js';
+
+/**
+ * THE PROJECTION A PART IS PINNED AT — the one number, read from the 1.6 tag.
+ *
+ * Stuart 2026-08-21: "over write vision and make it use the projection for the 1.6 tags as we need
+ * to properly tag everything for the rendering to work, this way if a projection is missing it will
+ * be missing from both."
+ *
+ * Projection used to live in two fields — the PIN's `projInches`, which gates what the engine
+ * offers and what renders, and the library ITEM's `customData.projection`, which Vision engineered
+ * the bend and the bracket spacing from. On H1-138 the audit found most items carry no projection
+ * at all and one carries a different one, so Vision was engineering from a field that had quietly
+ * stopped being maintained the moment tagging moved into 1.6.
+ *
+ * One number, one place. The tag is what has to be right for the render, so the tag is what
+ * everything reads — and a missing projection is now missing from BOTH tools, loudly, instead of
+ * being silently absent in one of them.
+ *
+ * @param pins  the assembly's pins (assembly_pins docs)
+ * @param part  the library doc for the part in question (id / itemId / legacyErpId all matched)
+ * @param tier  which depth to take off a per-tier tag ("FRONT:6, BACK:3-5/8") — the front rod's
+ *              by default, which is the one a drawing is engineered around.
+ * @returns the projection in inches, or null where the part is not pinned or not tagged
+ */
+export function pinProjectionOf(pins, part, tier = 'FRONT') {
+    if (!part) return null;
+    const keys = new Set([part.id, part.itemId, part.legacyErpId]
+        .filter(Boolean).map(k => String(k).trim().toUpperCase()));
+    if (!keys.size) return null;
+    for (const pin of (pins || [])) {
+        const pid = String(pin?.partId || '').trim().toUpperCase();
+        if (!pid || !keys.has(pid)) continue;
+        const raw = pin.projInches;
+        if (raw == null || String(raw).trim() === '') continue;
+        // A double's bracket carries both depths in one field. A drawing is engineered around the
+        // front rod, so that is the one taken — falling back to whichever tier is named.
+        const tiers = parseProjTiers(raw);
+        const tierKeys = Object.keys(tiers);
+        if (tierKeys.length) return tiers[tier] != null ? tiers[tier] : tiers[tierKeys[0]];
+        const list = measureList(raw);
+        if (list.length) return list[0];
+        const one = measureOf(raw);
+        if (one != null) return one;
+    }
+    return null;
+}
 import { normalizeCategory, normalizePosition, normalizeLocation } from './assemblyTags.js';
 import { SOLID, TRAVERSE, RIDER_ROLES } from './hardwareModel.js';
 

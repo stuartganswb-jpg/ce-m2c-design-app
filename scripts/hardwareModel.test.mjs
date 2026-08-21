@@ -1771,38 +1771,43 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('and nothing is recommended without a span', centreBracketsFor(null, 2), null);
 }
 
-// ── DOES VISION ENGINEER THE DEPTH THE ENGINE GATES BY? ──────────────────────────────────────
-// Stuart 2026-08-21. Projection lives in two fields: Vision reads the ITEM's customData.projection
-// (bend deduct, bracket spacing, O2O), this engine reads the PIN's tag. Disagreement is a pole cut
-// to the wrong length, and neither screen would say so.
+// ── IS EVERY MOUNTED PART TAGGED WITH ITS DEPTH? ─────────────────────────────────────────────
+// Stuart 2026-08-21, after seeing the drift on H1-138: "over write vision and make it use the
+// projection for the 1.6 tags … this way if a projection is missing it will be missing from both."
+// So the tag is the truth, and the only real fault is an untagged part. A stale item field is drift
+// nothing reads — worth saying once, not worth stopping for.
 {
-    // RAW choices, as the adapter hands them over — resolve() normalizes, and normalizing twice
-    // would drop the proj tag this whole check is about.
+    // RAW choices, as the adapter hands them over — resolve() normalizes, and normalizing an
+    // already normalized choice drops the proj tag this whole check is about.
     const cs = [
         C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['r'] }),
         C({ id: 'OK', partId: 'A-OK', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a1'] }),
-        C({ id: 'BAD', partId: 'A-BAD', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a2'] }),
-        C({ id: 'BLANK', partId: 'A-BLANK', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a3'] }),
+        C({ id: 'STALE', partId: 'A-STALE', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a2'] }),
+        C({ id: 'BLANKITEM', partId: 'A-BLANKITEM', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a3'] }),
         C({ id: 'UNTAG', partId: 'A-UNTAG', role: 'BRACKET', position: 'LEFT', nodes: ['a4'] }),
-        C({ id: 'BAD2', partId: 'A-BAD', role: 'BRACKET', position: 'RIGHT', proj: '6', nodes: ['a5'] }),
+        C({ id: 'STALE2', partId: 'A-STALE', role: 'BRACKET', position: 'RIGHT', proj: '6', nodes: ['a5'] }),
     ];
     const model = resolve({ choices: cs, answers: {}, selectedIds: ['ROD'] });
-    const fab = { 'A-OK': 6, 'A-BAD': 4.625, 'A-BLANK': null, 'A-UNTAG': 6 };
+    const fab = { 'A-OK': 6, 'A-STALE': 4.625, 'A-BLANKITEM': null, 'A-UNTAG': 6 };
     const notes = projectionAudit(model, (id) => fab[id]);
     const noteFor = (code) => notes.find(n => n.msg.startsWith(code));
 
-    ok('an agreeing bracket says nothing', !noteFor('A-OK'));
-    ok('a disagreement is red', noteFor('A-BAD')?.sev === 'red');
-    ok('…and names BOTH numbers', /4\.625/.test(noteFor('A-BAD')?.msg || '') && /6"/.test(noteFor('A-BAD')?.msg || ''));
-    ok('a blank item is called out', !!noteFor('A-BLANK'));
-    ok('an untagged pin is called out', !!noteFor('A-UNTAG'));
-    eq('a part pinned twice is one note', notes.filter(n => n.msg.startsWith('A-BAD')).length, 1);
+    ok('a tagged part whose item agrees says nothing', !noteFor('A-OK'));
+    ok('a tagged part with a blank item says nothing either', !noteFor('A-BLANKITEM'));
+    ok('an UNTAGGED part is the real fault, and it is red', noteFor('A-UNTAG')?.sev === 'red');
+    ok('…and it says Vision has nothing to engineer from', /engineer/.test(noteFor('A-UNTAG')?.msg || ''));
+    ok('a stale item field is amber, not red', noteFor('A-STALE')?.sev === 'amber');
+    ok('…and names both numbers so it can be corrected', /6"/.test(noteFor('A-STALE')?.msg || '') && /4\.625/.test(noteFor('A-STALE')?.msg || ''));
+    eq('a part pinned twice is one note', notes.filter(n => n.msg.startsWith('A-STALE')).length, 1);
 
-    // A flow that stamps its own projection overrides the item's field in Vision, so a blank one
-    // is not a fault there — but a real disagreement still is.
+    // A flow that stamps its own projection engineers from that, so an untagged part is not
+    // stranded there — but it still cannot be gated by depth, so it is not silent either.
     const preset = projectionAudit(model, (id) => fab[id], 6);
-    ok('under a flow preset a blank item is not a fault', !preset.find(n => n.msg.startsWith('A-BLANK')));
-    ok('…and a disagreement still is', preset.find(n => n.msg.startsWith('A-BAD'))?.sev === 'red');
+    eq('under a flow preset an untagged part softens to amber', preset.find(n => n.msg.startsWith('A-UNTAG'))?.sev, 'amber');
+
+    // OUR part number, never the app's doc id: "i have no idea what they are".
+    const named = projectionAudit(model, (id) => fab[id], null, (id) => ({ 'A-UNTAG': 'H1-138B6' })[id]);
+    ok('the note names our part number', !!named.find(n => n.msg.startsWith('H1-138B6')));
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
