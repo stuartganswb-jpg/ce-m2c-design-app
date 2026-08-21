@@ -130,6 +130,11 @@ export function handoffItem(resolved, ctx = {}) {
         name: `${c.code} — ${c.why}`, qty: c.qty,
         price: c.billable ? c.rate : 0, total: c.billable ? c.rate * c.qty : 0,
         partHandling: 'Small Parts', partId: c.code, legacyErpId: c.code,
+        // ⚠ FLAGGED SO IT IS PUSHED ONCE. These rows are on the breakdown for the documents and the
+        // floors, and the ERP push reads the item's `trvComponents` list directly (it always has).
+        // Without a mark the TAGS breakdown walk would push them a second time and the order would
+        // carry double the carriers.
+        trvComponent: true,
     }));
 
     const breakdown = [...lines, ...extraRows, ...trvRows];
@@ -160,6 +165,8 @@ export function handoffItem(resolved, ctx = {}) {
             memo,
         },
         engineeringNotes: ctx.engineeringNotes || null,
+        // The saved render, replayed by the floors' viewer. Null on an assembly with no .glb.
+        renderState: ctx.renderState || null,
         // The push reads this list directly, not the breakdown rows — same field, same contents.
         trvComponents,
         // What the engine is: the flag that tells a consumer which shape to expect.

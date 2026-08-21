@@ -652,6 +652,24 @@ function HardwareConfiguratorInner({
             // reads `trvComponents` off the item and the documents read the breakdown rows, so
             // neither can tell which engine asked the question.
             trvComponents,
+            // ── THE FROZEN RENDER (Stuart 2026-08-21) ────────────────────────────────────────
+            // The shop floor, the finishing floor and the HQ work-order window re-render a saved
+            // order from this and nothing else (Shared/ConfiguredItemViewer). The old engine wrote
+            // it at add; without it a TAGS order opens to an empty canvas six weeks later, when the
+            // assembly has moved on and nobody can reconstruct what was sold.
+            //
+            // ⚠ `defaultHidden` AND `clearNodes` TRAVEL WITH IT. This engine renders ADDITIVELY —
+            // nothing is visible until it is chosen — so replaying the same overrides without that
+            // flag would show the entire .glb, every option at once. The old engine's saved states
+            // carry neither and behave exactly as they always have.
+            renderState: cadUrl ? {
+                cadUrl,
+                textureEntries: Object.entries(textureOverrides || {}).map(([target, url]) => ({ target, url })),
+                visibilityEntries: Object.entries(visibleOverrides || {}).map(([target, visible]) => ({ target, visible })),
+                cloneSpecs: [],
+                defaultHidden: true,
+                clearNodes: clearList,
+            } : null,
         });
         if (typeof onAdd === 'function') onAdd(item);
         setSaved(s => [...s, { memo: configMemo || `Configuration ${s.length + 1}`, total: grandTotal, lines: customerLines(priced.lines).length }]);

@@ -228,6 +228,15 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                                                     textureOverrides={texMap}
                                                     visibilityOverrides={visMap}
                                                     cloneSpecs={rs.cloneSpecs}
+                                                    /* ⚠ THE TAG ENGINE RENDERS ADDITIVELY (Stuart
+                                                       2026-08-21): nothing is visible until it is
+                                                       chosen, so its saved state means "show ONLY
+                                                       these". Replaying it without the flag shows
+                                                       the whole .glb — every option at once. An
+                                                       older saved state carries neither field and
+                                                       replays exactly as it always has. */
+                                                    defaultHidden={!!rs.defaultHidden}
+                                                    clearNodes={rs.clearNodes || null}
                                                 />
                                             </Bounds>
                                         </Suspense>

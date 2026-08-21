@@ -111,6 +111,41 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           return best;
       };
       // Find the styleOption (main step or backplate __sub) behind a selection id, to read its part link.
+      // ── WHICH ITEM A FINISHED LINE CONSUMES ──────────────────────────────────────────────
+      // Lifted out of the step walk unchanged (Stuart 2026-08-21) because the TAGS engine has to
+      // answer the same question and this rule is far too load-bearing to exist twice: an
+      // OUTSOURCED finish always consumes finished stock, an in-house finish consumes it only where
+      // the finished assembly is flagged Stocked, and paint is structural — every P-code shares the
+      // one phosphated "/P" item, which is then painted here. Anything else stays on the BASE item
+      // and the floor makes and finishes it.
+      const routeFinishedItem = (masterPart, finishObj, isOutsourced) => {
+          const out = {
+              nsId: masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED',
+              finishedErpId: '', finishUnmapped: '',
+          };
+          const finishCode = finishObj ? finishCodeOf(finishObj) : '';
+          if (!finishCode) return out;
+          const baseErp = String(masterPart.legacyErpId || masterPart.itemId || '').toUpperCase();
+          // Exact "/<CODE>" first (EP finishes are stocked as exact SKUs, e.g. /EP5); paints
+          // (P01, P02, …) share ONE "/P" item, so fall back to it when no exact SKU exists.
+          const candidates = [`${baseErp}/${finishCode}`];
+          if (/^P\d/.test(finishCode)) candidates.push(`${baseErp}/P`);
+          let candidateErpId = candidates[0];
+          let finishedPart = null;
+          for (const cand of candidates) {
+              const hit = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === cand);
+              if (hit) { candidateErpId = cand; finishedPart = hit; break; }
+          }
+          const isStocked = !!finishedPart?.manufacturingSpecs?.isStocked;
+          const isPaintRollup = !!finishedPart && candidateErpId.endsWith('/P');
+          if (isOutsourced || isStocked || isPaintRollup) {
+              out.finishedErpId = candidateErpId;
+              if (finishedPart && finishedPart.netSuiteInternalId) out.nsId = finishedPart.netSuiteInternalId;
+              else out.finishUnmapped = candidateErpId;   // finished SKU has no NS id → base + warn
+          }
+          return out;
+      };
+
       const findOpt = (flowSteps, stepId, selId) => {
           const base = stepId.endsWith('__sub') ? stepId.slice(0, -5) : stepId;
           const st = flowSteps.find(s => s.id === base);
@@ -136,7 +171,15 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               sidemark: String(ci.sidemark || '').trim(),
               // Traverse components chosen in the checkout configurator — carriers, end stops,
               // splices, accessories. Not flow steps, so the step walk never sees them.
-              trvComponents: Array.isArray(ci.trvComponents) ? ci.trvComponents : []
+              trvComponents: Array.isArray(ci.trvComponents) ? ci.trvComponents : [],
+              // ── WHICH ENGINE BUILT THIS LINE (Stuart 2026-08-21) ──────────────────────────
+              // The tag-driven engine does not answer flow steps: it resolves the parts itself and
+              // hands over a finished BOM. So a TAGS item's `config`/`quantities` are empty by
+              // design, and walking steps against them produced nothing at all — the push failed
+              // with "this quote has no CPQ configuration data attached", which is true of the map
+              // it was looking for and false of the quote.
+              engine: String(ci.engine || '').toUpperCase(),
+              breakdown: Array.isArray(ci.pricingBreakdown) ? ci.pricingBreakdown : []
             }))
           : [{
               config: job.cpqData.configuration || {},
@@ -145,11 +188,72 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               flowId: job.flowId,
               assemblyQty: 1
             }];
-      result.hasConfig = carts.some(c => Object.keys(c.config).length > 0 || Object.keys(c.quantities).length > 0);
+      // A TAGS cart's configuration IS its breakdown — there is no step map to find, and its
+      // absence is not the stale-quote symptom that message describes.
+      result.hasConfig = carts.some(c => Object.keys(c.config).length > 0 || Object.keys(c.quantities).length > 0
+          || (c.engine === 'TAGS' && c.breakdown.length > 0));
 
       const rawLines = []; // per-assembly lines, aggregated by NetSuite item at the end
 
       carts.forEach(cart => {
+          // ── THE TAG ENGINE HANDS OVER A FINISHED BOM ─────────────────────────────────────────
+          // Everything the step walk below works out — which part a selection means, which size it
+          // resolves to, what it is finished in — the engine has already worked out, and its answer
+          // is on the line: `partId` is the library doc, `finishCode` is what THAT part wears (a
+          // configuration may carry several), `qty` is the count. So this reads the answer instead
+          // of re-deriving it from questions that were never asked.
+          //
+          // What it does NOT do differently: which ITEM a finished line consumes is the same rule,
+          // through the same routeFinishedItem — because the floor's copy of that decision is what
+          // makes a phosphate line a phosphate line, and two engines must never disagree about it.
+          if (cart.engine === 'TAGS') {
+              cart.breakdown.forEach(l => {
+                  if (!l) return;
+                  // A fee prices the quote and rides the rollup; it is not a NetSuite component.
+                  if (l.isFee) return;
+                  // The traverse components have their own loop below — they are on the breakdown
+                  // for the documents, and pushing them from both places would double the order.
+                  if (l.trvComponent) return;
+                  const qty = Number(l.qty) > 0 ? Number(l.qty) : 1;
+                  let masterPart = matchPart(l.partId) || matchPart(l.legacyErpId);
+                  if (!masterPart) { result.unresolved.push({ stepTitle: `${l.name || 'Configured line'}`, partId: l.partId || l.legacyErpId }); return; }
+                  result.stepsConsidered++;
+                  if (masterPart.partClass === 'Fee' || String(masterPart.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE') return;
+                  if (masterPart.partClass === 'Kit') return;
+                  // An ALIAS is sold under its own name and consumed as the real item — the same
+                  // rule the step walk applies, for the same reason (Shared/aliasIdentity).
+                  let aliasFace = null;
+                  const aliasId = aliasTargetIdOf(masterPart);
+                  if (aliasId) { const real = matchPart(aliasId); if (real) { aliasFace = masterPart; masterPart = real; } }
+                  // THE FINISH IS PER LINE HERE, not per step: this engine lets one part be finished
+                  // differently from the rest of the configuration, so the line's own code decides.
+                  const code = String(l.finishCode || '').toUpperCase();
+                  const outFin = code ? outsourceFinishes.find(f => finishCodeOf(f) === code) : null;
+                  const finObj = code ? (outFin || globalFinishes.find(f => finishCodeOf(f) === code) || { code }) : null;
+                  // A species finish consumes the per-species item (…WBF → …WBF-O/-W) before routing.
+                  if (finObj?.bomSuffix) {
+                      const sp = speciesVariantOf(masterPart, finObj, (c) => libraryParts.find(p => String(p.legacyErpId || p.itemId || '').trim().toUpperCase() === c) || null);
+                      if (sp) masterPart = sp;
+                  }
+                  const { nsId, finishedErpId, finishUnmapped } = routeFinishedItem(masterPart, finObj, !!outFin);
+                  rawLines.push({
+                      stepId: `tags:${l.legacyErpId || l.partId}:${code}`,
+                      masterPart,
+                      aliasFace,
+                      qty: qty * cart.assemblyQty,
+                      nsId,
+                      finishedErpId,
+                      finishUnmapped,
+                      // The ITEM's handling is the routing signal, exactly as it is on the floors;
+                      // the line already carries it, resolved from the same place.
+                      partCategory: l.partHandling || masterPart.manufacturingSpecs?.partHandling || '',
+                      // What the bench cuts to, where this line is cut at all.
+                      projection: l.cutLength ? String(l.cutLength) : '',
+                      sidemark: cart.sidemark || ''
+                  });
+              });
+              // …and then fall through to the traverse loop, which is shared.
+          }
           const flow = cpqFlows.find(f => f.id === cart.flowId);
           const flowSteps = flow?.steps || [];
           const activeStepIds = new Set([...Object.keys(cart.config), ...Object.keys(cart.quantities)]);
@@ -158,7 +262,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           // flow has no SIZE steps.
           const sizeBundle = makeSizeSwap(flow, cart.config, libraryParts);
 
-          activeStepIds.forEach(stepId => {
+          // A TAGS cart has no step map to walk — its parts were pushed above.
+          (cart.engine === 'TAGS' ? new Set() : activeStepIds).forEach(stepId => {
               if (stepId.endsWith('__finish')) return; // finishes are applied, not physical BOM components
               const step = flowSteps.find(s => s.id === stepId);
               if (step?.type === SIZE_STEP_TYPE || step?.type === 'PROJ_SELECT') return; // size/projection selectors are not physical components
@@ -247,40 +352,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   const sp = speciesVariantOf(masterPart, speciesFinish, (c) => libraryParts.find(p => String(p.legacyErpId || p.itemId || '').trim().toUpperCase() === c) || null);
                   if (sp) masterPart = sp;
               }
-              let nsId = masterPart.netSuiteInternalId || masterPart.legacyErpId || masterPart.itemId || 'UNMAPPED';
-              let finishedErpId = '';
-              let finishUnmapped = '';
-              if (finishId) {
-                  const finishCode = finishCodeOf(finishObj);
-                  if (finishCode) {
-                      const baseErp = String(masterPart.legacyErpId || masterPart.itemId || '').toUpperCase();
-                      // Exact "/<CODE>" first (EP finishes are stocked as exact SKUs, e.g. /EP5); paints
-                      // (P01, P02, …) share ONE "/P" item, so fall back to it when no exact SKU exists.
-                      const candidates = [`${baseErp}/${finishCode}`];
-                      if (/^P\d/.test(finishCode)) candidates.push(`${baseErp}/P`);
-                      let candidateErpId = candidates[0];
-                      let finishedPart = null;
-                      for (const cand of candidates) {
-                          const hit = libraryParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === cand);
-                          if (hit) { candidateErpId = cand; finishedPart = hit; break; }
-                      }
-                      const isStocked = !!finishedPart?.manufacturingSpecs?.isStocked;
-                      // "/P" is structural, not flag-driven: paint finishes ALWAYS consume the stocked
-                      // phosphated "/P" item, which is then painted in-house — no per-item Stocked flag
-                      // needed. Exact finished SKUs (EP…, SG, CP = ready-to-ship) still route through the
-                      // outsourced-or-Stocked(custitem27) gate.
-                      const isPaintRollup = !!finishedPart && candidateErpId.endsWith('/P');
-                      if (outFinish || isStocked || isPaintRollup) { // consume the finished item
-                          finishedErpId = candidateErpId;
-                          if (finishedPart && finishedPart.netSuiteInternalId) {
-                              nsId = finishedPart.netSuiteInternalId;
-                          } else {
-                              finishUnmapped = candidateErpId; // finished SKU has no NS id → fall back to base + warn
-                          }
-                      }
-                      // else: in-house finish-to-order → keep nsId = base; the floor makes + finishes it
-                  }
-              }
+              const { nsId, finishedErpId, finishUnmapped } = routeFinishedItem(masterPart, finishId ? finishObj : null, !!outFinish);
               // MULTI-MATERIAL POLE: the material step carries the pole ITEM; the Length/calculator
               // step carries the FOOTAGE (its per-foot qty) — push the pole line at the feet, and
               // take the cut length from the calculator step's dimensions.

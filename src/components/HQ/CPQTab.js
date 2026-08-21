@@ -2452,6 +2452,37 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       if (prevIndex >= 0) setCurrentStepIndex(prevIndex);
   };
 
+  // ── WHAT VISION PUT ON THE LINE (Stuart 2026-08-21) ──────────────────────────────────────
+  // Lifted out of the old engine's add-to-cart so BOTH engines write it. A Vision drawing is a
+  // engineered document — the O2O, the saw angles, where each hidden hanger mounts, the notes the
+  // designer left on the canvas, the drawing itself — and the floors read it off the cart line.
+  // The tag engine builds its own item and would otherwise drop every one of these silently, which
+  // is the worst way to lose an engineering note.
+  const visionFieldsOf = (draft, svg) => ({
+      engineeringNotes: draft ? draft.specs?.engineeringNotes : null,
+      // Only the flat Vision part-pick ids the viewer needs — the full spatialData blob carries
+      // canvas structures (nested arrays) that Firestore rejects as "invalid nested entity".
+      visionPicks: draft?.spatialData ? {
+          bracketId: draft.spatialData.bracketId || null,
+          bracketIdRight: draft.spatialData.bracketIdRight || null,
+          bracketIdCenter: draft.spatialData.bracketIdCenter || null,
+          backplateIdLeft: draft.spatialData.backplateIdLeft || null,
+          backplateIdRight: draft.spatialData.backplateIdRight || null,
+          backplateIdCenter: draft.spatialData.backplateIdCenter || null
+      } : null,
+      // Free-floating general note boxes placed on the Vision canvas (shopNotes) — flat text, safe.
+      generalNotes: (draft?.spatialData?.shopNotes || []).map(n => (n && typeof n.text === 'string') ? n.text.trim() : '').filter(Boolean),
+      // Per-pin bracket/splice note boxes (att.note) captured straight from attachments, so they
+      // survive even if engineeringNotes.hangerLocations was empty on the draft.
+      bracketNotes: (draft?.spatialData?.attachments || []).map(a => ({
+          type: a.type === 'splice' ? 'splice' : 'bracket',
+          dist: (a.distInches !== undefined && a.distInches !== null) ? a.distInches : null,
+          ref: a.ref || '',
+          note: (a.note && typeof a.note === 'string') ? a.note.trim() : ''
+      })),
+      draftSvg: svg || null,
+  });
+
   const handleAddToCart = async () => {
       // TRAVERSE: the components configurator is part of checkout — ask ONCE per add. Skip is a
       // deliberate answer ([]), not an unanswered one (null).
@@ -2487,28 +2518,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           stepQuantities: { ...stepQuantities },
           dimensionInputs: { ...dimensionInputs },
           customOverrides: { ...customOverrides },
-          engineeringNotes: activeDraft ? activeDraft.specs?.engineeringNotes : null,
-          // Only the flat Vision part-pick ids the viewer needs — the full spatialData blob carries
-          // canvas structures (nested arrays) that Firestore rejects as "invalid nested entity".
-          visionPicks: activeDraft?.spatialData ? {
-              bracketId: activeDraft.spatialData.bracketId || null,
-              bracketIdRight: activeDraft.spatialData.bracketIdRight || null,
-              bracketIdCenter: activeDraft.spatialData.bracketIdCenter || null,
-              backplateIdLeft: activeDraft.spatialData.backplateIdLeft || null,
-              backplateIdRight: activeDraft.spatialData.backplateIdRight || null,
-              backplateIdCenter: activeDraft.spatialData.backplateIdCenter || null
-          } : null,
-          // Free-floating general note boxes placed on the Vision canvas (shopNotes) — flat text, safe.
-          generalNotes: (activeDraft?.spatialData?.shopNotes || []).map(n => (n && typeof n.text === 'string') ? n.text.trim() : '').filter(Boolean),
-          // Per-pin bracket/splice note boxes (att.note) captured straight from attachments, so they
-          // survive even if engineeringNotes.hangerLocations was empty on the draft.
-          bracketNotes: (activeDraft?.spatialData?.attachments || []).map(a => ({
-              type: a.type === 'splice' ? 'splice' : 'bracket',
-              dist: (a.distInches !== undefined && a.distInches !== null) ? a.distInches : null,
-              ref: a.ref || '',
-              note: (a.note && typeof a.note === 'string') ? a.note.trim() : ''
-          })),
-          draftSvg: activeDraftSvg,
+          ...visionFieldsOf(activeDraft, activeDraftSvg),
           capturedViews: capturedViews || null,
           // Snapshot the resolved render so this exact configuration re-renders later (shop/finishing
           // floor viewer + HQ) even if the flow or assembly is edited afterward. Overrides are stored
@@ -4499,7 +4509,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   /* The engine's finished configuration lands in the SAME cart the
                                      old one fills, in the same shape — so checkout, the floors, RTG
                                      and the ERP push are untouched by which engine built it. */
-                                  onAdd={(item) => setCart(prev => [...prev, item])}
+                                  /* The engine builds the configuration; the JOB's context is
+                                     added here, where it lives — the Vision drawing this line came
+                                     from, the quote it belongs to, and how many are ordered. */
+                                  onAdd={(item) => {
+                                      const draft = previousDrafts.find(d => d.id === activeDraftId) || null;
+                                      setCart(prev => [...prev, {
+                                          ...item,
+                                          masterQuoteId: activeMasterQuoteId,
+                                          qty: assemblyQty,
+                                          ...visionFieldsOf(draft, activeDraftSvg),
+                                          capturedViews: capturedViews || null,
+                                      }]);
+                                      if (activeDraftId) setDoc(doc(db, "cpq_drafts", activeDraftId), { status: 'CONFIGURED' }, { merge: true }).catch(() => {});
+                                  }}
                                   /* The way OUT of the engine. The walk ends on its last step, and
                                      before this the operator had to know the page's own header
                                      button was the exit (Stuart 2026-08-21). Same modal, same cart —
