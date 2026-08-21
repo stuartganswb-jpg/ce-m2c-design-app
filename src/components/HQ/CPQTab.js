@@ -4534,6 +4534,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                      engine asks the same questions from the same rules as its last
                                      step on a traverse rod — no rules doc, no step. */
                                   trvRules={trvRules}
+                                  /* THE VISION DRAWING THIS LINE IS BEING QUOTED FROM. Resuming a
+                                     draft used to translate into flow-step params — state this
+                                     engine does not have — so the engineered decisions arrived
+                                     nowhere. It reads the draft itself now (Shared/visionBridge). */
+                                  visionDraft={previousDrafts.find(d => d.id === activeDraftId) || null}
                                   spanMap={spanMap}
                                   spanCaps={spanCaps}
                                   /* ADD-BY-HAND ITEMS for this flow (splices, extra rings …), set

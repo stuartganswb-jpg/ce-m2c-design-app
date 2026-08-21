@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel } from '../HQ/CPQTab';
@@ -6,6 +6,7 @@ import { StudioRig } from './studioScene';
 import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
+import { seedFromVision } from './visionBridge';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort } from './priceLevels';
@@ -107,7 +108,7 @@ class EngineBoundary extends React.Component {
 function HardwareConfiguratorInner({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], onAdd = null, onCheckout = null, cartCount = 0, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [], trvRules = null,
+    outsourceCodes = [], onAdd = null, onCheckout = null, cartCount = 0, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [], trvRules = null, visionDraft = null,
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -226,6 +227,46 @@ function HardwareConfiguratorInner({
         if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
         return String(pt?.itemId || id || '').trim();
     }, [findPart]);
+    // ── A VISION DRAWING ARRIVES AS ANSWERS (Stuart 2026-08-21) ──────────────────────────────
+    // Vision is where the job is ENGINEERED — the bay measured, the returns drawn, the brackets and
+    // plates chosen against the projection. CPQ quotes what was engineered, and that handoff spoke
+    // only to the old engine: a resumed draft becomes flow-step params this engine does not have.
+    // Opening the new engine on one would have shown an empty configurator with every engineered
+    // decision quietly gone.
+    //
+    // ⚠ APPLIED ONCE PER DRAWING, NOT ON EVERY RENDER. The seed is the drawing's answers, not a
+    // lock: the operator may change any of them afterwards, and re-applying would fight them. So it
+    // fires on the draft ID changing and never again.
+    const [visionReport, setVisionReport] = useState(null);
+    const seededRef = useRef('');
+    useEffect(() => {
+        const id = visionDraft?.id || '';
+        if (!id || seededRef.current === id) return;
+        if (!model.slots.length) return;              // pins still loading — try again next render
+        seededRef.current = id;
+        const seed = seedFromVision({
+            model, draft: visionDraft, flow,
+            // Identity is OURS, not the bridge's: a Vision id may be a library doc id while a pin
+            // carries the item number. Same tolerant resolution the cards and quote lines use.
+            sameId: (a, b) => {
+                if (!a || !b) return false;
+                if (String(a).trim().toUpperCase() === String(b).trim().toUpperCase()) return true;
+                const pa = findPart(a), pb = findPart(b);
+                return !!(pa && pb && pa.id === pb.id);
+            },
+        });
+        if (Object.keys(seed.answers).length) setAnswers(a => ({ ...a, ...seed.answers }));
+        if (Object.keys(seed.picks).length) setPicks(p => ({ ...p, ...seed.picks }));
+        if (seed.lengthInches) {
+            const whole = Math.floor(seed.lengthInches);
+            const frac = seed.lengthInches - whole;
+            setPoleIn(String(whole));
+            setPoleFrac(frac > 0.001 ? String(Math.round(frac * 16)) + '/16' : '');
+        }
+        if (visionDraft.sidemark) setConfigMemo(visionDraft.sidemark);
+        setVisionReport({ carried: seed.carried, missed: seed.missed, name: visionDraft.sidemark || 'the drawing' });
+    }, [visionDraft, model, flow, findPart]);
+
     // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
     //
     // ⚠ 6.5 IS KEYED ON OUR ITEM CODE, AND A PIN CARRIES THE LIBRARY DOC ID (Stuart 2026-08-20:
@@ -864,6 +905,33 @@ function HardwareConfiguratorInner({
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 300px) minmax(0, 1fr)', gap: '14px', alignItems: 'start', maxWidth: '100%' }}>
           {finishPanel}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', minWidth: 0 }}>
+
+            {/* ── WHAT THE DRAWING BROUGHT, AND WHAT IT COULD NOT ─────────────────────────────
+                A silent handoff is the dangerous kind: an operator who does not know a bracket
+                failed to match will quote the one the engine defaulted to. So the drawing says
+                what it filled in, and says louder what it could not — and it is dismissible,
+                because it is a report on one moment, not a state of the configuration. */}
+            {visionReport && (
+                <div style={{ background: '#fff', border: `1px solid ${visionReport.missed.length ? '#b00020' : 'var(--brass)'}`, padding: '10px 14px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ ...mono, fontSize: '8.5px', color: visionReport.missed.length ? '#b00020' : 'var(--brass)' }}>
+                            From the Vision drawing · {visionReport.name}
+                        </div>
+                        {!!visionReport.carried.length && (
+                            <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-soft)', marginTop: '3px' }}>
+                                Carried over: {visionReport.carried.join(' · ')}
+                            </div>
+                        )}
+                        {visionReport.missed.map((m, i) => (
+                            <div key={i} style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: '#b00020', marginTop: '3px' }}>
+                                ⚠ {m.what} — {m.why}
+                            </div>
+                        ))}
+                    </div>
+                    <button onClick={() => setVisionReport(null)}
+                        style={{ ...mono, fontSize: '8px', border: '1px solid var(--line)', background: '#fff', padding: '3px 7px', cursor: 'pointer', color: 'var(--ink-soft)' }}>dismiss</button>
+                </div>
+            )}
 
             {/* CONFIGURATIONS — a job is several rooms. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', background: '#fff', border: '1px solid var(--line)', padding: '10px 14px' }}>
