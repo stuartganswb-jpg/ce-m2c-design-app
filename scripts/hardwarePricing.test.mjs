@@ -223,5 +223,35 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     ok('a clear part still wears nothing', takesFinish({ noFinish: true, materials: ['CLEAR (NO FINISH)'] }, { code: 'P20' }) === false);
 }
 
+// ── A DEFAULTED LEVEL MUST NOT OUTRANK THE CUSTOMER'S OWN ROW ────────────────────────────────
+// Eric via Stuart, 2026-08-21: "For Brimar, the French Return pricing is coming in at $35, which is
+// the Fabricut painted standard price, and not the $45 defined for the Brimar fee." Selecting a
+// customer defaults the level to FAB_COST, and the tier box belongs to the ITEM — it is Fabricut's
+// data. Applied to Brimar it priced their return off somebody else's sheet, beating the Brimar row
+// sitting right there. The line even printed their SKU from the row whose price it had skipped.
+{
+    const shared = {
+        id: 'FR', legacyErpId: 'H1-FRPF', itemName: 'FRENCH RETURN',
+        manufacturingSpecs: { basePrice: 30, fabricut: { cost: 35, wholesale: 60, retail: 90 } },
+        clientPricing: [{ customerId: 'BRIMAR', price: 45, clientSku: 'DFR01' }],
+    };
+    const brimar = { id: 'BRIMAR', name: 'Brimar' };
+    const at = (over) => priceChoice({}, shared, { customerId: 'BRIMAR', customer: brimar, ...over });
+
+    const defaulted = at({ priceLevel: 'FAB_COST', levelIsDefault: true });
+    eq("a defaulted level yields to Brimar's own row", [defaulted.price, defaulted.source], [45, PRICE_SOURCES.CLIENT]);
+    ok('and their SKU still prints', defaulted.sku === 'DFR01');
+
+    const chosen = at({ priceLevel: 'FAB_COST', levelIsDefault: false });
+    eq('a CHOSEN level still means it', [chosen.price, chosen.source], [35, PRICE_SOURCES.LEVEL]);
+
+    // …and the reason the default exists is untouched: an item with no row still gets the tier
+    // price rather than falling to $0.
+    const noRow = { ...shared, clientPricing: [] };
+    const still = priceChoice({}, noRow, { customerId: 'BRIMAR', customer: brimar, priceLevel: 'FAB_COST', levelIsDefault: true });
+    eq('an item with no row still takes the defaulted level', [still.price, still.source], [35, PRICE_SOURCES.LEVEL]);
+    ok('and the line says the level was defaulted', /defaulted/.test(still.detail));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

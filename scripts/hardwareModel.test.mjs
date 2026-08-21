@@ -1862,5 +1862,27 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('a carrier is never a slot of its own', !slots(norm, { setup: 'DOUBLE' }, ['TRACK']).some(s => s.kind === 'CARRIER'));
 }
 
+// ── THE BOM READS IN THE ORDER IT WAS ANSWERED ───────────────────────────────────────────────
+// Eric via Stuart, 2026-08-21: "Items return in the pricing chart out of order of entry." The
+// chosen parts came out in PIN order — an artefact of how the .glb was built. A quote is read
+// against the walk that produced it, and that order already exists as the order of the slots.
+{
+    // Deliberately pinned back-to-front: the ring first, the rod last.
+    const cs = [
+        C({ id: 'RING', partId: 'H1-138RING', role: 'RING', nodes: ['ri'] }),
+        C({ id: 'BKT', partId: 'H1-138B6', role: 'BRACKET', position: 'CENTER', nodes: ['b'] }),
+        C({ id: 'FIN', partId: 'H1-138KF', role: 'FINIAL', position: 'LEFT', nodes: ['f'] }),
+        C({ id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['r'] }),
+    ];
+    const m = resolve({ choices: cs, answers: {}, selectedIds: ['RING', 'BKT', 'FIN', 'ROD'] });
+    const order = m.bom.map(l => l.partId);
+    const slotOrder = m.slots.filter(s => s.options.some(o => order.includes(o.partId))).map(s => s.kind);
+
+    ok('the rod is not last just because it was pinned last', order[0] === 'H1-138R');
+    eq('the lines follow the slots, which are the steps', order.length, 4);
+    ok('…and the ring, asked last, is billed last', order[order.length - 1] === 'H1-138RING');
+    ok('the slot order is the one the walk shows', slotOrder.indexOf('ROD') < slotOrder.indexOf('RING'));
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

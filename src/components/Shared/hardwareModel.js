@@ -1396,8 +1396,19 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     const visible = visibleNodes(norm, answers, selectedIds);
     const ownership = nodeOwnership(norm, modelNodes);
     const selected = norm.filter(c => selectedIds.includes(c.id));
+    // ⚠ THE BOM READS IN THE ORDER IT WAS ANSWERED (Eric via Stuart, 2026-08-21: "Items return in
+    // the pricing chart out of order of entry"). The chosen parts used to come out in PIN order —
+    // the order they happen to sit in the assembly, which is an artefact of how the .glb was built
+    // and means nothing to anyone reading a quote. A quote is read against the walk that produced
+    // it: rod, ends, length, brackets, plates, rings. That order already exists — it is the order
+    // of the SLOTS, which is what the steps are built from — so the lines borrow it rather than
+    // inventing a second one that could disagree with the screen.
+    const slotRank = new Map();
+    sl.forEach((slot, i) => (slot.options || []).forEach(o => { if (!slotRank.has(o.id)) slotRank.set(o.id, i); }));
+    const rankOf = (c) => (slotRank.has(c.id) ? slotRank.get(c.id) : Number.MAX_SAFE_INTEGER);
     const bom = [
-        ...norm.filter(c => selectedIds.includes(c.id) && !c.parked),
+        // Sorted, never the source array — and stable, so two parts from one slot keep their order.
+        ...norm.filter(c => selectedIds.includes(c.id) && !c.parked).sort((a, b) => rankOf(a) - rankOf(b)),
         ...riders,
         ...companions,          // the collar bills with its finial
         // ⚠ THE COUNT REACHES THE BOM, NOT JUST THE QUOTE (Stuart: "bom and router, there is

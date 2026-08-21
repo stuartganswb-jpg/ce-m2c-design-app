@@ -500,6 +500,9 @@ function HardwareConfiguratorInner({
 
     const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel: effectiveLevel, outsourceCodes,
+        // Whether that level was CHOSEN or defaulted decides whether it outranks the customer's own
+        // negotiated row — see the precedence in hardwarePricing.
+        levelIsDefault,
         finishCode: globalFinish, finishFor: lineFinishFor, findPart, findByCode: findPart,
         // The flow's per-kind fallback, used only where a part has no price under any rule (tab 11).
         fallbackPrices: flow?.fallbackPrices || null,
@@ -507,7 +510,7 @@ function HardwareConfiguratorInner({
         // inches travel too: they become the line's cutLength, which is what the bench reads.
         billedFeet: lengthFeet || 0,
         lengthInches: lengthInches || 0,
-    }), [customerId, customer, effectiveLevel, outsourceCodes, globalFinish, lineFinishFor, findPart, lengthFeet, lengthInches, flow]);
+    }), [customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, findPart, lengthFeet, lengthInches, flow]);
     const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);

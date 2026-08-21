@@ -68,7 +68,7 @@ const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : nu
  * @returns { price, source, sku, aliasCode, detail }
  */
 export function priceChoice(choice, part, ctx = {}) {
-    const { customerId, customer, priceLevel = 'STANDARD', finishCode, outsourceCodes, findByCode } = ctx;
+    const { customerId, customer, priceLevel = 'STANDARD', finishCode, outsourceCodes, findByCode, levelIsDefault } = ctx;
     // ── 0 — WHICH RECORD IS THIS, ONCE A FINISH IS CHOSEN ────────────────────────────────────
     // Before anything is priced, the mill base resolves to the item that is actually sold: the /P
     // paint rollup, the exact /EPn plating, the generic /EP on a fee. This is identity, not a
@@ -93,18 +93,49 @@ export function priceChoice(choice, part, ctx = {}) {
 
     if (!part) return out(0, PRICE_SOURCES.NONE, 'no library item resolved for this choice');
 
-    // 2 — the selected price level, when this item has tier data to answer with. Items without it
-    //     (fees, one-offs) fall through untouched, so a quote is a faithful mix rather than a
-    //     level applied by force.
-    if (priceLevel && priceLevel !== 'STANDARD') {
+    // ⚠ A DEFAULTED LEVEL IS A FALLBACK, NOT A DECISION (Eric via Stuart, 2026-08-21: "For Brimar,
+    // the French Return pricing is coming in at $35, which is the Fabricut painted standard price,
+    // and not the $45 defined for the Brimar fee").
+    //
+    // Selecting a customer quietly defaults the level to FAB_COST — "our cost to them" — which was
+    // right for the problem it solved: a mill item has no base price, so a connected customer got a
+    // screen of $0.00 lines with a perfectly good number sitting in the tier box beside them.
+    //
+    // But the tier box belongs to the ITEM, not to the customer being quoted, and it is Fabricut's
+    // data. Applied to BRIMAR it prices their french return off somebody else's sheet — and it beat
+    // Brimar's OWN negotiated row, which was sitting right there (the line even printed their SKU,
+    // DFR01, from the row whose price it had just skipped).
+    //
+    // So the order depends on whether the level was CHOSEN or merely defaulted:
+    //   · chosen (staff picked Fabricut Cost / Wholesale / Retail) → the level means it, and wins.
+    //   · defaulted → the customer's own row is the more specific fact and wins; the level stays
+    //     underneath it, still catching the mill items that have no row and no base price, which is
+    //     the whole reason it exists.
+    const levelPrice = () => {
+        if (!priceLevel || priceLevel === 'STANDARD') return null;
         const lv = fabricutPriceOf(part, priceLevel, finishCode, outsourceCodes, findByCode);
-        if (lv !== null && lv !== undefined) return out(lv, PRICE_SOURCES.LEVEL, `${priceLevel}${finishCode ? ` · finish ${finishCode}` : ''}`);
-    }
+        return (lv === null || lv === undefined) ? null : lv;
+    };
+    const clientPrice = () => (keys ? clientPriceFor(part.clientPricing, keys) : null);
+    const levelOut = (lv) => out(lv, PRICE_SOURCES.LEVEL, `${priceLevel}${finishCode ? ` · finish ${finishCode}` : ''}${levelIsDefault ? ' · defaulted' : ''}`);
+    const clientOut = (cv) => out(cv, PRICE_SOURCES.CLIENT, row?.customerId ? `row keyed "${row.customerId}"` : '');
 
-    // 3 — this customer's negotiated price.
-    if (keys) {
-        const cv = clientPriceFor(part.clientPricing, keys);
-        if (cv !== null) return out(cv, PRICE_SOURCES.CLIENT, row?.customerId ? `row keyed "${row.customerId}"` : '');
+    if (!levelIsDefault) {
+        // 2 — the CHOSEN price level, when this item has tier data to answer with. Items without it
+        //     (fees, one-offs) fall through untouched, so a quote is a faithful mix rather than a
+        //     level applied by force.
+        const lv = levelPrice();
+        if (lv !== null) return levelOut(lv);
+        // 3 — this customer's negotiated price.
+        const cv = clientPrice();
+        if (cv !== null) return clientOut(cv);
+    } else {
+        // 2 — this customer's own negotiated price beats a level nobody asked for.
+        const cv = clientPrice();
+        if (cv !== null) return clientOut(cv);
+        // 3 — …and the defaulted level still catches what the row does not cover.
+        const lv = levelPrice();
+        if (lv !== null) return levelOut(lv);
     }
 
     // 4 — the item's own price.
