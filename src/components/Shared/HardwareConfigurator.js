@@ -196,6 +196,33 @@ function HardwareConfiguratorInner({
     // Nothing to clear, nothing to re-seed, no order of operations to get wrong.
     const livePicks = useMemo(() => resolvePicks(model, picks), [model, picks, resolvePicks]);
 
+
+    // ── OUR PART NUMBER, RESOLVED ─────────────────────────────────────────────────────────────
+    // This sits ABOVE the bracket advice on purpose. `advice` names ourId in its dependency list,
+    // and a dependency list is read the moment the line runs — so with ourId still declared down in
+    // the pricing section the whole configurator died on render with "Cannot access ... before
+    // initialization" (2026-08-21). A `const` is not hoisted the way a function is; anything a hook
+    // depends on has to be declared before it, not merely somewhere in the same component.
+    const partIndex = useMemo(() => {
+        const m = new Map();
+        parts.forEach(pt => [pt.id, pt.itemId, pt.legacyErpId].forEach(k => {
+            const kk = String(k || '').trim().toUpperCase();
+            if (kk && kk !== 'PENDING' && !m.has(kk)) m.set(kk, pt);
+        }));
+        return m;
+    }, [parts]);
+    const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
+    // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
+    // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
+    // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
+    // the pin's id is resolved to the library item and OUR number read off it — never printed raw.
+    // 'PENDING' is the placeholder on an item that has not been numbered yet, so it never prints.
+    const ourId = useCallback((id) => {
+        const pt = findPart(id);
+        const legacy = String(pt?.legacyErpId || '').trim();
+        if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
+        return String(pt?.itemId || id || '').trim();
+    }, [findPart]);
     // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
     //
     // ⚠ 6.5 IS KEYED ON OUR ITEM CODE, AND A PIN CARRIES THE LIBRARY DOC ID (Stuart 2026-08-20:
@@ -312,26 +339,6 @@ function HardwareConfiguratorInner({
     }, [resolved, chosenList, finishByCode, finishFor]);
 
     // ── PRICE ─────────────────────────────────────────────────────────────────────────────────
-    const partIndex = useMemo(() => {
-        const m = new Map();
-        parts.forEach(pt => [pt.id, pt.itemId, pt.legacyErpId].forEach(k => {
-            const kk = String(k || '').trim().toUpperCase();
-            if (kk && kk !== 'PENDING' && !m.has(kk)) m.set(kk, pt);
-        }));
-        return m;
-    }, [parts]);
-    const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
-    // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
-    // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
-    // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
-    // the pin's id is resolved to the library item and OUR number read off it — never printed raw.
-    // 'PENDING' is the placeholder on an item that has not been numbered yet, so it never prints.
-    const ourId = useCallback((id) => {
-        const pt = findPart(id);
-        const legacy = String(pt?.legacyErpId || '').trim();
-        if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
-        return String(pt?.itemId || id || '').trim();
-    }, [findPart]);
     // ── OUR COST TO THEM IS THE DEFAULT, ONCE THERE IS A "THEM" ──────────────────────────────
     // Stuart 2026-08-17: "it should default at our cost to them". The tier in the Customer Alias &
     // Pricing box only ever applied ABOVE Standard, so a connected customer still quoted off the
