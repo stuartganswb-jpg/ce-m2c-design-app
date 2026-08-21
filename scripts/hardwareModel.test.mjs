@@ -1437,6 +1437,36 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('the bracket wins where one is chosen', both.options[0].inlineOnly === false);
 }
 
+// ── …BUT IT PREFERS ITS OWN PLATES WHERE THEY EXIST ───────────────────────────────────────────
+// Stuart 2026-08-21: an In Line bracket "pulls the backplates that inline with the returns … but
+// these inline have their own inline backplates". Borrowing the other pool is a FALLBACK, not the
+// first answer — so where a collection tags both sets, each arm gets the set tagged for it.
+{
+    const plate = (id, flags) => C({ id, partId: `P-${id}`, role: 'BACKPLATE', position: 'LEFT',
+        proj: '6', nodes: [id], ...flags });
+    const base = [
+        C({ id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] }),
+        C({ id: 'RODL', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rl'] }),
+        C({ id: 'RET', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', proj: '6', nodes: ['ret'] }),
+        C({ id: 'INL', partId: 'H1-138IL6', role: 'BRACKET', position: 'LEFT', proj: '6', usesReturnPlates: true, nodes: ['inl'] }),
+        plate('I', { inlineOnly: true }), plate('R', { returnOnly: true }), plate('PLAIN', {}),
+    ];
+    const cs = applyFitsDefaults(base.map(normalizeChoice));
+    const bpFor = (sel) => slots(cs, { proj: '6' }, sel).find(s => s.kind === 'BACKPLATE');
+
+    const ret = bpFor(['ROD', 'RODL', 'RET']);
+    eq('a return is offered one plate', ret.options.length, 1);
+    ok('and it is the RETURN copy, not the in-line one', ret.options[0].returnOnly === true);
+
+    const inline = bpFor(['ROD', 'RODL', 'INL']);
+    eq('an in-line arm is offered one plate', inline.options.length, 1);
+    ok('and it is the IN-LINE copy', inline.options[0].inlineOnly === true);
+
+    // Neither ever reaches the plain pool while its own set exists — those belong to the ordinary
+    // wall bracket, and handing them out here is how a plate ends up behind the wrong arm.
+    ok('neither takes the plain plate', ret.options[0].id !== 'PLAIN' && inline.options[0].id !== 'PLAIN');
+}
+
 // ── PHASE 1 OF THE RESHUFFLE: THE ENDS LEAD ───────────────────────────────────────────────────
 // "move the front left and right end selections to be the next selections after bracket
 //  projection. remember to move the rear options as well if it is double selected."

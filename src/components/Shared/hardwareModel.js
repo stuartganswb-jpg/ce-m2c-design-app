@@ -1106,16 +1106,37 @@ export function slots(choices, answers = {}, selectedIds = []) {
         }
 
         // THREE PLATE POOLS, one live at a time — they occupy the same spot on the wall:
-        //   in-line arm → the in-line copies, falling back to the RETURN copies where a collection
-        //                 has no in-line ones (1.6: "flows without inl-only plates fall back to
-        //                 rtn-only for In Line brackets");
-        //   any other  → the plain plates, neither in-line nor return.
-        // A RETURN DRAWS THE IN-LINE POOL. His words: "the same backplate options as the inline".
-        // It sits against the wall the same way an in-line arm does, so it takes the same plates —
-        // standard included, cover plate the upgrade — and no collection needs re-tagging for it.
+        //   in-line arm → the in-line copies (inl-only), falling back to the RETURN copies where a
+        //                 collection has no in-line ones (1.6: "flows without inl-only plates fall
+        //                 back to rtn-only for In Line brackets");
+        //   return      → the return copies (rtn-only), falling back to the in-line ones, and to
+        //                 the plain plates only where it has neither — a return always meets the
+        //                 wall, so it is never left with nothing;
+        //   any other   → the plain plates, neither in-line nor return.
+        // A RETURN AND AN IN-LINE ARM SIT AGAINST THE WALL THE SAME WAY, which is why they share
+        // each other's plates at all — standard included, cover plate the upgrade. What they do not
+        // share is which set they ask for FIRST.
         if (arm.isInline || arm.role === 'RETURN') {
             const inl = slot.options.filter(o => o.inlineOnly);
-            let pool = inl.length ? inl : slot.options.filter(o => o.returnOnly);
+            const rtn = slot.options.filter(o => o.returnOnly);
+            const plain = slot.options.filter(o => !o.inlineOnly && !o.returnOnly);
+            // ⚠ EACH ARM PREFERS ITS OWN COPIES (Stuart 2026-08-21: an In Line bracket "pulls the
+            // backplates that inline with the returns … but these inline have their own inline
+            // backplates"). Borrowing was written as a KINDNESS — a collection with only in-line
+            // copies should still put a plate behind its returns — but it was written as the FIRST
+            // choice for both arms, so the moment a collection tags both sets the return reads the
+            // in-line pool and the two steps offer an identical list. Which is what he was looking
+            // at: the same eight plates behind a french return and behind an in-line arm.
+            //
+            // So the borrowing stays and becomes what it always meant: a fallback. A return asks
+            // for the return copies, an in-line arm asks for the in-line copies, and only where its
+            // own set does not exist does either reach for the other's. A collection tagged one way
+            // sees no change at all; a collection tagged both ways now gets the plate it was tagged
+            // for. THE PLAIN COPIES ARE NOT IN EITHER POOL — those belong to the ordinary wall
+            // bracket, and a return only falls that far when nothing else exists (below).
+            let pool = arm.role === 'RETURN'
+                ? (rtn.length ? rtn : inl)
+                : (inl.length ? inl : rtn);
             // ⚠ A RETURN ALWAYS MEETS THE WALL (Stuart 2026-08-20: "on double when i choose double
             // french return … it should be showing the backplate options"). H1-138 has in-line
             // copies for the 6.5/3.25 pair and NONE for 8.5/3.25, so on that double the in-line
@@ -1127,9 +1148,7 @@ export function slots(choices, answers = {}, selectedIds = []) {
             // mount, it is bolted to the wall, and it needs a plate behind it whatever the
             // collection happens to stock — so it falls back to the plain plates rather than
             // leaving the customer with an explanation and nothing to pick.
-            if (!pool.length && arm.role === 'RETURN') {
-                pool = slot.options.filter(o => !o.inlineOnly && !o.returnOnly);
-            }
+            if (!pool.length && arm.role === 'RETURN') pool = plain;
             slot.options = pool;
             if (!slot.options.length) {
                 slot.suppressedBy = arm.name;
