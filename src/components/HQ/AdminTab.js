@@ -185,6 +185,20 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
   const [newFlowName, setNewFlowName] = useState("");
   const [linkItemSearch, setLinkItemSearch] = useState(""); // CPQ step "Link to Library Item" search box
   const [generateAsmId, setGenerateAsmId] = useState(""); // assembly the "Generate Flow from Tags" button reads
+  // ── THE FLOW BUILDER'S SHORT LIST (Stuart 2026-08-21) ────────────────────────────────────
+  // "can you for hide or even remove the tools that relate to the older engine … all that need to
+  // be here are color selections that are available for the flow and an area to apply a default
+  // back up price per step. everything else looks outdated to me."
+  //
+  // For a tagged collection he is right: the options, their prices and their finish scoping are
+  // answered in 1.6 now, and the step editor is the old engine's way of saying the same things.
+  // So the builder opens on what is still true of a flow — what it links to, what it is called,
+  // the fabrication preset Vision reads, the finishes it offers, its account, its add-by-hand
+  // items, and the rollup item the push needs — and the step machinery is one click away.
+  //
+  // HIDDEN, NOT DELETED. M2C's lighting tear-sheets and the pillow flow still run on the old
+  // configurator and are still edited here; deleting this would strand them with no way back.
+  const [legacyFlowTools, setLegacyFlowTools] = useState(false);
   const [genSingleAsm, setGenSingleAsm] = useState(false); // 🎯 single-assembly mode: this assembly's tags only — no union/review/SIZE steps
   const [genBayConfig, setGenBayConfig] = useState("STRAIGHT"); // bay configuration the generated flow is stamped with (drives fabShape + the pole calculatorTemplate so Vision Hardware math matches)
   const [flowSettings, setFlowSettings] = useState({ name: '', legacyErpId: '', basePrice: '', linkedAssemblyId: '', nsRollupItemId: '', nsRollupItemName: '', fabEndStyle: '', fabProjection: '', fabShape: '', defaultFinishOptions: [], hiddenClusters: [] });
@@ -2193,7 +2207,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
             <div style={{ display: 'flex', flex: 1, height: '100%' }}>
                 
                 <div style={{ width: '350px', borderRight: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px', background: 'var(--paper)' }}>
-                    <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Active CPQ Flows</h3>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '10px' }}>
+                        <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500 }}>Active CPQ Flows</h3>
+                        <label title="The step editor, the per-step finish cascade and the geometry-hiding list belong to the OLD configurator. A tagged collection answers all three in 1.6 — options, prices and finish scoping live on the pins. Turn this on to edit a flow that still runs on the old engine (M2C lighting tear-sheets, the pillow flow)."
+                            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: legacyFlowTools ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            <input type="checkbox" checked={legacyFlowTools} onChange={e => setLegacyFlowTools(e.target.checked)} style={{ width: '14px', height: '14px', margin: 0, cursor: 'pointer', accentColor: 'var(--brass)' }} />
+                            Legacy step tools
+                        </label>
+                    </div>
                     
                     <div style={{ display: 'flex', gap: '8px' }}>
                         <input value={newFlowName} onChange={e => setNewFlowName(e.target.value)} placeholder="e.g., CHANDELIER CONFIG" style={{ flex: 1, padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
@@ -2346,6 +2367,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     </div>
                                 </div>
 
+                                {/* Seeds every Choose/Swap STEP with a finish list — a step is the old
+                                    engine's unit, and the new one scopes finishes per PART from the
+                                    item's material. "Finishes offered" below is the live control. */}
+                                {legacyFlowTools && (
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Default Finishes (cascade to every step)</label>
                                     <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Pick the finishes this collection offers. "Apply to all steps" seeds every Choose/Swap step with these — then deselect the rare exceptions on individual steps. Leave empty to allow every finish.</span>
@@ -2369,8 +2394,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                         <button onClick={handleApplyFinishesToSteps} style={{ padding: '10px 18px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Apply to all steps ↓</button>
                                     </div>
                                 </div>
+                                )}
 
-                                {linkedAsm?.nodeClusters?.length > 0 && (
+                                {/* The old engine drew the whole .glb and hid what this flow did not
+                                    use. The new one draws NOTHING until it is chosen, so there is no
+                                    geometry to hide — an untagged node simply never appears. */}
+                                {legacyFlowTools && linkedAsm?.nodeClusters?.length > 0 && (
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Hide Geometry (other configs)</label>
                                     <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>When one CAD file holds several configs (e.g. wall / ceiling / end brackets), hide the regions this flow should NOT show. Clusters are grouped by the Location/Position tags set in Node Grouping — toggle a whole region header in one click (e.g. hide all "CEILING · LEFT").</span>
@@ -2621,6 +2650,16 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                 )}
                             </div>
 
+                            {/* ── THE STEP EDITOR IS THE OLD ENGINE'S (Stuart 2026-08-21) ──────────────
+                                "can you for hide or even remove the tools that relate to the older
+                                engine … everything else looks outdated to me."
+                                Quite right for a tagged collection: the new engine reads PINS, and a
+                                step's options, prices and finish scoping are answered in 1.6 now.
+                                HIDDEN RATHER THAN DELETED, because M2C's lighting tear-sheets and the
+                                pillow flow still run on the old configurator and are still edited
+                                here — deleting this would strand them. Off by default so the team
+                                sees the short list, one click away when a legacy flow needs it. */}
+                            {legacyFlowTools && (<>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 20px 0', borderBottom: '1px solid var(--line)', paddingBottom: '15px' }}>
                                 <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500 }}>Configure Steps</h3>
                                 <button onClick={() => document.getElementById('main-assembly-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} style={{ padding: '10px 16px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>↑ Main Assembly Settings</button>
@@ -3110,6 +3149,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     </div>
                                 ))}
                             </div>
+                            </>)}
                         </div>
                     )}
                 </div>
