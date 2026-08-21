@@ -498,7 +498,12 @@ const threePiece = [
         C({ id: 'BP-RTN', partId: 'P-RTN', role: 'BACKPLATE', position: 'CENTER', returnOnly: true, nodes: ['p-rtn'] }),
     ];
     const plates = (sel) => resolve({ choices: arms, answers: {}, selectedIds: sel }).slots.find(s => s.kind === 'BACKPLATE');
-    eq('with no arm chosen the plate pool is untouched', plates(['ROD']).options.map(o => o.id).sort(), ['BP-INL', 'BP-RTN', 'BP-STD']);
+    // ⚠ THIS ASSERTION USED TO READ "the plate pool is untouched" (Stuart 2026-08-21). Untouched
+    // meant "offer every plate in the assembly, including the copies tagged for somebody else" —
+    // which is how Brimar came to offer a RETURN's mounting base under a bracket step where no
+    // bracket had been chosen. A copy tagged for an in-line arm or a return belongs to an arm; with
+    // no arm chosen there is nobody to belong to, so only the plain plates stand.
+    eq('with no arm chosen only the plain plates are offered', plates(['ROD']).options.map(o => o.id).sort(), ['BP-STD']);
     eq('a standard arm offers only the plain plate — not in-line, not return',
         plates(['ROD', 'STD']).options.map(o => o.id), ['BP-STD']);
     eq('an in-line arm offers only the in-line plate', plates(['ROD', 'INLINE']).options.map(o => o.id), ['BP-INL']);
@@ -1465,6 +1470,54 @@ eq('nonsense is null', measureOf('n/a'), null);
     // Neither ever reaches the plain pool while its own set exists — those belong to the ordinary
     // wall bracket, and handing them out here is how a plate ends up behind the wrong arm.
     ok('neither takes the plain plate', ret.options[0].id !== 'PLAIN' && inline.options[0].id !== 'PLAIN');
+}
+
+// ── A PLATE NOBODY IS HOLDING IS NOT AN OFFER ─────────────────────────────────────────────────
+// Stuart 2026-08-21, testing Brimar: "on the left and right bracket selection, it is offering a
+// matching backplate? the backplate is tagged for rtn-only and both brackets are tagged as basic",
+// and separately: choosing a return, picking its plate, then going back to a finial "leaves the
+// selected backplate hanging out there in the rendering and the cart".
+{
+    const base = [
+        C({ id: 'ROD', partId: 'H2-1INPOLE', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] }),
+        C({ id: 'RODL', partId: 'H2-1INPOLE', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rl'] }),
+        C({ id: 'FIN', partId: 'HCUFIBL1', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] }),
+        C({ id: 'RET', partId: 'H1-FRPF', role: 'RETURN', position: 'LEFT', nodes: ['ret'] }),
+        C({ id: 'ARM', partId: 'HCUMB410', role: 'BRACKET', position: 'LEFT', nodes: ['arm'] }),
+        C({ id: 'RTNPLATE', partId: 'HUSCBPSTA', role: 'BACKPLATE', position: 'LEFT', returnOnly: true, nodes: ['rp'] }),
+    ];
+    const cs = applyFitsDefaults(base.map(normalizeChoice));
+    const bpFor = (sel) => slots(cs, {}, sel).find(s => s.kind === 'BACKPLATE');
+
+    // 1 · nothing chosen at that end — the return's plate is not this step's to offer
+    eq('an unheld return plate is not offered', bpFor(['ROD', 'RODL']).options.map(o => o.id), []);
+
+    // 2 · choose the return and it is
+    eq('the return brings its plate with it', bpFor(['ROD', 'RODL', 'RET']).options.map(o => o.id), ['RTNPLATE']);
+
+    // 3 · …and changing back to a finial takes it away again, which is what drops it from the
+    //     render and the cart: livePicks keeps only what is still offered.
+    const after = slots(cs, {}, ['ROD', 'RODL', 'FIN']);
+    const bpAfter = after.find(s => s.kind === 'BACKPLATE');
+    eq('dropping the return drops its plate from the offer', bpAfter.options.map(o => o.id), []);
+    const reseated = reseatPicks({ slots: after, choices: cs }, { [bpAfter.key]: 'RTNPLATE' });
+    ok('so the plate the operator picked does not survive the change', reseated[bpAfter.key] === undefined);
+}
+
+// ── A POSITION THAT ONLY OFFERS ONE-PIECE ARMS ASKS NO PLATE QUESTION ─────────────────────────
+// "both brackets are tagged as basic so they should not even require a backplate." The BASIC tag
+// is read off what is CHOSEN, so before a choice it could not speak. Where EVERY arm on offer is
+// one piece the answer is known already, whichever gets picked.
+{
+    const cs = applyFitsDefaults([
+        C({ id: 'ROD', partId: 'H2-1INPOLE', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] }),
+        C({ id: 'B1', partId: 'HCUMLB410EB', role: 'BRACKET', position: 'RIGHT', isBasic: true, nodes: ['b1'] }),
+        C({ id: 'B2', partId: 'HCUMB410', role: 'BRACKET', position: 'RIGHT', isBasic: true, nodes: ['b2'] }),
+        C({ id: 'PLATE', partId: 'HUSCBPSTA', role: 'BACKPLATE', position: 'RIGHT', nodes: ['p'] }),
+    ].map(normalizeChoice));
+    const bp = slots(cs, {}, ['ROD']).find(s => s.kind === 'BACKPLATE');
+    eq('no plate is offered where every arm is one piece', bp.options.map(o => o.id), []);
+    ok('and the step says why', /one piece/.test(bp.suppressedReason || ''));
 }
 
 // ── PHASE 1 OF THE RESHUFFLE: THE ENDS LEAD ───────────────────────────────────────────────────

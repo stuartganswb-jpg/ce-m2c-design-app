@@ -1082,7 +1082,47 @@ export function slots(choices, answers = {}, selectedIds = []) {
             return;
         }
         const arm = bracketAt(slot.position);
-        if (!arm) return;                            // no arm chosen yet — the pool is untouched
+        // ── A PLATE WITH NO ARM IS NOT A QUESTION YET (Stuart 2026-08-21) ────────────────────
+        // "on the left and right bracket selection, it is offering a matching backplate? the
+        // backplate is tagged for rtn-only and both brackets are tagged as basic so they should not
+        // even require a backplate."
+        //
+        // The pool used to be left UNTOUCHED until an arm was chosen, which quietly meant "offer
+        // every plate in the assembly, including the copies tagged for somebody else". Two faults
+        // fall out of that one line, and he found both:
+        //
+        //   · Brimar offered a RETURN's mounting base under a bracket step where no bracket had
+        //     been chosen — the rtn-only tag was doing its job, there was simply nothing consulting
+        //     it yet; and the BASIC tag could not speak either, because it is read off what is
+        //     CHOSEN and nothing was.
+        //   · Choosing a french return, picking its plate, then changing back to a finial left the
+        //     plate in the render and on the quote ("that needs to be tied in to auto remove when a
+        //     return is removed"). Removing the return removes the arm — and with the pool untouched
+        //     the orphaned plate was still 'offered', so nothing dropped it. It is not a cleanup
+        //     rule that was missing: a plate nobody is holding was never a legitimate offer.
+        //
+        // So the plate follows the arm all the way down. Where an arm is EXPECTED at this position
+        // and has not been chosen, there is no plate question yet — and the moment the arm goes
+        // away the pick goes with it, because reseatPicks keeps only what is still offered.
+        if (!arm) {
+            const armSlot = [...bucket.values()].find(s2 => s2.kind === 'BRACKET' && (s2.position || '') === (slot.position || ''));
+            // EVERY ARM HERE IS ONE PIECE — then the plate is moot whichever of them is chosen,
+            // and saying so now beats asking a question whose answer is already known. The BASIC
+            // tag above says this about a CHOSEN part; this says it about a position where nothing
+            // but one-piece arms is on offer, which is Brimar's left and right.
+            if (armSlot && armSlot.options.length && armSlot.options.every(o => o.isBasic)) {
+                slot.suppressedBy = armSlot.options[0].partId || armSlot.options[0].name;
+                slot.suppressedReason = 'every bracket offered here is one piece — the arm and backplate are the same part';
+                slot.options = [];
+                return;
+            }
+            // Otherwise the plain plates stand, and only those: a copy tagged for an in-line arm or
+            // for a return belongs to an arm nobody is holding. The plain pool is what an unanswered
+            // bracket step would offer anyway, so nothing that used to be askable stops being
+            // askable — only the copies that were never this step's to offer.
+            slot.options = slot.options.filter(o => !o.inlineOnly && !o.returnOnly);
+            return;
+        }
         // ── PROJECTION IS A PAIRING TAG TOO (Stuart 2026-08-17: "the backplate/coverplates and the
         // bracket arms are tagged to match via projection as well as the style (inline), so the
         // projection is a pairing tag as well on both these parts").
