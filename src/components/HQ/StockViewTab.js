@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField } from "firebase/firestore";
+import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, addDoc, serverTimestamp } from "firebase/firestore";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { SOURCING, sourcingOf } from '../Shared/sourcing';
@@ -1247,6 +1247,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             loadOpenWos();
         } catch (e) { alert('Reset failed: ' + (e.message || e)); }
     };
+    // The close a person still has to do in NetSuite goes out on OS Comms, because a task nobody
+    // is told about is not a task (Eric's Option 3 — the app cannot close a non-WIP work order).
+    const notify = async (msg) => {
+        try {
+            await addDoc(collection(db, 'global_messages'), {
+                sender: 'System', sourceApp: 'STOCK_VIEW', target: 'ALL', isSystem: true,
+                t: serverTimestamp(), msg,
+            });
+        } catch (e) { console.warn('OS Comms notify failed:', e); }
+    };
+
     const closeWoRow = async (row) => {
         const fin = row.fin, hq = row.hq;
         const ref = woRowRef(row);
@@ -1257,7 +1268,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // never the SHOP sibling, so a custom order closed here left its shop half live.
             const res = await closeOrderEverywhere(
                 { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
-                { order: fin || hq, kind: 'stock', by: currentUser || 'StockView', from: 'STOCK_VIEW', enqueueNsWrite }
+                { order: fin || hq, kind: 'stock', by: currentUser || 'StockView', from: 'STOCK_VIEW', notify }
             );
             addLog(`✕ Closed ${ref} — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `, NetSuite close queued (${res.ns}) — NOT confirmed` : ''}.`, res.ns ? 'warn' : 'info');
             loadOpenWos();

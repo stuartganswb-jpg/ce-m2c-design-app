@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { doc, updateDoc, setDoc, getDoc, getDocs, query, where, collection, onSnapshot } from "firebase/firestore";
+import { doc, updateDoc, setDoc, getDoc, getDocs, query, where, collection, onSnapshot, addDoc, serverTimestamp } from "firebase/firestore";
 import { btnStyle, cardStyle } from './finishingStyles';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { nsProxyFetch } from '../Shared/nsProxy';
@@ -236,6 +236,17 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       } catch (e) { alert('Could not save the note: ' + (e.message || e)); }
   };
 
+  // The close a person still has to do in NetSuite goes out on OS Comms, because a task nobody
+  // is told about is not a task (Eric's Option 3 — the app cannot close a non-WIP work order).
+  const notify = async (msg) => {
+      try {
+          await addDoc(collection(db, 'global_messages'), {
+              sender: 'System', sourceApp: 'FINISHING', target: 'ALL', isSystem: true,
+              t: serverTimestamp(), msg,
+          });
+      } catch (e) { console.warn('OS Comms notify failed:', e); }
+  };
+
   const closeOrder = async (wo) => {
       const nsNote = wo.nsWoId
           ? `\n\nThis WO has a NetSuite work order (${wo.nsWoTran || wo.nsWoId}) — closing here ALSO queues the NetSuite WO close (watch 11.1 → NetSuite Sync Queue).`
@@ -248,7 +259,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           // four (fin · shop · RTG · NetSuite) from whichever screen presses it.
           const res = await closeOrderEverywhere(
               { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
-              { order: wo, kind: wo.orderType === 'sales' ? 'sales' : 'stock', by: currentUser || 'Setup Queue', from: 'SETUP_QUEUE', enqueueNsWrite }
+              { order: wo, kind: wo.orderType === 'sales' ? 'sales' : 'stock', by: currentUser || 'Setup Queue', from: 'SETUP_QUEUE', notify }
           );
           if (writeLog) writeLog(`Closed WO ${wo.displayId || wo.id} from the Setup Queue — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `, NetSuite close queued (${res.ns})` : ''}`, 'setup');
           if (!res.hqFound) alert(`✕ ${wo.displayId || wo.id} is closed on the floor.\n\n⚠ No RTG record was found for it, so there is nothing on the dispatch board to close. Tell Stuart — an order the board never knew about is worth understanding.`);

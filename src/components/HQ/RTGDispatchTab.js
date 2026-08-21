@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
-import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
-import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed } from '../Shared/orderLifecycle';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
 import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
@@ -1243,6 +1243,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // CLOSE queued in NetSuite so the component commitment releases. Docs are kept for history;
     // nothing is deleted. Linked docs are found by every identity the order may be keyed under
     // (doc id, woId, soId, orderKey, hqJobId → fin id / orderKey / SHOP-<key>).
+    // The close a person still has to do in NetSuite goes out on OS Comms, because a task nobody
+    // is told about is not a task (Eric's Option 3 — the app cannot close a non-WIP work order).
+    const notify = async (msg) => {
+        try {
+            await addDoc(collection(db, 'global_messages'), {
+                sender: 'System', sourceApp: 'RTG', target: 'ALL', isSystem: true,
+                t: serverTimestamp(), msg,
+            });
+        } catch (e) { console.warn('OS Comms notify failed:', e); }
+    };
+
     const closeOrderEverywhere = async (order, kind) => {
         const isSales = kind === 'sales';
         const ref = isSales ? `SO ${order.soId || order.id}` : `WO ${order.nsWoTran || order.woId || order.id}`;
@@ -1258,7 +1269,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // thing wherever it is pressed (Stuart 2026-08-19).
             const res = await closeEverywhere(
                 { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
-                { order, kind, by: currentUser || '', from: 'RTG', enqueueNsWrite }
+                { order, kind, by: currentUser || '', from: 'RTG', notify }
             );
             addLog(`✕ ${ref} closed — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `. NetSuite close QUEUED for ${res.ns} — confirm it lands in the transmit log; a non-WIP work order will refuse it.` : ''}`, res.ns ? 'warn' : 'success');
             loadRTGOrders();
@@ -1289,7 +1300,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const itemCode = woItemCodeOf(m.order) || m.order.id;
         const rawCode = millBaseOf(itemCode);
         const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || {};
-        if (!window.confirm(`Close ${itemCode} short?\n\n${describeBalanceClose(plan, { itemCode, rawCode })}\n\nThis writes to NetSuite. Continue?`)) return;
+        if (!window.confirm(`Close ${itemCode} short?\n\n${describeBalanceClose(plan, { itemCode, rawCode, bin: m.order.rodCutDestBin || '' })}\n\nThis writes to NetSuite. Continue?`)) return;
         setBalanceModal(null);
         try {
             // The item ids come from the Master Library — without them nothing is guessed, the step
@@ -1321,17 +1332,19 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 skipped.push(`build of ${itemCode} — the floor already posted this order's build, so it is NOT built twice`);
             }
 
-            const moveRaw = plan.toRawQty || -plan.adjustOutQty;
+            // Only REAL scrap moves stock. Salvageable pieces go back in the bin — their raw was
+            // never consumed, so an adjustment would double-count it (Eric 2026-08-21).
+            const moveRaw = -plan.adjustOutQty;
             if (moveRaw !== 0) {
                 const raw = await findNsId(rawCode);
-                if (!raw) skipped.push(`${plan.toRawQty ? 'return to raw' : 'scrap'} of ${plan.bad} × ${rawCode} (no NetSuite id)`);
+                if (!raw) skipped.push(`scrap of ${plan.adjustOutQty} × ${rawCode} (no NetSuite id)`);
                 else await enqueueNsWrite({
                     kind: 'inventoryadjustment',
-                    label: `${moveRaw > 0 ? 'Return to raw' : 'Scrap'} ${Math.abs(moveRaw)} × ${rawCode} (${m.order.id})`,
+                    label: `Scrap ${Math.abs(moveRaw)} × ${rawCode} (${m.order.id})`,
                     sourceApp: 'RTG', createdBy: currentUser || '',
                     targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
                     method: 'POST',
-                    payload: adjustmentPayload({ nsItemId: raw.id, qty: moveRaw, bin: raw.bin, location: nsCfg.location, subsidiary: nsCfg.subsidiary, memo: `${moveRaw > 0 ? 'Salvaged back to raw' : 'Unusable — scrapped'} from ${m.order.id} (${itemCode})` }),
+                    payload: adjustmentPayload({ nsItemId: raw.id, qty: moveRaw, bin: raw.bin, location: nsCfg.location, subsidiary: nsCfg.subsidiary, memo: `Scrap ${m.order.id}` }),
                 });
             }
 
@@ -1339,14 +1352,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             const res = await closeEverywhere(
                 { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
                 { order: m.order, kind: m.kind, by: currentUser || '', from: 'RTG_BALANCE',
-                  reason: `built ${plan.good}/${plan.ordered}${plan.bad ? `, ${plan.bad} bad ${plan.toRawQty ? 'returned to raw' : 'scrapped'}` : ''}`, enqueueNsWrite }
+                  reason: `built ${plan.good}/${plan.ordered}${plan.bad ? `, ${plan.bad} bad ${plan.returnToBinQty ? 'returned to bin' : 'scrapped'}` : ''}`, notify }
             );
             await updateDoc(doc(db, m.kind === 'sales' ? 'hq_sales_orders' : 'hq_work_orders', m.order.id), {
                 builtQty: plan.good, badQty: plan.bad, balanceClosed: plan.balance,
                 balanceClosedBy: currentUser || '', balanceClosedAt: Date.now(),
             }).catch(() => {});
 
-            addLog(`⚖ ${itemCode}: built ${plan.good}/${plan.ordered}, closed balance ${plan.balance}${plan.bad ? `, ${plan.bad} ${plan.toRawQty ? '→ raw' : 'scrapped'}` : ''}${skipped.length ? ` — SKIPPED: ${skipped.join('; ')}` : ''}.`, skipped.length ? 'warn' : 'success');
+            addLog(`⚖ ${itemCode}: built ${plan.good}/${plan.ordered}, closed balance ${plan.balance}${plan.bad ? `, ${plan.bad} ${plan.returnToBinQty ? '→ back to bin' : 'scrapped'}` : ''}${skipped.length ? ` — SKIPPED: ${skipped.join('; ')}` : ''}.`, skipped.length ? 'warn' : 'success');
 
             // Re-issue is PROMPTED, never automatic — the same shape as the make-up cascade.
             if (plan.reissueQty > 0) {
@@ -1390,7 +1403,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         ORPHAN_FLOOR:   { label: 'On the floor, not on this board', why: 'A live floor job with no RTG record — nothing here can dispatch, close or report it.' },
         FLOOR_CLOSED:   { label: 'Closed on the floor, open here',  why: 'The floor finished with it; the board still lists it as live work.' },
         BOARD_CLOSED:   { label: 'Closed here, still live on the floor', why: 'The board closed it; the floor never heard, so it is still queued or being worked.' },
-        NS_UNCONFIRMED: { label: 'NetSuite never confirmed the close', why: 'The app closed it and queued the NetSuite close, which has not come back. A non-WIP work order refuses it.' },
+        NS_CLOSE_TODO:  { label: 'Close the balance in NetSuite', why: 'Closed in the app. A non-WIP work order cannot be closed through the API — its Close button is a client-side call, not an endpoint — so the balance has to be closed on the NetSuite transaction, then confirmed here.' },
     };
     const reconcileOne = async (f) => {
         const target = f.parent || f.floor;
@@ -1400,12 +1413,26 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         try {
             const res = await closeEverywhere(
                 { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
-                { order: target, kind, by: currentUser || '', from: 'RTG_RECONCILE', reason: f.type, enqueueNsWrite }
+                { order: target, kind, by: currentUser || '', from: 'RTG_RECONCILE', reason: f.type, notify }
             );
             addLog(`⇄ Reconciled ${target.id} (${f.type}) — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `, NetSuite close queued (${res.ns})` : ''}.`, 'success');
             loadRTGOrders();
         } catch (e) { alert('Reconcile failed: ' + (e.message || e)); }
     };
+    // The only honest way nsWoClosed becomes true: a person says they did it, with their name on it.
+    const markNsClosed = async (f) => {
+        const target = f.parent || f.floor;
+        if (!target) return;
+        const ref = target.nsWoTran || target.nsWoId || target.id;
+        if (!window.confirm(`✓ Confirm the balance on NetSuite work order ${ref} has been closed?\n\nOnly tick this once it is actually closed on the NetSuite transaction — the app cannot check, so this is your word for it and it is recorded under your name.`)) return;
+        try {
+            const n = await confirmNsClosed({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                { order: target, kind: (target.soId ? 'sales' : 'stock'), by: currentUser || '' });
+            addLog(`✓ NetSuite close confirmed for ${ref} by ${currentUser || 'unknown'} — ${n} record(s) stamped.`, 'success');
+            loadRTGOrders();
+        } catch (e) { alert('Could not record that: ' + (e.message || e)); }
+    };
+
     const reconcilePanel = () => {
         if (!orphanFindings.length) return (
             <div style={{ padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.06em', color: '#3a7d44' }}>
@@ -1429,10 +1456,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{(f.floor && (f.floor.nsWoTran || f.floor.displayId)) || (t && t.id)}</span>
                                     {code && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{code}</span>}
                                     {f.coll && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{f.coll === 'fin_workorders' ? 'FINISHING' : 'SHOP'}</span>}
-                                    {type !== 'NS_UNCONFIRMED' && (
+                                    {type !== 'NS_CLOSE_TODO' && (
                                         <button onClick={() => reconcileOne(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }}>⇄ Close everywhere</button>
                                     )}
-                                    {type === 'NS_UNCONFIRMED' && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>check the transmit log below</span>}
+                                    {type === 'NS_CLOSE_TODO' && (
+                                        <>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>NS WO {(t && (t.nsWoTran || t.nsWoId)) || '—'}</span>
+                                            <button onClick={() => markNsClosed(f)} title="Tick this once the balance is closed on the NetSuite work order — it is the only way this can be marked done, because the app cannot perform the close itself."
+                                                style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#3a7d44', borderColor: '#3a7d44' }}>✓ Closed in NetSuite</button>
+                                        </>
+                                    )}
                                 </div>
                             );
                         })}
@@ -2074,13 +2107,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                         <button onClick={() => setBalanceModal({ ...m2, salvage: false })} style={{ ...btnStyle, flex: 1, background: !m2.salvage ? '#d9534f' : '#fff', color: !m2.salvage ? '#fff' : 'var(--ink)', border: `1px solid ${!m2.salvage ? '#d9534f' : 'var(--line)'}` }}>No — adjust out</button>
                                     </div>
                                     <div style={{ fontSize: '11px', color: 'var(--ink-soft)', marginTop: '8px', lineHeight: 1.5 }}>
-                                        {m2.salvage ? `+${plan.toRawQty} × ${raw} back into raw stock.` : `−${plan.adjustOutQty} × ${raw} written off as unusable.`}
+                                        {m2.salvage ? `Put ${plan.returnToBinQty} × ${raw} back in the bin — no stock movement, the build never consumed them.` : `−${plan.adjustOutQty} × ${raw} written off as unusable.`}
                                     </div>
                                 </div>
                             )}
 
                             <div style={{ padding: '14px 16px', background: 'var(--paper)', border: '1px solid var(--line)', marginBottom: '20px', whiteSpace: 'pre-wrap', fontSize: '0.88rem', lineHeight: 1.7, color: 'var(--ink)' }}>
-                                {describeBalanceClose(plan, { itemCode: code, rawCode: raw })}
+                                {describeBalanceClose(plan, { itemCode: code, rawCode: raw, bin: m2.order.rodCutDestBin || m2.order.binLocation || '' })}
                             </div>
 
                             <button disabled={plan.nothingToDo} onClick={runBalanceClose}

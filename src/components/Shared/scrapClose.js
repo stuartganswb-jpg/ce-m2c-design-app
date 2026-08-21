@@ -38,8 +38,13 @@ export function planBalanceClose({ ordered, good, bad, salvage }) {
         bad: b,
         balance,                                   // what the close writes off
         buildQty: g,                               // assembly build in NetSuite
-        toRawQty: salvage ? b : 0,                 // +adjustment onto the raw item
-        adjustOutQty: salvage ? 0 : b,             // −adjustment against the raw item
+        // NO ADJUSTMENT WHEN THE PARTS ARE SALVAGEABLE (Eric 2026-08-21, correcting my first pass).
+        // "Notice to send any flawed finish parts back to the BIN … Result: no raw inventory
+        // loss/discrepancy." The raw for the BAD pieces was never consumed — the build only
+        // consumes what it builds — so it is still on the books. Adding it back would count it
+        // TWICE. What is needed is a physical instruction with the bin, not a stock movement.
+        returnToBinQty: salvage ? b : 0,           // go put them back — no NetSuite write
+        adjustOutQty: salvage ? 0 : b,             // real scrap: the raw IS gone, take it off
         reissueQty: balance,                       // suggested replacement, always prompted
         // A shortage with nothing physical to account for is the commonest case; saying so stops
         // the salvage question being asked when there is nothing to salvage.
@@ -49,13 +54,13 @@ export function planBalanceClose({ ordered, good, bad, salvage }) {
 }
 
 /** Human summary of what pressing Confirm will actually do — shown before anything is written. */
-export function describeBalanceClose(plan, { itemCode, rawCode }) {
+export function describeBalanceClose(plan, { itemCode, rawCode, bin }) {
     const l = [];
     if (plan.buildQty > 0) l.push(`• BUILD ${plan.buildQty} × ${itemCode} in NetSuite`);
     else l.push(`• No build — nothing good came off this order`);
-    if (plan.toRawQty > 0) l.push(`• RETURN ${plan.toRawQty} × ${rawCode || 'the raw item'} to raw stock (+ adjustment)`);
-    if (plan.adjustOutQty > 0) l.push(`• SCRAP ${plan.adjustOutQty} × ${rawCode || 'the raw item'} (− adjustment, unusable)`);
-    l.push(`• CLOSE the balance of ${plan.balance} — the work order leaves every queue`);
+    if (plan.returnToBinQty > 0) l.push(`• PUT BACK ${plan.returnToBinQty} × ${rawCode || 'the raw item'} into bin ${bin || '(bin unknown)'} — no stock movement: the build never consumed them, so they are still on the books`);
+    if (plan.adjustOutQty > 0) l.push(`• SCRAP ${plan.adjustOutQty} × ${rawCode || 'the raw item'} (− adjustment — the raw is genuinely gone)`);
+    l.push(`• CLOSE the balance of ${plan.balance} in the app, and raise the NetSuite close as a task`);
     if (plan.reissueQty > 0) l.push(`• You'll then be asked whether to re-issue ${plan.reissueQty}`);
     return l.join('\n');
 }

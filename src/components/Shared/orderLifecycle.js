@@ -81,7 +81,7 @@ export async function linkedDocsOf(ctx, order, kind) {
  * Returns a summary the caller can put in front of the operator — including whether a NetSuite
  * close was queued, which is a REQUEST and not a confirmation (a non-WIP work order refuses it).
  */
-export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason, enqueueNsWrite }) {
+export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason, notify }) {
     const { db, doc, updateDoc } = ctx;
     const links = await linkedDocsOf(ctx, order, kind);
     const stamp = {
@@ -118,19 +118,33 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
         : ((links.hq && links.hq.data.nsWoId && !links.hq.data.nsWoClosed)
             ? { coll: links.hq.coll, docId: links.hq.id, nsWoId: links.hq.data.nsWoId, tran: links.hq.data.nsWoTran }
             : null);
-    if (ns && enqueueNsWrite) {
-        await enqueueNsWrite({
-            kind: 'workorderclose',
-            label: `Close NS WO ${ns.tran || ns.nsWoId} — ${order.id}`,
-            sourceApp: from || 'APP', createdBy: by || '',
-            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${ns.nsWoId}/!transform/workorderclose`,
-            method: 'POST', payload: { memo: `Closed from ${from || 'the app'} (${order.id})` },
-            // nsWoClosed is set by the WRITE-BACK — i.e. only once NetSuite accepts it.
-            writeBack: { collection: ns.coll, docId: ns.docId, patch: { nsWoClosed: true, nsWoClosePending: false } },
-        });
-        await updateDoc(doc(db, ns.coll, ns.docId), { nsWoClosePending: true, nsWoCloseQueuedAt: Date.now() }).catch(() => {});
-        if (links.hq) await updateDoc(doc(db, links.hq.coll, links.hq.id), { nsWoClosePending: true }).catch(() => {});
+    if (ns) {
+        // ── THE APP CANNOT CLOSE A NON-WIP WORK ORDER (Eric 2026-08-21) ────────────────────────
+        // "We do not want to turn on WIP … As the Close function for non-WIP does not create a
+        // transaction record, it may not be possible, outside of scripting, for the app."
+        //
+        // He is right, and it is worth writing down WHY so nobody tries again: !transform/
+        // workorderclose only accepts WIP orders, and NetSuite's own Close button is a client-side
+        // call — onclick="close_remaining(890002,'workord')" — not an endpoint anything outside
+        // that page can reach. There is no REST close for these.
+        //
+        // So Option 3, his pick: build what is good, and RAISE THE CLOSE AS A TASK for someone to
+        // do in NetSuite. The app stops queueing a call that fails every time and starts asking a
+        // person, which is the honest version of the same intent. `nsWoClosed` is then stamped by
+        // whoever confirms they did it — never by us guessing.
+        await updateDoc(doc(db, ns.coll, ns.docId), {
+            nsWoCloseRequired: true, nsWoCloseRequestedAt: Date.now(), nsWoCloseRequestedBy: by || '',
+            nsWoClosePending: false,
+        }).catch(() => {});
+        if (links.hq) await updateDoc(doc(db, links.hq.coll, links.hq.id), {
+            nsWoCloseRequired: true, nsWoCloseRequestedAt: Date.now(), nsWoCloseRequestedBy: by || '',
+            nsWoClosePending: false,
+        }).catch(() => {});
+        if (notify) {
+            await notify(`🔒 CLOSE IN NETSUITE — work order ${ns.tran || ns.nsWoId} (${order.id}) was closed in the app${reason ? ` — ${reason}` : ''}. A non-WIP work order cannot be closed through the API, so its balance needs closing on the NetSuite transaction. Closed by ${by || 'the app'} from ${from || 'the app'}.`).catch(() => {});
+        }
         done.ns = ns.tran || ns.nsWoId;
+        done.nsNeedsManualClose = true;
     }
     return { ...done, hqFound: !!links.hq, finIds: [...links.fin.keys()], shopIds: [...links.shop.keys()] };
 }
@@ -179,7 +193,28 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [] }) {
         else if (isClosedState(parent) && !isDoneState(d)) out.push({ type: 'BOARD_CLOSED', coll, floor: d, parent });
     });
     hqOrders.forEach(o => {
-        if (o.nsWoClosePending && !o.nsWoClosed) out.push({ type: 'NS_UNCONFIRMED', coll: null, floor: null, parent: o });
+        // Not an error — a job someone still has to do in NetSuite by hand (Eric's Option 3).
+        if (o.nsWoCloseRequired && !o.nsWoClosed) out.push({ type: 'NS_CLOSE_TODO', coll: null, floor: null, parent: o });
     });
     return out;
+}
+
+/**
+ * Someone closed the balance on the NetSuite transaction — record that it is done.
+ *
+ * This is the other half of Eric's Option 3. The app cannot perform the close, so the only honest
+ * way for `nsWoClosed` to become true is a person saying they did it, with their name against it.
+ * Stamps every document the order owns so no screen is left believing the work is outstanding.
+ */
+export async function confirmNsClosed(ctx, { order, kind, by }) {
+    const { db, doc, updateDoc } = ctx;
+    const links = await linkedDocsOf(ctx, order, kind);
+    const patch = {
+        nsWoClosed: true, nsWoCloseRequired: false,
+        nsWoClosedBy: by || '', nsWoClosedAt: Date.now(), nsWoClosedVia: 'MANUAL_NETSUITE',
+    };
+    let n = 0;
+    for (const [id] of links.fin) { await updateDoc(doc(db, 'fin_workorders', id), patch).catch(() => {}); n++; }
+    if (links.hq) { await updateDoc(doc(db, links.hq.coll, links.hq.id), patch).catch(() => {}); n++; }
+    return n;
 }
