@@ -1810,5 +1810,32 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('the note names our part number', !!named.find(n => n.msg.startsWith('H1-138B6')));
 }
 
+// ── THE DRIVE ANSWERS THE TRAVERSE END ───────────────────────────────────────────────────────
+// Stuart 2026-08-21: the end "just only presents one choice since there is only one end for manual
+// and one end for motorized so this just really needs to be put in the bom and not presented as
+// another decision that has already been made by selecting the drive choice."
+//
+// The configurator settles a TRV_END slot that holds exactly one option. THIS is the property that
+// makes that safe: the drive tag is what narrows it, so a collection that stocks two manual ends
+// still gets asked. No rule about drives was added anywhere — this is the tags doing the work.
+{
+    const cs = [
+        C({ id: 'TRK', partId: 'H1-2TRV', role: 'TRACK', position: 'CENTER', nodes: ['t'] }),
+        C({ id: 'E-MAN', partId: 'H1-2TRVEM', role: 'TRV_END', position: 'LEFT', drive: 'MANUAL', nodes: ['em'] }),
+        C({ id: 'E-MOT', partId: 'H1-2TRVEE', role: 'TRV_END', position: 'LEFT', drive: 'MOTORIZED', nodes: ['ee'] }),
+    ];
+    const endSlot = (answers) => slots(applyFitsDefaults(cs.map(normalizeChoice)), answers, ['TRK']).find(s => s.kind === 'TRV_END');
+
+    eq('with no drive answered both ends are on offer — it IS a question', endSlot({}).options.length, 2);
+    const man = endSlot({ drive: 'MANUAL' });
+    eq('answering manual leaves one', man.options.length, 1);
+    eq('…and it is the manual end', man.options[0].id, 'E-MAN');
+    eq('answering motorized leaves the other', endSlot({ drive: 'MOTORIZED' }).options[0].id, 'E-MOT');
+    // A second manual end and the question comes back on its own — no rule to unpick.
+    const twoManual = [...cs, C({ id: 'E-MAN2', partId: 'H1-2TRVEM2', role: 'TRV_END', position: 'LEFT', drive: 'MANUAL', nodes: ['em2'] })];
+    eq('two manual ends and it is a question again',
+        slots(applyFitsDefaults(twoManual.map(normalizeChoice)), { drive: 'MANUAL' }, ['TRK']).find(s => s.kind === 'TRV_END').options.length, 2);
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

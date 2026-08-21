@@ -266,7 +266,31 @@ function HardwareConfiguratorInner({
     // that deadlocked twice), the picks are simply FILTERED THROUGH the live options at render
     // time: a pick that is no longer offered is not shown as chosen and contributes no geometry.
     // Nothing to clear, nothing to re-seed, no order of operations to get wrong.
-    const livePicks = useMemo(() => resolvePicks(model, picks), [model, picks, resolvePicks]);
+    // ── A DECISION ALREADY MADE IS NOT A STEP (Stuart 2026-08-21) ────────────────────────────
+    // "when selecting the h1-2trv … the drive on step 1 manual or motorized, that can be set to
+    // ahead and make the decision for the traverse end which is being presented as steps 12 + 13 …
+    // it just only presents one choice since there is only one end for manual and one end for
+    // motorized so this just really needs to be put in the bom and not presented as another
+    // decision that has already been made by selecting the drive choice."
+    //
+    // Exactly so. The traverse end is a REAL part that differs by drive — which is why it has its
+    // own role rather than sitting in the track picker — and the drive answer at step 1 already
+    // names it. Asking again is asking the same question twice and calling the second one step 12.
+    //
+    // ⚠ THE TAGS ALREADY DID THE WORK. This adds no rule about drives: the end that survives is the
+    // one whose tag admits the answer given, which is the same filtering every other slot gets. All
+    // that changes is that a slot left holding ONE end stops being a question and becomes a pick
+    // the engine makes — so it prices, renders, reaches the BOM and pushes exactly as if it had
+    // been clicked. Tag a second manual end tomorrow and the question comes back on its own.
+    const settledKeys = useMemo(() => new Set(
+        model.slots.filter(s => s.kind === 'TRV_END' && s.options.length === 1).map(s => s.key)
+    ), [model]);
+    const livePicks = useMemo(() => {
+        const auto = {};
+        model.slots.forEach(s => { if (settledKeys.has(s.key)) auto[s.key] = s.options[0].id; });
+        // An operator's own pick still wins, so nothing here can overwrite an answer.
+        return { ...auto, ...resolvePicks(model, picks) };
+    }, [model, picks, resolvePicks, settledKeys]);
 
 
     // ── A VISION DRAWING ARRIVES AS ANSWERS (Stuart 2026-08-21) ──────────────────────────────
@@ -682,6 +706,7 @@ function HardwareConfiguratorInner({
         const nested = new Set();
         model.slots.filter(s => s.kind !== 'BACKPLATE').forEach(s => {
             if (!s.options.length && !s.suppressedBy) return;
+            if (settledKeys.has(s.key)) return;      // answered by the drive — see settledKeys
             // A plate belongs to the arm that carries it. Normally that is the bracket — but when a
             // RETURN has taken that end the bracket step is suppressed, and the return is the arm
             // (see bracketAt in hardwareModel), so the plate travels to the END step instead. Left
@@ -724,7 +749,7 @@ function HardwareConfiguratorInner({
         // answer, and says so on the step rather than offering an empty list.
         if (isTraverse && trvRules) out.push({ kind: 'TRV', key: 'traverse', label: 'Traverse components' });
         return out;
-    }, [model, isTraverse, trvRules, sizeSteps, sizeProjInches]);
+    }, [model, isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys]);
 
     const [stepIx, setStepIx] = useState(0);
     const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
