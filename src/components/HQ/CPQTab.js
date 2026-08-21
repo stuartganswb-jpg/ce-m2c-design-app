@@ -726,7 +726,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // 100% as long as the tags are correct"). A super-admin toggle that replaces the whole step UI
   // and render with the tag-driven configurator for this assembly. The old path is untouched and
   // still what every quote runs on; this is where the template gets proven before anything moves.
-  const [newEngine, setNewEngine] = useState(false);
+  // ── AND IT IS EVERYONE'S NOW, AND CLASSICAL'S BY DEFAULT (Stuart 2026-08-21) ──────────────
+  // "we need to make the new engine open to everyone else, i think it is only visible to me, for
+  // classical brand it can be the default engine that loads, right now it is still loading the old
+  // way until i hit new engine."
+  //
+  // It was a super-admin toggle because it was being PROVEN — the old path drove every quote and
+  // this was the thing being checked against it. That has held: the push, the floors' frozen
+  // render, the Vision drawing and the traverse components all come through it now. So the gate
+  // comes off, and Classical opens on it rather than opening on the old one and waiting to be
+  // asked. Every other brand still opens the old way and can switch, which keeps M2C's lighting
+  // and the pillow flows exactly where they are.
+  const [newEngine, setNewEngine] = useState(activeBrand === 'ce');
+  // Following the brand rather than the mount: switching to Classical opens the new engine,
+  // switching away opens the old one, and either can still be overridden by the button.
+  useEffect(() => { setNewEngine(activeBrand === 'ce'); }, [activeBrand]);
   // Steps this configuration has already tried to auto-fill (see the sweep below). A Set that also
   // carries the configuration signature it belongs to, so a new configuration starts clean.
   const autoFilledRef = useRef(new Set());
@@ -870,6 +884,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   };
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
+  // ── NOT EVERY FLOW IS A TAGGED ASSEMBLY ──────────────────────────────────────────────────
+  // The tag engine reads an assembly's PINS. M2C's lighting flows are 2D tear sheets and the
+  // pillow flow is a set of questions with no assembly behind either — there is nothing for it to
+  // read, so those stay on the old configurator whatever the toggle says. A hardware flow with no
+  // linked assembly stays too: it works today, and "works today" outranks which engine draws it.
+  //
+  // With NO flow chosen the new engine still shows — its own picker is how a flow gets chosen, and
+  // choosing a lighting one lands on the old pane a moment later.
+  const flowNeedsOldEngine = !!(activeFlow && (
+      activeFlow.sheet2d?.url
+      || /PILLOW/i.test(activeFlow.name || '')
+      || !activeFlow.linkedAssemblyId
+  ));
+  const engineOn = newEngine && !flowNeedsOldEngine;
 
   useEffect(() => {
       if (activeFlow && activeFlow.linkedAssemblyId) {
@@ -3892,7 +3920,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           {/* Stuart 2026-08-17: "remove the left step 1 select flow, that can happen at the top,
               that whole left side is going to be gone as soon as we delete the old flow, this way
               the new area Live 3d engine spreads entirely from left to right." */}
-          <div style={{ width: '400px', display: newEngine && isSuperAdmin ? 'none' : 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
+          <div style={{ width: '400px', display: engineOn ? 'none' : 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
               
               {/* QUEUED LINES PANEL */}
               {activeMasterQuoteId && previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).length > 0 && (
@@ -3986,7 +4014,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   Hidden, not unmounted: the engine is a toggle, and turning it back off must return
                   the operator to exactly the step they were on. */}
               {activeFlow && currentStep && (
-                  <div style={{ background: '#fff', border: '1px solid var(--brass)', display: newEngine && isSuperAdmin ? 'none' : 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', flex: 1 }}>
+                  <div style={{ background: '#fff', border: '1px solid var(--brass)', display: engineOn ? 'none' : 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', flex: 1 }}>
                       <div style={{ padding: '20px 24px', background: 'var(--paper)', color: 'var(--ink)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500 }}>Step {currentStepIndex + 1} of {activeFlow.steps.length}: {currentStep.title}</span>
                           {(currentStep.basePrice !== undefined && currentStep.basePrice !== null && currentStep.basePrice !== '') && (
@@ -4431,7 +4459,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                           </label>
                           <button onClick={() => { const v = captureFnRef.current && captureFnRef.current(); if (v) setCapturedViews(v); else alert('Capture not ready — give the model a moment to load, then try again.'); }} title="Capture Front + Back images of this configuration for the production packet" style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: capturedViews ? 'var(--brass)' : 'var(--ink)', background: 'transparent', border: '1px solid var(--line)', padding: '5px 10px' }}>📷 Capture Views</button>
                           {isSuperAdmin && (
-                              <button onClick={() => setNewEngine(v => !v)} title="NEW ENGINE — the tag-driven master template. Reads the assembly's PINS directly: no generated flow, no baked geometry map, nothing to regenerate. Opens empty and builds additively, so everything you see is something you chose. The old configurator is untouched and still what quotes run on." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', ...{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em' }, color: newEngine ? '#fff' : 'var(--brass)', background: newEngine ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', padding: '5px 10px' }}>
+                              <button onClick={() => setNewEngine(v => !v)} title="NEW ENGINE — the tag-driven configurator. Reads the assembly's PINS directly: no generated flow, no baked geometry map, nothing to regenerate. Opens empty and builds additively, so everything you see is something you chose. Classical opens on it; every other brand can switch to it here. A lighting tear-sheet or pillow flow always opens the old configurator, because there are no pins to read." style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', ...{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em' }, color: newEngine ? '#fff' : 'var(--brass)', background: newEngine ? 'var(--brass)' : 'transparent', border: '1px solid var(--brass)', padding: '5px 10px' }}>
                                   ▶ New engine
                               </button>
                           )}
@@ -4452,7 +4480,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   {/* ▶ THE NEW ENGINE takes the whole pane when it is on — its own questions, its own
                       additive render, driven only by this assembly's pins. The old step column to
                       the left is inert while it is showing. */}
-                  {newEngine && isSuperAdmin ? (
+                  {engineOn ? (
                       <div style={{ padding: '16px', background: '#fff', borderTop: '1px solid var(--line)' }}>
                           {/* The flow lives here now, not in a column of its own — one line above the
                               rail, so the engine has the full width the render needs. Same handler
@@ -4763,7 +4791,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
               {/* Priced from the OLD engine's selections, which the new one does not make. Showing
                   both is showing two different totals for one order. The engine carries its own. */}
-              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: newEngine && isSuperAdmin ? 'none' : 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '28px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+              <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', display: engineOn ? 'none' : 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '28px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                   {activeDraftId && (() => {
                       const d = previousDrafts.find(x => x.id === activeDraftId);
                       const n = d?.specs?.engineeringNotes;
