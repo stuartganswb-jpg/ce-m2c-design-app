@@ -4,6 +4,7 @@
 // Pricing ships on invoices, so the order it resolves in is asserted rather than described.
 
 import { priceChoice, priceConfiguration, pricingWarnings, PRICE_SOURCES } from '../src/components/Shared/hardwarePricing.js';
+import { takesFinish } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
 const eq = (n, got, want) => {
@@ -191,6 +192,35 @@ const ctx = (over = {}) => ({ customerId: CUST.id, customer: CUST, ...over });
     const warn = pricingWarnings({ lines: [{ name: 'Bracket', billedId: 'H1-UNPRICED', unit: 25, source: PRICE_SOURCES.FALLBACK, detail: 'bracket default on this flow — H1-UNPRICED has no price of its own' }] });
     eq('a fallback line warns, in amber not red', warn.map(w => w.sev), ['amber']);
     ok('and it says how to make it real', /price the item in 4\.6/.test(warn[0].msg));
+}
+
+// ── THE PER-LINE FINISH GATE IS ASKED WITH A BOM ROW, NOT A CHOICE ───────────────────────────
+// 2026-08-21, prod down: "we created a bug in the engine when finishes are selected". The caller's
+// finishFor() applies the MATERIAL gate, and it was handed the BOM row — which carried no
+// materials — so the gate read `undefined.some` and the configurator died the moment a finish was
+// picked. The row carries what a finish is judged on now, and the gate tolerates a row that does
+// not. Both are asserted, because either one alone would have prevented the outage.
+{
+    const p = (code, price) => ({ id: code, itemId: code, legacyErpId: code, itemName: code,
+        manufacturingSpecs: { basePrice: String(price) } });
+    const lib = { 'ROD': p('ROD', 10) };
+    const find = (c) => lib[String(c).toUpperCase()] || null;
+    const model = { bom: [{ partId: 'ROD', name: 'Rod', qty: 1, role: 'ROD', materials: ['METAL'], id: 'c-rod' }] };
+
+    // The real shape: finishFor gets the row and applies the gate to it, exactly as the
+    // configurator does. This threw before the fix.
+    let seen = null;
+    const priced = priceConfiguration(model, {
+        findPart: find, findByCode: find, finishCode: 'P20',
+        finishFor: (choice) => { seen = choice; return takesFinish(choice, { code: 'P20' }) ? 'P20' : ''; },
+    });
+    ok('the row can answer what it is made of', Array.isArray(seen?.materials));
+    ok('…and carries its id, so a per-part exception can match it', !!seen?.id);
+    eq('the line is finished', priced.lines[0].finishCode, 'P20');
+
+    // …and a row with nothing on it is read as metal rather than throwing.
+    ok('a bare object does not take the engine down', takesFinish({ partId: 'X' }, { code: 'P20' }) === true);
+    ok('a clear part still wears nothing', takesFinish({ noFinish: true, materials: ['CLEAR (NO FINISH)'] }, { code: 'P20' }) === false);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

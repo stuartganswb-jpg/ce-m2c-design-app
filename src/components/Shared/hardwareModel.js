@@ -695,7 +695,12 @@ export function clearNodes(choices, selectedIds = []) {
 export function takesFinish(choice, finish) {
     if (!choice || choice.noFinish) return false;
     const fm = String((finish && (finish.material || finish.type)) || '').trim().toUpperCase() || 'METAL';
-    return choice.materials.some(m => m === fm);
+    // ⚠ BLANK MATERIALS ALREADY MEAN METAL — normalizeChoice says so, and the overwhelming majority
+    // of parts are tagged with nothing. So a choice that arrives without the field is read the same
+    // way rather than throwing: this is asked from pricing, from the renderer and from the finish
+    // rail, and a crash here takes the whole configurator down (2026-08-21, it did).
+    const mats = Array.isArray(choice.materials) && choice.materials.length ? choice.materials : ['METAL'];
+    return mats.some(m => m === fm);
 }
 
 /** The finishes a part can actually wear, out of those the flow offers. */
@@ -1401,6 +1406,16 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
     ].map(c => ({ partId: c.partId, name: c.name,
         qty: Number(quantities[c.id]) > 0 ? Number(quantities[c.id]) : c.qty,
         price: c.price, raw: c.raw,
+        // ⚠ THE LINE MUST BE ABLE TO ANSWER "WHAT ARE YOU MADE OF" (Stuart 2026-08-21, prod down:
+        // "we created a bug in the engine when finishes are selected"). Pricing asks the caller
+        // what finish each line wears, and the caller answers with the material gate — a wood stain
+        // does not land on a steel bracket. It was handed THIS ROW, which carried no materials at
+        // all, so the gate read `undefined.some` and took the configurator out the moment a finish
+        // was chosen. A row that is asked about its finish has to carry what a finish is judged on.
+        //
+        // `id` travels for the same reason: a per-part finish EXCEPTION is keyed on the choice, and
+        // a row with no id could never match one.
+        id: c.id, materials: c.materials, noFinish: !!c.noFinish,
         // BOM-only parts stay IN the bill of materials — the shop picks them — but every
         // customer-facing surface filters on this. One list, two audiences.
         hidden: !!c.hidden, role: c.role, position: c.position }));
