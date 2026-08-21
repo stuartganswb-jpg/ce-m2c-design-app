@@ -108,5 +108,37 @@ const draft = (over = {}) => ({
     eq('a doc id resolves through the caller index', seed.picks[left.key], 'BL-B');
 }
 
+// ── A DRAWING NAMES THE SAME PART SEVERAL TIMES ──────────────────────────────────────────────
+// Stuart 2026-08-21, first Vision → new engine push: "⚠ CE-INV-51280 — nothing in this assembly
+// offers it — it may not be pinned", printed for ids the line ABOVE had just listed as carried
+// over. Vision stores its answers twice — per position in spatialData, and as step selections in
+// specs — so a plate chosen for both ends arrives three or four times. The first copy was placed;
+// every later one found the slots already taken and reported a part that was on the order.
+{
+    const PLATE = 'H1-138BP-S';
+    const d = {
+        specs: {
+            engineeringNotes: { poleO2O: 96 },
+            // the SAME plate, arriving again as a flow step selection
+            'step-bkt-l': 'o-b6',
+        },
+        spatialData: {
+            shape: 'STRAIGHT', mountLeft: 'OPEN',
+            bracketId: 'H1-138B6', bracketIdRight: 'H1-138B6',
+            backplateIdLeft: PLATE, backplateIdRight: PLATE,
+        },
+    };
+    // A flow whose sub-option is that same plate — the second source Vision writes.
+    const flow2 = { steps: [{ id: 'step-bkt-l', styleOptions: [{ optId: 'o-b6', partId: 'H1-138B6' }], subOptions: [{ optId: 'o-bp', partId: PLATE }] }] };
+    const seed = seedFromVision({ model, draft: { ...d, specs: { ...d.specs, 'step-bkt-l__sub': 'o-bp' } }, flow: flow2 });
+
+    ok('the plate is placed on both ends', seed.carried.filter(c => c.startsWith(PLATE)).length === 2);
+    eq('and is never reported missing as well', seed.missed.filter(m => m.what === PLATE).length, 0);
+    ok('the bracket, named twice, is not reported either', !seed.missed.some(m => m.what === 'H1-138B6'));
+    // The point of `missed` survives: something genuinely absent is still called out, once.
+    const ghost = seedFromVision({ model, flow: FLOW, draft: { ...d, spatialData: { ...d.spatialData, bracketIdCenter: 'H1-NOT-PINNED' } } });
+    eq('a part nothing offers is still reported, exactly once', ghost.missed.filter(m => m.what === 'H1-NOT-PINNED').length, 1);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

@@ -118,10 +118,24 @@ export function seedFromVision({ model, draft, flow = null, sameId }) {
     const wanted = visionPartIds(draft, flow);
     const slots = (model.slots || []).filter(s => Array.isArray(s.options) && s.options.length);
     const taken = new Set();
+    // ⚠ A DRAWING NAMES THE SAME PART SEVERAL TIMES, AND THAT IS NOT A FAULT (Stuart 2026-08-21,
+    // first Vision → new engine push: "⚠ CE-INV-51280 — nothing in this assembly offers it"
+    // printed for ids the line above had just listed as carried over).
+    //
+    // Vision stores its answers twice — the fabrication picks per position in spatialData, and the
+    // flow's step selections in specs — so a plate chosen for both ends arrives three or four times.
+    // The hinted pass placed it, and then the SAME id came round again with no hint, found every
+    // slot that offers it already taken, and reported it missing. It was not missing; it was
+    // already on the order, and the operator was being told to go and tag something that is tagged.
+    //
+    // So a part that has been placed is never reported again, and the same id is not chased twice.
+    const placed = [];
+    const already = (partId) => placed.some(p => eq(p, partId));
 
     const claim = (slot, opt, label) => {
         picks[slot.key] = opt.id;
         taken.add(slot.key);
+        placed.push(label);
         carried.push(`${label}${slot.position ? ` (${slot.position.toLowerCase()})` : ''}`);
     };
 
@@ -136,15 +150,27 @@ export function seedFromVision({ model, draft, flow = null, sameId }) {
         return false;
     };
 
-    wanted.filter(w => w.position).forEach(w => {
+    // Positioned ids first — a bracket drawn FOR THE LEFT belongs in the left slot even where the
+    // same part is offered on both sides. Duplicates of one part-and-position are one decision.
+    const seen = new Set();
+    const fresh = wanted.filter(w => {
+        const k = `${U(w.partId)}|${U(w.kind)}|${U(w.position)}`;
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+    });
+
+    fresh.filter(w => w.position).forEach(w => {
         if (tryHinted(w)) return;
         // A slot that is not asked here is not a failure: choosing a return takes that end's
         // bracket off the table, and the drawing may still name the bracket it replaced.
         const suppressed = (model.slots || []).some(s => s.kind === w.kind && U(s.position) === U(w.position) && s.suppressedBy);
-        if (!suppressed) missed.push({ what: w.partId, why: `no ${String(w.kind || 'slot').toLowerCase()} at ${String(w.position).toLowerCase()} offers it — check the tags in 1.6` });
+        if (suppressed || already(w.partId)) return;
+        missed.push({ what: w.partId, why: `no ${String(w.kind || 'slot').toLowerCase()} at ${String(w.position).toLowerCase()} offers it — check the tags in 1.6` });
     });
 
-    wanted.filter(w => !w.position).forEach(w => {
+    fresh.filter(w => !w.position).forEach(w => {
+        // Already on the order from the positioned pass — the drawing simply names it twice.
+        if (already(w.partId)) return;
         if (tryHinted(w)) return;
         missed.push({ what: w.partId, why: 'nothing in this assembly offers it — it may not be pinned' });
     });
