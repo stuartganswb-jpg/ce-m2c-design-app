@@ -18,6 +18,8 @@ import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i18n';
+import { holdOrder, releaseHold } from '../Shared/orderHold';
+import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
 import { readConvertDiag, diagSummary, isHealthyState } from '../Shared/convertDiag';
@@ -766,6 +768,38 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             });
             writeLog(`▶ ${packRef(job)} pulled forward into the pick queue from Pending (${pendingReasonOf(job)}).`, 'wms');
         } catch (e) { alert('Could not release it: ' + (e.message || e)); }
+    };
+
+    // ── STOP AN ORDER FROM THE BENCH (Stuart 2026-08-21) ───────────────────────────────────────
+    // Scrap found at PACKING is the same event as scrap found at finishing — the order stops. It
+    // matters where it happened, so the stage is recorded and the banner says it.
+    const holdCtx = { db, doc, getDoc, getDocs, query, collection, where, updateDoc };
+    const notifyOps = async (msg) => {
+        try { await addDoc(collection(db, 'global_messages'), { sender: 'System', sourceApp: 'WMS', target: 'ALL', isSystem: true, t: serverTimestamp(), msg }); }
+        catch (e) { console.warn('OS Comms notify failed:', e); }
+    };
+    const stopOrderHere = async (job, stage) => {
+        if (!job) return;
+        const reason = window.prompt(`🛑 STOP ${packRef(job)}?\n\nUse this when the order cannot go on — parts short, damaged, or wrong item. It pins to the top of the warehouse, finishing and RTG, and notifies management now.\n\nWhat is wrong?`, '');
+        if (reason === null) return;
+        const r = String(reason).trim();
+        if (!r) return alert('A reason is needed — it is what the next person acts on.');
+        const detail = window.prompt('Which items / how many? (optional)', '') || '';
+        try {
+            await holdOrder(holdCtx, { order: job, kind: job.orderType === 'sales' ? 'sales' : 'stock', stage, reason: r, detail: detail.trim(), by: operator?.name || 'WMS', notify: notifyOps });
+            writeLog(`🛑 STOPPED ${packRef(job)} at ${stage} — ${r}`, 'wms');
+            alert(`🛑 ${packRef(job)} is stopped. It pins to the top of every screen showing it, and management has been notified.`);
+        } catch (e) { alert('Could not stop the order: ' + (e.message || e)); }
+    };
+    const resumeOrderHere = async (job) => {
+        const note = window.prompt(`▶ Resume ${packRef(job)}?\n\n${job.heldReason ? `Stopped because: ${job.heldReason}\n\n` : ''}What was done to fix it?`, '');
+        if (note === null) return;
+        const n = String(note).trim();
+        if (!n) return alert('Say what was done — a hold lifted silently teaches nobody anything.');
+        try {
+            await releaseHold(holdCtx, { order: job, kind: job.orderType === 'sales' ? 'sales' : 'stock', note: n, by: operator?.name || 'WMS', notify: notifyOps });
+            writeLog(`▶ RESUMED ${packRef(job)} — ${n}`, 'wms');
+        } catch (e) { alert('Could not resume: ' + (e.message || e)); }
     };
 
     // RETURN A PICKED ORDER TO THE QUEUE (Sandra 2026-08-20). Picking was a one-way door: the only
@@ -2991,6 +3025,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 
                 {/* 📦 TAB: PICK QUEUE */}
                 {activeTab === 'QUEUE' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0', width: '100%' }}>
+                    <HeldOrdersBanner orders={finAll.filter(j => (j.brand || 'ce') === activeBrand)} onRelease={resumeOrderHere} refOf={packRef} />
                     <div style={{ display: 'flex', gap: '30px', height: '100%', flexWrap: 'wrap', alignItems: 'flex-start' }}>
                         <div style={{ flex: '1 1 380px', minWidth: 0, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ padding: '20px', borderBottom: `1px solid ${theme.line}`, fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem' }}>{t('Awaiting Pick (Small Parts)')}</div>
@@ -3201,6 +3237,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 </div>
                             </div>
                         </div>
+                    </div>
                     </div>
                 )}
 

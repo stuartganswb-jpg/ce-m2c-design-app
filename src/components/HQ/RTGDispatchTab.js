@@ -6,6 +6,8 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/line
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed } from '../Shared/orderLifecycle';
+import { releaseHold } from '../Shared/orderHold';
+import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
 import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
@@ -1390,6 +1392,26 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         }
     };
 
+    // STOPPED ORDERS, ABOVE EVERYTHING (Stuart 2026-08-21). Management sees them here the moment
+    // the floor or the bench raises one — the whole point is not finding out later.
+    const heldOrders = useMemo(
+        () => [...liveWO, ...liveSO, ...liveFin, ...liveShop].filter(o => o && o.held === true)
+            .filter((o, i, arr) => arr.findIndex(x => (x.nsWoTran || x.id) === (o.nsWoTran || o.id)) === i),
+        [liveWO, liveSO, liveFin, liveShop]
+    );
+    const resumeHeld = async (o) => {
+        const note = window.prompt(`▶ Resume ${o.nsWoTran || o.soId || o.id}?\n\n${o.heldReason ? `Stopped because: ${o.heldReason}\n\n` : ''}What was done to fix it? (recorded on the order)`, '');
+        if (note === null) return;
+        const n = String(note).trim();
+        if (!n) return alert('Say what was done — a hold lifted silently teaches nobody anything.');
+        try {
+            await releaseHold({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                { order: o, kind: o.soId ? 'sales' : 'stock', note: n, by: currentUser || '', notify });
+            addLog(`▶ RESUMED ${o.nsWoTran || o.id} — ${n}`, 'success');
+            loadRTGOrders();
+        } catch (e) { alert('Could not resume: ' + (e.message || e)); }
+    };
+
     // ── RECONCILIATION: WHERE THE BOARD AND THE FLOOR DISAGREE ──────────────────────────────────
     // (Stuart 2026-08-19: "this needs to be the single source of truth … no more orphans still open
     // on the floor.") RTG can only BE the authority if it can see where it is being contradicted.
@@ -1949,6 +1971,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 };
                 return (
                     <>
+                    <HeldOrdersBanner orders={heldOrders} onRelease={resumeHeld} refOf={(o) => o.nsWoTran || o.soId || o.woId || o.id} />
                     {/* RECONCILIATION sits directly above the transmit log: together they are the
                         two ways this board can be contradicted — by the floor, and by NetSuite. */}
                     <div style={{ background: '#fff', border: `1px solid ${orphanFindings.length ? '#d9534f' : 'var(--line)'}`, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>

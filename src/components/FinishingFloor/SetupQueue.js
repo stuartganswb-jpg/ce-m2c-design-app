@@ -8,6 +8,8 @@ import { makeFullTasks, woItemCodeOf, woItemNameOf, isPlaceholderDims } from '..
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
+import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
+import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
@@ -247,6 +249,34 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       } catch (e) { console.warn('OS Comms notify failed:', e); }
   };
 
+  // ── STOP THE ORDER (Stuart 2026-08-21) ────────────────────────────────────────────────────────
+  // A custom order that is short or damaged cannot ship — the customer ordered a set. So it is not
+  // reconciled, it is STOPPED, and it pins itself to the top of every screen that shows it until
+  // someone fixes the problem. Management sees it immediately rather than finding it in a list.
+  const ctx = { db, doc, getDoc, getDocs, query, collection, where, updateDoc };
+  const stopOrder = async (wo) => {
+      const reason = window.prompt(`🛑 STOP ${wo.displayId || wo.id}?\n\nUse this when the order cannot continue as it stands — parts short, damaged, wrong item finished.\n\nThe order pins to the top of finishing, the warehouse and RTG until it is resolved, and management is notified now.\n\nWhat is wrong?`, '');
+      if (reason === null) return;
+      const r = String(reason).trim();
+      if (!r) return alert('A reason is needed — it is what the next person acts on. Nothing was changed.');
+      const detail = window.prompt('Which parts / how many? (optional, but it saves a trip to the bench)', '') || '';
+      try {
+          const res = await holdOrder(ctx, { order: wo, kind: wo.orderType === 'sales' ? 'sales' : 'stock', stage: 'FINISHING', reason: r, detail: detail.trim(), by: currentUser || 'Finishing', notify });
+          if (writeLog) writeLog(`🛑 STOPPED ${wo.displayId || wo.id} — ${r}${detail ? ` (${detail})` : ''}`, 'setup');
+          alert(`🛑 ${wo.displayId || wo.id} is stopped across ${res.docs} record(s).\n\nIt now pins to the top of this screen, the warehouse and RTG, and management has been notified. Nothing on this order moves until someone marks it resolved.`);
+      } catch (e) { alert('Could not stop the order: ' + (e.message || e)); }
+  };
+  const resumeOrder = async (wo) => {
+      const note = window.prompt(`▶ Resume ${wo.displayId || wo.id}?\n\nStopped ${wo.heldReason ? `because: ${wo.heldReason}` : ''}\n\nWhat was done to fix it? (recorded on the order)`, '');
+      if (note === null) return;
+      const n = String(note).trim();
+      if (!n) return alert('Say what was done — a hold lifted silently teaches nobody anything.');
+      try {
+          await releaseHold(ctx, { order: wo, kind: wo.orderType === 'sales' ? 'sales' : 'stock', note: n, by: currentUser || 'Finishing', notify });
+          if (writeLog) writeLog(`▶ RESUMED ${wo.displayId || wo.id} — ${n}`, 'setup');
+      } catch (e) { alert('Could not resume: ' + (e.message || e)); }
+  };
+
   const closeOrder = async (wo) => {
       const nsNote = wo.nsWoId
           ? `\n\nThis WO has a NetSuite work order (${wo.nsWoTran || wo.nsWoId}) — closing here ALSO queues the NetSuite WO close (watch 11.1 → NetSuite Sync Queue).`
@@ -436,6 +466,10 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
 
       {/* ⚡ PINNED — urgent and not yet acknowledged. These are ALSO still in their finish batch
           below; this strip is the "did anyone see it" gate, not a second copy of the work. */}
+      {/* STOPPED ORDERS OUTRANK EVERYTHING, including urgent — an urgent order is work to do
+          sooner; a stopped one is work that cannot be done at all (Stuart 2026-08-21). */}
+      <HeldOrdersBanner orders={pendingOrders} onRelease={resumeOrder} refOf={(o) => o.nsWoTran || o.displayId || o.id} />
+
       {urgentPinned.length > 0 && (
         <div style={{ background: '#fdf3f3', border: '2px solid #d9534f', borderRadius: '2px', padding: '16px 20px', marginBottom: '24px' }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.12em', color: '#d9534f', fontWeight: 700, marginBottom: '12px' }}>
@@ -607,6 +641,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {wo.urgent && <span title={`Urgent · need by ${wo.needBy || wo.reqDate || 'ASAP'}${wo.urgentAck ? ` · acknowledged by ${wo.urgentAckBy || 'floor'}` : ''}`} style={{ background: '#d9534f', color: '#fff', padding: '4px 8px', fontSize: '0.75rem', fontFamily: 'var(--mono)', letterSpacing: '.06em' }}>⚡ {wo.needBy || wo.reqDate || 'URGENT'}</span>}
                         <span style={{ background: 'var(--paper)', padding: '4px 8px', fontSize: '0.85rem', fontFamily: 'var(--mono)', textTransform: 'uppercase', border: '1px solid var(--line)', color: 'var(--ink)' }}>{wo.recipe || wo.color}</span>
+                        {!wo.held && (
+                            <button onClick={() => stopOrder(wo)} title="STOP this order — parts short, damaged, or wrong item finished. It pins to the top of every screen and notifies management until it is resolved." style={{ background: 'none', border: '1px solid #d9534f', color: '#d9534f', fontSize: '0.8rem', cursor: 'pointer', padding: '2px 8px', lineHeight: 1.4, fontFamily: 'var(--mono)' }}>🛑 STOP</button>
+                        )}
                         <button onClick={() => closeOrder(wo)} title="Close this work order — removes it from production (record kept; an attached NetSuite WO is closed too)" style={{ background: 'none', border: '1px solid var(--line)', color: '#d9534f', fontSize: '0.9rem', cursor: 'pointer', padding: '2px 8px', lineHeight: 1.4 }}>✕</button>
                     </div>
                 </div>
