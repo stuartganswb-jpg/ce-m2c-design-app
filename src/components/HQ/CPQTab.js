@@ -4500,6 +4500,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                      old one fills, in the same shape — so checkout, the floors, RTG
                                      and the ERP push are untouched by which engine built it. */
                                   onAdd={(item) => setCart(prev => [...prev, item])}
+                                  /* The way OUT of the engine. The walk ends on its last step, and
+                                     before this the operator had to know the page's own header
+                                     button was the exit (Stuart 2026-08-21). Same modal, same cart —
+                                     the count is passed so the button can say what is waiting. */
+                                  onCheckout={() => setShowCheckoutModal(true)}
+                                  cartCount={cart.length}
                                   spanMap={spanMap}
                                   spanCaps={spanCaps}
                                   /* ADD-BY-HAND ITEMS for this flow (splices, extra rings …), set

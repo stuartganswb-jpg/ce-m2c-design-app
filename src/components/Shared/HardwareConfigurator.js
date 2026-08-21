@@ -105,7 +105,7 @@ class EngineBoundary extends React.Component {
 function HardwareConfiguratorInner({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], onAdd = null, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
+    outsourceCodes = [], onAdd = null, onCheckout = null, cartCount = 0, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [],
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -734,6 +734,17 @@ function HardwareConfiguratorInner({
                     style={{ ...mono, marginLeft: 'auto', padding: '7px 12px', cursor: priced.lines.length ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
                     + Add configuration
                 </button>
+                {/* CHECKOUT IS A JOB-LEVEL ACT, so it sits with the configurations rather than at
+                    the end of a walk: adding a configuration returns the operator to step 1 for the
+                    next room, and the way out cannot be a button that only exists on step 10. It is
+                    the SAME cart the header counts — one door, shown in two places. */}
+                {typeof onCheckout === 'function' && (
+                    <button onClick={onCheckout} disabled={!cartCount}
+                        title={cartCount ? 'Fees, add-ons and the quote documents' : 'Add a configuration first — the cart is empty'}
+                        style={{ ...mono, padding: '7px 12px', cursor: cartCount ? 'pointer' : 'not-allowed', border: `1px solid ${cartCount ? 'var(--brass)' : 'var(--line)'}`, background: cartCount ? 'var(--brass)' : '#fff', color: cartCount ? '#fff' : 'var(--ink-soft)', opacity: cartCount ? 1 : .5 }}>
+                        Checkout ({cartCount})
+                    </button>
+                )}
             </div>
 
             {/* THE RAIL — the whole product at a glance, every answer visible. */}
@@ -963,11 +974,27 @@ function HardwareConfiguratorInner({
                             </div>
                         )}
 
+                        {/* ── THE LAST STEP HAS TO GO SOMEWHERE (Stuart 2026-08-21) ────────────
+                            "when last step is reach the next step button is greyed and no action
+                            available to add another config or check out". Quite right: the walk ran
+                            out of steps and left the operator holding a finished configuration with
+                            nothing to press. A greyed NEXT is honest about there being no step 11,
+                            but it is not an ending — so the last step's button becomes the ending it
+                            already was, and adds the configuration to the quote. The strip above
+                            keeps the same action for anyone who finished early and wants out. */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', paddingTop: '3px' }}>
                             <button onClick={() => setStepIx(Math.max(0, ix - 1))} disabled={ix === 0}
                                 style={{ ...chip(false), opacity: ix === 0 ? .35 : 1, cursor: ix === 0 ? 'not-allowed' : 'pointer' }}>Back</button>
-                            <button onClick={() => setStepIx(Math.min(steps.length - 1, ix + 1))} disabled={ix >= steps.length - 1}
-                                style={{ ...chip(true), opacity: ix >= steps.length - 1 ? .35 : 1, cursor: ix >= steps.length - 1 ? 'not-allowed' : 'pointer' }}>Next step</button>
+                            {ix >= steps.length - 1 ? (
+                                <button onClick={addConfiguration} disabled={!priced.lines.length}
+                                    title={priced.lines.length ? 'Adds this configuration to the quote and starts the next one' : 'Nothing priced yet — this configuration has no lines'}
+                                    style={{ ...chip(true), background: 'var(--brass)', border: '1px solid var(--brass)', color: '#fff', opacity: priced.lines.length ? 1 : .35, cursor: priced.lines.length ? 'pointer' : 'not-allowed' }}>
+                                    Add to quote · ${grandTotal.toFixed(2)}
+                                </button>
+                            ) : (
+                                <button onClick={() => setStepIx(Math.min(steps.length - 1, ix + 1))}
+                                    style={{ ...chip(true) }}>Next step</button>
+                            )}
                         </div>
                     </div>
                 </div>
