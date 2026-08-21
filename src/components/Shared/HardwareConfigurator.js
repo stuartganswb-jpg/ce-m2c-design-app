@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor, reseatPicks, recommendedQty, takesQty } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor } from './hardwareModel';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort } from './priceLevels';
@@ -196,6 +196,24 @@ function HardwareConfiguratorInner({
     // Nothing to clear, nothing to re-seed, no order of operations to get wrong.
     const livePicks = useMemo(() => resolvePicks(model, picks), [model, picks, resolvePicks]);
 
+    // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
+    //
+    // ⚠ 6.5 IS KEYED ON OUR ITEM CODE, AND A PIN CARRIES THE LIBRARY DOC ID (Stuart 2026-08-20:
+    // "the fabric weight for bracket span states nothing is set up, but it is set up"). It IS set
+    // up — `H1-1.375 → H1-138R` — but this asked for `CE-INV-61954`, which no family claims, so
+    // every rod reported itself unlisted. ourId() is the same resolver the cards and the quote
+    // lines use, so what we look up is now what he typed in 6.5.
+    const advice = useMemo(() => {
+        // ⚠ READS `model`, NOT `resolved` (2026-08-20). The centre-bracket recommendation feeds
+        // the quantities, which feed resolve — so taking the rod from the RESOLVED model would
+        // close the loop: advice → quantities → resolved → advice. The pre-quantity model already
+        // knows which rod was chosen, and a count never changes that.
+        const ids = new Set(Object.values(livePicks));
+        const rod = model.choices.find(c => ids.has(c.id) && ['ROD', 'FASCIA', 'TRACK'].includes(c.role));
+        if (!rod || !lengthInches) return null;
+        return bracketAdviceFor({ itemCode: ourId(rod.partId) || rod.name || rod.partId, map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
+    }, [model, livePicks, lengthInches, spanMap, spanCaps, fabricId, ourId]);
+
     // ── HOW MANY OF EACH (Stuart 2026-08-20) ─────────────────────────────────────────────────
     // Rings and carriers are spaced along the pole, so their count follows its length: four a foot
     // plus the pair at the ends. That is a RECOMMENDATION — it seeds the field so the ordinary
@@ -203,6 +221,18 @@ function HardwareConfiguratorInner({
     //
     // Carriers are riders: never offered, always built. They still need the right count, so they
     // are seeded here rather than at a step that does not exist.
+    // How many the ENGINEERING wants for a step, or null where nothing decides it. Rings and
+    // carriers come from the length; the centre bracket comes from the span less whatever the ends
+    // are already carrying. Read by both the seeding below and the field's placeholder, so what is
+    // billed and what is shown can never drift apart.
+    const recommendFor = useCallback((slot, choice) => {
+        if (!slot) return null;
+        if (slot.kind === 'BRACKET' && String(slot.position || '').toUpperCase() === 'CENTER') {
+            return advice ? centreBracketsFor(advice.brackets, bearingEnds(model.choices, Object.values(livePicks))) : null;
+        }
+        return recommendedQty(choice, lengthFeet);
+    }, [advice, model, livePicks, lengthFeet]);
+
     const quantities = useMemo(() => {
         const q = {};
         model.slots.forEach(sl => {
@@ -210,15 +240,15 @@ function HardwareConfiguratorInner({
             if (!id) return;
             const typed = Number(stepQty[sl.key]);
             if (typed > 0) { q[id] = typed; return; }
-            const rec = recommendedQty(sl.options.find(o => o.id === id), lengthFeet);
-            if (rec) q[id] = rec;
+            const rec = recommendFor(sl, sl.options.find(o => o.id === id));
+            if (rec != null && rec > 0) q[id] = rec;
         });
         (model.riders || []).forEach(r => {
             const rec = recommendedQty(r, lengthFeet);
             if (rec) q[r.id] = rec;
         });
         return q;
-    }, [model, livePicks, stepQty, lengthFeet]);
+    }, [model, livePicks, stepQty, lengthFeet, recommendFor]);
 
     const resolved = useMemo(
         () => resolveHardware({ choices, answers, selectedIds: Object.values(livePicks), modelNodes, quantities }),
@@ -352,18 +382,6 @@ function HardwareConfiguratorInner({
     const grandTotal = priced.total + extraLines.reduce((s2, l) => s2 + l.total, 0);
 
 
-    // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
-    //
-    // ⚠ 6.5 IS KEYED ON OUR ITEM CODE, AND A PIN CARRIES THE LIBRARY DOC ID (Stuart 2026-08-20:
-    // "the fabric weight for bracket span states nothing is set up, but it is set up"). It IS set
-    // up — `H1-1.375 → H1-138R` — but this asked for `CE-INV-61954`, which no family claims, so
-    // every rod reported itself unlisted. ourId() is the same resolver the cards and the quote
-    // lines use, so what we look up is now what he typed in 6.5.
-    const advice = useMemo(() => {
-        const rod = chosenList.find(c => ['ROD', 'FASCIA', 'TRACK'].includes(c.role));
-        if (!rod || !lengthInches) return null;
-        return bracketAdviceFor({ itemCode: ourId(rod.partId) || rod.name || rod.partId, map: spanMap, caps: spanCaps, rodInches: lengthInches, fabricId, dropFt: DEFAULT_DROP_FT });
-    }, [chosenList, lengthInches, spanMap, spanCaps, fabricId, ourId]);
 
     const chosen = useMemo(() => {
         const ids = new Set(Object.values(livePicks));
@@ -794,7 +812,9 @@ function HardwareConfiguratorInner({
                                 empty field means "use it" rather than "none". */}
                             {takesQty(step.slot) && livePicks[step.slot.key] && (() => {
                                 const picked = step.slot.options.find(o => o.id === livePicks[step.slot.key]);
-                                const rec = recommendedQty(picked, lengthFeet);
+                                const rec = recommendFor(step.slot, picked);
+                                const isCentre = step.slot.kind === 'BRACKET';
+                                const ends = isCentre ? bearingEnds(model.choices, Object.values(livePicks)) : 0;
                                 return (
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
                                         <span style={{ ...mono, fontSize: '8.5px', color: 'var(--brass)' }}>How many</span>
@@ -804,7 +824,9 @@ function HardwareConfiguratorInner({
                                             style={{ width: '62px', padding: '5px 7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', background: '#fff' }} />
                                         {rec != null && (
                                             <span style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
-                                                {`recommended ${rec} — four a foot over ${lengthFeet} ft, plus the pair at the ends`}
+                                                {isCentre
+                                                    ? `recommended ${rec} — ${advice ? advice.brackets : '?'} support${advice && advice.brackets === 1 ? '' : 's'} for this pole, less ${ends} carried by the ends`
+                                                    : `recommended ${rec} — four a foot over ${lengthFeet} ft, plus the pair at the ends`}
                                             </span>
                                         )}
                                     </div>

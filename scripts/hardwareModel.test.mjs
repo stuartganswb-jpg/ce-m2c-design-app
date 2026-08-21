@@ -10,7 +10,7 @@
 
 import {
     resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults, companionsFor, reseatPicks
-, recommendedQty, takesQty } from '../src/components/Shared/hardwareModel.js';
+, recommendedQty, takesQty, bearingEnds, centreBracketsFor } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -1654,6 +1654,38 @@ eq('nonsense is null', measureOf('n/a'), null);
     const counted = resolve({ choices: cs, answers: {}, selectedIds: ['ROD', 'R'], quantities: { R: 42 } });
     eq('with one, the BOM carries it', counted.bom.find(b => b.partId === 'H1-138BR').qty, 42);
     eq('and the rod is untouched', counted.bom.find(b => b.partId === 'H1-138R').qty, 1);
+}
+
+// ── WHICH ENDS CARRY THE ROD, AND HOW MANY CENTRES ARE LEFT ───────────────────────────────────
+// "if the left and right end treatment are either inside mount or returns with backplates then
+//  they count as brackets, if they do not have backplates then they do not … 8ft then 3 center
+//  brackets are required [traverse returns] … the same length and the solid rod with returns then
+//  only 1 center is required."
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    const base = [
+        { id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+    ];
+    const platedReturn = (pos) => ({ id: 'RET-' + pos, partId: 'CE-FEE-4594', role: 'RETURN', position: pos, nodes: ['r' + pos] });
+    const bareReturn = (pos) => ({ id: 'TRV-' + pos, partId: '138TRVFR', role: 'RETURN', position: pos, noBackplate: true, nodes: ['t' + pos] });
+    const finialEnd = (pos) => ({ id: 'FIN-' + pos, partId: 'H1-138KF', role: 'FINIAL', position: pos, nodes: ['f' + pos] });
+    const endBracket = (pos) => ({ id: 'BK-' + pos, partId: 'H1-138D6', role: 'BRACKET', position: pos, nodes: ['b' + pos] });
+    const insideMount = (pos) => ({ id: 'IM-' + pos, partId: 'H1-138IM', role: 'INSIDE_MOUNT', position: pos, nodes: ['i' + pos] });
+
+    const count = (extra, sel) => bearingEnds(N([...base, ...extra]), ['ROD', ...sel]);
+
+    eq('plated returns at both ends carry it', count([platedReturn('LEFT'), platedReturn('RIGHT')], ['RET-LEFT', 'RET-RIGHT']), 2);
+    eq('bare traverse returns carry nothing', count([bareReturn('LEFT'), bareReturn('RIGHT')], ['TRV-LEFT', 'TRV-RIGHT']), 0);
+    eq('inside mounts carry it', count([insideMount('LEFT'), insideMount('RIGHT')], ['IM-LEFT', 'IM-RIGHT']), 2);
+    eq('end brackets carry it', count([endBracket('LEFT'), endBracket('RIGHT')], ['BK-LEFT', 'BK-RIGHT']), 2);
+    eq('a bare finial carries nothing on its own', count([finialEnd('LEFT'), finialEnd('RIGHT')], ['FIN-LEFT', 'FIN-RIGHT']), 0);
+    eq('one end only counts once', count([platedReturn('LEFT'), bareReturn('RIGHT')], ['RET-LEFT', 'TRV-RIGHT']), 1);
+
+    // …and his two worked examples. An 8 ft H1-138 pole wants 3 supports.
+    eq('8 ft with traverse returns → 3 in the centre', centreBracketsFor(3, 0), 3);
+    eq('8 ft with solid plated returns → 1 in the centre', centreBracketsFor(3, 2), 1);
+    eq('a short pole held at both ends needs none', centreBracketsFor(2, 2), 0);
+    eq('and nothing is recommended without a span', centreBracketsFor(null, 2), null);
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

@@ -1277,6 +1277,41 @@ export function recommendedQty(choice, feet) {
     return per * Math.ceil(Number(feet)) + (QTY_END_ALLOWANCE[choice.role] || 0);
 }
 
+// ── WHICH ENDS CARRY THE ROD (Stuart 2026-08-20) ──────────────────────────────────────────────
+// "if the left and right end treatment are either inside mount or returns with backplates then
+//  they count as brackets, if they do not have backplates then they do not."
+//
+// A support is a support wherever it sits. An inside mount is bolted to the frame and a return
+// with a plate is bolted to the wall — both hold the rod up, so both spend one of the supports the
+// span calls for. A return with NO plate clamps to the fascia and holds nothing, which is why the
+// NO PLATE tag decides this: the same tag that says "offer no plate here" also says "this end
+// carries nothing", because they are the same physical fact.
+//
+//   8 ft wants 3 supports.  Traverse returns (no plate) → 3 in the centre.
+//                           Solid returns (plated)      → 2 ends + 1 centre.
+export function bearingEnds(choices = [], selectedIds = []) {
+    const want = new Set((selectedIds || []).filter(Boolean).map(String));
+    const chosen = choices.filter(c => want.has(c.id));
+    return ['LEFT', 'RIGHT'].reduce((n, pos) => {
+        const here = chosen.filter(c => String(c.position || '').toUpperCase() === pos);
+        const carries = here.some(c => c.role === 'BRACKET')
+            || here.some(c => c.role === 'INSIDE_MOUNT')
+            || here.some(c => c.role === 'RETURN' && !c.noBackplate);
+        return n + (carries ? 1 : 0);
+    }, 0);
+}
+
+/**
+ * How many CENTRE brackets a pole wants: the span's total, less the ends already carrying it.
+ *
+ * Zero is a real answer — a short pole held at both ends needs nothing in the middle — so this
+ * floors at zero rather than inventing a bracket to justify the step.
+ */
+export function centreBracketsFor(totalSupports, endsCarrying) {
+    if (!(Number(totalSupports) > 0)) return null;
+    return Math.max(0, Math.round(totalSupports) - Math.max(0, Math.round(endsCarrying || 0)));
+}
+
 /** Does this decision carry a count the operator can set? */
 export function takesQty(slot) {
     if (!slot) return false;
