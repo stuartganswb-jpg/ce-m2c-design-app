@@ -7,6 +7,7 @@ import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAud
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
 import { seedFromVision } from './visionBridge';
+import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort } from './priceLevels';
@@ -153,7 +154,74 @@ function HardwareConfiguratorInner({
     const lengthFeetExact = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
     const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
 
-    const choices = useMemo(() => choicesFromAssembly(assembly, pins), [assembly, pins]);
+    // ── OUR PART NUMBER, RESOLVED ─────────────────────────────────────────────────────────────
+    // This sits ABOVE the bracket advice on purpose. `advice` names ourId in its dependency list,
+    // and a dependency list is read the moment the line runs — so with ourId still declared down in
+    // the pricing section the whole configurator died on render with "Cannot access ... before
+    // initialization" (2026-08-21). A `const` is not hoisted the way a function is; anything a hook
+    // depends on has to be declared before it, not merely somewhere in the same component.
+    const partIndex = useMemo(() => {
+        const m = new Map();
+        parts.forEach(pt => [pt.id, pt.itemId, pt.legacyErpId].forEach(k => {
+            const kk = String(k || '').trim().toUpperCase();
+            if (kk && kk !== 'PENDING' && !m.has(kk)) m.set(kk, pt);
+        }));
+        return m;
+    }, [parts]);
+    const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
+    // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
+    // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
+    // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
+    // the pin's id is resolved to the library item and OUR number read off it — never printed raw.
+    // 'PENDING' is the placeholder on an item that has not been numbered yet, so it never prints.
+    const ourId = useCallback((id) => {
+        const pt = findPart(id);
+        const legacy = String(pt?.legacyErpId || '').trim();
+        if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
+        return String(pt?.itemId || id || '').trim();
+    }, [findPart]);
+
+    // ── ONE FLOW, EVERY DIAMETER (Stuart 2026-08-21) ─────────────────────────────────────────
+    // "can you integrate the H2 combined flow with the new engine."
+    //
+    // H2-05 / H2-75 / H2-1 / H2-138 are ONE flow whose first question is the rod diameter, and the
+    // geometry is the H2-138 master — the fullest of the four. Everything else is the same product
+    // in another size, resolved through the code grammar (Shared/sizeMatrix). H1 goes the same way
+    // next, which is why none of this is written per-collection.
+    //
+    // ⚠ THE SWAP HAPPENS ON THE CHOICE, WHICH IS WHY IT IS THIS SMALL. Change the part a pin points
+    // AT and the whole engine follows for free: the cards name the right item, pricing bills it,
+    // the BOM carries it, the push maps it, the handoff hands it over. The pin's NODES are left
+    // alone on purpose — the render is the 138 master scaled, not four sets of geometry.
+    const sizeSteps = useMemo(() => (flow?.steps || []).filter(st => st?.type === SIZE_STEP_TYPE), [flow]);
+    const [sizePick, setSizePick] = useState({});       // size step id -> optId
+    // sizeSelectionsOf falls back to the family's base cell, so `sel` is complete from the first
+    // render — an unanswered diameter quotes the base size rather than nothing at all.
+    const sizeSel = useMemo(() => (sizeSteps.length ? sizeSelectionsOf(flow, sizePick) : null), [flow, sizePick, sizeSteps]);
+    const sizeIndex = useMemo(() => (sizeSel ? buildSizeIndex(parts) : null), [sizeSel, parts]);
+    const choices = useMemo(() => {
+        const raw = choicesFromAssembly(assembly, pins);
+        if (!sizeSel || !sizeIndex) return raw;
+        const returnsOk = returnsAllowedFor(sizeSel);
+        const out = [];
+        raw.forEach(c => {
+            // A RETURN NEEDS DEPTH. At the shallow projection this collection makes no return, so
+            // it is not offered — the same rule the old engine applies (returnsMinProj).
+            if (!returnsOk && c.role === 'RETURN') return;
+            const part = findPart(c.partId);
+            if (!part) { out.push(c); return; }          // unresolvable parts are the diagnostics' problem
+            // Not made at this size — not a choice at this size. A stamped family knows; an
+            // unstamped part is left alone and behaves exactly as it does today.
+            if (!partAllowedAtSize(part, sizeSel, sizeIndex)) return;
+            const swapped = sizeVariantOf(part, sizeSel, sizeIndex);
+            out.push(swapped.swapped && swapped.part ? { ...c, partId: swapped.part.id } : c);
+        });
+        return out;
+    }, [assembly, pins, sizeSel, sizeIndex, findPart]);
+    // The size matrix answers the projection question for a combined flow, so the engine's own
+    // proj context is taken from it rather than asked twice. Untouched where there is no matrix.
+    const sizeProjInches = useMemo(() => (sizeSel ? projInchesOfSel(sizeSel) : null), [sizeSel]);
+    const effAnswers = useMemo(() => (sizeProjInches != null ? { ...answers, proj: sizeProjInches } : answers), [answers, sizeProjInches]);
     const modelNodes = useMemo(() => modelNodesOf(assembly), [assembly]);
 
     // ⚠ A PICK IS ONLY JUSTIFIED BY THE MODEL IT APPEARS IN, AND DROPPING ONE CHANGES THAT MODEL
@@ -183,15 +251,15 @@ function HardwareConfiguratorInner({
 
     const model = useMemo(() => {
         let sel = Object.values(picks).filter(Boolean);
-        let m = resolveHardware({ choices, answers, selectedIds: sel, modelNodes });
+        let m = resolveHardware({ choices, answers: effAnswers, selectedIds: sel, modelNodes });
         for (let pass = 0; pass < 4; pass++) {
             const next = Object.values(resolvePicks(m, picks));
             if (next.length === sel.length && next.every(id => sel.includes(id))) break;
             sel = next;
-            m = resolveHardware({ choices, answers, selectedIds: sel, modelNodes });
+            m = resolveHardware({ choices, answers: effAnswers, selectedIds: sel, modelNodes });
         }
         return m;
-    }, [choices, answers, picks, modelNodes, resolvePicks]);
+    }, [choices, effAnswers, picks, modelNodes, resolvePicks]);
 
     // An answer higher up can invalidate a pick below it — choose the traverse rod and the standard
     // arm you had chosen is not offered any more. Rather than police that with a sweep (the thing
@@ -201,32 +269,6 @@ function HardwareConfiguratorInner({
     const livePicks = useMemo(() => resolvePicks(model, picks), [model, picks, resolvePicks]);
 
 
-    // ── OUR PART NUMBER, RESOLVED ─────────────────────────────────────────────────────────────
-    // This sits ABOVE the bracket advice on purpose. `advice` names ourId in its dependency list,
-    // and a dependency list is read the moment the line runs — so with ourId still declared down in
-    // the pricing section the whole configurator died on render with "Cannot access ... before
-    // initialization" (2026-08-21). A `const` is not hoisted the way a function is; anything a hook
-    // depends on has to be declared before it, not merely somewhere in the same component.
-    const partIndex = useMemo(() => {
-        const m = new Map();
-        parts.forEach(pt => [pt.id, pt.itemId, pt.legacyErpId].forEach(k => {
-            const kk = String(k || '').trim().toUpperCase();
-            if (kk && kk !== 'PENDING' && !m.has(kk)) m.set(kk, pt);
-        }));
-        return m;
-    }, [parts]);
-    const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
-    // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
-    // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
-    // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
-    // the pin's id is resolved to the library item and OUR number read off it — never printed raw.
-    // 'PENDING' is the placeholder on an item that has not been numbered yet, so it never prints.
-    const ourId = useCallback((id) => {
-        const pt = findPart(id);
-        const legacy = String(pt?.legacyErpId || '').trim();
-        if (legacy && legacy.toUpperCase() !== 'PENDING') return legacy;
-        return String(pt?.itemId || id || '').trim();
-    }, [findPart]);
     // ── A VISION DRAWING ARRIVES AS ANSWERS (Stuart 2026-08-21) ──────────────────────────────
     // Vision is where the job is ENGINEERED — the bay measured, the returns drawn, the brackets and
     // plates chosen against the projection. CPQ quotes what was engineered, and that handoff spoke
@@ -322,8 +364,8 @@ function HardwareConfiguratorInner({
     }, [model, livePicks, stepQty, lengthFeet, recommendFor]);
 
     const resolved = useMemo(
-        () => resolveHardware({ choices, answers, selectedIds: Object.values(livePicks), modelNodes, quantities }),
-        [choices, answers, livePicks, modelNodes, quantities]);
+        () => resolveHardware({ choices, answers: effAnswers, selectedIds: Object.values(livePicks), modelNodes, quantities }),
+        [choices, effAnswers, livePicks, modelNodes, quantities]);
     const visibleOverrides = useMemo(() => {
         const o = {};
         resolved.visible.forEach(n => { o[String(n).toLowerCase()] = true; });
@@ -616,7 +658,15 @@ function HardwareConfiguratorInner({
         // a decision, not framing. Grouping everything BELOW it also means nothing is reordered:
         // projection already sorts last of the axes, so the group is the contiguous block in front
         // of it and every question stays exactly where it was.
-        const liveAxes = model.axes.filter(a => !a.implied && a.values.length > 1);
+        // ⚠ THE SIZE QUESTIONS LEAD, because everything after them is a different part. On a
+        // combined flow the diameter is the first thing asked and the projection second — the same
+        // order, and the same option lists, the old engine asks them in. A collection with no size
+        // matrix has no size steps and nothing here changes.
+        sizeSteps.forEach(st => out.push({ kind: 'SIZE', key: `size:${st.id}`, sizeStep: st, label: st.title }));
+        const liveAxes = model.axes.filter(a => !a.implied && a.values.length > 1)
+            // …and the matrix's projection IS the projection question. Asking the tag axis as well
+            // would put the same question on screen twice, with two different vocabularies.
+            .filter(a => !(a.key === 'proj' && sizeProjInches != null));
         const framing = liveAxes.filter(a => a.key !== 'proj');
         if (framing.length === 1) {
             const a = framing[0];
@@ -672,7 +722,7 @@ function HardwareConfiguratorInner({
         // answer, and says so on the step rather than offering an empty list.
         if (isTraverse && trvRules) out.push({ kind: 'TRV', key: 'traverse', label: 'Traverse components' });
         return out;
-    }, [model, isTraverse, trvRules]);
+    }, [model, isTraverse, trvRules, sizeSteps, sizeProjInches]);
 
     const [stepIx, setStepIx] = useState(0);
     const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
@@ -688,6 +738,10 @@ function HardwareConfiguratorInner({
                 return v == null || v === '' ? '' : valueLabel(a.key, v);
             }).filter(Boolean).join(' \u00b7 ');
         }
+        if (st.kind === 'SIZE') {
+            const opt = (st.sizeStep.styleOptions || []).find(o => o.optId === sizePick[st.sizeStep.id]);
+            return opt ? (opt.partName || opt.label || opt.optId) : '';
+        }
         if (st.kind === 'LENGTH') return lengthFeet ? `${lengthFeet} ft` : '';
         // The rail says what was decided, so a traverse quote can be read back at a glance: the
         // carrier style is the decision, the count is the consequence.
@@ -699,7 +753,7 @@ function HardwareConfiguratorInner({
         if (st.slot.suppressedBy) return 'not asked';
         const pick = st.slot.options.find(o => o.id === livePicks[st.slot.key]);
         return pick ? (ourId(pick.partId) || pick.name) : '';   // our number on the rail too
-    }, [answers, livePicks, lengthFeet, ourId, trvLive, trvRules, trvComponents]);
+    }, [answers, livePicks, lengthFeet, ourId, trvLive, trvRules, trvComponents, sizePick]);
 
     // ── SEVERAL CONFIGURATIONS, ONE QUOTE ────────────────────────────────────────────────────
     // A room is a configuration; a job is several. Each is finished, memo'd and added, and the
@@ -1113,6 +1167,21 @@ function HardwareConfiguratorInner({
                             )}
                         </>)}
 
+                        {step?.kind === 'SIZE' && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                {/* The flow's own option list, unedited — the diameters and
+                                    projections it was generated with, gated exactly as it gates
+                                    them (a projection is offered only at the diameters that make
+                                    it). Choosing here re-resolves every part in the assembly. */}
+                                {(step.sizeStep.styleOptions || []).map(o => (
+                                    <button key={o.optId} onClick={() => setSizePick(p => ({ ...p, [step.sizeStep.id]: o.optId }))}
+                                        style={chip(sizePick[step.sizeStep.id] === o.optId)}>
+                                        {o.partName || o.label || o.optId}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
                         {step?.kind === 'TRV' && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                 {/* WHAT DECIDES THE LIST, said out loud. The drive was answered
@@ -1264,8 +1333,14 @@ function HardwareConfiguratorInner({
                                 <StudioRig />
                                 <OrbitControls makeDefault />
                                 <Bounds fit clip margin={1.2}>
-                                    <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
-                                        cloneSpecs={[]} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                    {/* ⚠ ONE GEOMETRY, SCALED. A combined flow's .glb is the master
+                                        diameter's — H2's is the 1-3/8" — so a 3/4" order renders it
+                                        at the ratio between the two rather than needing four models.
+                                        renderScaleOf is 1 on any flow without a size matrix. */}
+                                    <group scale={renderScaleOf(flow, sizePick, assembly)}>
+                                        <DynamicModel url={cadUrl} textureOverrides={textureOverrides} visibilityOverrides={visibleOverrides}
+                                            cloneSpecs={[]} highlightOverrides={[]} defaultHidden clearNodes={clearList} />
+                                    </group>
                                 </Bounds>
                             </Canvas>
                         ) : <div style={{ ...mono, color: 'var(--ink-soft)', display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center' }}>No .glb on this assembly</div>}
