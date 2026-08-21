@@ -951,22 +951,51 @@ function HardwareConfiguratorInner({
         </div>
     );
     // Material first, then where it is done — in-house and outsourced price and lead differently.
+    // ── WHAT THIS FLOW OFFERS, IN ONE PLACE (Stuart 2026-08-21) ──────────────────────────────
+    // "when selecting brimar flow at first its just there selected finishes, but as soon as i click
+    // on one it opens the full library of finishes even the ones not selected in tab 11."
+    //
+    // The flow's list was applied where the swatches are GROUPED and nowhere else, so the moment a
+    // part was picked the per-part row underneath — "just this part" — offered the whole library.
+    // A collection that has been narrowed to its own finishes must stay narrowed everywhere, or the
+    // narrowing is decoration: one wrong click and a Brimar quote wears a finish Brimar does not
+    // sell. An empty list still means "never narrowed", which is every flow's behaviour before the
+    // control existed.
+    const offeredFinishes = useMemo(() => (flowFinishes.length
+        ? finishes.filter(f => flowFinishes.includes(f.code || f.finishCode || f.name || f.id))
+        : finishes), [finishes, flowFinishes]);
+
     const finishGroups = useMemo(() => {
-        // WHAT THIS FLOW OFFERS comes first, set in tab 11. An empty list means the flow has never
-        // been narrowed, so every finish stands — the behaviour every flow had before the control
-        // existed. Then the parts have their say: a finish no chosen part can wear is not offered.
-        const inFlow = flowFinishes.length
-            ? finishes.filter(f => flowFinishes.includes(f.code || f.finishCode || f.name || f.id))
-            : finishes;
-        const usable = inFlow.filter(f => !chosenList.length || chosenList.some(c => finishesFor(c, [f]).length));
+        // …and then the parts have their say: a finish no chosen part can wear is not offered.
+        const usable = offeredFinishes.filter(f => !chosenList.length || chosenList.some(c => finishesFor(c, [f]).length));
         const byMat = new Map();
         usable.forEach(f => {
             const m = String(f.material || f.type || 'METAL').toUpperCase();
             if (!byMat.has(m)) byMat.set(m, { inHouse: [], out: [] });
-            (f.multiplier !== undefined || f.vendor ? byMat.get(m).out : byMat.get(m).inHouse).push(f);
+            // A METAL finish splits by how it is applied — painted here, plated by a vendor. WOOD
+            // does not: a stain is a stain whichever side of the wall it is done on, so it stays one
+            // list rather than being cut in two and labelled the same thing twice.
+            const splits = !m.includes('WOOD');
+            const out = splits && (f.multiplier !== undefined || f.vendor);
+            (out ? byMat.get(m).out : byMat.get(m).inHouse).push(f);
         });
         return [...byMat.entries()];
-    }, [finishes, flowFinishes, chosenList]);
+    }, [offeredFinishes, chosenList]);
+
+    // ── WHAT THE FINISH IS, NOT WHO APPLIES IT (Stuart 2026-08-21) ──────────────────────────
+    // "we can rename the categories to Wood, Painted and Plated rather than in house and
+    // outsourced, just changing the naming conventions."
+    //
+    // Right, and it is not only nicer language: in house / outsourced is OUR problem, and it was on
+    // a screen where the question is what the customer is buying. The split underneath is unchanged
+    // — a paint we apply here, a plating a vendor does — only what it is called. A wood group is
+    // wood whichever side of the wall it is finished on, so it says so once instead of splitting.
+    const groupLabel = (mat, kind) => {
+        const m = String(mat || '').toUpperCase();
+        if (m.includes('WOOD')) return 'Wood';
+        if (m.includes('METAL')) return kind === 'out' ? 'Plated' : 'Painted';
+        return kind === 'out' ? 'Outsourced' : 'In house';   // an unfamiliar material keeps the old words
+    };
 
     const finishPanel = (
         <div style={{ ...boxStyle, minHeight: '0', position: 'sticky', top: '12px' }}>
@@ -984,11 +1013,11 @@ function HardwareConfiguratorInner({
                     <div key={mat} style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
                         <span style={{ ...mono, fontSize: '9px' }}>{mat} <span style={{ color: 'var(--ink-faint)' }}>· {g.inHouse.length + g.out.length}</span></span>
                         {!!g.inHouse.length && (<div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                            <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>In house · {g.inHouse.length}</span>
+                            <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>{groupLabel(mat, 'in')} · {g.inHouse.length}</span>
                             {swatchRow(g.inHouse, globalFinish, setGlobalFinish)}
                         </div>)}
                         {!!g.out.length && (<div style={{ paddingLeft: '7px', borderLeft: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                            <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>Outsourced · {g.out.length}</span>
+                            <span style={{ ...mono, fontSize: '8px', color: 'var(--ink-faint)' }}>{groupLabel(mat, 'out')} · {g.out.length}</span>
                             {swatchRow(g.out, globalFinish, setGlobalFinish)}
                         </div>)}
                     </div>
@@ -1003,7 +1032,9 @@ function HardwareConfiguratorInner({
                                 {partFinish[o.id] && <button onClick={() => setPartFinish(pf => { const n = { ...pf }; delete n[o.id]; return n; })}
                                     style={{ ...mono, fontSize: '7.5px', border: '1px solid var(--line)', background: '#fff', padding: '2px 5px', cursor: 'pointer', color: 'var(--ink-soft)' }}>back to config finish</button>}
                             </span>
-                            {swatchRow(finishesFor(o, finishes), partFinish[o.id] || globalFinish, (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
+                            {/* THE SAME LIST THE GRID USES — see offeredFinishes. This row reading
+                                the unfiltered library is what let a narrowed flow show everything. */}
+                            {swatchRow(finishesFor(o, offeredFinishes), partFinish[o.id] || globalFinish, (c) => setPartFinish(pf => ({ ...pf, [o.id]: c })))}
                         </div>
                     );
                 })()}
