@@ -69,6 +69,28 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
 
   // ---- SIZE-MATRIX ROUTING (Stuart 2026-07-14) ------------------------------------------------
   // One kept assembly covers a whole diameter × projection family in CPQ, but spec sheets need
+  // ── THE SHEET IS THE ASSEMBLY YOU OPENED, AND NOTHING ELSE (Stuart 2026-08-21) ───────────
+  // "when the correct assemblies are located it is rendering better, but when it opens there is no
+  // filter it is bringing in from all the assemblies … once an assembly is selected this screen
+  // should pop open but only display the options from that assembly not all of them."
+  //
+  // Opening H2-75 was listing H2-138 parts: the size matrix was translating every code into the
+  // selected CELL's diameter, and the cell was not the opened assembly's. So the sheet named parts
+  // that assembly does not contain, drew geometry that did not match them, and said so in red.
+  //
+  // The whole machine — the dia/proj dropdowns, the cell chips, the per-cell source registry and
+  // the code translation — exists because the ORIGINAL sizes were never tagged: one assembly had to
+  // stand in for its siblings and its codes had to be renamed on the way out. A tagged assembly
+  // needs none of it. Its pins say what it contains, in 1.6, so the sheet lists exactly that.
+  //
+  // Switching it off at the FAMILY KEY turns off all four at once — sizedCode is already identity
+  // without a family, the dropdowns and chips are already hidden without one, and every cell is the
+  // base cell. An untagged legacy assembly still gets the full machine, which is what keeps the
+  // retiring sheets printable until they are gone.
+  const hasTruePins = React.useMemo(
+    () => (basePins || []).some(p => p && p.choiceNode && !p.isHiddenPart && p.partId),
+    [basePins]);
+
   // TRUE geometry per cell. Each cell maps to a SOURCE assembly whose GLB + pins carry that
   // cell's real parts and codes (e.g. the retired ¾" × 3.625" assembly = the 75|S source; the
   // designer's spec masters register here as they land — this picker IS the spec-master
@@ -82,10 +104,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       if (fam) counts[fam] = (counts[fam] || 0) + 1;
     }
     const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    // ⚠ A TAGGED ASSEMBLY HAS NO SIZE MACHINE. Its pins already say what it contains, so there is
+    // nothing to stand in for and nothing to rename — see hasTruePins above.
+    if (hasTruePins) return null;
     // ≥5 family-stamped pins = a genuine size-family assembly. A stray cross-collection pin
     // (Brimar/Flat Iron assemblies share the odd H1 plate) must NOT sprout size dropdowns.
     return top && top[1] >= 5 ? top[0] : null;
-  }, [basePins, libraryParts]);
+  }, [basePins, libraryParts, hasTruePins]);
   const sizeFam = sizeFamilyKey ? SIZE_FAMILIES[sizeFamilyKey] : null;
   // The OPENED assembly's own diameter (bare code, e.g. H2-05 → '05'): per-assembly flows open
   // each size's sheet from that size's own doc, so the sheet starts on THAT cell and treats it
@@ -109,24 +134,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [sizeFam, sizeFamilyKey, openedDia]);
   const [sizeSel, setSizeSel] = useState(null); // { dia, proj }
   useEffect(() => { if (sizeFam && !sizeSel) setSizeSel({ dia: openedDia || sizeFam.baseDia, proj: openedProj || sizeFam.baseProj }); }, [sizeFam, sizeSel, openedDia, openedProj]);
-  // ── THE SHEET DRAWS THE ASSEMBLY YOU OPENED (Stuart 2026-08-21) ──────────────────────────
-  // "we had built this and then added a bunch of code to try and get it to work magic with
-  // geometry and never got it right, so time to put it so it just follows the true nodes in 1.6 …
-  // i really do not care about the existing as it is based off H1-.75, 1, 1-3/8 which we are
-  // retiring today … H1-138 and H1-2TRV both contain true tags and geometry."
-  //
-  // The cell routing exists because the ORIGINAL sizes were never tagged: each dia×proj cell had
-  // to borrow geometry from whichever old assembly happened to hold those parts, and the sheet
-  // then guessed the codes off node names. Every one of those sources is being retired.
-  //
-  // An assembly with TRUE CHOICE PINS needs none of it. Its pins say which part each node is, in
-  // 1.6, where the rest of the app already reads them — so the sheet draws that assembly's own
-  // geometry and prints its own pins' codes, whatever cell the dropdowns are showing. The
-  // dropdowns keep translating the printed CODES through the size matrix, which is arithmetic on
-  // a code and needs no geometry at all.
-  const hasTruePins = React.useMemo(
-    () => (basePins || []).some(p => p && p.choiceNode && !p.isHiddenPart && p.partId),
-    [basePins]);
+
+  // Every cell is the base cell once the size machine is off (hasTruePins, above): there is one
+  // assembly, it is the one that was opened, and it draws itself.
   const isBaseCell = hasTruePins || !sizeFam || !sizeSel || (sizeSel.dia === (openedDia || sizeFam.baseDia) && sizeSel.proj === (openedProj || sizeFam.baseProj));
   const cellKey = sizeSel ? `${sizeSel.dia}|${sizeSel.proj}` : '';
   const cellLabel = (sizeFam && sizeSel)
