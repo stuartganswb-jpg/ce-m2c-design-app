@@ -109,7 +109,25 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [sizeFam, sizeFamilyKey, openedDia]);
   const [sizeSel, setSizeSel] = useState(null); // { dia, proj }
   useEffect(() => { if (sizeFam && !sizeSel) setSizeSel({ dia: openedDia || sizeFam.baseDia, proj: openedProj || sizeFam.baseProj }); }, [sizeFam, sizeSel, openedDia, openedProj]);
-  const isBaseCell = !sizeFam || !sizeSel || (sizeSel.dia === (openedDia || sizeFam.baseDia) && sizeSel.proj === (openedProj || sizeFam.baseProj));
+  // ── THE SHEET DRAWS THE ASSEMBLY YOU OPENED (Stuart 2026-08-21) ──────────────────────────
+  // "we had built this and then added a bunch of code to try and get it to work magic with
+  // geometry and never got it right, so time to put it so it just follows the true nodes in 1.6 …
+  // i really do not care about the existing as it is based off H1-.75, 1, 1-3/8 which we are
+  // retiring today … H1-138 and H1-2TRV both contain true tags and geometry."
+  //
+  // The cell routing exists because the ORIGINAL sizes were never tagged: each dia×proj cell had
+  // to borrow geometry from whichever old assembly happened to hold those parts, and the sheet
+  // then guessed the codes off node names. Every one of those sources is being retired.
+  //
+  // An assembly with TRUE CHOICE PINS needs none of it. Its pins say which part each node is, in
+  // 1.6, where the rest of the app already reads them — so the sheet draws that assembly's own
+  // geometry and prints its own pins' codes, whatever cell the dropdowns are showing. The
+  // dropdowns keep translating the printed CODES through the size matrix, which is arithmetic on
+  // a code and needs no geometry at all.
+  const hasTruePins = React.useMemo(
+    () => (basePins || []).some(p => p && p.choiceNode && !p.isHiddenPart && p.partId),
+    [basePins]);
+  const isBaseCell = hasTruePins || !sizeFam || !sizeSel || (sizeSel.dia === (openedDia || sizeFam.baseDia) && sizeSel.proj === (openedProj || sizeFam.baseProj));
   const cellKey = sizeSel ? `${sizeSel.dia}|${sizeSel.proj}` : '';
   const cellLabel = (sizeFam && sizeSel)
     ? `${sizeFam.dia.options.find(o => o.value === sizeSel.dia)?.label || sizeSel.dia} · ${sizeFam.proj.options.find(o => o.value === sizeSel.proj)?.label || sizeSel.proj}`
