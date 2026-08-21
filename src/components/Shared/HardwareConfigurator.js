@@ -3,7 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Bounds } from '@react-three/drei';
 import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
-import { resolve as resolveHardware, diagnose as diagnoseHardware, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
+import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
@@ -489,6 +489,23 @@ function HardwareConfiguratorInner({
     const setPick = useCallback((k, v) => setPicks(p => ({ ...p, [k]: p[k] === v ? undefined : v })), []);
 
     const diagnosis = useMemo(() => diagnoseHardware(model), [model]);
+    // ── AND ONE QUESTION THE TAGS ALONE CANNOT ANSWER (Stuart 2026-08-21) ─────────────────────
+    // "make sure the integration/handoff to the vision tool is aligned … brackets are all tagged
+    // with projection which is what drives most of visions math and most important."
+    //
+    // Vision engineers from the ITEM's customData.projection; this engine gates by the PIN's tag.
+    // Two fields, two tools, and a disagreement between them is a pole cut to the wrong length with
+    // nothing on either screen to say so. It sits with the tag notes because that is where someone
+    // looks when an assembly is behaving oddly — and it is read-only: it reports, it never repairs.
+    const projNotes = useMemo(() => projectionAudit(
+        model,
+        (partId) => findPart(partId)?.manufacturingSpecs?.customData?.projection,
+        // A flow that stamps its own projection overrides the item's field inside Vision, so a
+        // blank item is not a fault under one. Same two fields Vision reads, in the same order.
+        flow?.fabProjection !== undefined && flow?.fabProjection !== '' && flow?.fabProjection !== null
+            ? flow.fabProjection : (flow?.impliedProjInches ?? null),
+    ), [model, findPart, flow]);
+    const tagNotes = useMemo(() => [...diagnosis, ...projNotes], [diagnosis, projNotes]);
     const cadUrl = assembly?.manufacturingSpecs?.cadUrl;
 
     // ── THUMBNAILS, PHOTOGRAPHED FROM THIS ASSEMBLY'S OWN .GLB ───────────────────────────────
@@ -1289,13 +1306,13 @@ function HardwareConfiguratorInner({
                                 {isSuperAdmin && (
                                     <div style={{ borderTop: '1px solid var(--line)', paddingTop: '8px' }}>
                                         <button onClick={() => setShowDiag(v => !v)}
-                                            style={{ ...mono, fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', padding: '5px 9px', cursor: 'pointer', color: diagnosis.some(d => d.sev === 'red') ? '#b00020' : 'var(--ink-soft)' }}>
-                                            {diagnosis.length ? `${diagnosis.length} tag note(s)` : 'Tags clean'}
+                                            style={{ ...mono, fontSize: '9px', background: 'transparent', border: '1px solid var(--line)', padding: '5px 9px', cursor: 'pointer', color: tagNotes.some(d => d.sev === 'red') ? '#b00020' : 'var(--ink-soft)' }}>
+                                            {tagNotes.length ? `${tagNotes.length} tag note(s)` : 'Tags clean'}
                                         </button>
                                         {showDiag && (
                                             <div style={{ marginTop: '6px', fontFamily: 'var(--mono)', fontSize: '9px', lineHeight: 1.55 }}>
-                                                {!diagnosis.length && <div style={{ color: '#2a7' }}>Every slot has options, the chosen parts agree, and every tagged node exists.</div>}
-                                                {diagnosis.map((d, i) => <div key={i} style={{ color: d.sev === 'red' ? '#b00020' : '#8a6508' }}>{d.sev === 'red' ? '●' : '○'} {d.kind} — {d.msg}</div>)}
+                                                {!tagNotes.length && <div style={{ color: '#2a7' }}>Every slot has options, the chosen parts agree, every tagged node exists, and Vision engineers the same projection this engine offers.</div>}
+                                                {tagNotes.map((d, i) => <div key={i} style={{ color: d.sev === 'red' ? '#b00020' : '#8a6508' }}>{d.sev === 'red' ? '●' : '○'} {d.kind} — {d.msg}</div>)}
                                             </div>
                                         )}
                                     </div>

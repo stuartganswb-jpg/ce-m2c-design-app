@@ -10,7 +10,7 @@
 
 import {
     resolve, diagnose, normalizeChoice, measureOf, activeAxes, admits, contextOf, takesFinish, finishesFor, slots, applyFitsDefaults, companionsFor, reseatPicks
-, recommendedQty, takesQty, bearingEnds, centreBracketsFor } from '../src/components/Shared/hardwareModel.js';
+, recommendedQty, takesQty, bearingEnds, centreBracketsFor, projectionAudit } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -1769,6 +1769,40 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('8 ft with solid plated returns → 1 in the centre', centreBracketsFor(3, 2), 1);
     eq('a short pole held at both ends needs none', centreBracketsFor(2, 2), 0);
     eq('and nothing is recommended without a span', centreBracketsFor(null, 2), null);
+}
+
+// ── DOES VISION ENGINEER THE DEPTH THE ENGINE GATES BY? ──────────────────────────────────────
+// Stuart 2026-08-21. Projection lives in two fields: Vision reads the ITEM's customData.projection
+// (bend deduct, bracket spacing, O2O), this engine reads the PIN's tag. Disagreement is a pole cut
+// to the wrong length, and neither screen would say so.
+{
+    // RAW choices, as the adapter hands them over — resolve() normalizes, and normalizing twice
+    // would drop the proj tag this whole check is about.
+    const cs = [
+        C({ id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', nodes: ['r'] }),
+        C({ id: 'OK', partId: 'A-OK', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a1'] }),
+        C({ id: 'BAD', partId: 'A-BAD', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a2'] }),
+        C({ id: 'BLANK', partId: 'A-BLANK', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a3'] }),
+        C({ id: 'UNTAG', partId: 'A-UNTAG', role: 'BRACKET', position: 'LEFT', nodes: ['a4'] }),
+        C({ id: 'BAD2', partId: 'A-BAD', role: 'BRACKET', position: 'RIGHT', proj: '6', nodes: ['a5'] }),
+    ];
+    const model = resolve({ choices: cs, answers: {}, selectedIds: ['ROD'] });
+    const fab = { 'A-OK': 6, 'A-BAD': 4.625, 'A-BLANK': null, 'A-UNTAG': 6 };
+    const notes = projectionAudit(model, (id) => fab[id]);
+    const noteFor = (code) => notes.find(n => n.msg.startsWith(code));
+
+    ok('an agreeing bracket says nothing', !noteFor('A-OK'));
+    ok('a disagreement is red', noteFor('A-BAD')?.sev === 'red');
+    ok('…and names BOTH numbers', /4\.625/.test(noteFor('A-BAD')?.msg || '') && /6"/.test(noteFor('A-BAD')?.msg || ''));
+    ok('a blank item is called out', !!noteFor('A-BLANK'));
+    ok('an untagged pin is called out', !!noteFor('A-UNTAG'));
+    eq('a part pinned twice is one note', notes.filter(n => n.msg.startsWith('A-BAD')).length, 1);
+
+    // A flow that stamps its own projection overrides the item's field in Vision, so a blank one
+    // is not a fault there — but a real disagreement still is.
+    const preset = projectionAudit(model, (id) => fab[id], 6);
+    ok('under a flow preset a blank item is not a fault', !preset.find(n => n.msg.startsWith('A-BLANK')));
+    ok('…and a disagreement still is', preset.find(n => n.msg.startsWith('A-BAD'))?.sev === 'red');
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'}  ${pass} passed, ${fail} failed`);

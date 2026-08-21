@@ -1421,6 +1421,65 @@ export function resolve({ choices = [], answers = {}, selectedIds = [], modelNod
 
 // Problems worth a human's attention, stated so a tag is always the thing to fix. Severity is
 // about consequence, not tidiness: RED means a customer cannot build or cannot see something.
+/**
+ * DOES VISION ENGINEER THE SAME DEPTH THE ENGINE GATES BY? (Stuart 2026-08-21)
+ *
+ * "make sure the integration/handoff to the vision tool is aligned … all brackets are aligned with
+ *  projections, new engine will actually be more accurate as brackets are all tagged with
+ *  projection which is what drives most of visions math and most important."
+ *
+ * He is right on both counts, and the reason this check exists is the bit in between: PROJECTION IS
+ * STORED IN TWO PLACES and each tool reads a different one.
+ *
+ *   · VISION engineers from the library item — `manufacturingSpecs.customData.projection` on the
+ *     SELECTED BRACKET. That number is the bend deduct, the bracket spacing, the O2O.
+ *   · THIS ENGINE gates parts by the PIN's `projInches` tag, and never reads the item's field.
+ *
+ * Where they agree the handoff is tighter than the old engine's ever was. Where they disagree —
+ * a pin tagged 6" on an item that says 4-5/8", or an item with the field blank — Vision draws and
+ * cuts to one number while the quote is built from another, and NEITHER SCREEN SAYS SO. That is
+ * not a rounding error: it is a pole cut to the wrong length.
+ *
+ * So it is asked out loud, per assembly, before anything is quoted from it.
+ *
+ * @param model      resolve() output
+ * @param fabProjOf  partId → the item's customData.projection (number, or null when unset)
+ * @param flowPreset the flow's stamped projection, where it has one — a preset OVERRIDES the
+ *                   item's field in Vision, so a blank item is not a fault under one.
+ */
+export function projectionAudit(model, fabProjOf, flowPreset = null) {
+    const out = [];
+    if (typeof fabProjOf !== 'function') return out;
+    const preset = measureOf(flowPreset);
+    const seen = new Set();
+    (model?.choices || []).filter(c => MOUNTED_ROLES.includes(c.role) && c.partId).forEach(c => {
+        const key = String(c.partId).toUpperCase();
+        if (seen.has(key)) return;                 // one note per PART, however many pins it has
+        seen.add(key);
+        const fab = measureOf(fabProjOf(c.partId));
+        const tagged = c.projs || [];
+        const name = c.partId;
+        // A per-tier tag (a double's two depths) leaves projs empty by design and is not drift.
+        if (!tagged.length && c.projTiers && Object.keys(c.projTiers).length) return;
+        if (fab == null) {
+            if (preset != null) return;            // the flow presets it; the item's field is unread
+            out.push({ sev: tagged.length ? 'amber' : 'red', kind: 'projection',
+                msg: `${name} has no projection on the ITEM — Vision engineers the bend and the bracket spacing from that field${tagged.length ? `, and the pin says ${tagged.map(p => `${p}"`).join(' / ')}` : ''}.` });
+            return;
+        }
+        if (!tagged.length) {
+            out.push({ sev: 'amber', kind: 'projection',
+                msg: `${name} is untagged here but the item is made at ${fab}" — this engine cannot gate it by depth, so it is offered at every projection.` });
+            return;
+        }
+        if (!tagged.some(t => sameMeasure(t, fab))) {
+            out.push({ sev: 'red', kind: 'projection',
+                msg: `${name} DISAGREES: Vision engineers at ${fab}" (the item), this engine offers it at ${tagged.map(t => `${t}"`).join(' / ')} (the pin). One of the two is wrong.` });
+        }
+    });
+    return out;
+}
+
 export function diagnose(model) {
     const out = [];
     const add = (sev, kind, msg) => out.push({ sev, kind, msg });
