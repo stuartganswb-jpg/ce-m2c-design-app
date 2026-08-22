@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
-import { explodeTraverse, usageAt } from './traverseExplode.mjs';
+import { explodeTraverse, usageAt, singleProjections, projLabel } from './traverseExplode.mjs';
 import { parseTraverseKitSheets } from './traverseKitImport.mjs';
 
 const HAVE = existsSync('./kit_sheet.json');
@@ -52,4 +52,44 @@ test('front-as-ring: ONE track, the front ring pole, the DRT bracket', { skip },
 test('below the minimum still consumes the 4ft set', { skip }, () => {
     const r = explodeTraverse({ align: A(), feet: 3, rules });
     assert.equal(q(r, 'H1-2RCTAR'), 4);
+});
+
+// ── PROJECTION → BRACKET (Stuart 2026-08-22) ──────────────────────────────────────────────────
+test('projLabel speaks the shop\'s language, to sixteenths', () => {
+    assert.equal(projLabel('3.625'), '3-5/8"');
+    assert.equal(projLabel('4.625'), '4-5/8"');
+    assert.equal(projLabel(6), '6"');
+    assert.equal(projLabel('4.5'), '4-1/2"');
+});
+
+test('the three single projections, shallowest first, the standard marked', () => {
+    const ps = singleProjections();
+    assert.deepEqual(ps.map(p => p.inches), ['3.625', '4.625', '6']);
+    assert.deepEqual(ps.map(p => p.code), ['H1-2TRV-WB', 'H1-2TRV-EWB', 'H1-2TRV-6WB']);
+    assert.equal(ps[0].standard, true);
+    assert.equal(ps[1].standard, false);
+    assert.equal(ps[1].returnArm, 'H1-2TRVERA');
+});
+
+test('a single consumes the bracket for the projection SOLD, counted off its own chart row', { skip }, () => {
+    const std = explodeTraverse({ align: A(), feet: 4, rules, proj: '3.625' });
+    assert.equal(q(std, 'H1-2TRV-WB'), 2);
+    const ext = explodeTraverse({ align: A(), feet: 4, rules, proj: '4.625' });
+    assert.equal(q(ext, 'H1-2TRV-EWB'), 2);
+    assert.equal(q(ext, 'H1-2TRV-WB'), undefined);   // the standard bracket is NOT on a 4-5/8 order
+    const six = explodeTraverse({ align: A(), feet: 4, rules, proj: '6' });
+    assert.equal(q(six, 'H1-2TRV-6WB'), 2);
+});
+
+test('no projection given still explodes the standard, and says so', { skip }, () => {
+    const r = explodeTraverse({ align: A(), feet: 4, rules });
+    assert.equal(q(r, 'H1-2TRV-WB'), 2);
+    assert.ok(r.skipped.some(s => /no projection on this line/.test(s)));
+});
+
+test('a DOUBLE ignores projection entirely — one bracket carries both rods', { skip }, () => {
+    const r = explodeTraverse({ align: A({ setup: 'DOUBLE' }), feet: 6, rules, proj: '6' });
+    assert.equal(q(r, 'H1-2TRV-DWB'), 3);
+    assert.equal(q(r, 'H1-2TRV-6WB'), undefined);
+    assert.ok(!r.skipped.some(s => /no projection/.test(s)));
 });

@@ -4,7 +4,7 @@ import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where } 
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
-import { explodeTraverse } from '../Shared/traverseExplode';
+import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
@@ -143,6 +143,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [trvFeet, setTrvFeet] = useState('');
     const [trvMotor, setTrvMotor] = useState('');
     const [trvFinish, setTrvFinish] = useState('');   // the ACTUAL finish: /P kits → P01…, /EP → EP1…, /W → S01… stains
+    // ⚠ THE PROJECTION IS A SEPARATE ANSWER FROM THE KIT (Stuart 2026-08-22). A kit code says
+    // single/double, drive, mount and material — it does NOT say how far off the wall. The sheet
+    // sells a single at three depths as three different brackets, so an order that never asked was
+    // consuming the standard one whatever was actually sold. Asked here, standard depths only;
+    // anything outside the catalogue is a trip to CPQ.
+    const [trvProj, setTrvProj] = useState('');
     // Shipping — the same fields the CPQ checkout collects, because NetSuite's SO wants them
     // (Stuart 2026-08-13: "Netsuite not going to accept an order without this stuff").
     const [ship, setShip] = useState({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
@@ -157,6 +163,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [trvRules, setTrvRules] = useState(null);      // system/traverse_rules_H1-2TRV
     const [quickQty, setQuickQty] = useState('');   // blank, like every other qty on this tab
     const [kb, setKb] = useState(EMPTY_KB);
+    // The Kit Builder is a BUILD tool, not an order-entry one (Stuart 2026-08-22: "make the kit
+    // builder a collapsed window at the bottom, so we open it only to build kits, but its out of
+    // the way when just entering orders"). Closed by default; the header is the switch.
+    const [kbOpen, setKbOpen] = useState(false);
     const [kitName, setKitName] = useState('');
     const [kitCollection, setKitCollection] = useState(''); // "file" the kit under a collection (e.g. TQS)
     const [kitEdit, setKitEdit] = useState(null);     // kit pricing/collection editor {name, brand, basePrice, collection, clientPricing, finishCodes}
@@ -545,9 +555,34 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         return finishList.filter(f => !f.outsourced && /^P/.test(f.code));
     }, [trvKit, finishList]);
 
+    // A DOUBLE has no projection to ask about — one bracket carries both rods, and every double
+    // part is tagged proj:any. So the question appears on singles and nowhere else.
+    const trvIsSingle = !!trvKit && String(trvKit.manufacturingSpecs?.kitAlign?.setup || '').toUpperCase() !== 'DOUBLE';
+    const trvProjOptions = useMemo(
+        () => (trvIsSingle ? singleProjections(trvKit?.manufacturingSpecs?.kitFamily || 'H1-2TRV') : []),
+        [trvIsSingle, trvKit]);
+
+    // ── THE TRACK'S OWN COLOUR (Stuart 2026-08-22) ───────────────────────────────────────────────
+    // "for every master finish ie. P01, EP01, etc. there is a matching bronze or champagne default
+    // for the traverse track and brackets." That alignment already exists — `subFinishCode` on the
+    // master finish (4.5), read by the push for every item flagged `usesSubFinish`. It was only ever
+    // visible AFTER the fact, in a push warning. Shown at the moment of choosing instead, so a
+    // finish with no aligned track colour is obvious while it can still be fixed.
+    const subFinishOf = (code) => {
+        const f = finishList.find(x => x.code === String(code || '').toUpperCase());
+        return f && f.subFinishCode ? f.subFinishCode : '';
+    };
+    // A projection carried over from a kit we just left is meaningless — clear it with the kit, and
+    // clear it outright on a double, which has none to give. Same idiom as the diameter/finish
+    // guards above.
+    useEffect(() => { setTrvProj(prev => (prev && !trvProjOptions.some(p => p.inches === prev)) ? '' : prev); }, [trvProjOptions]);
+
     const addTraverse = () => {
         if (!trvKit) return alert("Pick a kit (or paste one of the customer's kit codes).");
         if (!trvFinish) return alert('Pick the finish — the shop cannot build "painted" without knowing WHICH paint.');
+        // A single at the wrong depth is the wrong bracket ITEM, not a note on the order — so the
+        // question is answered before the line exists rather than assumed at push time.
+        if (trvIsSingle && !trvProj) return alert('Pick the projection — a single sells at three depths and each one is a different bracket.');
         const row = kitRowOf(trvKit);
         const align = trvKit.manufacturingSpecs.kitAlign;
         const feet = Math.max(parseInt(trvFeet) || 4, 1);
@@ -567,11 +602,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             key: `${trvKit.id}-${Date.now()}`,
             itemId: trvKit.id, erp: mc?.code || trvKit.legacyErpId, nsId: '', name: trvKit.itemName || trvKit.legacyErpId,
             aliasErp: theirSku, aliasItemId: null,
-            qty: 1, note: `${feet}ft system — 4ft set${feet < billFeet ? ' (min charge)' : ''} · ${trvFinish}${mc ? ` · ${trvMotor}` : ''}`,
+            qty: 1, note: `${feet}ft system — 4ft set${feet < billFeet ? ' (min charge)' : ''} · ${trvFinish}${trvProj ? ` · ${projLabel(trvProj)}` : ''}${mc ? ` · ${trvMotor}` : ''}`,
             bin: '', packUom: '', packSize: 1,
             rateOverride: mcNet, // per-motor kits price at THEIR number; base kits price from the row (null → rateForLine)
             kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
-            trvFinish, trvMotor: mc ? trvMotor : '', trvFeet: billFeet, trvKitCode: mc?.code || trvKit.legacyErpId,
+            // trvProj rides the LINE, not the kit record: the same kit sells at any of the three
+            // depths, so the bracket the push consumes is a property of this order.
+            trvFinish, trvProj, trvMotor: mc ? trvMotor : '', trvFeet: billFeet, trvKitCode: mc?.code || trvKit.legacyErpId,
         }]);
         const extra = billFeet - (align.minFeet || 4);
         const perFoot = parseFloat(row?.perFootPrice);
@@ -583,14 +620,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             bin: '', packUom: '', packSize: 1,
             rateOverride: Number.isFinite(perFoot) ? perFoot : 0,
             kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
-            trvFinish, trvKitCode: mc?.code || trvKit.legacyErpId, trvIsFeet: true,
+            trvFinish, trvProj, trvKitCode: mc?.code || trvKit.legacyErpId, trvIsFeet: true,
         }]);
         // The components configurator opens NOW — required at checkout, and this IS checkout for
         // a kit order. Skip stays possible (the operator may be quoting blind), but the default
         // path walks through it.
         setTrvCfg({ drive: String(align.drive).toUpperCase(), feet: billFeet, kitCode: mc?.code || trvKit.legacyErpId, finish: trvFinish,
             trackCount: String(align.setup).toUpperCase() === 'DOUBLE' && String(align.frontRail).toUpperCase() !== 'RING' ? 2 : 1 });
-        setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish('');
+        setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
     };
 
     // Configurator lines → cart. Every line is a REAL library item (they consume inventory):
@@ -878,7 +915,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     const fam = kitDoc?.manufacturingSpecs?.kitFamily || 'H1-2TRV';
                     if (!rulesDoc) { try { const snap = await getDoc(doc(db, 'system', `traverse_rules_${fam}`)); rulesDoc = snap.exists() ? snap.data() : null; } catch { rulesDoc = null; } }
                     if (!rulesDoc) addLog(`No traverse rules doc for ${fam} — bracket/splice counts fall back to defaults. Re-run the 4.6 kit sheet import.`, 'warn');
-                    const ex = explodeTraverse({ family: fam, align: kitDoc?.manufacturingSpecs?.kitAlign, feet: l.trvFeet, motorItem: l.trvMotor, rules: rulesDoc });
+                    const ex = explodeTraverse({ family: fam, align: kitDoc?.manufacturingSpecs?.kitAlign, feet: l.trvFeet, proj: l.trvProj, motorItem: l.trvMotor, rules: rulesDoc });
                     // SUB-FINISH ROUTING (Stuart 2026-08-13): an item marked usesSubFinish (the
                     // tracks) goes to the floor in the SUB color the mainline finish aligns to —
                     // P01 → C, EP5 → B — set per finish in the 4.5 editors. The "finish the track
@@ -1269,7 +1306,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: '10px' }}>
                                     <div>
                                         <span style={lbl}>Kit</span>
-                                        <select value={trvKitId} onChange={e => { setTrvKitId(e.target.value); setTrvMotor(''); }} style={inp}>
+                                        <select value={trvKitId} onChange={e => { setTrvKitId(e.target.value); setTrvMotor(''); setTrvProj(''); }} style={inp}>
                                             <option value="">— pick a kit —</option>
                                             {trvKits.map(k => { const r = kitRowOf(k); return <option key={k.id} value={k.id}>{k.legacyErpId}{r?.clientSku ? ` · ${r.clientSku}` : ''} — {k.itemName || ''} — ${r?.price ?? '—'}</option>; })}
                                         </select>
@@ -1295,18 +1332,57 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                         </select>
                                     </div>
                                 )}
+                                {/* PROJECTION — singles only. Each depth is a different bracket ITEM
+                                    (3-5/8 standard / 4-5/8 extended / 6 extended), and the usage chart
+                                    counts each separately, so this decides what the shop consumes. A
+                                    depth outside the catalogue is a CPQ order. */}
+                                {trvKit && trvIsSingle && (
+                                    <div>
+                                        <span style={lbl}>Bracket projection — standard depths only</span>
+                                        <select value={trvProj} onChange={e => setTrvProj(e.target.value)} style={inp}>
+                                            <option value="">— pick the projection —</option>
+                                            {trvProjOptions.map(p => <option key={p.inches} value={p.inches}>{p.label}{p.standard ? ' — standard' : ' — extended'} · {p.code}</option>)}
+                                        </select>
+                                        {trvProj && (() => {
+                                            const hit = trvProjOptions.find(p => p.inches === trvProj);
+                                            return hit ? (
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '5px', letterSpacing: '.06em' }}>
+                                                    CONSUMES {hit.code}{hit.returnArm ? ` · MATCHING RETURN ARM ${hit.returnArm}` : ''}
+                                                </div>
+                                            ) : null;
+                                        })()}
+                                    </div>
+                                )}
+                                {trvKit && !trvIsSingle && (
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.06em' }}>
+                                        DOUBLE — ONE BRACKET CARRIES BOTH RODS, SO THERE IS NO PROJECTION TO PICK.
+                                    </div>
+                                )}
                                 {trvKit && (
                                     <div>
                                         <span style={lbl}>Finish — {String(trvKit.manufacturingSpecs.kitAlign.material).toUpperCase() === 'W' ? 'stain (S…)' : String(trvKit.manufacturingSpecs.kitAlign.material).toUpperCase() === 'EP' ? 'plated (EP…)' : 'paint (P…)'}</span>
                                         <select value={trvFinish} onChange={e => setTrvFinish(e.target.value)} style={inp}>
                                             <option value="">— pick the finish —</option>
-                                            {trvFinishOptions.map(f => <option key={f.code} value={f.code}>{f.code} — {f.name}</option>)}
+                                            {/* The FASCIA colour. The track and brackets take the sub colour
+                                                aligned to it in 4.5 — named on the option so the CSR sees both
+                                                halves of what they are ordering. */}
+                                            {trvFinishOptions.map(f => <option key={f.code} value={f.code}>{f.code} — {f.name}{f.subFinishCode ? ` · track ${f.subFinishCode}` : ' · no track colour set'}</option>)}
                                         </select>
+                                        {trvFinishOptions.length === 0 && (
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '5px', letterSpacing: '.06em' }}>
+                                                NO FINISHES OFFERED FOR THIS KIT — tick its finish matrix in 4.6 → KITS, or add the {String(trvKit.manufacturingSpecs.kitAlign.material).toUpperCase() === 'W' ? 'S-stain' : String(trvKit.manufacturingSpecs.kitAlign.material).toUpperCase() === 'EP' ? 'plated' : 'paint'} codes to the finish list.
+                                            </div>
+                                        )}
+                                        {trvFinish && !subFinishOf(trvFinish) && (
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#a05a2c', marginTop: '5px', letterSpacing: '.06em', lineHeight: 1.6 }}>
+                                                ⚠ {trvFinish} HAS NO ALIGNED TRACK COLOUR — the track and brackets will go to the floor in {trvFinish} itself. Set its bronze/champagne default in 4.5 → Master Finishes.
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                                 {trvKit && (
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.7 }}>
-                                        {describeKitAlign(trvKit.manufacturingSpecs.kitAlign, trvMotor).join(' · ')}
+                                        {[...describeKitAlign(trvKit.manufacturingSpecs.kitAlign, trvMotor), ...(trvProj ? [projLabel(trvProj)] : [])].join(' · ')}
                                         <br />End treatments (return arms) bill separately — add them with Quick Add above.
                                     </div>
                                 )}
@@ -1316,8 +1392,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     )}
 
                     <div style={card}>
-                        <div style={cardHd}>Kit Builder</div>
-                        <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <div onClick={() => setKbOpen(o => !o)} title={kbOpen ? 'Collapse — out of the way while entering orders' : 'Open the kit builder'}
+                            style={{ ...cardHd, display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
+                            <span>Kit Builder{!kbOpen && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', color: 'var(--ink-soft)', marginLeft: '10px' }}>BUILD &amp; SAVE KITS — CLOSED</span>}</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{kbOpen ? '▾' : '▸'}</span>
+                        </div>
+                        <div style={{ padding: '18px 20px', display: kbOpen ? 'flex' : 'none', flexDirection: 'column', gap: '14px' }}>
                             {/* ROD DIAMETER FIRST — the same first question the CPQ landing asks.
                                 Every slot below is filtered to it, so 1/2" Simple Elegance offers
                                 only the handful of parts that actually fit a 1/2" rod. */}
