@@ -5,7 +5,7 @@
 // it wrong in ways the configurator never did. These assertions exist to prove the sheet is not
 // deciding anything: it answers the arm and asks the engine what follows.
 
-import { sheetRows, armsOf, platesForArm } from '../src/components/SpecSheet/specSheetRows.js';
+import { sheetRows, armsOf, platesForArm, rodForArm, visibleNodesForRow } from '../src/components/SpecSheet/specSheetRows.js';
 import { resolve } from '../src/components/Shared/hardwareModel.js';
 
 let pass = 0, fail = 0;
@@ -69,6 +69,36 @@ const codes = (r) => (r ? r.plates.map(p => p.partId).sort() : null);
     eq('armsOf reads the arms off the model', armsOf(model).length, 3);
     eq('and platesForArm with no arm is empty rather than throwing',
         platesForArm({ choices: model.choices, arm: null }).plates.length, 0);
+}
+
+// ── ONE ROW DRAWS ONE COMBINATION ────────────────────────────────────────────────────────────
+// Stuart 2026-08-21: "each drop down should filter and only show the rod and bracket and arm
+// assigned to it, you can see the rear rods from doubles showing on the single bracket."
+{
+    // A double: a front rod and a back rod, with an arm pinned at each tier.
+    const DBL = [
+        { id: 'ROD-F', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', tier: 'FRONT', nodes: ['rod-front'] },
+        { id: 'ROD-B', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', tier: 'BACK', nodes: ['rod-back'] },
+        { id: 'ARM-F', partId: 'H1-138B6', role: 'BRACKET', position: 'LEFT', tier: 'FRONT', nodes: ['arm-front'] },
+        { id: 'ARM-B', partId: 'H1-138D6', role: 'BRACKET', position: 'LEFT', tier: 'BACK', nodes: ['arm-back'] },
+    ];
+    const m = resolve({ choices: DBL, answers: {}, selectedIds: [] });
+    const arm = (id) => m.choices.find(c => c.id === id);
+
+    eq('a front arm takes the front rod', rodForArm(m, arm('ARM-F'))?.id, 'ROD-F');
+    eq('and a back arm takes the back one', rodForArm(m, arm('ARM-B'))?.id, 'ROD-B');
+
+    const nodes = visibleNodesForRow({ choices: DBL, arm: arm('ARM-F'), rod: rodForArm(m, arm('ARM-F')) });
+    ok('the row draws its own rod', nodes.has('rod-front'));
+    ok('and its own arm', nodes.has('arm-front'));
+    ok('NOT the rear rod from the double', !nodes.has('rod-back'));
+    ok('and not the other arm', !nodes.has('arm-back'));
+
+    // An untiered single is unaffected — it has one rod and draws it.
+    const single = resolve({ choices: CHOICES, answers: {}, selectedIds: [] });
+    eq('a single takes its only rod', rodForArm(single, single.choices.find(c => c.id === 'ARM-D'))?.id, 'ROD');
+    ok('and an arm with nothing selected draws nothing rather than everything',
+        visibleNodesForRow({ choices: CHOICES, arm: null }).size === 0);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

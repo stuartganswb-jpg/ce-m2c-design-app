@@ -21,6 +21,9 @@ import {
 } from './specSheetGeometry';
 import { renderHiddenLine } from './hiddenLine';
 import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from './specSheetPage';
+import { rodForArm, visibleNodesForRow } from './specSheetRows';
+import { choicesFromAssembly } from '../Shared/hardwareAdapter';
+import { resolve as resolveHardware } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 
 // Wall-mount plate meshes are children of each backplate choice node in the merged GLB
@@ -321,6 +324,34 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return (preferred.length ? preferred : cls).flatMap(c => c.nodes || []);
   }, [clusters]);
 
+  // ── WHAT ONE PAGE IS ALLOWED TO DRAW (Stuart 2026-08-21) ─────────────────────────────────
+  // "each drop down should filter and only show the rod and bracket and arm assigned to it, you can
+  // see the rear rods from doubles showing on the single bracket … if it respects the available
+  // combinations from the cpq flow based on its code and tags it will render the correct
+  // combinations."
+  //
+  // nodesFor() asks the GLB for every pole cluster in the file, so a double's REAR rod landed on a
+  // single bracket's page. The configurator never has that problem: it renders additively, so
+  // selecting the arm, its plate and the rod that belongs with it yields exactly the geometry that
+  // combination owns — which is the same question this page is asking.
+  //
+  // Used as a FILTER, never as a source: it can only remove geometry that does not belong to the
+  // row, never invent any. An assembly with no true pins has no engine answer and is left alone.
+  const engineChoices = React.useMemo(
+    () => (hasTruePins ? choicesFromAssembly(assembly, pins) : null), [hasTruePins, assembly, pins]);
+  const allowedNodesFor = useCallback((bracketPin, platePin) => {
+    if (!engineChoices) return null;
+    const model = resolveHardware({ choices: engineChoices, answers: {}, selectedIds: [] });
+    const byNode = (pin) => pin && (model.choices || []).find(c =>
+      (c.nodes || []).some(n => String(n).toLowerCase() === String(pin.choiceNode || '').toLowerCase()));
+    const arm = byNode(bracketPin);
+    if (!arm) return null;                       // an untagged page keeps drawing as it did
+    const set = visibleNodesForRow({
+      choices: engineChoices, arm, plate: byNode(platePin), rod: rodForArm(model, arm),
+    });
+    return set.size ? set : null;
+  }, [engineChoices]);
+
   // LEGACY SOURCES (pre-choice-pin era, e.g. the retired 3.625" assembly): pins carry no
   // choiceNode, so choicesFor() finds nothing — but the GLB nodes are NAMED with the item codes
   // (designer convention: "H1-75BE LEFT"). Derive the choices from the clusters' node names so
@@ -564,8 +595,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const scene = sceneRef.current;
     const bracket = extractWorldMeshes(scene, [bracketPin.choiceNode]);
     if (!bracket.length) throw new Error(`Bracket node "${bracketPin.choiceNode}" not found in GLB.`);
-    const poleNodes = nodesFor('POLE');
-    const ringNodes = nodesFor('RING');
+    // ⚠ ONLY THE ROD THIS BRACKET HOLDS. nodesFor('POLE') is every pole cluster in the file;
+    // allowedNodesFor is the engine's answer for THIS combination, so a double's rear rod stops
+    // appearing on a single bracket's page. Null = no engine answer (untagged) → unchanged.
+    const allowed = allowedNodesFor(bracketPin, opts.platePin || null);
+    const keep = (list) => (allowed ? list.filter(n => allowed.has(String(n).toLowerCase())) : list);
+    const poleNodes = keep(nodesFor('POLE'));
+    const ringNodes = keep(nodesFor('RING'));
     let pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     if (!pole.length && sceneChoicesRef.current?.POLE?.length) {
       pole = extractWorldMeshes(scene, sceneChoicesRef.current.POLE.map(c => c.choiceNode));
@@ -819,7 +855,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, ringItems, measured };
-  }, [nodesFor, wallCfg, choicesFor, legacyChoicesFor, libraryParts]);
+  }, [nodesFor, allowedNodesFor, wallCfg, choicesFor, legacyChoicesFor, libraryParts]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {

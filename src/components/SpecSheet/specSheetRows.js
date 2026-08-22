@@ -23,7 +23,7 @@
 // (scripts/hardwareModel.test.mjs). Nothing here can disagree with the quote, because there is
 // nothing here to disagree with — only the same call the configurator makes.
 
-import { resolve, slots } from '../Shared/hardwareModel.js';
+import { resolve, slots, ROD_ROLES } from '../Shared/hardwareModel.js';
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -98,4 +98,46 @@ export function sheetRows({ choices, answers = {}, rodId = null }) {
         arm,
         ...platesForArm({ choices: norm, answers, arm, rod }),
     }));
+}
+
+/**
+ * The rod that belongs with ONE arm.
+ *
+ * Stuart 2026-08-21: "you can see the rear rods from doubles showing on the single bracket." The
+ * sheet was drawing every pole cluster in the file, because it asked the GLB for poles rather than
+ * asking which pole this bracket holds. A double pins a front rod and a back rod; an arm belongs to
+ * one of them, and the tag that says which is the TIER it was pinned at.
+ */
+export function rodForArm(model, arm) {
+    const rods = (model?.choices || []).filter(c => ROD_ROLES.includes(c.role) && !c.parked);
+    if (!rods.length) return null;
+    const tier = U(arm?.tier || '');
+    // Same tier first — a FRONT arm draws the FRONT rod. Then an untagged rod, which serves both.
+    // Then the centre segment, which is the one a drawing shows: the ends are cut away by the view.
+    return rods.find(r => tier && U(r.tier) === tier)
+        || rods.find(r => !U(r.tier) && U(r.position) === 'CENTER')
+        || rods.find(r => !U(r.tier))
+        || rods[0];
+}
+
+/**
+ * EXACTLY THE GEOMETRY ONE ROW DRAWS — the engine's own answer, lowercased for node matching.
+ *
+ * Stuart 2026-08-21: "each drop down should filter and only show the rod and bracket and arm
+ * assigned to it … if it respects the available combinations from the cpq flow based on its code
+ * and tags it will render the correct combinations."
+ *
+ * That is what `visible` IS. The configurator renders additively — nothing appears until it is
+ * chosen — so selecting the rod, the arm and its plate yields precisely the nodes that
+ * configuration owns, and nothing else in the merged file. The sheet had been drawing the whole
+ * model and then trying to subtract the parts that looked wrong.
+ *
+ * Returned as a SET so the caller can intersect rather than replace: this can only ever remove
+ * geometry that does not belong to the row, never invent any.
+ */
+export function visibleNodesForRow({ choices, answers = {}, arm, plate = null, rod = null }) {
+    if (!arm) return new Set();
+    const ids = [arm.id, ...(plate ? [plate.id] : []), ...(rod ? [rod.id] : [])].filter(Boolean);
+    const m = resolve({ choices, answers, selectedIds: ids });
+    return new Set([...(m.visible || [])].map(n => String(n).toLowerCase()));
 }
