@@ -7,6 +7,7 @@ import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAud
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
 import { seedFromVision } from './visionBridge';
+import { seedFromKit } from './kitSeed';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
@@ -110,9 +111,14 @@ function HardwareConfiguratorInner({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
     outsourceCodes = [], onAdd = null, onCheckout = null, cartCount = 0, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [], trvRules = null, visionDraft = null,
+    // Quick Ship kits this assembly could be started from. Empty on every flow that has none, and
+    // the picker does not render — so a collection with no kits is untouched by all of this.
+    kits = [],
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
+    const [kitPick, setKitPick] = useState('');      // the kit chosen as a starting point
+    const [kitReport, setKitReport] = useState(null);  // what it carried, missed, or refused
     const [showDiag, setShowDiag] = useState(false);
     const [showGeo, setShowGeo] = useState(false);   // the untagged-node list, behind its count
     const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
@@ -332,6 +338,34 @@ function HardwareConfiguratorInner({
         if (visionDraft.sidemark) setConfigMemo(visionDraft.sidemark);
         setVisionReport({ carried: seed.carried, missed: seed.missed, name: visionDraft.sidemark || 'the drawing' });
     }, [visionDraft, model, flow, findPart]);
+
+    // ── STARTING FROM A KIT (Stuart 2026-08-22) ──────────────────────────────────────────────
+    // "if a customer orders a standard kit in a standard finish we will use tab 7 … but if they
+    // want any customization then they come to cpq."
+    //
+    // Deliberately NOT an effect. Seeding happens in the handler, once, because the operator asked
+    // for it — so there is no dependency array to get wrong, nothing that can re-fire while they
+    // work, and nothing declared below the memos that read it. (A const in a temporal dead zone is
+    // a ReferenceError, and that has taken this engine out twice.)
+    //
+    // It SEEDS, it does not lock: a customer who has reached CPQ is by definition deviating from
+    // the kit, so every answer stays editable. And picks need no reseating by hand — resolve()
+    // runs reseatPicks on every model, exactly as the Vision seed relies on.
+    const applyKit = (id) => {
+        setKitPick(id);
+        if (!id) { setKitReport(null); return; }
+        const chosen = kits.find(k => String(k.id || k.legacyErpId || '') === id);
+        if (!chosen) return;
+        const name = String(chosen.legacyErpId || chosen.itemName || 'the kit');
+        const seed = seedFromKit({ model, kit: chosen });
+        // A REFUSAL WRITES NOTHING. A kit the assembly cannot build would otherwise seed every
+        // answer it CAN honour and look more convincing the more of it landed.
+        if (seed.blocked) { setKitReport({ name, blocked: seed.blocked, carried: [], missed: [] }); return; }
+        if (Object.keys(seed.answers).length) setAnswers(a => ({ ...a, ...seed.answers }));
+        if (Object.keys(seed.picks).length) setPicks(p => ({ ...p, ...seed.picks }));
+        if (seed.lengthInches) { setPoleIn(String(Math.floor(seed.lengthInches))); setPoleFrac(''); }
+        setKitReport({ name, blocked: null, carried: seed.carried, missed: seed.missed });
+    };
 
     // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
     //
@@ -1096,6 +1130,53 @@ function HardwareConfiguratorInner({
                         ))}
                     </div>
                     <button onClick={() => setVisionReport(null)}
+                        style={{ ...mono, fontSize: '8px', border: '1px solid var(--line)', background: '#fff', padding: '3px 7px', cursor: 'pointer', color: 'var(--ink-soft)' }}>dismiss</button>
+                </div>
+            )}
+
+            {/* START FROM A KIT — the same kits tab 7 sells, as an opening position. Renders only
+                where kits exist, so every collection without them is exactly as it was. */}
+            {!!kits.length && (
+                <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ ...mono, fontSize: '8.5px', color: 'var(--ink-soft)' }}>Start from a kit</span>
+                    <select value={kitPick} onChange={e => applyKit(e.target.value)}
+                        style={{ padding: '6px 8px', border: '1px solid var(--line)', background: '#fff', fontSize: '12px', minWidth: '260px' }}>
+                        <option value="">— configure from scratch —</option>
+                        {kits.map(k => (
+                            <option key={k.id || k.legacyErpId} value={String(k.id || k.legacyErpId || '')}>
+                                {k.legacyErpId || k.itemName}{k.itemName && k.legacyErpId ? ` · ${k.itemName}` : ''}
+                            </option>
+                        ))}
+                    </select>
+                    <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
+                        Fills the opening answers. Everything stays editable — a kit that needed no changes would have gone out on tab 7.
+                    </span>
+                </div>
+            )}
+
+            {kitReport && (
+                <div style={{ background: '#fff', border: `1px solid ${kitReport.blocked ? '#b00020' : (kitReport.missed.length ? '#8a6508' : 'var(--brass)')}`, padding: '10px 14px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ ...mono, fontSize: '8.5px', color: kitReport.blocked ? '#b00020' : 'var(--brass)' }}>
+                            {kitReport.blocked ? 'This assembly cannot build' : 'Started from kit'} · {kitReport.name}
+                        </div>
+                        {kitReport.blocked && (
+                            <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: '#b00020', marginTop: '3px' }}>
+                                ⚠ {kitReport.blocked.what} — {kitReport.blocked.why} Nothing was filled in.
+                            </div>
+                        )}
+                        {!!kitReport.carried.length && (
+                            <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-soft)', marginTop: '3px' }}>
+                                Filled in: {kitReport.carried.join(' · ')}
+                            </div>
+                        )}
+                        {kitReport.missed.map((m, i) => (
+                            <div key={i} style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: '#8a6508', marginTop: '3px' }}>
+                                ○ {m.what} — {m.why}
+                            </div>
+                        ))}
+                    </div>
+                    <button onClick={() => setKitReport(null)}
                         style={{ ...mono, fontSize: '8px', border: '1px solid var(--line)', background: '#fff', padding: '3px 7px', cursor: 'pointer', color: 'var(--ink-soft)' }}>dismiss</button>
                 </div>
             )}

@@ -4,6 +4,7 @@ import { Sheet2DOverlay, MaterialRail } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
 import { choicesFromAssembly, modelNodesOf } from '../Shared/hardwareAdapter';
 import HardwareConfigurator from '../Shared/HardwareConfigurator';
+import { kitsForSeeding } from '../Shared/kitSeed';
 import { finishVariantOf as sharedFinishVariantOf } from '../Shared/finishVariant';
 import { resolve as resolveHardware, diagnose as diagnoseHardware } from '../Shared/hardwareModel';
 import { normalizeLocation } from '../Shared/assemblyTags';
@@ -690,6 +691,21 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
   const [activeAssemblyId, setActiveAssemblyId] = useState('');
   const [activeAssembly, setActiveAssembly] = useState(null);
+  // ── THE KITS THIS ASSEMBLY COULD BE STARTED FROM (Stuart 2026-08-22) ────────────────────────
+  // Scoped by CODE, not by everything the library holds: the H1-2TRV kits are named H1-2TRV-4/P,
+  // H1-2TRV-4DC/EP and so on, so the assembly's own code is the family. A collection with no kits
+  // gets an empty list and the picker never renders — which is what keeps this invisible to every
+  // flow that was already tested.
+  const seedableKits = useMemo(() => {
+      const a = activeAssembly;
+      if (!a) return [];
+      const base = String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase();
+      if (!base) return [];
+      return kitsForSeeding(libraryParts).filter(k => {
+          const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
+          return code === base || code.startsWith(base + '-');
+      });
+  }, [activeAssembly, libraryParts]);
   
   const [activeMasterQuoteId, setActiveMasterQuoteId] = useState(null);
   const [activeDraftId, setActiveDraftId] = useState(null);
@@ -4526,6 +4542,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   isSuperAdmin={isSuperAdmin}
                                   finishes={[...globalFinishes, ...outsourceFinishes]}
                                   parts={[...libraryParts, ...liveAssemblies]}
+                                  kits={seedableKits}
                                   /* THE JOB'S CUSTOMER WINS; the flow's own account is the fallback,
                                      so opening a collection to check its alias and pricing shows
                                      them without inventing a job first (tab 11 → Customer). */
