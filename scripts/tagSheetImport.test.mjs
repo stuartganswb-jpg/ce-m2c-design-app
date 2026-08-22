@@ -218,12 +218,26 @@ eq('a blank cell does not clear an existing value', after2[0].choices[0].mountTy
       { clusterId:'c6', clusterName:'METAL-POLE-DBL-BACK-RIGHT', category:'POLE', choices:[
           { nodeName:'S60__0_H1138inPOLEDBLBackright', tier:'', trvSetup:'DOUBLE' },
       ]},
+    // ⚠ H1-1, 2026-08-22: a rear pole with NEITHER a tier NOR the DOUBLE flag. The flag was the only
+    // guard, no H1-1 pole carried it, and this row was stamped FRONT — the rear rod then rode along
+    // with every front rod. Its NAME said back the whole time, in three places.
+    { clusterId:'c7', clusterName:'NEW-SLOT', category:'POLE', choices:[
+        { nodeName:'H11R', label:'POLE DBL long Back', tier:'', trvSetup:'' },
+    ]},
+    // The same trap in the words H1-138 uses for it.
+    { clusterId:'c8', clusterName:'NEW-SLOT', category:'POLE', choices:[
+        { nodeName:'H11R2', label:'rear rod as used WITH a return — terminates into the front rod bend', tier:'', trvSetup:'' },
+    ]},
     ];
     const plan=planSinglesFill(loaded);
     eq('only the untagged brackets', plan.brackets, 2);
     eq('only the untagged pole', plan.poles, 1);
     eq('three choices in all', plan.hits.length, 3);
     ok('a DOUBLE pole with no tier yet is left alone', !plan.hits.some(h => h.clusterId === 'c6'));
+    ok('a pole whose NAME says back is never stamped FRONT', !plan.hits.some(h => h.clusterId === 'c7'));
+    ok('and neither is one that calls itself the rear rod', !plan.hits.some(h => h.clusterId === 'c8'));
+    eq('both are reported, not silently dropped', plan.skipped.length, 2);
+    ok('the report says why', plan.skipped.every(k => k.why === 'name says back'));
 
     const after=applySinglesFill(loaded, plan);
     eq('the single brackets are SINGLE', after[0].choices.map(c=>c.trvSetup).join(), 'SINGLE,SINGLE');

@@ -466,9 +466,34 @@ export function matchSlotFiles(slots, files = []) {
 
 const CAT_OF = (choice, cluster) => U(choice.catOverride || cluster.category || '');
 
+// ── THE NAME IS EVIDENCE, AND IT IS THE ONLY EVIDENCE THAT SURVIVES A MISSED TAG ──────────────
+// Stuart, 2026-08-22, after this stamped H1-1's rear rod FRONT: "uploading these files is a large
+// job and we need fall back protection from human error, it is too hard to tag 100% accurate
+// everytime."
+//
+// The DOUBLE flag was the only thing standing between a rear pole and a FRONT stamp, and on H1-1
+// no pole carried it — every double tag sat on a bracket. So the guard never fired and the rear rod
+// was stamped the exact opposite of the truth, which is the hardest kind of wrong to see afterwards
+// (the flow simply drags the back rod along whenever the front is chosen).
+//
+// The designer had already written it down: "POLE DBL long Back", "METAL POLE DBL BACK RIGHT",
+// "rear rod as used WITH a return". Reading that is not a guess about intent — it is the same move
+// suggestSetupFromName makes for DOUBLE, and it costs nothing when the tag is present anyway.
+//
+// SKIPPING IS THE SAFE DIRECTION. A pole this passes over keeps its blank tier and waits for a
+// person; a pole it wrongly stamps FRONT is a rear rod in every quote. So the match is deliberately
+// GENEROUS where suggestSetupFromName is narrow: over-skipping costs one dropdown, under-skipping
+// costs a wrong rod. BACKPLATE is struck first — it is the one word containing "BACK" that means
+// nothing of the kind (and cannot reach here anyway, since only POLE rows are tested).
+const NAME_SAYS_BACK = (...names) => {
+    const hay = names.map(n => U(n)).join(' ').replace(/BACKPLATES?/g, ' ');
+    return /BACK|REAR/.test(hay);
+};
+
 /** What "finish the singles" would change, without changing anything. */
 export function planSinglesFill(loaded = []) {
     const hits = [];
+    const skipped = [];
     loaded.forEach(r => (r.choices || []).forEach(ch => {
         const cat = CAT_OF(ch, r);
         // ⚠ A BLANK IS NOT AN ANSWER (Stuart 2026-08-18, catching this before it ran). "The pole has
@@ -481,13 +506,20 @@ export function planSinglesFill(loaded = []) {
         // not yet decided, and neither is this rule's business. That flag has always been saved, so
         // it is something known rather than something assumed.
         const isDoublePart = U(ch.trvSetup) === 'DOUBLE';
+        const saysBack = NAME_SAYS_BACK(ch.label, ch.nodeName, r.clusterName);
         const diff = [];
         if (['BRACKET', 'BACKPLATE'].includes(cat) && !S(ch.trvSetup)) diff.push({ field: 'trvSetup', to: 'SINGLE' });
-        if (cat === 'POLE' && !S(ch.tier) && !isDoublePart) diff.push({ field: 'tier', to: 'FRONT' });
+        if (cat === 'POLE' && !S(ch.tier) && !isDoublePart && !saysBack) diff.push({ field: 'tier', to: 'FRONT' });
+        // A pole passed over for its NAME is reported, never dropped in silence: the operator needs
+        // to see that it still wants a tier by hand, and that this is why it was left alone.
+        if (cat === 'POLE' && !S(ch.tier) && !isDoublePart && saysBack) {
+            skipped.push({ clusterId: r.clusterId, clusterName: r.clusterName, nodeName: ch.nodeName, why: 'name says back' });
+        }
         if (diff.length) hits.push({ clusterId: r.clusterId, clusterName: r.clusterName, nodeName: ch.nodeName, diff });
     }));
     return {
         hits,
+        skipped,
         brackets: hits.filter(h => h.diff.some(d => d.field === 'trvSetup')).length,
         poles: hits.filter(h => h.diff.some(d => d.field === 'tier')).length,
     };
@@ -503,7 +535,12 @@ export function applySinglesFill(loaded, plan) {
             const cat = CAT_OF(ch, r);
             const next = { ...ch };
             if (['BRACKET', 'BACKPLATE'].includes(cat) && !S(next.trvSetup)) next.trvSetup = 'SINGLE';
-            if (cat === 'POLE' && !S(next.tier)) next.tier = 'FRONT';
+            // The same two guards the plan applied. The `by` set already excludes a name-says-back
+            // pole, so this is belt and braces — but the two functions must never be able to
+            // disagree about what a FRONT stamp means, because only one of them is ever read.
+            if (cat === 'POLE' && !S(next.tier)
+                && U(next.trvSetup) !== 'DOUBLE'
+                && !NAME_SAYS_BACK(next.label, next.nodeName, r.clusterName)) next.tier = 'FRONT';
             return next;
         }),
     }));

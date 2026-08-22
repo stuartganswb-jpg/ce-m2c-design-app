@@ -2368,6 +2368,21 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                     <b style={{ color: 'var(--brass)' }}>{singlesPlan.hits.length}</b> choice(s) would be filled — {singlesPlan.brackets} bracket/backplate → SETUP=SINGLE, {singlesPlan.poles} pole → ROD=FRONT
                                     {!singlesPlan.hits.length && <span style={{ color: '#3a7d44' }}> · nothing left to fill</span>}
                                 </div>
+                                {/* WHAT IT LEFT ALONE, AND WHY (Stuart 2026-08-22). A rear pole passed
+                                    over for its name still wants a tier from a person — reporting it
+                                    here is the difference between "protected" and "forgotten". */}
+                                {!!(singlesPlan.skipped || []).length && (
+                                    <div style={{ borderTop: '1px solid var(--line)', paddingTop: '6px' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', color: '#8a6508' }}>
+                                            {singlesPlan.skipped.length} rear pole(s) left blank — the name says back. Tag ROD=BACK by hand.
+                                        </div>
+                                        {singlesPlan.skipped.slice(0, 20).map((k, i) => (
+                                            <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: '9.5px', letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--ink-soft)', padding: '2px 0' }}>
+                                                <span style={{ color: 'var(--ink)' }}>{k.clusterName}</span> · {k.nodeName}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                                 {!!singlesPlan.hits.length && (
                                     <div style={{ maxHeight: '150px', overflowY: 'auto', borderTop: '1px solid var(--line)', paddingTop: '6px' }}>
                                         {singlesPlan.hits.slice(0, 50).map((h, i) => (
