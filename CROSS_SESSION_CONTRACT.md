@@ -10,6 +10,7 @@ update it, not around it.**
 | **B — Floors / WMS** | `FLOORS_WMS_HANDOFF_BRIEF.md` | FinishingFloor, ShopFloor, PickPack, RTGDispatchTab, NetSuiteSyncTab, `onStockBuildDone`, the floor/WMS `Shared/*` modules, `netsuite/ce_convert_build_restlet.js` |
 | **C — Traverse / Vision** | `TRAVERSE_HANDOFF_BRIEF.md` | `traverseTags.js`, `traverseFlow.js`, `AssemblyBuilderTab.js` (1.6), `AdminTab.js` (flow generator), `CPQTab.js`, `assemblyTags.js`, Vision Hardware |
 | **D — Fees / Checkout / 4.6** | `FEES_CHECKOUT_SESSION_BRIEF.md` | `CustomerCollectionsTab.js` (4.6), `feeRules.js`, `clientPricing.js`, `aliasIdentity.js`, checkout data model. ⚠ `CPQTab.js` / `QuickShipTab.js` / `ERPPushPullTab.js` edits coordinate with Session C |
+| **E — Kits ↔ the new CPQ engine** | `KIT_CPQ_ALIGNMENT_BRIEF.md` | `HardwareConfigurator.js`, `hardwareModel.js`, `hardwarePricing.js`, `hardwareHandoff.js`, `kitCode.js`, the engine mount in `CPQTab.js`. **CPQ only** — tab 7, 4.6 and the checkout fee catalogue belong to D. Overlap is exactly two things: kit records and the checkout fee catalogue |
 
 **If your bug traces into another session's territory: stop, report, let Stuart route it.**
 Shared modules read by CPQ (`plateRules`, `sizeMatrix*`, `finishLabel`, `configQty`) are Session C's
