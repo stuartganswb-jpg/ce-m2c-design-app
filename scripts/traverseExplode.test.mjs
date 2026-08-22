@@ -93,3 +93,28 @@ test('a DOUBLE ignores projection entirely — one bracket carries both rods', {
     assert.equal(q(r, 'H1-2TRV-6WB'), undefined);
     assert.ok(!r.skipped.some(s => /no projection/.test(s)));
 });
+
+test('the track AND the brackets wear the base colour; the fascia and the ends do not', { skip }, () => {
+    const r = explodeTraverse({ align: A(), feet: 4, rules, proj: '4.625' });
+    const line = (code) => r.lines.find(l => l.code === code);
+    assert.equal(line('H1-2TRVTRK/C').subFinish, true);    // track
+    assert.equal(line('H1-2TRV-EWB').subFinish, true);     // the bracket goes with it
+    assert.equal(line('H1-2RCTAR').subFinish, false);      // fascia — the colour that was sold
+    assert.equal(line('H1-2TRVPLUG').subFinish, false);    // end treatment
+    assert.equal(line('H1-2TRV-EWB').role, 'bracket');
+});
+
+test('every bracket shape carries the base-colour fact, not just the single', { skip }, () => {
+    const dbl = explodeTraverse({ align: A({ setup: 'DOUBLE' }), feet: 6, rules });
+    assert.equal(dbl.lines.find(l => l.code === 'H1-2TRV-DWB').subFinish, true);
+    const ceil = explodeTraverse({ align: A({ mount: 'CEILING' }), feet: 6, rules });
+    assert.equal(ceil.lines.find(l => l.code === 'H1-2TRV-CB').subFinish, true);
+    const ring = explodeTraverse({ align: A({ setup: 'DOUBLE', frontRail: 'RING' }), feet: 6, rules });
+    assert.equal(ring.lines.find(l => l.code === 'H1-2TRV-DRTWB').subFinish, true);
+    assert.equal(ring.lines.find(l => l.code === 'H1-2RCTPR').subFinish, false);   // the front ring pole is visible
+});
+
+test('the motor is not a painted part', { skip }, () => {
+    const r = explodeTraverse({ align: A({ drive: 'MOTORIZED' }), feet: 4, motorItem: 'HSOM-20', rules });
+    assert.equal(r.lines.find(l => l.code === 'HSOM-20').subFinish, false);
+});

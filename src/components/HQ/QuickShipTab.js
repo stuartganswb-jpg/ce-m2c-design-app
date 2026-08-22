@@ -921,13 +921,21 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // P01 → C, EP5 → B — set per finish in the 4.5 editors. The "finish the track
                     // to match the fascia" upgrade is a configurator add-on fee that will override
                     // this per order when it lands.
+                    //
+                    // ⚠ THE BRACKETS GO WITH THE TRACK (Stuart 2026-08-22). They are made in the same
+                    // two base colours and are chosen to match it, so a BOM that sent the track to
+                    // bronze and the brackets to the customer's colour described a system nobody
+                    // builds. The EXPLOSION now says which lines those are (`subFinish` on the line,
+                    // from the family's subFinishRoles), so the routing no longer depends on every
+                    // bracket item in the library having had the checkbox ticked — the item flag
+                    // still counts, it is just no longer the only way to be right.
                     const finObj = finishList.find(f => f.code === String(l.trvFinish || '').toUpperCase());
                     ex.lines.forEach(c => {
                         const cd = byId(c.code);
                         if (!cd?.netSuiteInternalId) { addLog(`Component ${c.code} has no NetSuite ID — NOT consumed (${c.why}).`, 'warn'); return; }
-                        const takesSub = !!cd?.manufacturingSpecs?.usesSubFinish;
+                        const takesSub = !!cd?.manufacturingSpecs?.usesSubFinish || !!c.subFinish;
                         const finShown = takesSub && finObj?.subFinishCode ? `${finObj.subFinishCode} (sub finish)` : (l.trvFinish || '');
-                        if (takesSub && !finObj?.subFinishCode) addLog(`${c.code} is marked for a SUB finish but ${l.trvFinish || 'the chosen finish'} has no aligned sub color (set it in 4.5) — pushing in the mainline finish.`, 'warn');
+                        if (takesSub && !finObj?.subFinishCode) addLog(`${c.code} (${c.role || 'sub-finish part'}) is made in the base colours, but ${l.trvFinish || 'the chosen finish'} has no aligned one (set it in 4.5) — pushing in the mainline finish.`, 'warn');
                         trvPushLines.push({
                             item: { id: String(cd.netSuiteInternalId) }, quantity: c.qty, rate: 0, price: { id: '-1' },
                             description: `${c.code} — ${cd.itemName || c.code} · ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,

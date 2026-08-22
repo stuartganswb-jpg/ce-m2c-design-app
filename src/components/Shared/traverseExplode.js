@@ -28,6 +28,17 @@ export const TRAVERSE_FAMILY_PARTS = {
         // The return arm matching each projection. Not exploded (end treatments bill as their own
         // lines) — carried so a surface that asks for a projection can name the arm that fits it.
         returnArms: { '3.625': 'H1-2TRVSRA', '4.625': 'H1-2TRVERA', '6': 'H1-2TRV6RA' },
+        // ⚠ WHAT WEARS THE BASE COLOUR, NOT THE CUSTOMER'S (Stuart 2026-08-22: "the sub finish
+        // that's listed for the track must also be listed in the bom for the brackets, not the end
+        // treatments but the brackets — as they also in this group come painted in these two base
+        // colors to match the track"). The fascia is the part anyone looks at, so it wears the
+        // finish that was sold; the track and the brackets it hangs on are made in bronze or
+        // champagne and are chosen to MATCH the fascia, not to be it. End treatments are visible
+        // hardware and stay on the mainline finish.
+        //
+        // Declared per family as ROLES, so the answer travels with the line rather than depending
+        // on every bracket item in the library having had a checkbox ticked.
+        subFinishRoles: ['track', 'bracket'],
         splice: 'H1-2TRVSPLC',
         frontRingPole: 'H1-2RCTPR',
     },
@@ -69,7 +80,9 @@ export const usageAt = (row, feet) => {
 /**
  * One traverse system → the component lines NetSuite consumes.
  * `rules` = the system/traverse_rules_<family> doc (usage rows). Returns { lines, skipped } where
- * lines = [{ code, qty, why }] and skipped = human notes for what is NOT consumed yet.
+ * lines = [{ code, qty, why, role, subFinish }] and skipped = human notes for what is NOT consumed
+ * yet. `subFinish` = this part is made in the base colours and takes the sub finish aligned to the
+ * order's finish, not the finish itself (the track and the brackets).
  */
 export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, rules, proj }) {
     const P = TRAVERSE_FAMILY_PARTS[family];
@@ -77,11 +90,17 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
     const ft = Math.max(parseInt(feet) || 4, align.minFeet || 4);
     const setup = U(align.setup); const ring = U(align.frontRail) === 'RING';
     const lines = []; const skipped = [];
-    const add = (code, qty, why) => { if (code && qty > 0) lines.push({ code: U(code), qty, why }); };
+    const subRoles = P.subFinishRoles || [];
+    // Every line says what it IS, and whether that kind of part wears the base colour. The caller
+    // routes on the line rather than re-deciding from the code, so one order and one BOM can never
+    // disagree about which parts are bronze.
+    const add = (code, qty, why, role = '') => {
+        if (code && qty > 0) lines.push({ code: U(code), qty, why, role, subFinish: subRoles.includes(role) });
+    };
 
-    add(P.fascia[U(align.material)] || P.fascia.P, ft, 'fascia (per ft)');
-    add(P.track, ft * (setup === 'DOUBLE' && !ring ? 2 : 1), setup === 'DOUBLE' && !ring ? 'two tracks (per ft)' : 'track (per ft)');
-    if (ring) { add(P.frontRingPole, 1, 'front ring pole'); skipped.push('ring COUNT rides the configurator — front pole consumed, rings not yet'); }
+    add(P.fascia[U(align.material)] || P.fascia.P, ft, 'fascia (per ft)', 'fascia');
+    add(P.track, ft * (setup === 'DOUBLE' && !ring ? 2 : 1), setup === 'DOUBLE' && !ring ? 'two tracks (per ft)' : 'track (per ft)', 'track');
+    if (ring) { add(P.frontRingPole, 1, 'front ring pole', 'ringPole'); skipped.push('ring COUNT rides the configurator — front pole consumed, rings not yet'); }
 
     // The single's bracket follows the PROJECTION sold. No projection given = the standard depth,
     // which is what every order consumed before the question was asked — so an older caller, and a
@@ -94,7 +113,7 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
         : singleCode;
     const bracketRow = (rules?.usage || []).find(u => U(u.itemId) === U(bracketCode))
         || (rules?.usage || []).find(u => U(u.itemId) === U(singleCode));
-    add(bracketCode, bracketRow ? usageAt(bracketRow, ft) : 2, 'brackets (count table)');
+    add(bracketCode, bracketRow ? usageAt(bracketRow, ft) : 2, 'brackets (count table)', 'bracket');
     if (U(align.mount) === 'CEILING' && !(rules?.usage || []).some(u => U(u.itemId) === U(P.brackets.CEILING)))
         skipped.push('ceiling bracket count uses the standard table — confirm when ceiling lands in the flow');
     if (setup === 'SINGLE' && !String(proj ?? '').trim())
@@ -102,10 +121,10 @@ export function explodeTraverse({ family = 'H1-2TRV', align, feet, motorItem, ru
 
     const spliceRow = (rules?.usage || []).find(u => U(u.itemId) === U(P.splice));
     const splices = spliceRow ? usageAt(spliceRow, ft) : 0;
-    if (splices > 0) add(P.splice, splices, 'splices (count table)');
+    if (splices > 0) add(P.splice, splices, 'splices (count table)', 'splice');
 
-    if (U(align.drive) === 'MOTORIZED') add(U(motorItem) || P.baseMotor, 1, 'motor');
-    else add(P.plug, 2, 'end plugs (manual, both ends)');
+    if (U(align.drive) === 'MOTORIZED') add(U(motorItem) || P.baseMotor, 1, 'motor', 'motor');
+    else add(P.plug, 2, 'end plugs (manual, both ends)', 'plug');
 
     skipped.push('carriers + configurator items consume when the configurator ships');
     return { lines, skipped };
