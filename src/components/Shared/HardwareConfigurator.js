@@ -621,6 +621,26 @@ function HardwareConfiguratorInner({
         // have no idea what they are"). Same resolver the cards, the quote lines and the rail use.
         (partId) => ourId(partId),
     ), [model, findPart, flow, ourId]);
+    // ── A QUESTION WITH ONE ANSWER IS NEVER ASKED, SO SAY WHAT IT ANSWERED (Stuart 2026-08-22) ─
+    // An axis discovers its values from the tags, and ONE value makes it `implied`: applied
+    // silently as the answer (activeAxes) and filtered out of the questions on screen. That is
+    // right for a genuinely one-way collection — a manual-only track should not grow a Drive
+    // question with one button. But it is also exactly what H1-1 looked like: 240 brackets with a
+    // blank SETUP and only the 30 doubles tagged, so the assembly had ONE setup value, every quote
+    // was silently a DOUBLE, and no "Single or Double" question ever appeared. Nothing on either
+    // screen said so — the missing question is invisible precisely because it is missing.
+    //
+    // suggestSetupFromName can only ever seed DOUBLE (never SINGLE, deliberately — a false DOUBLE
+    // hides a part from every single), so this is the standing shape of any assembly with doubles
+    // until someone runs 1.6's "Finish the singles". Reporting it is not calling it a fault: it
+    // states the decision the engine made without asking, and leaves the judgement to the reader.
+    const impliedNotes = useMemo(() => (model?.axes || [])
+        .filter(a => a.implied && Array.isArray(a.values) && a.values.length === 1)
+        .map(a => ({
+            sev: 'amber', kind: 'NOT ASKED',
+            msg: `"${a.label}" is answered ${a.values[0]} on every order — only one value is tagged, so the question never appears. Tag a second value in 1.6 to make it a question.`,
+        })), [model]);
+
     // ── THE IMPORTANT NOTE MUST NOT BE THE 250TH ─────────────────────────────────────────────
     // H1-138 reports 243 untagged nodes, and the thirteen projection notes sat underneath them
     // where nobody would ever scroll. Untagged geometry is ONE fact about the assembly — a list of
@@ -629,11 +649,11 @@ function HardwareConfiguratorInner({
     const tagNotes = useMemo(() => {
         const geo = diagnosis.filter(d => d.kind === 'UNTAGGED GEOMETRY');
         const rest = diagnosis.filter(d => d.kind !== 'UNTAGGED GEOMETRY');
-        return [...rest, ...projNotes, ...(geo.length ? [{
+        return [...rest, ...projNotes, ...impliedNotes, ...(geo.length ? [{
             sev: 'amber', kind: 'UNTAGGED GEOMETRY', collapsed: geo,
             msg: `${geo.length} node(s) in the .glb that no choice claims — they never render. Tag them in 1.6 or remove them.`,
         }] : [])];
-    }, [diagnosis, projNotes]);
+    }, [diagnosis, projNotes, impliedNotes]);
     const cadUrl = assembly?.manufacturingSpecs?.cadUrl;
 
     // ── THUMBNAILS, PHOTOGRAPHED FROM THIS ASSEMBLY'S OWN .GLB ───────────────────────────────

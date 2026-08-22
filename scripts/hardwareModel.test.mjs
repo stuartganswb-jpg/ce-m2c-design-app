@@ -110,6 +110,28 @@ const solidFamily = [
     eq('the new projection selects its own bracket', at8.slots.find(s => s.kind === 'BRACKET').options.map(o => o.id), ['BKT-S-80']);
 }
 
+// ── FIXTURE 2b: THE H1-1 SHAPE — DOUBLES TAGGED, SINGLES BLANK ───────────────────────────────
+// Stuart, 2026-08-22: "so did the designer miss a setting on loading, want to prevent this next
+// time." They had not. suggestSetupFromName seeds DOUBLE off the part name and can never seed
+// SINGLE, so H1-1 loaded with its 30 doubles tagged and 240 brackets/backplates blank. Blank votes
+// for nothing, one value is IMPLIED rather than asked, and every quote was silently a DOUBLE with
+// no "Single or Double" question anywhere on screen. These assertions pin the behaviour the new
+// NOT ASKED tag note reports — and prove the note fires on exactly this shape and not otherwise.
+{
+    // Same family, singles untagged — precisely what 1.6 hands the engine before "Finish the singles".
+    const doublesOnly = solidFamily.map(c => c.setup === 'SINGLE' ? { ...c, setup: '' } : c);
+    const m = resolve({ choices: doublesOnly, answers: {} });
+    const setup = m.axes.find(a => a.key === 'setup');
+    eq('only DOUBLE is tagged, so setup holds one value', setup.values, ['DOUBLE']);
+    ok('a one-value setup question is implied, never asked', setup.implied === true);
+
+    // Finishing the singles is the whole fix: a second value turns it back into a question.
+    const finished = resolve({ choices: solidFamily, answers: {} });
+    const asked = finished.axes.find(a => a.key === 'setup');
+    eq('tagging the singles restores both answers', asked.values, ['DOUBLE', 'SINGLE']);
+    ok('and the question is asked again', !asked.implied);
+}
+
 // ── FIXTURE 3: mixed solid + traverse in ONE assembly (Fabricut H1-138 shape) ─────────────────
 // The traverse rod occupies the same place in the file and is toggled by tag; it brings its own
 // brackets, backplates and returns, and carriers ride it. Finials and inside mounts are shared.

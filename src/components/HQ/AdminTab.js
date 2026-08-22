@@ -926,7 +926,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       // carries are SKIPPED — master options own the render geometry. Sibling-only options have
       // no nodes in the master GLB: they price/BOM correctly; the render shows that end without
       // the mesh until the designer adds the shape to the master file. Families without a
-      // codeRx (Fabricut H1) never union — those flows are byte-identical to before.
+      // codeRx never union. (H1-RND HAD no codeRx when this was written; it gained one on
+      // 2026-08-08 and unions exactly like H2. What keeps an H1 flow to its own pins today is
+      // SINGLE-ASSEMBLY MODE — famKey is forced null above — not a missing codeRx.)
       // STYLE-KEYED per-diameter tag map — filled by the union pass from EVERY family pin
       // (master + siblings, including deduped duplicates: a deduped H2-05LB still contributes
       // its .75 proj tag under dia '05'), read back at option emission as projByDia/mountByDia.
@@ -1013,7 +1015,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                   unionReport.push(`${sib.itemName || sib.itemId}: ${sibPins.length} pin(s) → +${addedCodes.length}${addedCodes.length ? ` (${addedCodes.join(', ')})` : ''}${skippedIds.length ? ` · skipped ${skippedIds.length} not-in-library (${[...new Set(skippedIds)].join(', ')})` : ''}`);
               }
           } else {
-              unionReport.push('no size family / no codeRx — union skipped (expected for H1)');
+              unionReport.push('no size family / no codeRx — union skipped (single-assembly mode, or no one size family dominates the pins)');
           }
       } catch (e) { unionReport.push(`⚠ FAILED: ${e.message || e}`); console.warn('family union skipped:', e); }
       // The union names what it did on every generate — a missing sibling option (H2-05FDB
