@@ -620,6 +620,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const [cpqFlows, setCpqFlows] = useState([]);
   
   const [libraryParts, setLibraryParts] = useState([]);
+  const [kitLibrary, setKitLibrary] = useState([]);   // Kit-class records carrying a kitAlign
   const [activeBomPins, setActiveBomPins] = useState([]); 
 
   const [globalLists, setGlobalLists] = useState({
@@ -701,11 +702,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       if (!a) return [];
       const base = String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase();
       if (!base) return [];
-      return kitsForSeeding(libraryParts).filter(k => {
+      return kitsForSeeding(kitLibrary).filter(k => {
           const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
           return code === base || code.startsWith(base + '-');
       });
-  }, [activeAssembly, libraryParts]);
+  }, [activeAssembly, kitLibrary]);
   
   const [activeMasterQuoteId, setActiveMasterQuoteId] = useState(null);
   const [activeDraftId, setActiveDraftId] = useState(null);
@@ -821,6 +822,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // catalog ever looked).
           setLibraryParts(docs.filter(d => ["Inventory", "Fee", "Alias"].includes(d.partClass) || d.manufacturingSpecs?.checkoutSelectable === true));
           setLiveAssemblies(docs.filter(d => d.partClass === "Assembly" || d.partClass === "Master Assembly"));
+          // KITS RIDE IN THEIR OWN LIST, NOT IN libraryParts (Stuart 2026-08-22). Widening the
+          // class filter above would have been one word, and would have put Kit records into
+          // `parts` — the index the configurator prices, resolves and looks parts up in. A kit is
+          // not a part, and the cheap edit would have reached every flow through the pricing path.
+          // Its own state reaches only the kit picker.
+          setKitLibrary(docs.filter(d => d.partClass === "Kit" && d.manufacturingSpecs?.kitAlign));
       });
 
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { if (docSnap.exists()) setGlobalLists(docSnap.data()); });
