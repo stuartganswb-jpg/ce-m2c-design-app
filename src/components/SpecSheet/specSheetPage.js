@@ -201,7 +201,15 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     return s2;
   };
 
-  let cursor = bodyTop;
+  // ── THE DRAWINGS FILL THE SHEET (Stuart 2026-08-23: "lots of dead white space") ───────────
+  // Rows sized to content leave whatever is left over at the bottom, so a one-row or two-row page
+  // hugged the title block with two thirds of the sheet blank. The slack is shared out between
+  // the rows instead — the hand-made sheets space four rows evenly down the page, and this is the
+  // same rule when there are fewer.
+  const slack = Math.max(0, bodyH - grid.totalH);
+  const lead = slack / (rows.length + 1);
+
+  let cursor = bodyTop + lead;
   rows.forEach((r, i) => {
     const h = grid.rowH[i];
     const cy = cursor + h / 2;
@@ -225,7 +233,7 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     if (cx.code !== undefined && r.code) {
       svg += `<text x="${cx.code}" y="${cy + FS.code / 3}" font-size="${FS.code}" text-anchor="middle">${r.code}</text>`;
     }
-    cursor += h;
+    cursor += h + lead;
   });
 
   // ── EACH RING ON ITS OWN, ALONG THE BOTTOM (Stuart 2026-08-23) ─────────────────────────────

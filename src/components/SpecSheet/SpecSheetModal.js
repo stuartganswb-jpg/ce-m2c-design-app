@@ -318,8 +318,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // there because an untagged source could not say which rod an arm belonged to. rodForArm()
     // answered that when the page was built (a double pins a front rod and a back rod; the arm's
     // tier says which is its own), so the page carries the node list and nothing here guesses.
-    const rodNodes = keep(opts.rodNodes || []);
-    const pole = rodNodes.length ? extractWorldMeshes(scene, rodNodes) : [];
+    // ⚠ THE ENGINE NAMES THE ROD; THE CLUSTER NAMES ITS GEOMETRY. A pin's node list comes from
+    // `targetNode`, and for H1-138's pole that is not what the .glb calls the mesh — asking for
+    // `S1-LONG-ROD--LEFT-HALF__1_H1138inPOLEleft1` found nothing and every page threw, leaving the
+    // PREVIOUS page's drawing on screen under a red banner (which is why two different arms showed
+    // the same picture). The cluster's node list is the one the scene answers to.
+    //
+    // So the engine still decides WHICH rod — `allowed` is its answer for this arm, and a double's
+    // rear rod stays off a single's page — but the names handed to the GLB are the cluster's.
+    const engineRod = (opts.rodNodes || []).filter(n => extractWorldMeshes(scene, [n]).length);
+    const poleNodes = engineRod.length ? keep(engineRod) : keep(nodesFor('POLE'));
+    const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
@@ -333,7 +342,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       .filter(r => r.meshes.length);
 
     const plateChoices = familyPins || [];
-    if (!pole.length) throw new Error(`The engine pairs this arm with a rod the GLB does not carry (${(opts.rodNodes || []).join(', ') || 'no rod tagged at all'}) — check the POLE pins in 1.6 / ⚖.`);
+    if (!pole.length) throw new Error(`No rod geometry for this page — the engine pairs the arm with ${(opts.rodNodes || []).join(', ') || 'no rod at all'}, and the POLE cluster carries ${nodesFor('POLE').length} node(s). Check the POLE pins in 1.6 / ⚖.`);
     // basic brackets have no plate — the bracket itself marks the wall side for axis inference
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
@@ -447,6 +456,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
 
     // Rod break: clip the front view to a window around plate/bracket/ring and mark the
     // cut — a full rod can't print at 1:1, and the hand-made sheets truncate it the same way.
+    // ⚠ THE ELEVATION IS A WINDOW, AND THE WINDOW HAS A MAXIMUM (Stuart 2026-08-23: "lots of
+    // dead white space, not matching my examples at all"). The window used to be whatever the
+    // included boxes spanned, so one box reaching down the rod opened it to the whole pole — the
+    // page then reduced to 41% to fit, drew a hairline rod across the sheet and left two thirds of
+    // it empty. The hand-made sheets show a SHORT broken view: plate, arm, the rings, and a stub
+    // of rod either side. So the window is capped, and anything past the cap is cut with a break
+    // mark, which is what a broken view means.
+    const WINDOW_MAX_M = 22 * 0.0254;   // ~22" — the widest the reference elevations run
     const clipFront = (front0, includeBoxes) => {
       const poleFull = viewBbox(pole, views.front);
       let lo = Infinity, hi = -Infinity;
@@ -455,7 +472,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         if (b.minU < lo) lo = b.minU;
         if (b.maxU > hi) hi = b.maxU;
       }
+      if (!isFinite(lo) || !isFinite(hi)) { lo = poleFull.minU; hi = poleFull.maxU; }
       lo -= 0.015; hi += 0.018; // extra visible rod so the parked ring clearly hangs on it
+      // Cap from the WALL end — the plate and arm are the anchor a reader lines up on, so it is
+      // the far end of the rod that gets cut, never the mounting.
+      if (hi - lo > WINDOW_MAX_M) hi = lo + WINDOW_MAX_M;
       const vis = clipSegmentsU(front0.vis, lo, hi);
       if (poleFull.minU < lo) vis.push(...breakMarks(lo + 0.004, poleFull.minV, poleFull.maxV));
       if (poleFull.maxU > hi) vis.push(...breakMarks(hi - 0.006, poleFull.minV, poleFull.maxV));
@@ -466,7 +487,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const rowRings = parkRings(bracketHalfAlong);
       const meshes = [...bracket, ...pole, ...rowRings.flatMap(r => r.meshes)];
       const front0 = withCarrier(renderHiddenLine(meshes, views.front, 1600));
-      const profile = renderHiddenLine(meshes, views.profile, 900);
+      // ⚠ NO RINGS IN THE PROFILE. Every ring is parked at its own station ALONG the rod, and the
+      // profile looks down that axis — so they all land on the same spot and draw on top of each
+      // other (Stuart 2026-08-23: "rendering over laps"). The reference's profile column is the
+      // arm's section; each ring's own end view is on the bottom strip.
+      const profile = renderHiddenLine([...bracket, ...pole], views.profile, 900);
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes]);
@@ -536,7 +561,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const rowRings = parkRings(Math.max(plateHalfAlong, bracketHalfAlong));
       const meshes = [...bracket, ...plateAll, ...pole, ...rowRings.flatMap(r => r.meshes)];
       const front0 = withCarrier(renderHiddenLine(meshes, views.front, 1600));
-      const profile = renderHiddenLine(meshes, views.profile, 900);
+      // Rings excluded — see the note on the basic row: they stack in this view.
+      const profile = renderHiddenLine([...bracket, ...plateAll, ...pole], views.profile, 900);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
