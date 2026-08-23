@@ -24,11 +24,20 @@ export const SCALE_1TO1 = scaleForPaper('letter');
 const MARGIN = 28;
 const SW = 0.6; // dimension line weight
 
-// fit-mode letter layout (row-centered columns)
-const COL_FIT = { detail: 130, front: 430, code: 660, profile: 890 };
-const BOX_FIT = { detail: [96, 60], front: [380, 42], profile: [230, 42] }; // [maxWpx, rowH inset]
-// 1:1 tabloid layout: detail column returns, profile takes the right side
-const COL_ACTUAL = { detail: 170, front: 560, code: 560, profile: 1290 };
+// ── TYPE SCALE (Stuart 2026-08-23) ───────────────────────────────────────────────────────────
+// "the prints will be printed on 8.5x11, i am ok having it scale 1:1 at 11 x17 as long as the page
+//  formats to print well at the reduced 8.5x11."
+//
+// That reduction is ~64%, and it is what decides the type size — not the 11×17 master. At 103 page
+// units per printed inch, the old 10–12 unit text came out at 5–7pt on the tabloid and 3–4.5pt
+// reduced, which is not readable. The hand-made sheets run ~11pt at 11×17 → ~7pt on letter, so the
+// scale below targets that and everything on the page is sized from it.
+const FS = { title: 17, sub: 13, code: 16, label: 13, dim: 14, note: 12, zone: 11 };
+// Breathing room around a drawing, in page units, so dimension lines and their labels have
+// somewhere to go. ~1/4" printed on either side.
+const PAD = { x: 30, y: 26 };
+const GUTTER = 34;      // between columns
+const CODE_COL = 150;   // the code column carries text only — a fixed, generous width
 
 export function dimH(x0, x1, y, inches) {
   let s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="black" stroke-width="${SW}"/>`;
@@ -90,33 +99,21 @@ function place(zb, cx, cy, scale) {
   };
 }
 
-// Shared fit-mode column scale: tightest fit across rows, capped at letter 1:1.
-function columnScale(rows, key, rowH) {
-  const [maxW, inset] = BOX_FIT[key];
-  let s = Infinity;
-  for (const r of rows) {
-    const zb = r[key]?.zb;
-    if (!zb) continue;
-    s = Math.min(s, maxW / (zb.maxU - zb.minU), (rowH - inset) / (zb.maxV - zb.minV));
-  }
-  return isFinite(s) ? Math.min(s, SCALE_1TO1) : 1;
-}
-
 function pageFrame(P, title, subtitle) {
   let svg = '';
   svg += `<rect x="${MARGIN}" y="${MARGIN}" width="${P.W - 2 * MARGIN}" height="${P.H - 2 * MARGIN}" fill="none" stroke="black" stroke-width="1.5"/>`;
   for (let i = 1; i < 8; i++) {
     const x = MARGIN + ((P.W - 2 * MARGIN) * i) / 8;
     svg += `<line x1="${x}" y1="${MARGIN}" x2="${x}" y2="${MARGIN - 8}" stroke="black"/><line x1="${x}" y1="${P.H - MARGIN}" x2="${x}" y2="${P.H - MARGIN + 8}" stroke="black"/>`;
-    svg += `<text x="${x - (P.W - 2 * MARGIN) / 16}" y="${MARGIN - 12}" font-size="10" text-anchor="middle">${9 - i}</text>`;
+    svg += `<text x="${x - (P.W - 2 * MARGIN) / 16}" y="${MARGIN - 12}" font-size="${FS.zone}" text-anchor="middle">${9 - i}</text>`;
   }
   ['D', 'C', 'B', 'A'].forEach((z, i) => {
     const y = MARGIN + ((P.H - 2 * MARGIN) * (i + 0.5)) / 4;
-    svg += `<text x="${MARGIN - 16}" y="${y}" font-size="10" text-anchor="middle">${z}</text>`;
-    svg += `<text x="${P.W - MARGIN + 16}" y="${y}" font-size="10" text-anchor="middle">${z}</text>`;
+    svg += `<text x="${MARGIN - 16}" y="${y}" font-size="${FS.zone}" text-anchor="middle">${z}</text>`;
+    svg += `<text x="${P.W - MARGIN + 16}" y="${y}" font-size="${FS.zone}" text-anchor="middle">${z}</text>`;
   });
-  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 34}" font-size="13">${title || ''}</text>`;
-  if (subtitle) svg += `<text x="${MARGIN + 40}" y="${MARGIN + 50}" font-size="11" fill="#444">${subtitle}</text>`;
+  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 36}" font-size="${FS.title}">${title || ''}</text>`;
+  if (subtitle) svg += `<text x="${MARGIN + 40}" y="${MARGIN + 56}" font-size="${FS.sub}" fill="#444">${subtitle}</text>`;
   return svg;
 }
 
@@ -125,57 +122,99 @@ const wrapSvg = (P, inner) =>
 
 // rows[i] = { rowKey, code, wallCode, front, profile, detail, dims } — dim specs:
 //   { t:'h', u0, u1, v, off? } | { t:'v', u, v0, v1, off?, side?, ldy?, dia? } | { t:'dia', u, v, val, dir? }
-export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], scaleMode = 'fit', paper, footerNote, cornerItems = [] }) {
-  const actual = scaleMode === 'actual';
-  const P = PAPERS[paper || (actual ? 'tabloid' : 'letter')];
-  const oneToOne = scaleForPaper(paper || (actual ? 'tabloid' : 'letter'));
-  let svg = pageFrame(P, title, subtitle);
+// ── THE GRID IS MEASURED, NOT DECLARED (Stuart 2026-08-23) ───────────────────────────────────
+// What was here: four fixed column centres (COL_FIT / COL_ACTUAL), fixed maximum widths per
+// column, equal row heights, and — in fit mode — ONE SCALE PER COLUMN taken as the tightest fit
+// across every row, so a single long rod drew every plate on the page tiny. A wide cell had
+// nowhere to go and a narrow one left a hole.
+//
+// What is here now: every cell is measured at print scale, columns are as wide as their widest
+// cell, rows as tall as their tallest, and the page shrinks UNIFORMLY (and says so) only if the
+// result overflows the paper. Scale is a property of the page, not of a column — which is what
+// makes 1:1 mean anything.
+const CELL_KEYS = ['detail', 'front', 'code', 'profile'];
+
+// Drawn size of one cell at a given scale, including the room its dimensions need.
+const cellSize = (view, scale) => (view && view.zb && isFinite(view.zb.maxU))
+  ? { w: (view.zb.maxU - view.zb.minU) * scale + PAD.x * 2, h: (view.zb.maxV - view.zb.minV) * scale + PAD.y * 2 }
+  : { w: 0, h: 0 };
+
+/** Column widths and row heights that fit the content, at `scale`. */
+function measureGrid(rows, scale) {
+  const colW = {};
+  CELL_KEYS.forEach(k => { colW[k] = k === 'code' ? CODE_COL : 0; });
+  const rowH = rows.map(r => {
+    let h = 0;
+    CELL_KEYS.forEach(k => {
+      if (k === 'code') return;
+      const { w, h: ch } = cellSize(r[k], scale);
+      if (w > colW[k]) colW[k] = w;
+      if (ch > h) h = ch;
+    });
+    return Math.max(h, 60);
+  });
+  const totalW = CELL_KEYS.reduce((a, k) => a + (colW[k] ? colW[k] + GUTTER : 0), -GUTTER);
+  const totalH = rowH.reduce((a, h) => a + h, 0);
+  return { colW, rowH, totalW, totalH };
+}
+
+// rows[i] = { rowKey, code, wallCode, front, profile, detail, dims } — dim specs:
+//   { t:'h', u0, u1, v, off? } | { t:'v', u, v0, v1, off?, side?, ldy?, dia? } | { t:'dia', u, v, val, dir? }
+export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], paper = 'tabloid', footerNote, bottomItems = [] }) {
+  const P = PAPERS[paper] || PAPERS.tabloid;
+  const oneToOne = scaleForPaper(paper || 'tabloid');
   const viewMaps = [];
 
-  const rowH = (P.H - 2 * MARGIN - 90) / Math.max(rows.length, 1);
-  const scales = actual
-    ? { detail: oneToOne, front: oneToOne, profile: oneToOne }
-    : {
-      detail: columnScale(rows, 'detail', rowH),
-      front: columnScale(rows, 'front', rowH),
-      profile: columnScale(rows, 'profile', rowH),
-    };
-  const cols = actual ? COL_ACTUAL : COL_FIT;
+  // Space the drawings may occupy, once the title block, the notes and the bottom strip are out.
+  const bodyTop = MARGIN + 78;
+  const bottomStripH = bottomItems.length ? 210 : 0;
+  const notesH = noteLines.length * (FS.note + 4) + 18;
+  const bodyH = P.H - MARGIN - bodyTop - bottomStripH - notesH;
+  const bodyW = P.W - 2 * MARGIN - 80;
+
+  // One scale for the page: true 1:1, reduced uniformly only if the content will not fit. A page
+  // that had to shrink says so in the footer rather than quietly lying about being actual size.
+  let scale = oneToOne;
+  let grid = measureGrid(rows, scale);
+  const shrink = Math.min(bodyW / (grid.totalW || 1), bodyH / (grid.totalH || 1), 1);
+  if (shrink < 1) { scale = oneToOne * shrink; grid = measureGrid(rows, scale); }
+  const toScale = shrink >= 0.999;
+
+  let svg = pageFrame(P, title, subtitle);
+
+  // Column centres, left to right, from the measured widths.
+  const cx = {};
+  let x = MARGIN + 40;
+  CELL_KEYS.forEach(k => {
+    if (!grid.colW[k]) return;
+    cx[k] = x + grid.colW[k] / 2;
+    x += grid.colW[k] + GUTTER;
+  });
 
   const drawDims = (dims, mu, mv) => {
-    let s = '';
+    let s2 = '';
     for (const d of dims || []) {
-      if (d.t === 'h') s += dimH(mu(d.u0), mu(d.u1), mv(d.v) + (d.off || 0), d.in);
-      else if (d.t === 'v') s += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia, d.side || 1, d.ldy || 0);
-      else if (d.t === 'dia') s += leaderDia(mu(d.u), mv(d.v), d.in, d.dir || 1);
+      if (d.t === 'h') s2 += dimH(mu(d.u0), mu(d.u1), mv(d.v) + (d.off || 0), d.in);
+      else if (d.t === 'v') s2 += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia, d.side || 1, d.ldy || 0);
+      else if (d.t === 'dia') s2 += leaderDia(mu(d.u), mv(d.v), d.in, d.dir || 1);
     }
-    return s;
+    return s2;
   };
 
-  // actual mode: rows stack by their real content height; fit mode: equal rows
-  let cursor = MARGIN + 78;
+  let cursor = bodyTop;
   rows.forEach((r, i) => {
-    let cy, rowBottom;
-    if (actual) {
-      const hPx = ((r.front.zb.maxV - r.front.zb.minV) * scales.front) + 76; // dims + code padding
-      cy = cursor + hPx / 2;
-      rowBottom = cursor + hPx;
-      cursor = rowBottom;
-    } else {
-      cy = MARGIN + 95 + rowH * i + rowH / 2;
-      rowBottom = MARGIN + 95 + rowH * (i + 1);
-    }
-    let frontBottom = cy;
-    for (const key of ['detail', 'front', 'profile']) {
+    const h = grid.rowH[i];
+    const cy = cursor + h / 2;
+    for (const key of CELL_KEYS) {
+      if (key === 'code' || cx[key] === undefined) continue;
       const view = r[key];
       if (!view) continue;
-      const { mu, mv, mapping } = place(view.zb, cols[key], cy, scales[key]);
+      const { mu, mv, mapping } = place(view.zb, cx[key], cy, scale);
       svg += segPaths(view.vis, mu, mv);
       svg += drawDims(r.dims?.[key], mu, mv);
       if (key === 'detail' && r.wallCode) {
-        svg += `<text x="${cols.detail}" y="${mapping.rect[1] - 34}" font-size="10" text-anchor="middle">${r.wallCode}</text>`;
+        svg += `<text x="${cx.detail}" y="${mapping.rect[1] - 16}" font-size="${FS.label}" text-anchor="middle">${r.wallCode}</text>`;
       }
-      if (key === 'front') frontBottom = mapping.rect[1] + mapping.rect[3];
       viewMaps.push({ rowKey: r.rowKey, view: key, mapping });
       for (const md of manualDims) {
         if (md.rowKey === r.rowKey && md.view === key) {
@@ -183,35 +222,41 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
         }
       }
     }
-    if (actual) {
-      const yUnder = frontBottom + 24;
-      if (yUnder < P.H - MARGIN - 34) svg += `<text x="${cols.code}" y="${yUnder}" font-size="12" text-anchor="middle">${r.code || ''}</text>`;
-      else svg += `<text x="${MARGIN + 55}" y="${P.H - MARGIN - 16}" font-size="12">${r.code || ''}</text>`;
-    } else svg += `<text x="${cols.code}" y="${cy + 4}" font-size="12" text-anchor="middle">${r.code || ''}</text>`;
+    if (cx.code !== undefined && r.code) {
+      svg += `<text x="${cx.code}" y="${cy + FS.code / 3}" font-size="${FS.code}" text-anchor="middle">${r.code}</text>`;
+    }
+    cursor += h;
   });
 
-  // corner detail images (1:1 mode): part options that stack in the composed views —
-  // e.g. the two ring choices — drawn separately bottom-right so both parts are shown
-  if (actual && cornerItems.length) {
-    const cellW = 240;
-    const baseCy = P.H - MARGIN - 150;
-    cornerItems.forEach((it, i) => {
-      const cx = P.W - MARGIN - 20 - cellW * (cornerItems.length - 1 - i) - cellW / 2;
-      const { mu, mv, mapping } = place(it.view.zb, cx, baseCy, oneToOne);
+  // ── EACH RING ON ITS OWN, ALONG THE BOTTOM (Stuart 2026-08-23) ─────────────────────────────
+  // "then along the bottom you can show each ring on its own from the side." Was a two-item huddle
+  // in the bottom-right corner; it is a strip across the page now, so a collection with four ring
+  // options shows four.
+  if (bottomItems.length) {
+    const stripTop = P.H - MARGIN - notesH - bottomStripH;
+    const cellW = (P.W - 2 * MARGIN - 80) / bottomItems.length;
+    const baseCy = stripTop + bottomStripH / 2;
+    svg += `<line x1="${MARGIN + 40}" y1="${stripTop}" x2="${P.W - MARGIN - 40}" y2="${stripTop}" stroke="#999" stroke-width="0.6"/>`;
+    bottomItems.forEach((it, i) => {
+      const bcx = MARGIN + 40 + cellW * i + cellW / 2;
+      const { mu, mv, mapping } = place(it.view.zb, bcx, baseCy, scale);
       svg += segPaths(it.view.vis, mu, mv);
       const [bx, by, bw, bh] = mapping.rect;
-      svg += `<text x="${cx}" y="${by - 28}" font-size="11" text-anchor="middle">${it.code}</text>`;
-      svg += leaderDia(bx + bw * 0.18, by + bh * 0.15, it.odIn, -1);
-      svg += dimV(bx + bw + 12, by, by + bh, it.hIn);
+      svg += `<text x="${bcx}" y="${stripTop + 20}" font-size="${FS.label}" text-anchor="middle">${it.code}</text>`;
+      if (it.odIn) svg += leaderDia(bx + bw * 0.18, by + bh * 0.15, it.odIn, -1);
+      if (it.hIn) svg += dimV(bx + bw + 12, by, by + bh, it.hIn);
     });
   }
-  noteLines.forEach((line, i) => {
-    svg += `<text x="${MARGIN + 290}" y="${P.H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
-  });
-  const footer = footerNote || (actual ? `SCALE 1:1 ON ${P.label} LANDSCAPE (0.25" margins, print at 100%)` : '');
-  if (footer) svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="10" text-anchor="end">${footer}</text>`;
 
-  return { svg: wrapSvg(P, svg), viewMaps, paper: paper || (actual ? 'tabloid' : 'letter') };
+  noteLines.forEach((line, i) => {
+    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 14 - (noteLines.length - 1 - i) * (FS.note + 4)}" font-size="${FS.note}">${line}</text>`;
+  });
+  const footer = footerNote || (toScale
+    ? `SCALE 1:1 ON ${P.label} LANDSCAPE (0.25" margins, print at 100%)`
+    : `REDUCED ${Math.round(shrink * 100)}% TO FIT ${P.label} — NOT TO SCALE, READ THE DIMENSIONS`);
+  svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 14}" font-size="${FS.note}" text-anchor="end">${footer}</text>`;
+
+  return { svg: wrapSvg(P, svg), viewMaps, paper: paper || 'tabloid', toScale, scale };
 }
 
 // Generic 1:1 items-grid page — used for the wall-mounts reference and the finials catalog.

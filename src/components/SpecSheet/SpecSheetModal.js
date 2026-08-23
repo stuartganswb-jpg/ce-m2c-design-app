@@ -268,14 +268,19 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     } catch (e) { alert('Failed to save the size source: ' + (e.message || e)); }
   };
   const [edition, setEdition] = useState('H1'); // 'H1' | 'FAB'
-  // 'tab11' = true 1:1 on 11×17 · 'letterReduced' = same 11×17 master reduced onto 8.5×11
-  // (~64%, marked not-to-scale) · 'fit' = compact 8.5×11 fit-scale layout
+  // ── ONE MASTER, TWO PAPERS (Stuart 2026-08-23) ───────────────────────────────────────────
+  // "i am ok having it scale 1:1 at 11 x17 as long as the page formats to print well at the
+  //  reduced 8.5x11 … the call out measurements show the true dim's so that is fine."
+  //
+  // So there is ONE layout — the 11×17 master, drawn at true 1:1 — and a choice of what to print
+  // it on. The third mode ('fit', a compact letter layout with its own scale rules) is gone: it
+  // was where the column-scale defect lived, and a second layout that reads differently from the
+  // master is a second thing to be wrong.
   const [paperMode, setPaperMode] = useState('tab11');
-  const scaleMode = paperMode === 'fit' ? 'fit' : 'actual';
-  const layoutPaper = scaleMode === 'actual' ? 'tabloid' : 'letter';
+  const layoutPaper = 'tabloid';
   const outputPaper = paperMode === 'tab11' ? 'tabloid' : 'letter';
   const reducedNote = paperMode === 'letterReduced'
-    ? 'REDUCED PRINT OF THE 11×17 1:1 MASTER — NOT 1:1 AT THIS SIZE (use the 11×17 option at 100% for actual scale)'
+    ? 'REDUCED PRINT OF THE 11×17 1:1 MASTER — NOT 1:1 AT THIS SIZE (dimensions are true; use 11×17 at 100% for actual scale)'
     : null;
   // The scene is loaded ONCE and counted, not described. What a page contains is the engine's
   // answer (specSheetPages), which needs pins and tags — not geometry — so the two no longer
@@ -577,7 +582,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (!ringChoices.length && ringNodes.length) {
       ringChoices = [{ partName: '', meshes: extractWorldMeshes(scene, ringNodes) }];
     }
-    let ring = [];
     const plateChoices = familyPins || [];
     if (!pole.length) throw new Error('No POLE cluster nodes found — tag this source assembly\'s pole cluster (category POLE) in 1.6 / ⚖.');
     // basic brackets have no plate — the bracket itself marks the wall side for axis inference
@@ -606,40 +610,43 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       bracket.length = 0;
       bracket.push(...keep);
     }
-    // pick the ring that actually HANGS on the rod for the composed views: prefer choices
-    // whose bbox wraps the pole centerline; among those the lowest one (a stacked second
-    // option floats above the rod and would corrupt the ring-drop measurement)
-    const ringDetails = [];
-    if (ringChoices.length) {
-      const vert = axes.vertAxis;
-      const poleC = axes.poleBox.center[vert];
-      const scored = ringChoices.map(rc => {
-        const b = groupBbox(rc.meshes);
-        return { ...rc, b, wraps: b.min[vert] <= poleC && b.max[vert] >= poleC, centerV: b.center[vert] };
-      });
-      const wrapping = scored.filter(s => s.wraps);
-      const pool = wrapping.length ? wrapping : scored;
-      const main = pool.reduce((lo, s) => (s.centerV < lo.centerV ? s : lo), pool[0]);
-      ring = main.meshes;
-      // detail images for EVERY ring option (they stack on the rod; key dims match, but
-      // the customer should see both parts) — rendered later once views exist
-      for (const s of scored) ringDetails.push(s);
-    }
+    // ── EVERY RING OPTION HANGS ON THE ROD (Stuart 2026-08-23) ──────────────────────────────
+    // "you can add each ring there and show the measurement from the top of the rod to the bottom
+    //  of the eye lit for each."
+    //
+    // The sheet used to pick ONE — the lowest option whose box wraps the pole — because the merged
+    // model stacks every ring at the same station, so drawing them all drew them on top of each
+    // other. They are not alternatives to be chosen between here; they are the choices this rod
+    // offers, and the drop measurement is exactly what differs between them. So each one is parked
+    // at its own station along the open rod instead.
+    const ringDetails = ringChoices.map(rc => ({ ...rc, b: groupBbox(rc.meshes) }));
     // presentation: park the ring on OPEN rod PAST the plate/bracket edge (per row — wide
     // -H plates push it further out). A ring in front of the plate face reads as if it
     // aligned to the plate top instead of hanging from the rod; off to the side the ring
     // and its drop measurement are unambiguous (matches how the return pages read).
-    const parkRing = (clearHalfM) => {
-      if (!ring.length) return ring;
-      const rb = groupBbox(ring), pb = axes.poleBox, bb = groupBbox(bracket);
+    // Park each ring on OPEN rod PAST the plate/bracket edge, one after another. A ring in front
+    // of the plate face reads as if it aligned to the plate top instead of hanging from the rod;
+    // out along the rod, each ring and its own drop measurement are unambiguous.
+    // Returns [{ partName, meshes }] in the order they sit on the rod.
+    const parkRings = (clearHalfM) => {
+      if (!ringDetails.length) return [];
+      const pb = axes.poleBox, bb = groupBbox(bracket);
       const ax = axes.poleAxis;
       const sign = Math.sign(pb.center[ax] - bb.center[ax]) || 1;
-      const ringHalf = (rb.max[ax] - rb.min[ax]) / 2 + 0.002;
-      let target = bb.center[ax] + sign * (clearHalfM + ringHalf + 0.008);
-      target = Math.min(Math.max(target, pb.min[ax] + ringHalf), pb.max[ax] - ringHalf);
-      const d = [0, 0, 0];
-      d[ax] = target - rb.center[ax];
-      return translateMeshes(ring, d);
+      let edge = bb.center[ax] + sign * (clearHalfM + 0.008);
+      const out = [];
+      for (const rc of ringDetails) {
+        const rb = rc.b;
+        const half = (rb.max[ax] - rb.min[ax]) / 2 + 0.002;
+        let target = edge + sign * half;
+        target = Math.min(Math.max(target, pb.min[ax] + half), pb.max[ax] - half);
+        const d = [0, 0, 0];
+        d[ax] = target - rb.center[ax];
+        out.push({ partName: rc.partName, meshes: translateMeshes(rc.meshes, d) });
+        // next station: past this ring, with a gap wide enough for its dimension label
+        edge = target + sign * (half + 0.020);
+      }
+      return out;
     };
     const bracketHalfAlong = bracket.length
       ? (groupBbox(bracket).max[axes.poleAxis] - groupBbox(bracket).min[axes.poleAxis]) / 2
@@ -677,17 +684,18 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     };
     // BASIC bracket / INSIDE MOUNT page: one row, choice + pole + ring only
     if (!plateChoices.length) {
-      const rowRing = parkRing(bracketHalfAlong);
-      const meshes = [...bracket, ...pole, ...rowRing];
+      const rowRings = parkRings(bracketHalfAlong);
+      const meshes = [...bracket, ...pole, ...rowRings.flatMap(r => r.meshes)];
       const front0 = renderHiddenLine(meshes, views.front, 1600);
       const profile = renderHiddenLine(meshes, views.profile, 900);
       const bracketF = viewBbox(bracket, views.front);
-      const ringF = rowRing.length ? viewBbox(rowRing, views.front) : null;
-      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ringF]);
+      const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
+      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes]);
       const dims = { front: [], profile: [], detail: [] };
       let measProjIn = null; // captured for the geometry-vs-cell check (IM has no projection)
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
-      if (ringF) dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 18, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
+      // one drop dim per ring option: top of rod → bottom of that ring's eyelet
+      ringBoxes.forEach(rb => dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN }));
       if (opts.isIM) {
         // inside mount: barrel length + Ø; end view gets plate Ø + ring Ø leaders.
         // No projection dim — IM mounts at the rod end, not on the wall.
@@ -702,10 +710,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           const pP = viewBbox(imPlate, views.profile);
           dims.profile.push({ t: 'dia', u: pP.minU + (pP.maxU - pP.minU) * 0.15, v: pP.maxV - (pP.maxV - pP.minV) * 0.15, dir: -1, in: (pP.maxV - pP.minV) * M2IN });
         }
-        if (ring.length) {
-          // ring OD only — the eyelet hangs below and would inflate the Ø
-          const ringBody = ring.filter(m => !/eyelet/i.test(m.name + m.path));
-          const rP = viewBbox(ringBody.length ? ringBody : ring, views.profile);
+        // end-view ring Ø, from the first ring on the rod — OD only, since the eyelet hangs
+        // below and would inflate it. Every option's own Ø is on the bottom strip.
+        const endRing = rowRings[0]?.meshes || [];
+        if (endRing.length) {
+          const ringBody = endRing.filter(m => !/eyelet/i.test(m.name + m.path));
+          const rP = viewBbox(ringBody.length ? ringBody : endRing, views.profile);
           dims.profile.push({ t: 'dia', u: rP.maxU - (rP.maxU - rP.minU) * 0.15, v: rP.maxV - (rP.maxV - rP.minV) * 0.15, in: (rP.maxV - rP.minV) * M2IN });
         }
       } else {
@@ -744,18 +754,19 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const wallCode = wallCodeMatch ? wallCodeMatch[0].toUpperCase().replace(/\s*\/?\s*P$/, '/P') : (wallPlate.length ? 'WALL PLATE' : '');
       // park the ring past THIS row's plate edge — wide -H plates push it further out
       const plateHalfAlong = (cb0.max[axes.poleAxis] - cb0.min[axes.poleAxis]) / 2;
-      const rowRing = parkRing(Math.max(plateHalfAlong, bracketHalfAlong));
-      const meshes = [...bracket, ...plateAll, ...pole, ...rowRing];
+      const rowRings = parkRings(Math.max(plateHalfAlong, bracketHalfAlong));
+      const meshes = [...bracket, ...plateAll, ...pole, ...rowRings.flatMap(r => r.meshes)];
       const front0 = renderHiddenLine(meshes, views.front, 1600);
       const profile = renderHiddenLine(meshes, views.profile, 900);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
       const bracketF = viewBbox(bracket, views.front);
-      const ringF = rowRing.length ? viewBbox(rowRing, views.front) : null;
+      const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
+      const ringF = ringBoxes[0] || null;
       const coverP = viewBbox(cover.length ? cover : plateAll, views.profile);
       const wallF = wallPlate.length ? viewBbox(wallPlate, views.front) : null;
-      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ringF]);
+      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ...ringBoxes]);
       const isRound = /-R$/i.test(platePin.partName || '');
       const dims = { front: [], profile: [], detail: [] };
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
@@ -765,9 +776,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: coverF.minV, off: 16, in: plateWIn });
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       if (ringF) {
-        // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition); label drops
-        // ~1/4" printed so the text clears the underside of the pole
-        dims.front.push({ t: 'v', u: ringF.maxU, v0: poleF.maxV, v1: ringF.minV, off: 18, ldy: 26, in: (poleF.maxV - ringF.minV) * M2IN });
+        // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition), for EVERY ring
+        // option on the rod — that measurement is the thing that differs between them. Label
+        // drops ~1/4" printed so the text clears the underside of the pole.
+        ringBoxes.forEach(rb => dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN }));
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
         if (topHoleOff != null && wallF) {
@@ -910,12 +922,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
             'Measured from 3D geometry, nearest 1/16". Manual dims entered where geometry cannot provide them.',
           ],
-          scaleMode,
           paper: layoutPaper,
           footerNote: reducedNote,
-          cornerItems: (built.ringItems?.length > 1)
-            ? built.ringItems.map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn }))
-            : [],
+          // Each ring on its own, side view, along the bottom of the sheet.
+          bottomItems: (built.ringItems || []).map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn })),
         });
         setPageData(result);
         setStatus('');
@@ -926,7 +936,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, sizedCode, baseAssembly, cellLabel, sizeFam, sizeSel]);
+  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, sizedCode, baseAssembly, cellLabel, sizeFam, sizeSel]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
@@ -1008,12 +1018,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         ...(rows.some(r => r.hasAsMounted) ? [AS_MOUNTED_NOTE] : []),
         'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
       ],
-      scaleMode,
       paper: layoutPaper,
       footerNote: reducedNote,
-      cornerItems: (built.ringItems?.length > 1)
-        ? built.ringItems.map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn }))
-        : [],
+      bottomItems: (built.ringItems || []).map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn })),
     }).svg;
   });
 
@@ -1090,10 +1097,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             <button style={edition === 'H1' ? btnOn : btn} onClick={() => setEdition('H1')}>H1 codes</button>
             <button style={edition === 'FAB' ? btnOn : btn} onClick={() => setEdition('FAB')}>Fabricut codes</button>
           </div>
-          <div style={{ display: 'flex', gap: '4px' }} title="1:1 = actual size on 11×17 · Reduced = the same 11×17 master shrunk onto 8.5×11 (~64%, not to scale) · Fit = compact 8.5×11">
+          <div style={{ display: 'flex', gap: '4px' }} title="1:1 = actual size on 11×17 · Reduced = the same master printed on 8.5×11 (~64%; dimensions still read true)">
             <button style={paperMode === 'tab11' ? btnOn : btn} onClick={() => setPaperMode('tab11')}>1:1 · 11×17</button>
             <button style={paperMode === 'letterReduced' ? btnOn : btn} onClick={() => setPaperMode('letterReduced')}>Reduced · 8.5×11</button>
-            <button style={paperMode === 'fit' ? btnOn : btn} onClick={() => setPaperMode('fit')}>Fit · 8.5×11</button>
+
           </div>
           <button style={dimTool ? btnOn : btn} onClick={() => { setDimTool(v => !v); pendingPtRef.current = null; }}>＋ Manual dim</button>
           {manualDims.length > 0 && (
