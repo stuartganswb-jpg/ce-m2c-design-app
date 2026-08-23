@@ -210,7 +210,12 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
               cart.breakdown.forEach(l => {
                   if (!l) return;
                   // A fee prices the quote and rides the rollup; it is not a NetSuite component.
-                  if (l.isFee) return;
+                  // ⚠ AND NEITHER IS A KIT (Stuart 2026-08-22). A traverse kit has no NetSuite
+                  // identity by design — Quick Ship has always pushed "exploded components plus a
+                  // generic traverse $-holder, never the kit itself". Its dollars ride the rollup
+                  // the same way a fee's do, and the component lines beneath it are what push.
+                  // Without this the estimate would carry a line item NetSuite has no item for.
+                  if (l.isFee || l.isKit) return;
                   // The traverse components have their own loop below — they are on the breakdown
                   // for the documents, and pushing them from both places would double the order.
                   if (l.trvComponent) return;

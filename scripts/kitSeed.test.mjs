@@ -127,28 +127,37 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
         ],
         total: 180,
     };
-    const r = applyKitPricing(priced, { kitCode: 'H1-2TRV-4/EP', kitName: '2in wall mount', kitPrice: 318, baseFeet: 4 });
+    const r = applyKitPricing(priced, { kitCode: 'H1-2TRV-4/EP', kitName: '2in wall mount', kitPrice: 318, baseFeet: 4, clientSku: 'HTS7504F PREMIUM' });
 
     eq('the kit is the first line', [r.lines[0].partId, r.lines[0].qty, r.lines[0].total], ['H1-2TRV-4/EP', 1, 318]);
     ok('and says what it is', r.lines[0].detail === '4 ft kit' && r.lines[0].isKit === true);
+    eq("it carries THEIR number too", r.lines[0].sku, 'HTS7504F PREMIUM');
+    ok('and is marked off the NetSuite component list', r.lines[0].noNs === true);
 
     const fascia = r.lines.find(l => l.partId === 'H1-2TRVF');
-    eq('a 10 ft fascia bills 6 ft above the kit', [fascia.feet, fascia.total], [6, 54]);
+    eq('a 10 ft fascia bills 6 ft above the kit', [fascia.billedFeet, fascia.total], [6, 54]);
     ok('and says so on the line', /6 ft above the 4 ft kit/.test(fascia.detail));
-    eq('THE CUT LENGTH IS UNTOUCHED — the bench still cuts 10 ft', fascia.cutLength, 120);
+    eq('THE REAL LENGTH IS UNTOUCHED — the shop still cuts 10 ft', [fascia.feet, fascia.cutLength], [10, 120]);
 
     eq('the track bills its 6 ft too', r.lines.find(l => l.partId === 'H1-2TRVT').total, 36);
     eq('a customisation bills in full — it was never in the kit', r.lines.find(l => l.partId === 'H1-1CC').total, 30);
     eq('318 + 54 + 36 + 30', r.total, 438);
 }
 
-// ── 9. A KIT-LENGTH ORDER BILLS THE KIT AND NOTHING ELSE ─────────────────────────────────────
-// The 4 ft set already paid for those 4 feet, so they must not appear a second time.
+// ── 9. A COVERED LINE STAYS ON THE LIST, AT ZERO ─────────────────────────────────────────────
+// ⚠ THE BUG THIS EXISTS TO CATCH: dropping the lines the kit paid for is right for the bill and
+// catastrophic for everything else. pricingBreakdown is the SAME list the NetSuite push, the pick
+// list and the packing slip read — so a 4 ft order would have billed correctly and shipped nothing.
 {
-    const priced = { lines: [{ partId: 'F', qty: 1, perFoot: true, feet: 4, unit: 9, total: 36 }], total: 36 };
+    const priced = { lines: [{ partId: 'F', name: 'fascia', qty: 1, perFoot: true, feet: 4, unit: 9, total: 36, cutLength: 48 }], total: 36 };
     const r = applyKitPricing(priced, { kitCode: 'K', kitPrice: 318, baseFeet: 4 });
-    eq('only the kit line survives', r.lines.length, 1);
-    eq('and the total IS the kit', r.total, 318);
+
+    eq('the component is STILL THERE, so it ships and it pushes', r.lines.length, 2);
+    const f = r.lines.find(l => l.partId === 'F');
+    eq('it just bills nothing', [f.billedFeet, f.total], [0, 0]);
+    ok('and says why, so a document can print it as included', f.inKit === true && /included in the 4 ft kit/.test(f.detail));
+    eq('its cut length is untouched', f.cutLength, 48);
+    eq('and the order totals the kit', r.total, 318);
 
     const shortCut = applyKitPricing({ lines: [{ partId: 'F', qty: 1, perFoot: true, feet: 3, unit: 9, total: 27 }], total: 27 },
         { kitCode: 'K', kitPrice: 318, baseFeet: 4 });

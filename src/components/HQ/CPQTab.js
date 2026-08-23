@@ -2652,8 +2652,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // the finish here reaches all of them at once, and keeps it where it belongs: stated once
           // per configuration, not repeated down every part row.
           const finLabel = finishLabelOfItem(item);
+          // ⚠ WHEN IT WAS ORDERED AS A KIT, THE HEADER IS THE KIT (Stuart 2026-08-22: "header = kit
+          // code + sidemark + finish"). This row is the one EVERY document renders, so naming the
+          // kit here makes the quote, the sales order, the packing slip and the invoice honest in
+          // one move instead of four — and it prints the CLIENT's own sku beside ours, because
+          // that is the number they ordered against and the one they will reconcile to.
+          const kitLine = (item.pricingBreakdown || []).find(l => l.isKit);
+          const kitTitle = kitLine
+              ? `${kitLine.legacyErpId}${kitLine.clientSku && kitLine.clientSku !== kitLine.legacyErpId ? ` · ${kitLine.clientSku}` : ''}`
+              : item.assemblyName;
           mergedBreakdown.push({
-              name: `▶ ${item.assemblyName} [${item.sidemark}]${finLabel ? `  ·  ${finLabel}` : ''}`,
+              name: `▶ ${kitTitle} [${item.sidemark}]${finLabel ? `  ·  ${finLabel}` : ''}`,
               qty: item.qty,
               total: grossTotal,
               finishLabel: finLabel || null,

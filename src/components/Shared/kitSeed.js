@@ -186,37 +186,42 @@ const isPerFootLine = (l) => !!l.perFoot;
 /**
  * Re-shape a priced configuration as: the kit, then what was added to it.
  *
+ * ⚠ NOTHING IS EVER REMOVED FROM THE LIST. The first cut of this dropped the per-foot lines that
+ * the kit already paid for, which is right for the BILL and catastrophic for everything else:
+ * `pricingBreakdown` is the same list the NetSuite push, the pick list and the packing slip read,
+ * so a 4 ft order would have billed correctly and shipped nothing. A covered line stays, at zero,
+ * and says why. Stuart 2026-08-22, on the packing slip: "a kit header with components beneath."
+ *
  * Pure. Applied ONLY where a kit was chosen — every other configuration is returned untouched, so
  * no existing flow's pricing can move.
  *
  * @returns {{lines, total}} in the same shape priceConfiguration returns.
  */
-export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet } = {}) {
+export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, clientSku } = {}) {
     if (!priced || !kitCode) return priced;
     const base = Number(baseFeet) > 0 ? Number(baseFeet) : 4;
     const price = Number(kitPrice) > 0 ? Number(kitPrice) : 0;
 
-    const rest = [];
-    for (const l of priced.lines || []) {
-        if (!isPerFootLine(l)) { rest.push(l); continue; }
-        const extra = (Number(l.feet) || 0) - base;
-        // Wholly inside the kit — the 4 ft set already paid for it, so it must not appear again.
-        // It is not dropped from the ORDER (the components still travel); it is dropped from the
-        // BILL, which is the only thing this function has an opinion about.
-        if (extra <= 0) continue;
-        rest.push({
+    const rest = (priced.lines || []).map(l => {
+        if (!isPerFootLine(l)) return l;
+        const feet = Number(l.feet) || 0;
+        const billed = Math.max(0, feet - base);
+        return {
             ...l,
-            feet: extra,
-            total: (Number(l.unit) || 0) * extra,
-            detail: `${extra} ft above the ${base} ft kit`,
-            aboveKit: true,
-        });
-    }
+            // `feet` stays the REAL length — it is what the shop cuts and what the packing slip
+            // says arrived. Only the money moves.
+            billedFeet: billed,
+            total: (Number(l.unit) || 0) * billed,
+            inKit: billed <= 0,
+            detail: billed > 0 ? `${billed} ft above the ${base} ft kit` : `included in the ${base} ft kit`,
+        };
+    });
 
     const kitLine = {
         partId: kitCode,
         name: kitName || kitCode,
-        sku: kitCode,
+        sku: clientSku || kitCode,
+        aliasCode: clientSku || '',
         billedId: kitCode,
         qty: 1,
         perFoot: false,
@@ -229,7 +234,13 @@ export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet }
         hidden: false,
         role: 'KIT',
         position: '',
+        // ⚠ A KIT IS NOT A NETSUITE ITEM. Quick Ship says so in as many words — "NO NetSuite
+        // identity by design (noNs) — the SO push consumes exploded components plus a generic
+        // traverse $-holder, never the kit itself." Its money rides the rollup exactly as a fee's
+        // does; the components beneath it are what push and what get picked. Without this the push
+        // would send a code NetSuite has no item for.
         isKit: true,
+        noNs: true,
     };
 
     const lines = [kitLine, ...rest];

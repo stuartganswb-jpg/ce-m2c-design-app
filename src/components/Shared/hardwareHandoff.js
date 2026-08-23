@@ -78,6 +78,14 @@ function handoffLine(l, part, finishName = '') {
         // cannot be sprayed off one label, so the line says what IT is finished in. A part that
         // wears nothing carries nothing, and the floor reads that as mill.
         ...(l.finishCode ? { finishCode: l.finishCode, finishLabel: finishName || l.finishCode } : {}),
+        // ── THE KIT'S OWN FIELDS (Stuart 2026-08-22) ────────────────────────────────────────
+        // `isKit`/`noNs` keep it off the NetSuite component list and off the pick list — its money
+        // rides the rollup, its components are what ship. `inKit` marks a part the kit already paid
+        // for, so a document can print it as included rather than as a free line nobody understands.
+        ...(l.isKit ? { isKit: true, noNs: true } : {}),
+        ...(l.inKit ? { inKit: true } : {}),
+        ...(l.billedFeet !== undefined ? { billedFeet: l.billedFeet } : {}),
+        ...(l.detail ? { detail: l.detail } : {}),
         ...(l.cutLength ? { cutLength: l.cutLength } : {}),
         ...(l.dimensions ? { dimensions: l.dimensions } : {}),
     };

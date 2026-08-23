@@ -559,7 +559,12 @@ function HardwareConfiguratorInner({
     const kitBill = useMemo(() => {
         if (!kitSource) return null;
         const kp = priceChoice({ partId: kitSource.code }, kitSource.record, priceCtx);
-        return { kitCode: kitSource.code, kitName: kitSource.name, kitPrice: kp?.price || 0, baseFeet: kitSource.baseFeet };
+        return {
+            kitCode: kitSource.code, kitName: kitSource.name, kitPrice: kp?.price || 0,
+            baseFeet: kitSource.baseFeet,
+            // THEIR number, resolved by the same rule every other line's alias is.
+            clientSku: kp?.sku || kp?.aliasCode || '',
+        };
     }, [kitSource, priceCtx]);
     const priced = useMemo(() => {
         const p = priceConfiguration(resolved, priceCtx);
