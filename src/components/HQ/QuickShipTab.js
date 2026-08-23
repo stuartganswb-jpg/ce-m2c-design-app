@@ -5,6 +5,7 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
+import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary } from '../Shared/feeRules';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
@@ -162,6 +163,17 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [trvCfg, setTrvCfg] = useState(null);          // { drive, feet, kitCode, finish } while open
     const [trvRules, setTrvRules] = useState(null);      // system/traverse_rules_H1-2TRV
     const [quickQty, setQuickQty] = useState('');   // blank, like every other qty on this tab
+    // TO BE FINISHED (Stuart 2026-08-22): the raw mill item plus the finish it is to be painted or
+    // plated in. Not stock — this is an order for something we make, entered on the same counter,
+    // so the CSR does not go to CPQ for a part that needs no configuring.
+    const [tbfItemId, setTbfItemId] = useState('');
+    const [tbfFinish, setTbfFinish] = useState('');
+    const [tbfQty, setTbfQty] = useState('');
+    const [tbfPrice, setTbfPrice] = useState('');   // prefilled from the customer's price; editable
+    // FEES as their own entry line — rush, freight, packaging, coatings. Priced the same way every
+    // fee is priced everywhere else (Shared/feeRules), so tab 7 and CPQ can never disagree.
+    const [feeItemId, setFeeItemId] = useState('');
+    const [feeQty, setFeeQty] = useState('');
     const [kb, setKb] = useState(EMPTY_KB);
     // The Kit Builder is a BUILD tool, not an order-entry one (Stuart 2026-08-22: "make the kit
     // builder a collapsed window at the bottom, so we open it only to build kits, but its out of
@@ -671,6 +683,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             packUom: pack.uom, packSize: pack.size,
             // Fees priced off a master list (rush) bill at the list amount, not the item's price.
             rateOverride: (opts && opts.rateOverride != null) ? opts.rateOverride : null,
+            // What the floor paints it (a to-be-finished line), and the fee rule that prices it.
+            ...(opts && opts.finishCode ? { finishCode: opts.finishCode } : {}),
+            ...(opts && opts.toBeFinished ? { toBeFinished: true } : {}),
+            ...(opts && opts.feeRule ? { feeRule: opts.feeRule } : {}),
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
             kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
         }]);
@@ -683,6 +699,71 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         pushLine(it, quickQty, '');
         setQuickItemId(''); setQuickQty('');
         addLog(`Added ${erpOf(it)} ×${quickQty}`, 'success');
+    };
+
+    // ── TO BE FINISHED ───────────────────────────────────────────────────────────────────────
+    // The RAW item — the code before the "/" — because that is what the floor takes off the shelf
+    // and paints. Deliberately NOT scoped to the collection selector: a mill part is often tagged
+    // for nothing, and a picker that hides the item you are trying to order reads as broken.
+    const rawItems = useMemo(() => allItems.filter(it =>
+        !isFinished(it)                                   // no /SUFFIX — this is the mill part
+        && !isFeeItemRecord(it)
+        && it.partClass !== 'Kit' && it.partClass !== 'Alias'
+        && !it.aliasOf && !it.manufacturingSpecs?.aliasOf
+        && it.manufacturingSpecs?.isRetired !== true
+        && !!erpOf(it)), [allItems]);
+    // Every fee record in the brand — the same identity test 4.6 and CPQ use, so a record that
+    // reads as a fee there reads as one here. (`feeItems(kw)` above is a different thing: the
+    // kit builder's keyword pick of cut / splice / rush.)
+    const allFeeItems = useMemo(() => allItems.filter(it =>
+        isFeeItemRecord(it) && it.manufacturingSpecs?.isRetired !== true), [allItems]);
+
+    const tbfItem = itemById(tbfItemId) || null;
+    // What this customer pays for it — their 4.6 row, else our base price. Shown rather than
+    // assumed, and editable: an order taken over the phone sometimes carries a number that was
+    // agreed before the row existed.
+    const tbfResolved = tbfItem ? rateFor(tbfItem) : 0;
+    useEffect(() => { setTbfPrice(tbfItem ? String(tbfResolved) : ''); }, [tbfItemId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const addToBeFinished = () => {
+        const it = tbfItem;
+        if (!it) return alert('Pick the raw item — the code before the "/".');
+        if (!tbfFinish) return alert('Pick the finish. A part cannot go to the floor as "painted" without saying which paint.');
+        if (!(parseInt(tbfQty) > 0)) return alert('Enter a quantity.');
+        const typed = parseFloat(tbfPrice);
+        const priced = Number.isFinite(typed) ? typed : tbfResolved;
+        const fin = finishList.find(f => f.code === tbfFinish);
+        pushLine(it, tbfQty, `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}`, null, {
+            noPack: true,                                  // a made-to-order part is not a pack
+            // Only override when the operator actually changed the number — otherwise the line
+            // keeps repricing live, which is how every other line on this tab behaves.
+            rateOverride: Math.abs(priced - tbfResolved) > 0.004 ? priced : null,
+            finishCode: tbfFinish, toBeFinished: true,
+        });
+        addLog(`To be finished: ${erpOf(it)} ×${tbfQty} in ${tbfFinish}`, 'success');
+        setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setTbfPrice('');
+    };
+
+    // ── FEES ─────────────────────────────────────────────────────────────────────────────────
+    // A flat fee bills qty × its price. A PERCENTAGE fee has no price of its own — it is worked
+    // out from the order, and it is worked out LIVE in pricedCart, so adding a line after the fee
+    // moves the fee with it.
+    const feeItem = itemById(feeItemId) || null;
+    const feeRule = feeItem ? feeRuleOf(feeItem.manufacturingSpecs) : null;
+    const addFee = () => {
+        const it = feeItem;
+        if (!it) return alert('Pick a fee.');
+        const rule = feeRuleOf(it.manufacturingSpecs);
+        const qty = rule.mode === 'PERCENT' ? 1 : parseInt(feeQty);
+        if (rule.mode !== 'PERCENT' && !(qty > 0)) return alert('Enter a quantity.');
+        pushLine(it, qty, rule.mode === 'PERCENT' ? feeRuleSummary(rule, null) : '', null, {
+            noPack: true,
+            // The rule rides the LINE so pricedCart can price a percentage off the finished order
+            // rather than off whatever the cart happened to hold at the moment it was added.
+            feeRule: rule,
+        });
+        addLog(`Fee added: ${erpOf(it)}${rule.mode === 'PERCENT' ? ` (${rule.percent}% of the order)` : ` ×${qty}`}`, 'success');
+        setFeeItemId(''); setFeeQty('');
     };
 
     // Resolve a kit-builder config into flat lines against CURRENT inventory (prices re-resolve live).
@@ -858,6 +939,18 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 rateMap.set(l.key, rate);
             });
         });
+        // ── PERCENTAGE FEES PRICE OFF THE ORDER, SO THEY GO LAST (Stuart 2026-08-22) ──────────
+        // The base is everything that is not itself a fee — the same base CPQ uses (parts before
+        // fees and before shipping), read through the same Shared/feeRules arithmetic, so 25% means
+        // the same number whichever door the order came through. Two percentage fees on one order
+        // therefore never compound, and a $100 floor still holds on a small one.
+        const pct = cart.filter(l => l.feeRule && l.feeRule.mode === 'PERCENT');
+        if (pct.length) {
+            const isFeeLine = (l) => !!l.feeRule || (() => { const it = itemById(l.itemId); return !!it && isFeeItemRecord(it); })();
+            const base = cart.filter(l => !isFeeLine(l))
+                .reduce((sum, l) => sum + (rateMap.get(l.key) || 0) * Math.max(1, eachQtyOf(l)), 0);
+            pct.forEach(l => rateMap.set(l.key, computeFee({ rule: l.feeRule, qty: 1, configSubtotal: base }).amount));
+        }
         return cart.map(l => ({ ...l, rate: rateMap.get(l.key) ?? 0, eachQty: eachQtyOf(l) }));
     }, [cart, customerId, kits, allItems]); // eslint-disable-line react-hooks/exhaustive-deps
     const cartTotal = pricedCart.reduce((s, l) => s + l.rate * l.eachQty, 0);
@@ -998,7 +1091,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         price: { id: "-1" },
                         // The customer ordered the alias code — name it first so the SO reads the way
                         // they ordered, while the LINE ITEM stays the real stocked part.
-                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''} [Quick Ship stock]`,
+                        description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : l.feeRule ? ' [fee]' : ' [Quick Ship stock]'}`,
                         ...(lineTag ? { custcol3: lineTag } : {}),
                     })).concat(trvPushLines.map(t => lineTag ? { ...t, custcol3: lineTag } : t))
                 }
@@ -1101,8 +1194,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             {/* HEADER */}
             <div style={{ ...card, padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
-                    <span style={{ ...lbl, color: 'var(--brass)' }}>Stocked / Pre-Finished Counter</span>
-                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Quick Ship</h2>
+                    <span style={{ ...lbl, color: 'var(--brass)' }}>Stock · To Be Finished · Kits · Fees</span>
+                    <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Order Entry</h2>
                 </div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textAlign: 'right' }}>
                     Flat lines → NetSuite Sales Order<br />No BOM build · {stocked.length} stocked items
@@ -1296,10 +1389,70 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                     <div style={card}>
                         <div style={cardHd}>Quick Add Item</div>
-                        <div style={{ padding: '18px 20px', display: 'grid', gridTemplateColumns: '1fr 70px auto', gap: '12px', alignItems: 'end' }}>
-                            <div><span style={lbl}>Stocked Item #</span><ItemSelect value={quickItemId} onChange={setQuickItemId} items={stocked} /></div>
-                            <div><span style={lbl}>Qty</span><input type="number" min="1" value={quickQty} onChange={e => setQuickQty(e.target.value)} style={qtyInp} /></div>
-                            <button onClick={addQuick} style={btn('var(--ink)', '#fff')}>Add</button>
+                        <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                            {/* 1 — OFF THE SHELF. Finished stock, in the scoped collection. */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 70px auto', gap: '12px', alignItems: 'end' }}>
+                                <div><span style={lbl}>Stocked Item #</span><ItemSelect value={quickItemId} onChange={setQuickItemId} items={stocked} /></div>
+                                <div><span style={lbl}>Qty</span><input type="number" min="1" value={quickQty} onChange={e => setQuickQty(e.target.value)} style={qtyInp} /></div>
+                                <button onClick={addQuick} style={btn('var(--ink)', '#fff')}>Add</button>
+                            </div>
+
+                            {/* 2 — TO BE FINISHED. The raw mill part plus the colour it is going to
+                                wear. Every other tab calls this a made-to-order line; here it is one
+                                row, because nothing about it needs configuring. */}
+                            <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '14px', display: 'grid', gridTemplateColumns: '1fr 150px 62px 82px auto', gap: '10px', alignItems: 'end' }}>
+                                <div>
+                                    <span style={lbl}>To Be Finished item # — raw part, before the “/”</span>
+                                    <ItemSelect value={tbfItemId} onChange={setTbfItemId} items={rawItems} placeholder="Search raw item #…" />
+                                </div>
+                                <div>
+                                    <span style={lbl}>Finish</span>
+                                    <select value={tbfFinish} onChange={e => setTbfFinish(e.target.value)} style={inp}>
+                                        <option value="">— finish —</option>
+                                        {[...new Map(finishList.map(f => [f.code, f])).values()]
+                                            .sort((a, b) => Number(a.outsourced) - Number(b.outsourced) || a.code.localeCompare(b.code))
+                                            .map(f => <option key={f.code} value={f.code}>{f.code}{f.name && f.name !== f.code ? ` — ${f.name}` : ''}{f.outsourced ? ' · outsourced' : ''}</option>)}
+                                    </select>
+                                </div>
+                                <div><span style={lbl}>Qty</span><input type="number" min="1" value={tbfQty} onChange={e => setTbfQty(e.target.value)} style={qtyInp} /></div>
+                                <div>
+                                    <span style={lbl}>Price</span>
+                                    <input type="number" min="0" step="0.01" value={tbfPrice} onChange={e => setTbfPrice(e.target.value)} placeholder="—" style={{ ...qtyInp, width: '82px', textAlign: 'right' }} />
+                                </div>
+                                <button onClick={addToBeFinished} style={btn('var(--ink)', '#fff')}>Add</button>
+                            </div>
+                            {tbfItem && (
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.06em', marginTop: '-6px' }}>
+                                    {selectedCustomer
+                                        ? (findClientPriceRow(tbfItem.clientPricing, custKeys)
+                                            ? `${selectedCustomer.name.toUpperCase()}'S PRICE $${tbfResolved.toFixed(2)}${findClientPriceRow(tbfItem.clientPricing, custKeys)?.clientSku ? ` · THEIR # ${findClientPriceRow(tbfItem.clientPricing, custKeys).clientSku}` : ''}`
+                                            : `NO ${selectedCustomer.name.toUpperCase()} PRICE ON THIS ITEM — BASE PRICE $${tbfResolved.toFixed(2)}`)
+                                        : `BASE PRICE $${tbfResolved.toFixed(2)} — PICK A CUSTOMER TO PRICE IT FOR THEM`}
+                                </div>
+                            )}
+
+                            {/* 3 — FEES. Every fee item in the brand, priced the one way fees are
+                                priced. A percentage fee has no quantity: it is a share of the order. */}
+                            <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '14px', display: 'grid', gridTemplateColumns: '1fr 62px auto', gap: '10px', alignItems: 'end' }}>
+                                <div>
+                                    <span style={lbl}>Fee — rush, freight, packaging, coatings…</span>
+                                    <ItemSelect value={feeItemId} onChange={setFeeItemId} items={allFeeItems} placeholder={allFeeItems.length ? 'Search fees…' : 'No fee items in this brand'} />
+                                </div>
+                                <div>
+                                    <span style={lbl}>Qty</span>
+                                    <input type="number" min="1" value={feeRule?.mode === 'PERCENT' ? '' : feeQty} onChange={e => setFeeQty(e.target.value)}
+                                        disabled={feeRule?.mode === 'PERCENT'} placeholder={feeRule?.mode === 'PERCENT' ? '—' : ''}
+                                        title={feeRule?.mode === 'PERCENT' ? 'A percentage fee is a share of the order, not a count' : ''}
+                                        style={{ ...qtyInp, background: feeRule?.mode === 'PERCENT' ? 'var(--paper-2)' : '#fff' }} />
+                                </div>
+                                <button onClick={addFee} style={btn('var(--ink)', '#fff')}>Add</button>
+                            </div>
+                            {feeItem && (
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', letterSpacing: '.06em', marginTop: '-6px' }}>
+                                    {feeRuleSummary(feeRule, rateFor(feeItem)).toUpperCase()}
+                                    {feeRule?.mode === 'PERCENT' && ' — WORKED OUT FROM THE ORDER, AND IT MOVES AS LINES ARE ADDED'}
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -1400,9 +1553,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     )}
 
                     <div style={card}>
-                        <div onClick={() => setKbOpen(o => !o)} title={kbOpen ? 'Collapse — out of the way while entering orders' : 'Open the kit builder'}
+                        <div onClick={() => setKbOpen(o => !o)} title={kbOpen ? 'Collapse — out of the way while entering orders' : 'Open it to add a whole collection by slot, or to build and save a kit'}
                             style={{ ...cardHd, display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
-                            <span>Kit Builder{!kbOpen && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', color: 'var(--ink-soft)', marginLeft: '10px' }}>BUILD &amp; SAVE KITS — CLOSED</span>}</span>
+                            <span>Quick Add by Collection &amp; Kit Builder{!kbOpen && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', color: 'var(--ink-soft)', marginLeft: '10px' }}>PICK BY COLLECTION, OR BUILD &amp; SAVE A KIT — CLOSED</span>}</span>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>{kbOpen ? '▾' : '▸'}</span>
                         </div>
                         <div style={{ padding: '18px 20px', display: kbOpen ? 'flex' : 'none', flexDirection: 'column', gap: '14px' }}>

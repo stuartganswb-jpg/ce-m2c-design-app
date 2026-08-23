@@ -47,6 +47,11 @@ const BRANDS = [
 // activeTab logic) — only the visible button text changes.
 const TAB_LABELS = {
   '1. Inception & Validation': '1. Product & Project Inception',
+  // Tab 7 outgrew its name (Stuart 2026-08-22): it started as the stocked-goods counter and is
+  // becoming where an order is entered — stock, to-be-finished, kits, fees. The KEY stays
+  // '7. Quick Ship' because every role's permissions in hq_config/permissions are stored against
+  // it; renaming the key would quietly revoke the tab for everyone who has it.
+  '7. Quick Ship': '7. Order Entry',
 };
 
 const TABS = [
