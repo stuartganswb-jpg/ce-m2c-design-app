@@ -172,6 +172,9 @@ function measureGrid(rows, scale) {
       if (m.above > a) a = m.above;
       if (m.below > b) b = m.below;
     });
+    // A row may carry captions BELOW its geometry — ring ids on leaders — which no bounding box
+    // knows about. It declares that room itself, or the next row lands on the text.
+    b += Number(r.padBelow) || 0;
     above.push(a); below.push(b);
     return Math.max(a + b, 60);
   });

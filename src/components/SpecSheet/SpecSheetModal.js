@@ -27,6 +27,9 @@ import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 // Wall-mount plate meshes are children of each backplate choice node in the merged GLB
 // (item codes like H1-CPWP2/P, H2-75CPWP1/P — any family). Fragment match: the classic
 // H1 trios plus the generic "WP<digit>" token so new collections work without edits here.
+// Room a dropped caption needs under the artwork, in page units — the label's own height plus a
+// little air. Kept beside the offsets that place them so the two cannot drift apart.
+const FS_LABEL_ROOM = 18;
 const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP|WP\d)/i;
 // Full wall-plate code inside a mesh path — family-agnostic (was hardcoded H1-).
 const WALL_CODE_RX = /[A-Z]+\d*-[A-Z0-9]*WP\d+(\s*\/?\s*P)?/i;
@@ -268,19 +271,40 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // specSheetPages walks activeAxes() and hands back one page per (leaf × arm), already carrying
   // its plates and its rings. Everything this effect still does is TRANSLATION: an engine choice
   // names a part, a pin names a node in the GLB, and the drawing needs the node.
-  const pinForChoice = useCallback((choice) => {
+  // ⚠ MATCH THE PIN BY ITS NODE, NOT BY ITS PART CODE (Stuart 2026-08-23: "the inline brackets
+  // are pulling the wrong backplates they need to use the ones tagged inline").
+  //
+  // H1-138 pins the SAME CODE in more than one pool: H1-138BP-R exists as a plain plate AND as an
+  // in-line plate, at every projection, on every side — different pins, different slot nodes,
+  // different tags, different positions in the model, one code. Looking the pin up by partId
+  // therefore returned whichever copy came first, so an in-line arm drew the PLAIN plate's
+  // geometry at the PLAIN plate's position while the row label read correctly. The page list was
+  // right the whole time; this lookup was throwing the distinction away.
+  //
+  // The engine's choice already names its own node — that IS the pin, with nothing to resolve.
+  // Code matching survives only as a fallback for a choice carrying no node at all.
+  const pinForChoice = useCallback((choice, { sideFirst = false } = {}) => {
     if (!choice) return null;
-    const want = String(choice.partId || '').trim().toUpperCase();
     const usable = (pins || []).filter(p => p.choiceNode && !p.isHiddenPart);
+    const want = String(choice.partId || '').trim().toUpperCase();
     const same = usable.filter(p => String(p.partId || '').trim().toUpperCase() === want);
-    // The hand-made sheets are all left-hand views, so an arm pinned both sides draws its LEFT
-    // copy — the same preference choicesFor() has always applied.
-    // The copy on the side being drawn; then a centre/shared copy, which belongs to both sides;
-    // then whatever exists, so a part pinned only on the far side still draws rather than
-    // vanishing from a sheet that names it.
-    const at = (pos) => same.find(p => (clusterById[p.clusterId]?.pos || side) === pos);
-    const pin = at(side) || at('CENTER') || at('SHARED') || at('')
-      || same[0]
+    const posOf = (p) => clusterById[p.clusterId]?.pos || '';
+    // ⚠ THE ROD IS THE ONE EXCEPTION. The sheet draws one hand, and a three-piece pole is pinned
+    // per side — so whichever SEGMENT the engine happened to name must not decide which way the
+    // rod runs on the page (Stuart: "for some reason these brackets the pole went off to the left
+    // rather than the right, keep them all the same"). Everything else takes the engine's node.
+    if (sideFirst) {
+      const onSide = same.find(p => posOf(p) === side)
+        || same.find(p => posOf(p) === 'CENTER')
+        || same.find(p => posOf(p) === 'SHARED');
+      if (onSide) return { ...onSide, partName: onSide.partName || choice.name || choice.partId };
+    }
+    const named = new Set((choice.nodes || []).map(n => String(n).toLowerCase()));
+    const exact = usable.find(p => named.has(String(p.choiceNode || '').toLowerCase())
+      || named.has(String(p.targetNode || '').toLowerCase()));
+    if (exact) return { ...exact, partName: exact.partName || choice.name || choice.partId };
+    const at = (pos) => same.find(p => (posOf(p) || side) === pos);
+    const pin = at(side) || at('CENTER') || at('SHARED') || at('') || same[0]
       || usable.find(p => String(p.id || p.choiceNode || '') === String(choice.id));
     return pin ? { ...pin, partName: pin.partName || choice.name || choice.partId } : null;
   }, [pins, clusterById, side]);
@@ -312,7 +336,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         kind: p.kind,
         title: `${bracketPin.partName}${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
         bracketPin, familyPins, ringPins, riderPins, plateFamily: p.plateFamily || '',
-        rodNodes: (p.rod?.nodes || []),
+        rodNodes: (() => {
+          const rp = pinForChoice(p.rod, { sideFirst: true });
+          return rp ? [rp.choiceNode] : (p.rod?.nodes || []);
+        })(),
         projIn: p.answers?.proj,
         isTraverse: p.isTraverse,
         isIM: p.kind === 'INSIDE_MOUNT',
@@ -498,8 +525,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         const d = [0, 0, 0];
         d[ax] = target - rb.center[ax];
         out.push({ partName: rc.partName, meshes: translateMeshes(rc.meshes, d) });
-        // next station: past this ring, with a gap wide enough for its dimension label
-        edge = target + sign * (half + 0.020);
+        // Next station: past this ring, with a gap wide enough for its drop dimension AND its
+        // pattern id. Stuart 2026-08-23: "spread the rings out some as they appear very busy".
+        edge = target + sign * (half + 0.040);   // ~1-9/16" of clear rod between rings
       }
       return out;
     };
@@ -548,7 +576,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // it empty. The hand-made sheets show a SHORT broken view: plate, arm, the rings, and a stub
     // of rod either side. So the window is capped, and anything past the cap is cut with a break
     // mark, which is what a broken view means.
-    const WINDOW_MAX_M = 22 * 0.0254;   // ~22" — the widest the reference elevations run
+    const WINDOW_MAX_M = 26 * 0.0254;   // ~26" — room for four spread rings and a run of rod
     // The rod's centreline expressed in a given view's v axis — both the elevation and the
     // section contain the rod, so this is the one height they can agree on.
     const rodCentreV = (view) => { const b = viewBbox(pole, view); return (b.minV + b.maxV) / 2; };
@@ -568,7 +596,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         if (b.maxU > hi) hi = b.maxU;
       }
       if (!isFinite(lo) || !isFinite(hi)) { lo = poleFull.minU; hi = poleFull.maxU; }
-      lo -= 0.015; hi += 0.018; // extra visible rod so the parked ring clearly hangs on it
+      // Extra visible rod so the rings clearly hang on it — longer on the open end, which is
+      // what makes the elevation read as a rod rather than a stub ("we can make the rod on the
+      // left side longer for all").
+      lo -= 0.025; hi += 0.055;
       if (hi - lo > WINDOW_MAX_M) {
         const m = (mountBox && isFinite(mountBox.minU)) ? mountBox : null;
         const mountC = m ? (m.minU + m.maxU) / 2 : lo;
@@ -637,7 +668,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // The rod centreline in each view — the row's shared datum, so the section reads across
       // from the elevation instead of each cell floating on its own extents.
       const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
-      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, hasAsMounted: false }], axes, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
+      const padBelow = ringBoxes.length ? 34 + 20 + FS_LABEL_ROOM : 0;
+      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, padBelow, hasAsMounted: false }], axes, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
     }
     let measured = null; // first row's pole Ø + projection, for the geometry-vs-cell check
     const rows = plateChoices.map((platePin) => {
@@ -794,7 +826,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         dims.detail.push({ t: 'v', u: wallF.maxU, v0: wallF.maxV, v1: wallF.minV, off: 12, in: (wallF.maxV - wallF.minV) * M2IN });
       }
       const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
-      return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
+      // ⚠ THE LABELS ARE BELOW THE GEOMETRY AND THE GRID CANNOT SEE THEM. Row heights are measured
+      // from mesh bounding boxes, so text dropped under a ring is invisible to the layout and the
+      // next row lands on top of it (Stuart 2026-08-23: "the lower row is overlapping the text").
+      // The row declares the room its captions need.
+      const padBelow = ringBoxes.length ? 34 + 20 + FS_LABEL_ROOM : 0;
+      return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, padBelow, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, measured };
   }, [allowedNodesFor, wallCfg, sideNodesFor, side]);
