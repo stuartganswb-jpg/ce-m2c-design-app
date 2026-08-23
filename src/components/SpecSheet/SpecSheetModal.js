@@ -19,7 +19,7 @@ import {
 import { renderHiddenLine } from './hiddenLine';
 import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from './specSheetPage';
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
-import { specPages } from './specSheetPages';
+import { specPages, auditPages } from './specSheetPages';
 import { choicesFromAssembly } from '../Shared/hardwareAdapter';
 import { resolve as resolveHardware } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
@@ -99,6 +99,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // answer (specSheetPages), which needs pins and tags — not geometry — so the two no longer
   // have to agree about anything.
   const [sceneReady, setSceneReady] = useState(0);
+  // Parts drawn on a page the engine would not offer there — always empty if everything is right.
+  const [bleed, setBleed] = useState([]);
   const [manualDims, setManualDims] = useState(() => assembly?.specSheetOverrides?.manualDims || []);
   // Manual dims belong to the SOURCE assembly's geometry — reload when the size cell swaps it.
   useEffect(() => { setManualDims(assembly?.specSheetOverrides?.manualDims || []); setDirty(false); }, [assembly?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -309,6 +311,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return;
     }
     setError('');
+    // ── THE SET IS AUDITED BEFORE IT IS SHOWN (Stuart 2026-08-23) ─────────────────────────
+    // "every assembly needs its own to avoid a mess." Every filter above is the engine's, so
+    // this should always come back empty — which is exactly why it is worth running. The old
+    // sheet was confidently wrong for months; a set that can prove it is its own assembly's is
+    // the difference between that and this. Independent path: it asks the gate directly rather
+    // than re-running the builder.
+    setBleed(auditPages(built, engineChoices));
     pageList.push({ key: '__WM__', kind: 'WALLMOUNTS', title: '⊞ Wall mounts (1:1)', family: '' });
     setPages(pageList);
     setPageIndex(0);
@@ -1018,6 +1027,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           {error ? <span style={{ color: '#b00020' }}>⚠ {error}</span>
             : status ? status
             : dimTool ? 'Manual dim: click two points on a drawing, then enter the value.'
+            : bleed.length ? (
+              <span style={{ color: '#b00020' }} title={bleed.map(b => `${b.subject} · ${b.part}: ${b.why}`).join('\n')}>
+                ⚠ {bleed.length} part{bleed.length === 1 ? '' : 's'} on {new Set(bleed.map(b => b.page)).size} sheet{new Set(bleed.map(b => b.page)).size === 1 ? '' : 's'} the engine would not offer there — first: {bleed[0].subject} · {bleed[0].part} ({bleed[0].why}). Hover for the rest.
+              </span>
+            )
             : (assembly && !assembly.manufacturingSpecs?.specCadUrl) ? <span style={{ color: '#8a6d1a' }}>📐 Drawing from the merged sales model — every option is in it, stacked, so pages can misdraw. For clean sheets upload this assembly's "Spec Sheet Layout (📐)" in 1.6 (the Fusion Import "Spec · true m" export).</span>
             : ''}
         </div>

@@ -257,3 +257,73 @@ export function specPages({ choices, answers = {} }) {
     }
     return pages;
 }
+
+// ── PROVING A SHEET SET BELONGS TO ITS ASSEMBLY (Stuart 2026-08-23) ──────────────────────────
+// "every assembly needs its own to avoid a mess."
+//
+// The mess is a page showing something that is not part of the combination it names. Every filter
+// above is the engine's, so the pages SHOULD be clean — but "should" is what the old sheet also
+// believed, and it was wrong for months without saying so.
+//
+// This audits the finished page list along an INDEPENDENT path. It does not call pageSlots or
+// slots() again — restating the builder in different words proves nothing. It asks `judge`, which
+// is the gate itself, whether each drawn part is admissible under that page's own answers, and it
+// checks the three pairing rules in their plain form. A disagreement between this and the builder
+// is a real defect in one of them.
+//
+// Returns [] when the set is clean. Never throws: an audit that can take the tool down is worse
+// than no audit.
+export function auditPages(pages, choices) {
+    const out = [];
+    if (!pages || !choices) return out;
+    let norm;
+    try { norm = resolve({ choices }).choices || []; } catch (e) { return out; }
+    const byLeaf = new Map();
+    const admissible = (answers) => {
+        const k = JSON.stringify(answers || {});
+        if (!byLeaf.has(k)) {
+            let ids = null;
+            try { ids = new Set(judge(norm, answers || {}).in.map(c => String(c.id))); } catch (e) { ids = null; }
+            byLeaf.set(k, ids);
+        }
+        return byLeaf.get(k);
+    };
+    const say = (page, part, why) => out.push({
+        page: page.key,
+        subject: page.subject?.partId || page.subject?.id || '(catalog)',
+        part: part?.partId || part?.id || '(none)',
+        why,
+    });
+
+    for (const page of pages) {
+        const ok = admissible(page.answers);
+        const drawn = [
+            ...(page.subject ? [['bracket arm', page.subject]] : []),
+            ...(page.rod ? [['rod', page.rod]] : []),
+            ...(page.plates || []).map(p => ['backplate', p]),
+            ...(page.rings || []).map(r => ['ring', r]),
+        ];
+        // 1 · every part must survive the gate under this page's OWN answers
+        if (ok) {
+            for (const [what, part] of drawn) {
+                if (!ok.has(String(part.id))) say(page, part, `this ${what} is not admissible at ${narrowingLabel(norm, page.answers) || 'this configuration'}`);
+            }
+        }
+        // 2 · the three pairing rules, in their plain form
+        const arm = page.subject;
+        if (arm && (page.plates || []).length) {
+            if (arm.isBasic) say(page, page.plates[0], 'a basic arm is one piece and takes no backplate, but this page carries plates');
+            const armInline = !!arm.inlineOnly, armReturn = !!arm.usesReturnPlates || U(arm.role) === 'RETURN';
+            for (const p of page.plates) {
+                if (p.inlineOnly && !armInline) say(page, p, 'an in-line plate on an arm that is not in-line');
+                if (!p.inlineOnly && armInline) say(page, p, 'a standard plate on an in-line arm');
+                if (p.returnOnly && !armReturn) say(page, p, 'a return plate on an arm that is not a return');
+            }
+        }
+        // 3 · a track carries carriers, not rings
+        if (page.rod && U(page.rod.role) === 'TRACK' && (page.rings || []).length) {
+            say(page, page.rings[0], 'a track carries its drapery on carriers — a ring cannot ride it');
+        }
+    }
+    return out;
+}

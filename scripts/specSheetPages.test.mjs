@@ -7,7 +7,7 @@
 // page list is the engine's answer and not a second opinion.
 
 import {
-    narrowings, narrowingLabel, subjectsOf, pageSlots, catalogOf, specPages,
+    narrowings, narrowingLabel, subjectsOf, pageSlots, catalogOf, specPages, auditPages,
 } from '../src/components/SpecSheet/specSheetPages.js';
 import { resolve } from '../src/components/Shared/hardwareModel.js';
 
@@ -155,6 +155,44 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     const model = resolve({ choices: CHOICES, answers: { rodKind: 'SOLID', proj: 3.625 } });
     ok('subjectsOf reads arms AND returns off the model',
         subjectsOf(model).some(s => s.kind === 'RETURN') && subjectsOf(model).some(s => s.kind === 'BRACKET'));
+}
+
+// ── THE SET IS ITS OWN ASSEMBLY'S, AND SAYS SO ───────────────────────────────────────────────
+// Stuart 2026-08-23: "every assembly needs its own to avoid a mess." The audit walks an
+// INDEPENDENT path — `judge`, the gate itself, plus the pairing rules in plain form — so a
+// disagreement with the builder is a real defect in one of them, not a restatement.
+{
+    eq('a set the engine built audits clean', auditPages(pages, CHOICES), []);
+    eq('and so does an empty one', auditPages([], CHOICES), []);
+    ok('a broken engine never takes the tool down', Array.isArray(auditPages(pages, null)));
+
+    const solid = drawings.find(p => p.subject.partId === 'H1-138DS' && p.plateFamily === 'H1-138BP');
+
+    // a plate smuggled in from another depth
+    const wrongDepth = [{ ...solid, plates: [...solid.plates, { id: 'PL-E', partId: 'H1-138BP-SE' }] }];
+    ok('a plate from another projection is caught',
+        auditPages(wrongDepth, CHOICES).some(v => /not admissible/.test(v.why)));
+
+    // a return plate on a plain arm
+    const wrongPool = [{ ...solid, plates: [{ id: 'PL-RTN', partId: 'H1-138RBP-S', returnOnly: true }] }];
+    ok('a return plate on a plain arm is caught',
+        auditPages(wrongPool, CHOICES).some(v => /return plate/.test(v.why)));
+
+    // plates on a one-piece arm
+    const basic = drawings.find(p => p.subject.partId === 'H1-138B');
+    const basicWithPlate = [{ ...basic, plates: [{ id: 'PL-S', partId: 'H1-138BP-S' }] }];
+    ok('a basic arm carrying plates is caught',
+        auditPages(basicWithPlate, CHOICES).some(v => /one piece/.test(v.why)));
+
+    // rings hung on a track
+    const trv = drawings.find(p => p.isTraverse);
+    const ringsOnTrack = [{ ...trv, rings: [{ id: 'RING-BR', partId: 'H1-138BR' }] }];
+    ok('rings hung on a track are caught',
+        auditPages(ringsOnTrack, CHOICES).some(v => /carriers/.test(v.why)));
+
+    // and the violation names the page and the part, or it is not actionable
+    const v = auditPages(wrongPool, CHOICES)[0];
+    ok('a violation names its page, subject and part', !!v.page && !!v.subject && !!v.part);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
