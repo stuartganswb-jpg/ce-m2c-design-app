@@ -134,14 +134,19 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
     eq("it carries THEIR number too", r.lines[0].sku, 'HTS7504F PREMIUM');
     ok('and is marked off the NetSuite component list', r.lines[0].noNs === true);
 
+    // ONE additional-foot line, named for the part the customer understands. The fascia carries
+    // the money for every per-foot part; the track is shop work and bills nothing.
     const fascia = r.lines.find(l => l.partId === 'H1-2TRVF');
-    eq('a 10 ft fascia bills 6 ft above the kit', [fascia.billedFeet, fascia.total], [6, 54]);
+    eq('the fascia carries the WHOLE additional-foot charge', [fascia.billedFeet, fascia.total], [6, 90]);
     ok('and says so on the line', /6 ft above the 4 ft kit/.test(fascia.detail));
     eq('THE REAL LENGTH IS UNTOUCHED — the shop still cuts 10 ft', [fascia.feet, fascia.cutLength], [10, 120]);
 
-    eq('the track bills its 6 ft too', r.lines.find(l => l.partId === 'H1-2TRVT').total, 36);
+    const track = r.lines.find(l => l.partId === 'H1-2TRVT');
+    eq('the track bills nothing — its cost is inside that foot', track.total, 0);
+    ok('it is marked shop work, and still ships', track.shopOnly === true && track.feet === 10);
+    ok('and it never leaves the list', r.lines.some(l => l.partId === 'H1-2TRVT'));
     eq('a customisation bills in full — it was never in the kit', r.lines.find(l => l.partId === 'H1-1CC').total, 30);
-    eq('318 + 54 + 36 + 30', r.total, 438);
+    eq('318 kit + 90 additional feet + 30 finial', r.total, 438);
 }
 
 // ── 9. A COVERED LINE STAYS ON THE LIST, AT ZERO ─────────────────────────────────────────────

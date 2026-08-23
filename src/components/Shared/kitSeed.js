@@ -202,18 +202,36 @@ export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, 
     const base = Number(baseFeet) > 0 ? Number(baseFeet) : 4;
     const price = Number(kitPrice) > 0 ? Number(kitPrice) : 0;
 
+    // ── ONE ADDITIONAL-FOOT LINE, NAMED FOR THE PART THE CUSTOMER UNDERSTANDS ────────────────
+    // Stuart 2026-08-22: "the fascia is the length the customer understands, track is all shop
+    // work so on customer facing paperwork just refer to the fascia."
+    //
+    // A traverse foot is one thing the customer buys and two things we cut. Tab 7 sells it as a
+    // single "Additional foot" at one rate, so CPQ must too or the same order reads differently
+    // on the two tabs. The fascia CARRIES the money for every per-foot part; the others keep
+    // their identity, their length and their place on the pick list, and bill nothing.
+    const perFoot = (priced.lines || []).filter(isPerFootLine);
+    const billedOf = (l) => Math.max(0, (Number(l.feet) || 0) - base);
+    const carrier = perFoot.find(l => U(l.role) === 'FASCIA') || perFoot[0] || null;
+    const extraMoney = perFoot.reduce((sum, l) => sum + (Number(l.unit) || 0) * billedOf(l), 0);
+
     const rest = (priced.lines || []).map(l => {
         if (!isPerFootLine(l)) return l;
-        const feet = Number(l.feet) || 0;
-        const billed = Math.max(0, feet - base);
+        const billed = billedOf(l);
+        const isCarrier = carrier && l === carrier;
         return {
             ...l,
             // `feet` stays the REAL length — it is what the shop cuts and what the packing slip
             // says arrived. Only the money moves.
             billedFeet: billed,
-            total: (Number(l.unit) || 0) * billed,
+            total: isCarrier ? extraMoney : 0,
             inKit: billed <= 0,
-            detail: billed > 0 ? `${billed} ft above the ${base} ft kit` : `included in the ${base} ft kit`,
+            // Everything that is not the carrier is shop work as far as the customer is concerned:
+            // it was built, it ships, and its cost is already inside the foot they were quoted.
+            ...(isCarrier ? {} : { shopOnly: true }),
+            detail: isCarrier
+                ? (billed > 0 ? `${billed} ft above the ${base} ft kit` : `included in the ${base} ft kit`)
+                : (billed > 0 ? 'shop work — inside the per-foot price' : `included in the ${base} ft kit`),
         };
     });
 

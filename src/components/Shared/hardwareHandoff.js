@@ -84,6 +84,7 @@ function handoffLine(l, part, finishName = '') {
         // for, so a document can print it as included rather than as a free line nobody understands.
         ...(l.isKit ? { isKit: true, noNs: true } : {}),
         ...(l.inKit ? { inKit: true } : {}),
+        ...(l.shopOnly ? { shopOnly: true } : {}),
         ...(l.billedFeet !== undefined ? { billedFeet: l.billedFeet } : {}),
         ...(l.detail ? { detail: l.detail } : {}),
         ...(l.cutLength ? { cutLength: l.cutLength } : {}),
