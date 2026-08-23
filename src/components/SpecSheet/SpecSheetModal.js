@@ -408,10 +408,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     //
     // So the engine still decides WHICH rod — `allowed` is its answer for this arm, and a double's
     // rear rod stays off a single's page — but the names handed to the GLB are the cluster's.
+    // ⚠ NEVER FILTER THE ANSWER YOU ASKED FOR. `allowed` is `visible` — what an ADDITIVE
+    // CONFIGURATOR renders for a set of selections — and a three-piece pole's END segments only
+    // render once that end's treatment is chosen. A spec sheet picks an arm and a rod and no
+    // finial, so the left half legitimately does not render, `allowed` did not contain it, and
+    // keep() threw away the very rod rodForArm() had just named. The page then reported "no rod
+    // geometry" while quoting the rod it had discarded — Stuart's first click, every time.
+    //
+    // The distinction is the fix: `keep` is for SWEEPS. A cluster list is a guess and the engine
+    // narrows it. A rod the engine itself named is not a guess, so it is drawn as given.
     const engineRod = (opts.rodNodes || []).filter(n => extractWorldMeshes(scene, [n]).length);
-    // With an engine answer to filter by, offer it every pole in the file and let it choose; with
-    // no answer (untagged), fall back to the left-hand convention.
-    const poleNodes = engineRod.length ? keep(engineRod) : keep(sideNodesFor('POLE'));
+    const poleNodes = engineRod.length ? engineRod : keep(sideNodesFor('POLE'));
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
@@ -426,7 +433,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       .filter(r => r.meshes.length);
 
     const plateChoices = familyPins || [];
-    if (!pole.length) throw new Error(`No rod geometry for this page — the engine pairs the arm with ${(opts.rodNodes || []).join(', ') || 'no rod at all'}, and the POLE cluster carries ${sideNodesFor('POLE').length} node(s). Check the POLE pins in 1.6 / ⚖.`);
+    if (!pole.length) {
+      const named = opts.rodNodes || [];
+      const inScene = named.filter(n => extractWorldMeshes(scene, [n]).length);
+      throw new Error(`No rod geometry for this page. The engine pairs this arm with ${named.join(', ') || 'no rod at all'}; ${inScene.length} of ${named.length} of those nodes are in the GLB, and the ${side.toLowerCase()}-side POLE clusters carry ${sideNodesFor('POLE').length}. Check the POLE pins in 1.6 / ⚖.`);
+    }
     // basic brackets have no plate — the bracket itself marks the wall side for axis inference
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
@@ -712,7 +723,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, ringItems, measured };
-  }, [allowedNodesFor, wallCfg, sideNodesFor]);
+  }, [allowedNodesFor, wallCfg, sideNodesFor, side]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
