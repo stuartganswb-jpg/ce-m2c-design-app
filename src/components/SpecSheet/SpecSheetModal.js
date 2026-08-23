@@ -22,6 +22,7 @@ import {
 import { renderHiddenLine } from './hiddenLine';
 import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from './specSheetPage';
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
+import { specPages } from './specSheetPages';
 import { choicesFromAssembly } from '../Shared/hardwareAdapter';
 import { resolve as resolveHardware } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
@@ -276,7 +277,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const reducedNote = paperMode === 'letterReduced'
     ? 'REDUCED PRINT OF THE 11×17 1:1 MASTER — NOT 1:1 AT THIS SIZE (use the 11×17 option at 100% for actual scale)'
     : null;
-  const [choiceData, setChoiceData] = useState(null);
+  // The scene is loaded ONCE and counted, not described. What a page contains is the engine's
+  // answer (specSheetPages), which needs pins and tags — not geometry — so the two no longer
+  // have to agree about anything.
+  const [sceneReady, setSceneReady] = useState(0);
   const [manualDims, setManualDims] = useState(() => assembly?.specSheetOverrides?.manualDims || []);
   // Manual dims belong to the SOURCE assembly's geometry — reload when the size cell swaps it.
   useEffect(() => { setManualDims(assembly?.specSheetOverrides?.manualDims || []); setDirty(false); }, [assembly?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -439,88 +443,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         finialsRef.current = null;
         setPageData(null); // never leave the previous source's drawing on screen during a swap
         setCellWarnings([]); // stale mismatch warnings die with the source they measured
-        if (cfgSnap?.exists()) { setWallCfg(cfgSnap.data()?.wallPlates || {}); setSizeSources(cfgSnap.data()?.sizeSources || {}); }
-        // DIRECT SPEC GLB sources have no pins/clusters at all — derive every choice from the
-        // scene's top-level code-named nodes, categorized by the LIBRARY (part.productType).
-        // An assembly-carried spec layout (specCadUrl) is the same kind of scene: its clusters
-        // and pins describe the MERGED model, not this flat layout, so scene-derivation applies.
-        const clusterless = !!specUrl || (!(assembly?.nodeClusters || []).length && !(pins || []).length);
-        let sceneChoices = null;
-        if (clusterless) {
-          sceneChoices = { BRACKET: [], BACKPLATE: [], FINIAL: [], RING: [], POLE: [] };
-          const seen = new Set();
-          (scene.children || []).forEach(top => {
-            const nm = top.name || '';
-            const leaf = String(nm).split('__').pop().replace(/^\d+_?/, '').trim();
-            const code = leaf.replace(/\s+(LEFT|RIGHT|CENTER|CTR|L|R)$/i, '').replace(/[\s_]v\d+.*$/i, '').replace(/\.\d{3}$/, '').trim().toUpperCase();
-            if (!code || seen.has(code)) return;
-            const part = (libraryParts || []).find(p => String(p.legacyErpId || '').toUpperCase() === code || String(p.itemId || '').toUpperCase() === code);
-            if (!part) return;
-            seen.add(code);
-            const cat = normalizeCategory(part.manufacturingSpecs?.productType || part.productType || '');
-            if (sceneChoices[cat]) sceneChoices[cat].push({ partName: code, choiceNode: nm, clusterId: '', endTreatment: '' });
-          });
-        }
-        sceneChoicesRef.current = sceneChoices;
-        const pick = (cat) => {
-          const pinned = choicesFor(cat);
-          if (pinned.length) return pinned;
-          const legacy = legacyChoicesFor(cat);
-          if (legacy.length) return legacy;
-          return sceneChoices ? (sceneChoices[cat] || []) : [];
-        };
-        const brackets = pick('BRACKET');
-        if (!brackets.length) throw new Error('No bracket choices found (need BRACKET pins/clusters, or a spec GLB with library-code-named bracket nodes).');
-        const plates = pick('BACKPLATE');
-        if (!plates.length) throw new Error('No backplate choices found (need BACKPLATE pins/clusters, or a spec GLB with library-code-named backplate nodes).');
-        // A plate is a RETURN plate if its pin OR its cluster carries the return flag —
-        // the same part code (e.g. H1-75RCP-S) exists in both the L/R bracket-backplate
-        // cluster and the french/miter return-backplate cluster, so the CLUSTER chip is
-        // what actually distinguishes them.
-        const plateIsReturn = (p) => {
-          const cl = clusterById[p.clusterId];
-          // Flags first; the LOCKED code grammar backstops legacy untagged pins — a family
-          // ending RBP/RCP is a return plate even on assemblies built before the tag spec
-          // (the retired 3.625" source paired ILE with RCP without this).
-          return !!(p.returnOnly || cl?.returnOnly || cl?.usesReturnPlates) || /R[BC]P$/i.test(familyOf(p.partName));
-        };
-        // inline plates (the I set, at pole height) pair ONLY with inline brackets (the
-        // ILE clip); standard plates (the D set, at arm height) pair with the rest —
-        // mixing them puts the plate at the wrong height relative to rod and ring
-        const plateIsInline = (p) => {
-          const cl = clusterById[p.clusterId];
-          return !!(p.inlineOnly || cl?.inlineOnly);
-        };
-        const stdFams = {}, inlFams = {}, retFams = {};
-        plates.forEach(p => {
-          const f = familyOf(p.partName);
-          const target = plateIsReturn(p) ? retFams : (plateIsInline(p) ? inlFams : stdFams);
-          (target[f] = target[f] || []).push(p);
-        });
-        // dedupe within each family (same part can pin LEFT and RIGHT positions)
-        const dedupe = (arr) => { const seen = new Set(); return arr.filter(p => seen.has(p.partName) ? false : (seen.add(p.partName), true)); };
-        [stdFams, inlFams, retFams].forEach(map => Object.keys(map).forEach(f => { map[f] = dedupe(map[f]); }));
-        const platesFlagged = Object.keys(retFams).length > 0;
-        const inlineFlagged = Object.keys(inlFams).length > 0;
-        // the FINIAL cluster holds ALL end-treatment choices (canonical tag spec):
-        // plain finials → catalog grid page; french/miter returns → bracket-style pages;
-        // inside mounts → single-row page (their threaded plate is nested in the geometry)
-        const endChoices = pick('FINIAL');
-        // Explicit tag first; legacy (untagged) choices classify by NAME grammar — the miter/bend
-        // node names carry it ("34X14 MTR LEFT", "…RND BEND LEFT").
-        const et = (p) => {
-          const tagged = normalizeEndTreatment(p.endTreatment || '');
-          if (tagged) return tagged;
-          const nm = `${p.partName || ''} ${p.choiceNode || ''}`;
-          if (/MTR|MITER|MITRE/i.test(nm)) return 'MITER_RETURN';
-          if (/BEND|FRENCH/i.test(nm)) return 'FRENCH_RETURN';
-          if (/INSIDE|(^|[^A-Z])IM([^A-Z]|$)/i.test(nm)) return 'INSIDE_MOUNT';
-          return '';
-        };
-        const finials = endChoices.filter(p => !et(p) || et(p) === 'FINIAL');
-        const returnArms = endChoices.filter(p => et(p) === 'FRENCH_RETURN' || et(p) === 'MITER_RETURN');
-        const insideMounts = endChoices.filter(p => et(p) === 'INSIDE_MOUNT');
-        setChoiceData({ brackets, stdFams, inlFams, retFams, platesFlagged, inlineFlagged, finials, returnArms, insideMounts });
+        if (cfgSnap?.exists()) setWallCfg(cfgSnap.data()?.wallPlates || {});
+        // ⚠ THE SCENE NO LONGER SAYS WHAT THE SHEET CONTAINS. It used to: choices were derived
+        // here from node names against the library, plates sorted into "families" by regexes over
+        // part codes, end treatments classified by sniffing /MTR|BEND/ out of node names. None of
+        // that could read a tag, so none of it could be narrowed — which is why every page showed
+        // too much. The GLB is asked for geometry and nothing else now; the page list comes from
+        // the engine, off the pins.
+        setSceneReady(n => n + 1);
         setStatus('');
       } catch (e) {
         console.error('SpecSheet load failed', e);
@@ -528,67 +458,72 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     })();
     return () => { dead = true; };
-  }, [assembly, choicesFor, legacyChoicesFor, clusterById]);
+  }, [assembly]);
 
-  // ---- derive pages from choices (re-chunked when the scale mode changes) ----
+  // ── THE PAGE LIST IS THE ENGINE'S ANSWER (Stuart 2026-08-23) ─────────────────────────────
+  // "each page should be filtered down to show only a specific bracket arm at a specific
+  //  projection … the same decisions made in the cpq steps. for each bracket arm we show it with
+  //  all 4 backplates and cover plates, and the pole in place with any ring options that fit that
+  //  pole diameter."
+  //
+  // specSheetPages walks activeAxes() and hands back one page per (leaf × arm), already carrying
+  // its plates and its rings. Everything this effect still does is TRANSLATION: an engine choice
+  // names a part, a pin names a node in the GLB, and the drawing needs the node.
+  const pinForChoice = useCallback((choice) => {
+    if (!choice) return null;
+    const want = String(choice.partId || '').trim().toUpperCase();
+    const usable = (pins || []).filter(p => p.choiceNode && !p.isHiddenPart);
+    const same = usable.filter(p => String(p.partId || '').trim().toUpperCase() === want);
+    // The hand-made sheets are all left-hand views, so an arm pinned both sides draws its LEFT
+    // copy — the same preference choicesFor() has always applied.
+    const pin = same.find(p => (clusterById[p.clusterId]?.pos || 'LEFT') === 'LEFT')
+      || same[0]
+      || usable.find(p => String(p.id || p.choiceNode || '') === String(choice.id));
+    return pin ? { ...pin, partName: pin.partName || choice.name || choice.partId } : null;
+  }, [pins, clusterById]);
+
   useEffect(() => {
-    if (!choiceData) return;
-    const { brackets, stdFams = {}, inlFams = {}, platesFlagged, inlineFlagged, finials = [], insideMounts = [] } = choiceData;
-    // Returns don't exist at 3-5/8" projection (sizeMatrix returnsMinProj) — an S cell prints
-    // NO return-plate families and NO return-arm pages, matching the CPQ availability rule.
-    const returnsHere = !sizeFam || !sizeSel || (sizeFam.returnsMinProj || []).includes(sizeSel.proj);
-    const retFams = returnsHere ? (choiceData.retFams || {}) : {};
-    const returnArms = returnsHere ? (choiceData.returnArms || []) : [];
-    // 1:1 rows are ~4" tall (ring drop + plate + padding) — two fit on 11×17's 10.5" printable height
-    const maxRows = scaleMode === 'actual' ? 2 : MAX_ROWS_PER_PAGE;
+    if (!sceneReady) return;
+    // An untagged assembly has no engine answer, and the old machine that stood in for one — the
+    // per-cell source registry, the code translation, the name-sniffing — is retired along with
+    // the assemblies it served. Saying so beats drawing something plausible and wrong.
+    if (!engineChoices) {
+      setError('This assembly is not tagged, so the sheet has nothing to filter on. Tag its pins in 1.6 / ⚖ (category, projection, rod world) and reopen.');
+      return;
+    }
+    const built = specPages({ choices: engineChoices });
     const pageList = [];
-    const allFams = {};
-    [stdFams, inlFams, retFams].forEach(m => Object.entries(m).forEach(([f, pins]) => { allFams[f] = [...(allFams[f] || []), ...pins]; }));
-    // return arms page like brackets (their bend geometry is part of the choice node)
-    const armLike = [
-      ...brackets.map(b => ({ pin: b, retSuffix: '' })),
-      ...returnArms.map(a => ({ pin: a, retSuffix: ' (return)' })),
-    ];
-    for (const { pin: b, retSuffix } of armLike) {
-      // isBasic = bracket takes NO backplate (canonical flag) — its page draws the
-      // bracket/pole/ring alone, no plate rows, no wall-mount detail.
-      if (b.isBasic) {
-        pageList.push({ key: `${b.partName}__BASIC`, title: `${sizedCode(b.partName)} (basic — no backplate)`, bracketPin: b, familyPins: [], family: 'basic, no backplate' });
+    for (const p of built) {
+      if (p.kind === 'CATALOG') {
+        const items = [...(p.finials || []), ...(p.accessories || [])].map(pinForChoice).filter(Boolean);
+        if (items.length) pageList.push({ key: p.key, kind: 'CATALOG', title: `❖ Finials & accessories${p.label ? ` · ${p.label}` : ''}`, itemPins: items, family: p.label });
         continue;
       }
-      const bracketIsReturn = !!(retSuffix || b.usesReturnPlates || b.isReturnArm || /RETURN/i.test(b.endTreatment || ''));
-      const bracketIsInline = !!(b.inlineOnly || clusterById[b.clusterId]?.inlineOnly);
-      // returns pair ONLY with return-plate families, inline brackets with the inline (I)
-      // set, everything else with the standard (D) set — falls back to the whole pool when
-      // the respective flags aren't in the data yet
-      let famMap;
-      if (bracketIsReturn) famMap = platesFlagged ? retFams : allFams;
-      else if (bracketIsInline && inlineFlagged) famMap = inlFams;
-      else famMap = (platesFlagged || inlineFlagged) ? stdFams : allFams;
-      if (!Object.keys(famMap).length) famMap = allFams;
-      for (const [fam, famPins] of Object.entries(famMap)) {
-        for (let i = 0; i < famPins.length; i += maxRows) {
-          const chunk = famPins.slice(i, i + maxRows);
-          const part = famPins.length > maxRows ? ` (${i / maxRows + 1})` : '';
-          pageList.push({
-            key: `${b.partName}__${fam}__${i}_${maxRows}`,
-            title: `${sizedCode(b.partName)}${retSuffix} + ${chunk.length ? familyOf(sizedCode(chunk[0].partName)) : fam}${part}`,
-            bracketPin: b,
-            familyPins: chunk,
-            family: fam,
-          });
-        }
-      }
+      const bracketPin = pinForChoice(p.subject);
+      if (!bracketPin) continue;   // the engine offers it, this GLB does not carry it
+      const familyPins = (p.plates || []).map(pinForChoice).filter(Boolean);
+      const ringPins = (p.rings || []).map(pinForChoice).filter(Boolean);
+      const riderPins = (p.riders || []).map(pinForChoice).filter(Boolean);
+      pageList.push({
+        key: p.key,
+        kind: p.kind,
+        title: `${bracketPin.partName}${p.label ? ` · ${p.label}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
+        bracketPin, familyPins, ringPins, riderPins,
+        isTraverse: p.isTraverse,
+        isIM: p.kind === 'INSIDE_MOUNT',
+        family: p.label,
+        reason: p.reason || '',
+      });
     }
-    for (const im of insideMounts) {
-      pageList.push({ key: `${im.partName}__IM`, title: `${sizedCode(im.partName)} (inside mount)`, bracketPin: im, familyPins: [], family: 'inside mount', isIM: true });
+    if (!pageList.length) {
+      setError('The engine offers no bracket this GLB carries — check that the pinned nodes still exist in the model.');
+      return;
     }
-    if (!pageList.length) { setError('No bracket × backplate-family pages could be derived.'); return; }
-    if (finials.length) pageList.push({ key: '__FINIALS__', title: '❖ Finials (1:1)', family: '' });
-    pageList.push({ key: '__WM__', title: '⊞ Wall mounts (1:1)', family: '' });
+    setError('');
+    pageList.push({ key: '__WM__', kind: 'WALLMOUNTS', title: '⊞ Wall mounts (1:1)', family: '' });
     setPages(pageList);
     setPageIndex(0);
-  }, [choiceData, scaleMode, clusterById, sizeFam, sizeSel, sizedCode]);
+  }, [sceneReady, engineChoices, pinForChoice]);
 
   // ---- build rows for a page (cached per bracket × family) ----
   const buildRows = useCallback((bracketPin, familyPins, opts = {}) => {
@@ -631,9 +566,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
-    const ringPins = choicesFor('RING').length ? choicesFor('RING')
-      : legacyChoicesFor('RING').length ? legacyChoicesFor('RING')
-      : (sceneChoicesRef.current?.RING || []);
+    // ⚠ THE RINGS ARE THIS PAGE'S RINGS. Sweeping the RING category gave every ring the file
+    // contains, at every diameter — the page then drew whichever happened to sit lowest. The
+    // engine already answered "which rings fit this rod" when the page was built (slots() with the
+    // rod selected), so the page carries them and this reads them.
+    const ringPins = opts.ringPins || [];
     let ringChoices = ringPins
       .map(p => ({ partName: p.partName, meshes: extractWorldMeshes(scene, [p.choiceNode]) }))
       .filter(r => r.meshes.length);
@@ -864,9 +801,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const poleNodes = nodesFor('POLE');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     const seen = new Map();
-    const allPlatePins = choiceData
-      ? [...Object.values(choiceData.stdFams || {}), ...Object.values(choiceData.inlFams || {}), ...Object.values(choiceData.retFams || {})].flat()
-      : [];
+    // Every plate the SHEET actually draws, across its pages — so a wall mount that no page uses
+    // is not on the reference either.
+    const seenPin = new Set();
+    const allPlatePins = pages.flatMap(pg => pg.familyPins || []).filter(pn => {
+      const k = String(pn.choiceNode || '');
+      if (!k || seenPin.has(k)) return false;
+      seenPin.add(k); return true;
+    });
     for (const p of allPlatePins) {
       const meshes = extractWorldMeshes(scene, [p.choiceNode]).filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
       if (!meshes.length) continue;
@@ -887,17 +829,18 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     }
     wallMountsRef.current = [...seen.values()];
     return wallMountsRef.current;
-  }, [choiceData, nodesFor, wallCfg]);
+  }, [pages, nodesFor, wallCfg]);
 
-  // ---- finials catalog: every finial choice at 1:1, side view, L × Ø dims ----
-  const buildFinials = useCallback(() => {
-    if (finialsRef.current) return finialsRef.current;
+  // ---- catalog page: the finials + accessories this leaf offers, at 1:1, L × Ø dims ----
+  const buildCatalog = useCallback((itemPins = []) => {
+    const cacheKey = itemPins.map(p => p.choiceNode).join('|');
+    if (finialsRef.current?.key === cacheKey) return finialsRef.current.items;
     const scene = sceneRef.current;
     const poleNodes = nodesFor('POLE');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     const items = [];
     let views = null;
-    for (const p of (choiceData?.finials || [])) {
+    for (const p of itemPins) {
       const meshes = extractWorldMeshes(scene, [p.choiceNode]);
       if (!meshes.length) continue;
       if (!views) {
@@ -908,18 +851,18 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const b = viewBbox(meshes, views.front);
       items.push({ partName: p.partName, view, wIn: (b.maxU - b.minU) * M2IN, hIn: (b.maxV - b.minV) * M2IN });
     }
-    finialsRef.current = items;
+    finialsRef.current = { key: cacheKey, items };
     return items;
-  }, [choiceData, nodesFor]);
+  }, [nodesFor]);
 
-  const composeFinialsPage = useCallback(() => buildItemsGridPage({
-    title: `${baseAssembly?.itemName || baseAssembly?.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — Finials`,
-    subtitle: 'All finial choices at actual size. Socket depth is hidden geometry — add it with the manual dim tool.',
-    items: buildFinials().map(f => ({ code: rowCode(f.partName), view: f.view, wIn: f.wIn, hIn: f.hIn })),
+  const composeCatalogPage = useCallback((page) => buildItemsGridPage({
+    title: `${baseAssembly?.itemName || baseAssembly?.itemId} — Finials & accessories${page?.family ? ` · ${page.family}` : ''}`,
+    subtitle: 'Every end treatment and accessory this configuration offers, at actual size. Socket depth is hidden geometry — add it with the manual dim tool.',
+    items: buildCatalog(page?.itemPins || []).map(f => ({ code: rowCode(f.partName), view: f.view, wIn: f.wIn, hIn: f.hIn })),
     paper: layoutPaper,
     footerNote: reducedNote,
     perRowOverride: layoutPaper === 'tabloid' ? 5 : 4,
-  }), [assembly, buildFinials, rowCode, layoutPaper, reducedNote]);
+  }), [buildCatalog, rowCode, layoutPaper, reducedNote, baseAssembly]);
 
   const composeWallMountsPage = useCallback(() => buildWallMountsPage({
     title: `${baseAssembly?.itemName || baseAssembly?.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — Wall mounts`,
@@ -936,11 +879,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     setStatus('Rendering…');
     const t = setTimeout(() => {
       try {
-        if (page.key === '__WM__') { setPageData(composeWallMountsPage()); setCellWarnings([]); setStatus(''); return; }
-        if (page.key === '__FINIALS__') { setPageData(composeFinialsPage()); setCellWarnings([]); setStatus(''); return; }
+        if (page.kind === 'WALLMOUNTS') { setPageData(composeWallMountsPage()); setCellWarnings([]); setStatus(''); return; }
+        if (page.kind === 'CATALOG') { setPageData(composeCatalogPage(page)); setCellWarnings([]); setStatus(''); return; }
         let built = rowCacheRef.current[page.key];
         if (!built) {
-          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM });
+          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins });
           rowCacheRef.current[page.key] = built;
         }
         // GEOMETRY vs CELL (playbook 4.2, warn-only): the measured pole Ø / projection must agree
@@ -983,7 +926,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage, composeFinialsPage, sizedCode, baseAssembly, cellLabel, sizeFam, sizeSel]);
+  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, scaleMode, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, sizedCode, baseAssembly, cellLabel, sizeFam, sizeSel]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
@@ -1048,10 +991,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
 
   // every page rendered (uses cache; builds missing ones) — for print/PDF
   const buildAllPages = () => pages.map((page) => {
-    if (page.key === '__WM__') return composeWallMountsPage().svg;
-    if (page.key === '__FINIALS__') return composeFinialsPage().svg;
+    if (page.kind === 'WALLMOUNTS') return composeWallMountsPage().svg;
+    if (page.kind === 'CATALOG') return composeCatalogPage(page).svg;
     let built = rowCacheRef.current[page.key];
-    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM }); rowCacheRef.current[page.key] = built; }
+    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins }); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
     const bSized = sizedCode(page.bracketPin.partName);
     const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
