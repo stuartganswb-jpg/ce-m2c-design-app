@@ -6,15 +6,12 @@
 // saved to the assembly doc (specSheetOverrides). Wall-mount styles carry bulk-entered
 // dims in system/spec_sheet_config. Editions: H1 (internal) or Fabricut customer codes.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { doc, getDoc, setDoc, updateDoc, getDocs, query, collection, where, deleteField } from 'firebase/firestore';
-import { db, storage } from '../../firebase';
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { SIZE_FAMILIES, buildSizeIndex, sizeVariantOf, projAllowedAtDia } from '../Shared/sizeMatrix';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { db } from '../../firebase';
 import { fabricutCodeOf } from '../Shared/priceLevels';
-import { specCellWarnings, specWarningLine } from './specCellCheck';
 import { loadGLBScene } from '../Shared/componentExport';
 import { Box3 } from 'three';
-import { normalizeCategory, normalizePosition, normalizeEndTreatment } from '../Shared/assemblyTags';
+import { normalizeCategory, normalizePosition } from '../Shared/assemblyTags';
 import {
   M2IN, extractWorldMeshes, groupBbox, translateMeshes, inferAxes, makeViews,
   armRootCenter, parseInches, clipSegmentsU, breakMarks, sanitize,
@@ -35,12 +32,6 @@ const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP|WP\d)/i;
 const WALL_CODE_RX = /[A-Z]+\d*-[A-Z0-9]*WP\d+(\s*\/?\s*P)?/i;
 const SCREW_MATCH = /screw/i;
 
-// Plate FAMILY = part code minus the shape suffix (H1-75RCP-S → H1-75RCP). A page is one
-// bracket × one family with the shapes as rows — matching the hand-made sheets. Return-arm
-// brackets pair with return plates when pins carry the flags; otherwise every family gets
-// its own page (tag pins in 1.6/⚖ to prune).
-const familyOf = (name) => String(name || '').replace(/-(H|R|S|V)$/i, '');
-const MAX_ROWS_PER_PAGE = 5;
 const AS_MOUNTED_NOTE = 'As-mounted dim marks the height from the center of the top hole of the wall mount to the bottom of the ring.';
 
 const btn = { padding: '6px 12px', fontSize: '0.8rem', cursor: 'pointer', border: '1px solid #444', background: '#fff', borderRadius: '4px' };
@@ -71,202 +62,24 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const [error, setError] = useState('');
   const [pageIndex, setPageIndex] = useState(0);
 
-  // ---- SIZE-MATRIX ROUTING (Stuart 2026-07-14) ------------------------------------------------
-  // One kept assembly covers a whole diameter × projection family in CPQ, but spec sheets need
-  // ── THE SHEET IS THE ASSEMBLY YOU OPENED, AND NOTHING ELSE (Stuart 2026-08-21) ───────────
-  // "when the correct assemblies are located it is rendering better, but when it opens there is no
-  // filter it is bringing in from all the assemblies … once an assembly is selected this screen
-  // should pop open but only display the options from that assembly not all of them."
+  // ── THE SIZE MACHINE IS GONE (Stuart 2026-08-23) ─────────────────────────────────────────
+  // "the old engine and all the related assemblies are retired so we either start over or strip
+  //  all the code out that related to it."
   //
-  // Opening H2-75 was listing H2-138 parts: the size matrix was translating every code into the
-  // selected CELL's diameter, and the cell was not the opened assembly's. So the sheet named parts
-  // that assembly does not contain, drew geometry that did not match them, and said so in red.
+  // What stood here: dia × projection dropdowns, a coverage strip of cells, a per-cell registry
+  // mapping each cell to a SOURCE assembly or an uploaded spec GLB, and a code translator that
+  // renamed every printed part on the way out. All of it existed for one reason — the ORIGINAL
+  // sizes were never tagged, so one assembly had to stand in for its siblings and its codes had
+  // to be rewritten to match the cell being drawn. Those assemblies are retired, and a tagged
+  // assembly needs none of it: its pins say what it contains, and it draws itself.
   //
-  // The whole machine — the dia/proj dropdowns, the cell chips, the per-cell source registry and
-  // the code translation — exists because the ORIGINAL sizes were never tagged: one assembly had to
-  // stand in for its siblings and its codes had to be renamed on the way out. A tagged assembly
-  // needs none of it. Its pins say what it contains, in 1.6, so the sheet lists exactly that.
-  //
-  // Switching it off at the FAMILY KEY turns off all four at once — sizedCode is already identity
-  // without a family, the dropdowns and chips are already hidden without one, and every cell is the
-  // base cell. An untagged legacy assembly still gets the full machine, which is what keeps the
-  // retiring sheets printable until they are gone.
+  // The sheet is the assembly you opened, its own codes, its own geometry.
+  const assembly = baseAssembly;
+  const pins = basePins;
   const hasTruePins = React.useMemo(
     () => (basePins || []).some(p => p && p.choiceNode && !p.isHiddenPart && p.partId),
     [basePins]);
 
-  // TRUE geometry per cell. Each cell maps to a SOURCE assembly whose GLB + pins carry that
-  // cell's real parts and codes (e.g. the retired ¾" × 3.625" assembly = the 75|S source; the
-  // designer's spec masters register here as they land — this picker IS the spec-master
-  // registry). Mapping lives in system/spec_sheet_config.sizeSources[family]["dia|proj"]; the
-  // family's base cell always uses the assembly the modal was opened with.
-  const sizeFamilyKey = React.useMemo(() => {
-    const counts = {};
-    for (const p of (basePins || [])) {
-      const part = (libraryParts || []).find(x => x.id === p.partId || x.itemId === p.partId || x.legacyErpId === p.partId);
-      const fam = part?.manufacturingSpecs?.customData?.sizeKey?.family;
-      if (fam) counts[fam] = (counts[fam] || 0) + 1;
-    }
-    const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
-    // ⚠ A TAGGED ASSEMBLY HAS NO SIZE MACHINE. Its pins already say what it contains, so there is
-    // nothing to stand in for and nothing to rename — see hasTruePins above.
-    if (hasTruePins) return null;
-    // ≥5 family-stamped pins = a genuine size-family assembly. A stray cross-collection pin
-    // (Brimar/Flat Iron assemblies share the odd H1 plate) must NOT sprout size dropdowns.
-    return top && top[1] >= 5 ? top[0] : null;
-  }, [basePins, libraryParts, hasTruePins]);
-  const sizeFam = sizeFamilyKey ? SIZE_FAMILIES[sizeFamilyKey] : null;
-  // The OPENED assembly's own diameter (bare code, e.g. H2-05 → '05'): per-assembly flows open
-  // each size's sheet from that size's own doc, so the sheet starts on THAT cell and treats it
-  // as the local base (drawing the assembly's own GLB). Families without codeRx (Fabricut H1)
-  // and masters that ARE the family base resolve to baseDia — byte-identical behavior there.
-  const openedDia = React.useMemo(() => {
-    if (!sizeFam) return null;
-    if (!sizeFam.codeRx) return sizeFam.baseDia;
-    const bare = new RegExp(sizeFam.codeRx.source.replace('([A-Z].*)$', '$'));
-    for (const c of [baseAssembly?.legacyErpId, baseAssembly?.itemId, baseAssembly?.itemName]) {
-      const m = String(c || '').trim().toUpperCase().match(bare);
-      if (m) return m[1];
-    }
-    return sizeFam.baseDia;
-  }, [sizeFam, baseAssembly]);
-  const openedProj = React.useMemo(() => {
-    if (!sizeFam || !openedDia) return sizeFam?.baseProj || null;
-    const opts = sizeFam.proj.options.filter(o => projAllowedAtDia(sizeFamilyKey, o, openedDia));
-    const base = opts.find(o => o.value === sizeFam.baseProj);
-    return (base || opts[0] || sizeFam.proj.options[0]).value;
-  }, [sizeFam, sizeFamilyKey, openedDia]);
-  const [sizeSel, setSizeSel] = useState(null); // { dia, proj }
-  useEffect(() => { if (sizeFam && !sizeSel) setSizeSel({ dia: openedDia || sizeFam.baseDia, proj: openedProj || sizeFam.baseProj }); }, [sizeFam, sizeSel, openedDia, openedProj]);
-
-  // Every cell is the base cell once the size machine is off (hasTruePins, above): there is one
-  // assembly, it is the one that was opened, and it draws itself.
-  const isBaseCell = hasTruePins || !sizeFam || !sizeSel || (sizeSel.dia === (openedDia || sizeFam.baseDia) && sizeSel.proj === (openedProj || sizeFam.baseProj));
-  const cellKey = sizeSel ? `${sizeSel.dia}|${sizeSel.proj}` : '';
-  const cellLabel = (sizeFam && sizeSel)
-    ? `${sizeFam.dia.options.find(o => o.value === sizeSel.dia)?.label || sizeSel.dia} · ${sizeFam.proj.options.find(o => o.value === sizeSel.proj)?.label || sizeSel.proj}`
-    : '';
-  const [sizeSources, setSizeSources] = useState({});
-  const [srcState, setSrcState] = useState({ assembly: null, pins: null, loading: false, missing: false });
-  const [showSrcPicker, setShowSrcPicker] = useState(false);
-  const [srcPickerList, setSrcPickerList] = useState(null);
-  const [srcPickId, setSrcPickId] = useState('');
-  useEffect(() => {
-    let dead = false;
-    (async () => {
-      if (!sizeFam || !sizeSel || isBaseCell) { setSrcState({ assembly: null, pins: null, loading: false, missing: false }); return; }
-      const entry = sizeSources?.[sizeFamilyKey]?.[cellKey];
-      // DIRECT SPEC GLB (preferred, Stuart 2026-07-14): a purpose-built flat GLB uploaded for this
-      // cell — one of each item, correctly positioned, code-named nodes (the 1.6 Fusion Import
-      // "Spec · true m" export). No assembly/pins/clusters; choices derive from the scene itself.
-      if (entry?.glbUrl && !entry.assemblyId) {
-        setSrcState({
-          assembly: {
-            id: `SPECGLB_${sizeFamilyKey}_${cellKey}`, itemName: entry.name || `Spec GLB ${cellKey}`,
-            manufacturingSpecs: { cadUrl: entry.glbUrl }, nodeClusters: [],
-            specSheetOverrides: { manualDims: entry.manualDims || [] },
-          },
-          pins: [], loading: false, missing: false,
-        });
-        return;
-      }
-      if (!entry?.assemblyId) { setSrcState({ assembly: null, pins: null, loading: false, missing: true }); return; }
-      setSrcState(s => ({ ...s, loading: true, missing: false }));
-      try {
-        const [aSnap, pSnap] = await Promise.all([
-          getDoc(doc(db, 'Approved_Designs', entry.assemblyId)),
-          getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', entry.assemblyId))),
-        ]);
-        if (dead) return;
-        if (!aSnap.exists()) { setSrcState({ assembly: null, pins: null, loading: false, missing: true }); return; }
-        // Pins are keyed by ITEM ID, the registry stores the DOC id — they coincide for
-        // builder-made docs (id === itemId) but not always. A mapped source whose ids differ used
-        // to resolve with zero pins silently and fall through to scene derivation (playbook 4.6).
-        let pinDocs = pSnap.docs;
-        const srcItemId = aSnap.data().itemId;
-        if (!pinDocs.length && srcItemId && srcItemId !== entry.assemblyId) {
-          const p2 = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', srcItemId)));
-          if (dead) return;
-          pinDocs = p2.docs;
-        }
-        setSrcState({ assembly: { id: aSnap.id, ...aSnap.data() }, pins: pinDocs.map(d => ({ id: d.id, ...d.data() })), loading: false, missing: false });
-      } catch (e) {
-        console.error('Spec source load failed', e);
-        if (!dead) setSrcState({ assembly: null, pins: null, loading: false, missing: true });
-      }
-    })();
-    return () => { dead = true; };
-  }, [sizeFam, sizeSel, isBaseCell, sizeSources, sizeFamilyKey, cellKey]);
-  // Everything below runs against the SOURCE for the selected cell (base cell = the opened assembly).
-  const assembly = srcState.assembly || baseAssembly;
-  const pins = srcState.pins || basePins;
-  // SIZED CODES: printed codes always resolve through the size matrix to the SELECTED cell — the
-  // geometry source's pins may carry another cell's codes (the retired 3.625" assembly predates
-  // the S/E rename: its pins say …ILE/BE/DE while its geometry IS the 3-5/8" set; at 75|S the
-  // sheet must print …ILS/BS/DS). Same resolver the CPQ quotes with; unknown parts pass through.
-  const specSizeIndex = React.useMemo(() => (sizeFam ? buildSizeIndex(libraryParts || []) : null), [sizeFam, libraryParts]);
-  const sizedCode = useCallback((partName) => {
-    if (!sizeFam || !sizeSel || !specSizeIndex || !partName) return partName;
-    const part = (libraryParts || []).find(p => p.legacyErpId === partName || p.itemId === partName || p.id === partName);
-    if (!part) return partName;
-    const res = sizeVariantOf(part, { family: sizeFamilyKey, dia: sizeSel.dia, proj: sizeSel.proj }, specSizeIndex);
-    const target = res?.part || part;
-    return (target.legacyErpId && target.legacyErpId !== 'PENDING' ? target.legacyErpId : target.itemId) || partName;
-  }, [sizeFam, sizeSel, specSizeIndex, libraryParts, sizeFamilyKey]);
-  const cellBlocked = !!(sizeFam && !isBaseCell && (srcState.loading || srcState.missing));
-  const loadSrcPickerList = async () => {
-    if (srcPickerList) return;
-    try {
-      const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('brandId', '==', baseAssembly?.brandId || ''), where('partClass', '==', 'Assembly')));
-      setSrcPickerList(snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .filter(a => a.manufacturingSpecs?.cadUrl)
-        .sort((a, b) => String(a.itemName || '').localeCompare(String(b.itemName || ''))));
-    } catch (e) { setSrcPickerList([]); }
-  };
-  // Undo a mis-registered cell (e.g. the wrong assembly picked from the list): removes the
-  // mapping so the cell goes back to "no spec geometry registered".
-  // Upload a purpose-built spec GLB for the selected cell (flat, code-named nodes — use the 1.6
-  // Fusion Import's "Spec · true m" download). Stored in Storage; the cell maps straight to it.
-  const [srcUploadBusy, setSrcUploadBusy] = useState(false);
-  const uploadCellGlb = async (file) => {
-    if (!file || !sizeSel) return;
-    setSrcUploadBusy(true);
-    try {
-      const path = `spec_glbs/${sizeFamilyKey}/${cellKey.replace('|', '_')}_${Date.now()}.glb`;
-      const r = storageRef(storage, path);
-      await uploadBytes(r, file);
-      const url = await getDownloadURL(r);
-      const next = { ...(sizeSources || {}) };
-      next[sizeFamilyKey] = { ...(next[sizeFamilyKey] || {}), [cellKey]: { glbUrl: url, name: file.name, kind: 'GLB', savedAt: Date.now() } };
-      await setDoc(doc(db, 'system', 'spec_sheet_config'), { sizeSources: next }, { merge: true });
-      setSizeSources(next);
-      setShowSrcPicker(false);
-    } catch (e) { alert('Spec GLB upload failed: ' + (e.message || e)); }
-    setSrcUploadBusy(false);
-  };
-  const clearCellSource = async () => {
-    if (!sizeSel || !sizeSources?.[sizeFamilyKey]?.[cellKey]) { setShowSrcPicker(false); return; }
-    try {
-      await updateDoc(doc(db, 'system', 'spec_sheet_config'), { [`sizeSources.${sizeFamilyKey}.${cellKey}`]: deleteField() });
-      const next = { ...(sizeSources || {}) };
-      next[sizeFamilyKey] = { ...(next[sizeFamilyKey] || {}) };
-      delete next[sizeFamilyKey][cellKey];
-      setSizeSources(next);
-      setShowSrcPicker(false);
-      setSrcPickId('');
-    } catch (e) { alert('Failed to remove the mapping: ' + (e.message || e)); }
-  };
-  const saveCellSource = async () => {
-    const pick = (srcPickerList || []).find(a => a.id === srcPickId);
-    if (!pick || !sizeSel) return;
-    const next = { ...(sizeSources || {}) };
-    next[sizeFamilyKey] = { ...(next[sizeFamilyKey] || {}), [cellKey]: { assemblyId: pick.id, name: pick.itemName || pick.itemId, cadUrl: pick.manufacturingSpecs?.cadUrl || '', savedAt: Date.now() } };
-    try {
-      await setDoc(doc(db, 'system', 'spec_sheet_config'), { sizeSources: next }, { merge: true });
-      setSizeSources(next);
-      setShowSrcPicker(false);
-    } catch (e) { alert('Failed to save the size source: ' + (e.message || e)); }
-  };
   const [edition, setEdition] = useState('H1'); // 'H1' | 'FAB'
   // ── ONE MASTER, TWO PAPERS (Stuart 2026-08-23) ───────────────────────────────────────────
   // "i am ok having it scale 1:1 at 11 x17 as long as the page formats to print well at the
@@ -297,8 +110,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const [pageData, setPageData] = useState(null); // { svg, viewMaps }
   const sceneRef = useRef(null);
   const unitScaledRef = useRef(false); // the >10-units inches→meters guess fired on this scene
-  const [cellWarnings, setCellWarnings] = useState([]); // geometry-vs-cell mismatches (warn-only)
-  const sceneChoicesRef = useRef(null); // spec-GLB sources: choices derived from scene node names
   const rowCacheRef = useRef({}); // pageKey -> built rows
   const wallMountsRef = useRef(null); // unique wall-mount styles for the 1:1 reference page
   const finialsRef = useRef(null);    // finial catalog items for the 1:1 grid page
@@ -312,20 +123,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const clusterById = React.useMemo(() => {
     const m = {}; clusters.forEach(c => { m[c.id] = c; }); return m;
   }, [clusters]);
-
-  // Choice pins per category, LEFT side preferred (sheets draw one side).
-  const choicesFor = useCallback((cat) => {
-    const inCat = (pins || []).filter(p => {
-      const cl = clusterById[p.clusterId];
-      return cl && cl.cat === cat && !cl.hidden && p.choiceNode && !p.isHiddenPart;
-    });
-    const left = inCat.filter(p => (clusterById[p.clusterId].pos || 'LEFT') === 'LEFT');
-    const pool = left.length ? left : inCat;
-    // stable order: H, R, S, V suffixes first (matches the hand-made sheets), then name
-    const rank = (p) => { const m = (p.partName || '').match(/-(H|R|S|V)$/i); return m ? 'HRSV'.indexOf(m[1].toUpperCase()) : 9; };
-    return [...pool].sort((a, b) => rank(a) - rank(b) || String(a.partName).localeCompare(String(b.partName)));
-  }, [pins, clusterById]);
-
 
   const nodesFor = useCallback((cat) => {
     const cls = clusters.filter(c => c.cat === cat && !c.hidden && (c.nodes || []).length && ['LEFT', 'SHARED', 'CENTER', ''].includes(c.pos || ''));
@@ -361,30 +158,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return set.size ? set : null;
   }, [engineChoices]);
 
-  // LEGACY SOURCES (pre-choice-pin era, e.g. the retired 3.625" assembly): pins carry no
-  // choiceNode, so choicesFor() finds nothing — but the GLB nodes are NAMED with the item codes
-  // (designer convention: "H1-75BE LEFT"). Derive the choices from the clusters' node names so
-  // any old assembly can serve as a spec-geometry source without re-pinning.
-  const legacyChoicesFor = useCallback((cat) => {
-    const cls = clusters.filter(c => c.cat === cat && !c.hidden && (c.nodes || []).length && ['LEFT', 'SHARED', 'CENTER', ''].includes(c.pos || ''));
-    const preferred = cls.filter(c => c.pos === 'LEFT');
-    const out = [];
-    (preferred.length ? preferred : cls).forEach(c => (c.nodes || []).forEach(n => {
-      const leaf = String(n).split('__').pop().replace(/^\d+_?/, '').trim();
-      const code = leaf
-        .replace(/\s+(LEFT|RIGHT|CENTER|CTR|L|R)$/i, '')
-        .replace(/[\s_]v\d+.*$/i, '')
-        .replace(/\.\d{3}$/, '')
-        .trim().toUpperCase();
-      if (!/^(H\d|CE-|FI)/i.test(code) || /STDOFF|STANDOFF/i.test(code)) return; // item-code-shaped names only (skip Body1/screws/standoffs)
-      out.push({ partName: code, choiceNode: n, clusterId: c.id, endTreatment: '' });
-    }));
-    const seen = new Set();
-    const deduped = out.filter(x => seen.has(x.partName) ? false : (seen.add(x.partName), true));
-    const rank = (p) => { const m = (p.partName || '').match(/-(H|R|S|V)$/i); return m ? 'HRSV'.indexOf(m[1].toUpperCase()) : 9; };
-    return deduped.sort((a, b) => rank(a) - rank(b) || String(a.partName).localeCompare(String(b.partName)));
-  }, [clusters]);
-
   // Fabricut customer code for a part — THE SAME resolver the quote line uses
   // (Shared/priceLevels.fabricutCodeOf: Painted → Base → Premium, tier by finish suffix, variant
   // docs hop to their base doc). This sheet used to carry its own precedence (Painted → Premium →
@@ -404,10 +177,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [libraryParts]);
 
   const rowCode = useCallback((partName) => {
-    const sized = sizedCode(partName);
-    if (edition === 'FAB') return fabCodeFor(sized) || fabCodeFor(partName) || `${sized} (no Fabricut code)`;
-    return sized;
-  }, [edition, fabCodeFor, sizedCode]);
+    if (edition === 'FAB') return fabCodeFor(partName) || `${partName} (no Fabricut code)`;
+    return partName;
+  }, [edition, fabCodeFor]);
 
   // ---- load GLB + wall-plate config once ----
   useEffect(() => {
@@ -447,7 +219,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         wallMountsRef.current = null;
         finialsRef.current = null;
         setPageData(null); // never leave the previous source's drawing on screen during a swap
-        setCellWarnings([]); // stale mismatch warnings die with the source they measured
+        // stale mismatch warnings die with the source they measured
         if (cfgSnap?.exists()) setWallCfg(cfgSnap.data()?.wallPlates || {});
         // ⚠ THE SCENE NO LONGER SAYS WHAT THE SHEET CONTAINS. It used to: choices were derived
         // here from node names against the library, plates sorted into "families" by regexes over
@@ -514,6 +286,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         kind: p.kind,
         title: `${bracketPin.partName}${p.label ? ` · ${p.label}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
         bracketPin, familyPins, ringPins, riderPins,
+        rodNodes: (p.rod?.nodes || []),
         isTraverse: p.isTraverse,
         isIM: p.kind === 'INSIDE_MOUNT',
         family: p.label,
@@ -540,34 +313,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // appearing on a single bracket's page. Null = no engine answer (untagged) → unchanged.
     const allowed = allowedNodesFor(bracketPin, opts.platePin || null);
     const keep = (list) => (allowed ? list.filter(n => allowed.has(String(n).toLowerCase())) : list);
-    const poleNodes = keep(nodesFor('POLE'));
-    const ringNodes = keep(nodesFor('RING'));
-    let pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
-    if (!pole.length && sceneChoicesRef.current?.POLE?.length) {
-      pole = extractWorldMeshes(scene, sceneChoicesRef.current.POLE.map(c => c.choiceNode));
-    }
-    if (!pole.length) {
-      // Legacy source assemblies (pre-canonical tags) may have no resolvable POLE cluster —
-      // find the rod by NODE NAME so the drawing still gets its axes and break marks.
-      const nameHits = [];
-      scene.traverse(o => { if (o.isMesh && /pole|rod/i.test(o.name || '') && !/finial|bracket|plate|ring|screw/i.test(o.name || '')) nameHits.push(o.name); });
-      if (nameHits.length) pole = extractWorldMeshes(scene, nameHits);
-    }
-    if (!pole.length) {
-      // Last resort (1.6 merged GLBs name top nodes by ITEM CODE, e.g. H2-75RD8): any
-      // top-level code-named node whose LIBRARY part classifies as a pole/rod/track is
-      // the rod — works for families whose clusters aren't POLE-tagged yet.
-      const poleNames = [];
-      (scene.children || []).forEach(top => {
-        const nm = top.name || '';
-        const leaf = String(nm).split('__').pop().replace(/^\d+_?/, '').trim();
-        const code = leaf.replace(/\s+(LEFT|RIGHT|CENTER|CTR|L|R)$/i, '').replace(/[\s_]v\d+.*$/i, '').replace(/\.\d{3}$/, '').trim().toUpperCase();
-        if (!code) return;
-        const part = (libraryParts || []).find(p => String(p.legacyErpId || '').toUpperCase() === code || String(p.itemId || '').toUpperCase() === code);
-        if (part && /POLE|ROD|TRACK/i.test(String(part.manufacturingSpecs?.productType || part.productType || ''))) poleNames.push(nm);
-      });
-      if (poleNames.length) pole = extractWorldMeshes(scene, poleNames);
-    }
+    // ⚠ THE ROD IS THE ONE THIS PAGE HOLDS. Three fallbacks stood here — a POLE-cluster sweep, a
+    // /pole|rod/ node-name search, and a library-classified guess over top-level nodes — each one
+    // there because an untagged source could not say which rod an arm belonged to. rodForArm()
+    // answered that when the page was built (a double pins a front rod and a back rod; the arm's
+    // tier says which is its own), so the page carries the node list and nothing here guesses.
+    const rodNodes = keep(opts.rodNodes || []);
+    const pole = rodNodes.length ? extractWorldMeshes(scene, rodNodes) : [];
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
@@ -579,11 +331,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     let ringChoices = ringPins
       .map(p => ({ partName: p.partName, meshes: extractWorldMeshes(scene, [p.choiceNode]) }))
       .filter(r => r.meshes.length);
-    if (!ringChoices.length && ringNodes.length) {
-      ringChoices = [{ partName: '', meshes: extractWorldMeshes(scene, ringNodes) }];
-    }
+
     const plateChoices = familyPins || [];
-    if (!pole.length) throw new Error('No POLE cluster nodes found — tag this source assembly\'s pole cluster (category POLE) in 1.6 / ⚖.');
+    if (!pole.length) throw new Error(`The engine pairs this arm with a rod the GLB does not carry (${(opts.rodNodes || []).join(', ') || 'no rod tagged at all'}) — check the POLE pins in 1.6 / ⚖.`);
     // basic brackets have no plate — the bracket itself marks the wall side for axis inference
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
@@ -804,7 +554,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, ringItems, measured };
-  }, [nodesFor, allowedNodesFor, wallCfg, choicesFor, legacyChoicesFor, libraryParts]);
+  }, [allowedNodesFor, wallCfg]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
@@ -874,15 +624,15 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     paper: layoutPaper,
     footerNote: reducedNote,
     perRowOverride: layoutPaper === 'tabloid' ? 5 : 4,
-  }), [buildCatalog, rowCode, layoutPaper, reducedNote, baseAssembly]);
+  }), [buildCatalog, rowCode, layoutPaper, reducedNote, baseAssembly?.itemName, baseAssembly?.itemId]);
 
   const composeWallMountsPage = useCallback(() => buildWallMountsPage({
-    title: `${baseAssembly?.itemName || baseAssembly?.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — Wall mounts`,
+    title: `${baseAssembly?.itemName || baseAssembly?.itemId} — Wall mounts`,
     items: buildWallMounts(),
     noteLines: ['Top-hole offsets come from the Wall mounts panel and drive the as-mounted dims.'],
     paper: layoutPaper,
     footerNote: reducedNote,
-  }), [assembly, buildWallMounts, layoutPaper, reducedNote]);
+  }), [buildWallMounts, layoutPaper, reducedNote, baseAssembly?.itemName, baseAssembly?.itemId]);
 
   // ---- compose current page ----
   useEffect(() => {
@@ -891,30 +641,29 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     setStatus('Rendering…');
     const t = setTimeout(() => {
       try {
-        if (page.kind === 'WALLMOUNTS') { setPageData(composeWallMountsPage()); setCellWarnings([]); setStatus(''); return; }
-        if (page.kind === 'CATALOG') { setPageData(composeCatalogPage(page)); setCellWarnings([]); setStatus(''); return; }
+        if (page.kind === 'WALLMOUNTS') { setPageData(composeWallMountsPage()); setStatus(''); return; }
+        if (page.kind === 'CATALOG') { setPageData(composeCatalogPage(page)); setStatus(''); return; }
         let built = rowCacheRef.current[page.key];
         if (!built) {
-          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins });
+          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes });
           rowCacheRef.current[page.key] = built;
         }
         // GEOMETRY vs CELL (playbook 4.2, warn-only): the measured pole Ø / projection must agree
         // with what the selected dia×proj cell CLAIMS (sizeMatrix inches). The sheet still renders
         // — borrowing geometry is sometimes deliberate — but it stops doing so silently. This was
         // the most likely silent failure of the H1 mass load (a ¾" file registered under 1-3/8").
-        setCellWarnings(specCellWarnings({
-          fam: sizeFam, sel: sizeSel,
-          poleDiaIn: built.measured?.poleDiaIn, projIn: built.measured?.projIn,
-          unitAutoScaled: unitScaledRef.current,
-        }));
-        const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
+                const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
         const anyAsMounted = rows.some(r => r.hasAsMounted);
-        const bSized = sizedCode(page.bracketPin.partName);
+        const bSized = page.bracketPin.partName;
         const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
-        const famLabel = (page.familyPins && page.familyPins.length) ? familyOf(sizedCode(page.familyPins[0].partName)) : page.family;
+        // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
+        // engine paired with the arm — or, when there are none, the engine's own reason.
+        const nPlates = (page.familyPins || []).length;
+        const famLabel = [page.family, nPlates ? `${nPlates} backplate${nPlates === 1 ? '' : 's'}` : (page.reason || 'drawn alone')]
+          .filter(Boolean).join(' · ');
         const result = buildPageSvg({
-          title: `${baseAssembly.itemName || baseAssembly.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — ${titleCode}`,
-          subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel} backplates · generated from 3D model`,
+          title: `${baseAssembly.itemName || baseAssembly.itemId} — ${titleCode}`,
+          subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel}`,
           rows,
           manualDims: manualDims.filter(d => d.pageKey === page.key),
           noteLines: [
@@ -936,7 +685,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, sizedCode, baseAssembly, cellLabel, sizeFam, sizeSel]);
+  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
@@ -977,15 +726,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
 
   const saveOverrides = async () => {
     try {
-      if (String(assembly?.id || '').startsWith('SPECGLB_')) {
-        // Direct spec-GLB source: the dims live on the cell's config entry, not an assembly doc.
-        const next = { ...(sizeSources || {}) };
-        next[sizeFamilyKey] = { ...(next[sizeFamilyKey] || {}), [cellKey]: { ...(next[sizeFamilyKey]?.[cellKey] || {}), manualDims } };
-        await setDoc(doc(db, 'system', 'spec_sheet_config'), { sizeSources: next }, { merge: true });
-        setSizeSources(next);
-      } else {
-        await updateDoc(doc(db, 'Approved_Designs', assembly.id), { specSheetOverrides: { manualDims } });
-      }
+      await updateDoc(doc(db, 'Approved_Designs', assembly.id), { specSheetOverrides: { manualDims } });
       setDirty(false);
       setStatus('Overrides saved.');
     } catch (e) { alert('Save failed: ' + (e?.message || e)); }
@@ -1004,14 +745,18 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (page.kind === 'WALLMOUNTS') return composeWallMountsPage().svg;
     if (page.kind === 'CATALOG') return composeCatalogPage(page).svg;
     let built = rowCacheRef.current[page.key];
-    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins }); rowCacheRef.current[page.key] = built; }
+    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes }); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
-    const bSized = sizedCode(page.bracketPin.partName);
+    const bSized = page.bracketPin.partName;
     const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
-    const famLabel = (page.familyPins && page.familyPins.length) ? familyOf(sizedCode(page.familyPins[0].partName)) : page.family;
+    // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
+    // engine paired with the arm — or, when there are none, the engine's own reason.
+    const nPlates = (page.familyPins || []).length;
+    const famLabel = [page.family, nPlates ? `${nPlates} backplate${nPlates === 1 ? '' : 's'}` : (page.reason || 'drawn alone')]
+      .filter(Boolean).join(' · ');
     return buildPageSvg({
-      title: `${baseAssembly.itemName || baseAssembly.itemId}${cellLabel ? ` · ${cellLabel}` : ''} — ${titleCode}`,
-      subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel} backplates · generated from 3D model`,
+      title: `${baseAssembly.itemName || baseAssembly.itemId} — ${titleCode}`,
+      subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel}`,
       rows,
       manualDims: manualDims.filter(d => d.pageKey === page.key),
       noteLines: [
@@ -1047,49 +792,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       <div style={{ background: '#f4f5f7', borderRadius: '8px', width: 'min(1240px, 96vw)', maxHeight: '94vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '1px solid #d5d8dd', flexWrap: 'wrap' }}>
           <strong style={{ fontSize: '0.95rem' }}>Spec Sheet — {baseAssembly?.itemName || baseAssembly?.itemId}</strong>
-          {sizeFam && sizeSel && (
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }} title="Diameter × projection — mirrors the CPQ size questions; each cell draws from its registered spec-geometry source">
-              <select value={sizeSel.dia} onChange={e => { setSizeSel(s => ({ ...s, dia: e.target.value })); setPageIndex(0); }} style={{ padding: '5px', fontSize: '0.8rem' }}>
-                {sizeFam.dia.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-              <select value={sizeSel.proj} onChange={e => { setSizeSel(s => ({ ...s, proj: e.target.value })); setPageIndex(0); }} style={{ padding: '5px', fontSize: '0.8rem' }}>
-                {sizeFam.proj.options.filter(o => projAllowedAtDia(sizeFamilyKey, o, sizeSel?.dia)).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-              {/* COVERAGE STRIP (playbook 4.3): every dia×proj cell of the family as a chip —
-                  green = direct spec GLB, amber = assembly-mapped, red = nothing registered,
-                  black = the base cell (draws the opened assembly). Before this, coverage was
-                  discovered by clicking every cell one at a time. Chips also navigate. */}
-              <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', maxWidth: '360px' }}>
-                {sizeFam.dia.options.flatMap(d =>
-                  sizeFam.proj.options.filter(p => projAllowedAtDia(sizeFamilyKey, p, d.value)).map(p => {
-                    const key = `${d.value}|${p.value}`;
-                    const isBase = d.value === (openedDia || sizeFam.baseDia) && p.value === (openedProj || sizeFam.baseProj);
-                    const entry = sizeSources?.[sizeFamilyKey]?.[key];
-                    const kind = isBase ? 'base' : (entry?.glbUrl && !entry.assemblyId) ? 'glb' : entry?.assemblyId ? 'asm' : 'missing';
-                    const cols = { base: '#1c2025', glb: '#2e7d4f', asm: '#8a6d1a', missing: '#b00020' };
-                    const saved = entry?.savedAt ? ` · saved ${new Date(entry.savedAt).toLocaleDateString()}` : '';
-                    const tip = kind === 'base' ? 'Base cell — draws the opened assembly'
-                      : kind === 'glb' ? `Direct spec GLB · ${entry.name || ''}${saved}`
-                      : kind === 'asm' ? `Mapped assembly · ${entry.name || ''}${saved}`
-                      : 'No spec geometry registered yet';
-                    const on = sizeSel.dia === d.value && sizeSel.proj === p.value;
-                    return (
-                      <button key={key} title={tip}
-                        onClick={() => { setSizeSel({ dia: d.value, proj: p.value }); setPageIndex(0); }}
-                        style={{ padding: '2px 5px', fontSize: '0.65rem', cursor: 'pointer', borderRadius: '3px', border: `1px solid ${cols[kind]}`, background: on ? cols[kind] : '#fff', color: on ? '#fff' : cols[kind] }}>
-                        {d.value}|{p.value}
-                      </button>
-                    );
-                  }))}
-              </div>
-              {!isBaseCell && srcState.assembly && (
-                <span style={{ fontSize: '0.72rem', color: '#2e7d4f', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Geometry source: ${srcState.assembly.itemName || srcState.assembly.id}`}>
-                  ⛓ {srcState.assembly.itemName || srcState.assembly.id}
-                  <button style={{ ...btn, padding: '1px 6px', marginLeft: '4px', fontSize: '0.7rem' }} title="Change this cell's geometry source" onClick={() => { setShowSrcPicker(true); loadSrcPickerList(); }}>✎</button>
-                </span>
-              )}
-            </div>
-          )}
           <select value={pageIndex} onChange={e => setPageIndex(+e.target.value)} style={{ padding: '5px', fontSize: '0.8rem' }}>
             {pages.map((p, i) => <option key={p.key} value={i}>{p.title}</option>)}
           </select>
@@ -1145,45 +847,16 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             </table>
           </div>
         )}
-        {(showSrcPicker || (srcState.missing && !isBaseCell)) && sizeFam && (
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #d5d8dd', background: '#fff8ec' }}>
-            <div style={{ fontSize: '0.85rem', marginBottom: '8px' }}>
-              <b>{cellLabel}</b> — {srcState.missing ? 'no spec geometry registered for this size yet.' : 'change this size\'s geometry source.'}
-            </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <label style={{ ...btnOn, background: '#2e7d4f', display: 'inline-block', cursor: srcUploadBusy ? 'wait' : 'pointer' }}>
-                {srcUploadBusy ? 'Uploading…' : `⬆ Upload spec GLB for ${cellLabel}`}
-                <input type="file" accept=".glb" disabled={srcUploadBusy} style={{ display: 'none' }} onChange={e => { uploadCellGlb(e.target.files[0]); e.target.value = ''; }} />
-              </label>
-              <span style={{ fontSize: '0.78rem', color: '#555' }}>preferred — a flat GLB with ONE of each item, correctly positioned, nodes named by item code (1.6 Fusion Import → "Spec · true m" → Download)</span>
-            </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
-              <span style={{ fontSize: '0.78rem', color: '#555' }}>…or map an existing assembly:</span>
-              <select value={srcPickId} onFocus={loadSrcPickerList} onChange={e => setSrcPickId(e.target.value)} style={{ padding: '6px', fontSize: '0.8rem', minWidth: '320px' }}>
-                <option value="">{srcPickerList === null ? 'Click to load assemblies…' : '-- Select the source assembly --'}</option>
-                {(srcPickerList || []).map(a => <option key={a.id} value={a.id}>{a.itemName || a.itemId}</option>)}
-              </select>
-              <button style={btnOn} disabled={!srcPickId} onClick={saveCellSource}>Save assembly as source</button>
-              {!!sizeSources?.[sizeFamilyKey]?.[cellKey] && <button style={{ ...btn, color: '#b00020', borderColor: '#b00020' }} title="Undo — remove this cell's mapping entirely" onClick={clearCellSource}>✕ Remove mapping</button>}
-              {showSrcPicker && <button style={btn} onClick={() => setShowSrcPicker(false)}>Cancel</button>}
-            </div>
-          </div>
-        )}
         <div style={{ padding: '8px 16px', fontSize: '0.8rem', color: '#555', minHeight: '20px' }}>
           {error ? <span style={{ color: '#b00020' }}>⚠ {error}</span>
             : status ? status
             : dimTool ? 'Manual dim: click two points on a drawing, then enter the value.'
-            : cellWarnings.length ? <span style={{ color: '#b00020' }}>⚠ Geometry doesn't match {cellLabel || 'this cell'}: {specWarningLine(cellWarnings)}. The sheet still renders, but its dimensions describe the LOADED geometry — check the registered source before printing.</span>
-            : (assembly && !assembly.manufacturingSpecs?.specCadUrl) ? <span style={{ color: '#8a6d1a' }}>📐 Drawing from the merged sales model — pages can misdraw or come up empty (that's why H1 got dedicated spec layouts). For clean sheets: upload this assembly's "Spec Sheet Layout (📐)" in 1.6 (the Spec · true m export), or register a per-size spec GLB via the size pickers above.</span>
+            : (assembly && !assembly.manufacturingSpecs?.specCadUrl) ? <span style={{ color: '#8a6d1a' }}>📐 Drawing from the merged sales model — every option is in it, stacked, so pages can misdraw. For clean sheets upload this assembly's "Spec Sheet Layout (📐)" in 1.6 (the Fusion Import "Spec · true m" export).</span>
             : ''}
         </div>
         <div ref={svgHostRef} onClick={handleSvgClick}
           style={{ flex: 1, overflow: 'auto', padding: '0 16px 16px', cursor: dimTool ? 'crosshair' : 'default' }}>
-          {cellBlocked ? (
-            <div style={{ padding: '80px 20px', textAlign: 'center', color: '#777', fontSize: '0.95rem' }}>
-              {srcState.loading ? `Loading ${cellLabel} geometry…` : `No spec geometry for ${cellLabel} yet — register its source assembly above.`}
-            </div>
-          ) : pageData && (
+          {pageData && (
             <div style={{ background: '#fff', boxShadow: '0 1px 6px rgba(0,0,0,0.2)', maxWidth: `${PAPERS[layoutPaper].W}px`, margin: '0 auto', aspectRatio: `${PAPERS[layoutPaper].W}/${PAPERS[layoutPaper].H}` }}
               dangerouslySetInnerHTML={{ __html: pageData.svg }} />
           )}
