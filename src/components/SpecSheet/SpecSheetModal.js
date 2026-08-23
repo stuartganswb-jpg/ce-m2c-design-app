@@ -416,6 +416,35 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       };
     });
     const rootV = armRootCenter(bracket, axes);
+    // ── THE CARRIER RIDES INSIDE THE TRACK, AND MUST STILL BE VISIBLE (Stuart 2026-08-23) ───
+    // "traverse a sideview with the carrier inserted … just needs to be inserted into it."
+    //
+    // The GLB already has it in the right place — a carrier is a RIDER, so the configurator
+    // renders it with the track and never asks about it. Adding its meshes to the composed group
+    // would draw nothing, though: the depth raster is built from every mesh in that group, and a
+    // carrier inside a closed extrusion is behind the track wall at every pixel.
+    //
+    // So it is rendered against ITS OWN depth buffer and the segments merged in — the track drawn
+    // whole, the carrier drawn through it. That is the cutaway convention the reference sheets
+    // use, and it is honest: nothing is moved, only un-occluded.
+    const carrierMeshes = (opts.riderPins || [])
+      .flatMap(rp => extractWorldMeshes(scene, [rp.choiceNode]))
+      .filter(Boolean);
+    const carrierView = carrierMeshes.length ? renderHiddenLine(carrierMeshes, views.front, 900) : null;
+    // ⚠ THE CARRIERS DO NOT WIDEN THE WINDOW. A track carries them along its whole length, so
+    // letting them vote on the rod break would open the view to the entire track and defeat it.
+    // They are merged BEFORE the clip instead, so the ones inside the window are drawn and the
+    // rest are cut with the track — which is what a broken view means.
+    // Union of two rendered views: segments concatenated, bounds widened. Only the bounds are
+    // read downstream (place/clip), so a merged view needs nothing from the depth raster.
+    const withCarrier = (view) => (!carrierView ? view : {
+      vis: [...view.vis, ...carrierView.vis],
+      zb: {
+        minU: Math.min(view.zb.minU, carrierView.zb.minU), maxU: Math.max(view.zb.maxU, carrierView.zb.maxU),
+        minV: Math.min(view.zb.minV, carrierView.zb.minV), maxV: Math.max(view.zb.maxV, carrierView.zb.maxV),
+      },
+    });
+
     // Rod break: clip the front view to a window around plate/bracket/ring and mark the
     // cut — a full rod can't print at 1:1, and the hand-made sheets truncate it the same way.
     const clipFront = (front0, includeBoxes) => {
@@ -436,7 +465,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (!plateChoices.length) {
       const rowRings = parkRings(bracketHalfAlong);
       const meshes = [...bracket, ...pole, ...rowRings.flatMap(r => r.meshes)];
-      const front0 = renderHiddenLine(meshes, views.front, 1600);
+      const front0 = withCarrier(renderHiddenLine(meshes, views.front, 1600));
       const profile = renderHiddenLine(meshes, views.profile, 900);
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
@@ -506,7 +535,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const plateHalfAlong = (cb0.max[axes.poleAxis] - cb0.min[axes.poleAxis]) / 2;
       const rowRings = parkRings(Math.max(plateHalfAlong, bracketHalfAlong));
       const meshes = [...bracket, ...plateAll, ...pole, ...rowRings.flatMap(r => r.meshes)];
-      const front0 = renderHiddenLine(meshes, views.front, 1600);
+      const front0 = withCarrier(renderHiddenLine(meshes, views.front, 1600));
       const profile = renderHiddenLine(meshes, views.profile, 900);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
