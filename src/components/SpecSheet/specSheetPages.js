@@ -226,6 +226,13 @@ export function specPages({ choices, answers = {} }) {
         const offered = { choices: judge(norm, leaf).in };
         for (const { choice: subject, kind } of subjectsOf(model)) {
             const rod = rodForArm(offered, subject);
+            // ── A DOUBLE HAS TWO POLES AND THE SHEET SHOWS BOTH ─────────────────────────────
+            // Stuart 2026-08-23: "on doubles you should show both poles in their place not just
+            // one." rodForArm answers WHICH rod this arm holds — the tier question, and still the
+            // right answer for the projection and for the rings. But a double bracket physically
+            // carries a front rod and a back rod, and a drawing showing one is a drawing of a
+            // single. So the page carries the whole admissible set alongside its own rod.
+            const rods = (offered.choices || []).filter(c => ROD_ROLES.includes(c.role) && !c.parked);
             const { plates, rings, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
             const fams = plates.length ? plateFamilies(plates) : [{ stem: '', plates: [] }];
             for (const fam of fams) {
@@ -239,7 +246,7 @@ export function specPages({ choices, answers = {} }) {
             seen.add(sig);
             pages.push({
                 key: `${U(subject.partId || subject.id)}__${U(fam.stem)}__${pages.length}`,
-                kind, answers: leaf, label, subject, rod, plates: fam.plates, plateFamily: fam.stem,
+                kind, answers: leaf, label, subject, rod, rods, plates: fam.plates, plateFamily: fam.stem,
                 rings, suppressedBy, reason,
                 isTraverse: !!rod && ROD_ROLES.includes(rod.role) && (U(rod.rodKind) === 'TRAVERSE' || rod.role === 'TRACK'),
                 // ⚠ RIDERS ARE ONLY THERE ONCE THE ROD IS. `ridersFor` is deliberately additive —

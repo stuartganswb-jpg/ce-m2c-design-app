@@ -37,7 +37,6 @@ const FS = { title: 17, sub: 13, code: 16, label: 13, dim: 14, note: 12, zone: 1
 // somewhere to go. ~1/4" printed on either side.
 const PAD = { x: 30, y: 26 };
 const GUTTER = 34;      // between columns
-const CODE_COL = 150;   // the code column carries text only — a fixed, generous width
 
 export function dimH(x0, x1, y, inches) {
   let s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="black" stroke-width="${SW}"/>`;
@@ -136,7 +135,12 @@ const wrapSvg = (P, inner) =>
 // cell, rows as tall as their tallest, and the page shrinks UNIFORMLY (and says so) only if the
 // result overflows the paper. Scale is a property of the page, not of a column — which is what
 // makes 1:1 mean anything.
-const CELL_KEYS = ['detail', 'front', 'code', 'profile'];
+// ⚠ 'code' IS NO LONGER A COLUMN. It used to be a strip of text between the elevation and the
+// section, which left the part numbers floating in the middle of the sheet attached to nothing
+// (Stuart 2026-08-23: "the pattern id's … currently floating by themselves"). They belong under
+// the part they name, so they are drawn beneath the section instead — arm code and plate code
+// together, because a row is that pairing.
+const CELL_KEYS = ['detail', 'front', 'profile'];
 
 // ── ONE DATUM PER ROW, SO THE COLUMNS READ ACROSS (Stuart 2026-08-23) ────────────────────────
 // "maybe offset the vertical alignment of the bracket side view with the front view so
@@ -161,20 +165,21 @@ const cellAboveBelow = (view, scale, datumV) => {
 /** Column widths and row heights that fit the content, at `scale`. */
 function measureGrid(rows, scale) {
   const colW = {};
-  CELL_KEYS.forEach(k => { colW[k] = k === 'code' ? CODE_COL : 0; });
+  CELL_KEYS.forEach(k => { colW[k] = 0; });
   const above = [], below = [];
   const rowH = rows.map(r => {
     let a = 0, b = 0;
     CELL_KEYS.forEach(k => {
-      if (k === 'code') return;
       const m = cellAboveBelow(r[k], scale, r.datum?.[k]);
       if (m.w > colW[k]) colW[k] = m.w;
       if (m.above > a) a = m.above;
       if (m.below > b) b = m.below;
     });
-    // A row may carry captions BELOW its geometry — ring ids on leaders — which no bounding box
-    // knows about. It declares that room itself, or the next row lands on the text.
+    // A row may carry captions BELOW its geometry — ring ids on leaders, and the arm/plate codes
+    // under the section — which no bounding box knows about. It declares that room itself, or the
+    // next row lands on the text.
     b += Number(r.padBelow) || 0;
+    b += ([r.armCode, r.code].filter(Boolean).length) * (FS.code + 4) + 8;
     above.push(a); below.push(b);
     return Math.max(a + b, 60);
   });
@@ -221,10 +226,19 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   let svg = pageFrame(P, title, subtitle);
 
   // Column centres, left to right, from the measured widths.
+  // ── THE SECTION SITS OUT ON THE RIGHT (Stuart 2026-08-23) ──────────────────────────────────
+  // "horizontally you can push the right row (side view) over to the right of the page quite a
+  //  bit." Columns were packed left with a fixed gutter and whatever was left over sat as dead
+  //  margin on the right. The leftover goes into the gap BEFORE the section instead, so the
+  //  elevation keeps the left of the sheet and the section is out at the right where it reads as
+  //  a separate view rather than a continuation of the drawing.
+  const used = CELL_KEYS.reduce((a, k) => a + (grid.colW[k] ? grid.colW[k] + GUTTER : 0), -GUTTER);
+  const spare = Math.max(0, bodyW - used);
   const cx = {};
   let x = MARGIN + 40;
   CELL_KEYS.forEach(k => {
     if (!grid.colW[k]) return;
+    if (k === 'profile') x += spare;
     cx[k] = x + grid.colW[k] / 2;
     x += grid.colW[k] + GUTTER;
   });
@@ -277,8 +291,13 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
         }
       }
     }
-    if (cx.code !== undefined && r.code) {
-      svg += `<text x="${cx.code}" y="${cy + FS.code / 3}" font-size="${FS.code}" text-anchor="middle">${r.code}</text>`;
+    // Arm code then plate code, under the section they belong to.
+    if (cx.profile !== undefined) {
+      const labels = [r.armCode, r.code].filter(Boolean);
+      const below = cy + grid.below[i] - FS.code * (labels.length + 0.6);
+      labels.forEach((t, n) => {
+        svg += `<text x="${cx.profile}" y="${below + n * (FS.code + 4)}" font-size="${FS.code}" text-anchor="middle">${t}</text>`;
+      });
     }
     cursor += h + lead;
   });

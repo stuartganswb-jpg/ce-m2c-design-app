@@ -339,11 +339,26 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         kind: p.kind,
         title: `${bracketPin.partName}${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
         bracketPin, familyPins, ringPins, riderPins, plateFamily: p.plateFamily || '',
+        // Every pole this configuration stands up, each taken on the drawn side — one on a
+        // single, front and back on a double.
         rodNodes: (() => {
-          const rp = pinForChoice(p.rod, { sideFirst: true });
-          return rp ? [rp.choiceNode] : (p.rod?.nodes || []);
+          const set = (p.rods && p.rods.length ? p.rods : [p.rod]).filter(Boolean);
+          const nodes = set.map(r => pinForChoice(r, { sideFirst: true })?.choiceNode).filter(Boolean);
+          return nodes.length ? [...new Set(nodes)] : (p.rod?.nodes || []);
         })(),
-        projIn: p.answers?.proj,
+        // ⚠ THE PROJECTION OF A DOUBLE IS PER TIER. A double's tag is not a number but a map —
+        // "FRONT: 6.5, BACK: 3.25" — and the plate's depth is measured from the pole THIS arm
+        // holds, so it is that tier's figure. Reading the axis answer alone gives a double no
+        // projection at all, which is why its plate never moved.
+        projIn: (() => {
+          const direct = Number(p.answers?.proj);
+          if (isFinite(direct) && direct > 0) return direct;
+          const tiers = p.subject?.projTiers || p.rod?.projTiers || null;
+          if (!tiers) return null;
+          const tier = String(p.rod?.tier || p.subject?.tier || '').toUpperCase();
+          const v = Number(tiers[tier] ?? Object.values(tiers)[0]);
+          return isFinite(v) && v > 0 ? v : null;
+        })(),
         isTraverse: p.isTraverse,
         isIM: p.kind === 'INSIDE_MOUNT',
         family: p.label,
@@ -550,7 +565,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         out.push({ partName: rc.partName, meshes: translateMeshes(rc.meshes, d) });
         // Next station: past this ring, with a gap wide enough for its drop dimension AND its
         // pattern id. Stuart 2026-08-23: "spread the rings out some as they appear very busy".
-        edge = target + sign * (half + 0.040);   // ~1-9/16" of clear rod between rings
+        edge = target + sign * (half + 0.062);   // ~2-7/16" of clear rod between rings
       }
       return out;
     };
@@ -599,7 +614,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // it empty. The hand-made sheets show a SHORT broken view: plate, arm, the rings, and a stub
     // of rod either side. So the window is capped, and anything past the cap is cut with a break
     // mark, which is what a broken view means.
-    const WINDOW_MAX_M = 26 * 0.0254;   // ~26" — room for four spread rings and a run of rod
+    const WINDOW_MAX_M = 34 * 0.0254;   // ~34" — four well-spread rings and a real run of rod
     // The rod's centreline expressed in a given view's v axis — both the elevation and the
     // section contain the rod, so this is the one height they can agree on.
     const rodCentreV = (view) => { const b = viewBbox(pole, view); return (b.minV + b.maxV) / 2; };
@@ -622,7 +637,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // Extra visible rod so the rings clearly hang on it — longer on the open end, which is
       // what makes the elevation read as a rod rather than a stub ("we can make the rod on the
       // left side longer for all").
-      lo -= 0.025; hi += 0.055;
+      lo -= 0.030; hi += 0.090;
       if (hi - lo > WINDOW_MAX_M) {
         const m = (mountBox && isFinite(mountBox.minU)) ? mountBox : null;
         const mountC = m ? (m.minU + m.maxU) / 2 : lo;
@@ -961,7 +976,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // with what the selected dia×proj cell CLAIMS (sizeMatrix inches). The sheet still renders
         // — borrowing geometry is sometimes deliberate — but it stops doing so silently. This was
         // the most likely silent failure of the H1 mass load (a ¾" file registered under 1-3/8").
-                const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
+                const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(page.bracketPin.partName) }));
         const anyAsMounted = rows.some(r => r.hasAsMounted);
         const bSized = page.bracketPin.partName;
         const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
@@ -1059,7 +1074,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (page.kind === 'CATALOG') return composeCatalogPage(page).svg;
     let built = rowCacheRef.current[page.key];
     if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn }); rowCacheRef.current[page.key] = built; }
-    const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
+    const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(page.bracketPin.partName) }));
     const bSized = page.bracketPin.partName;
     const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
     // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
