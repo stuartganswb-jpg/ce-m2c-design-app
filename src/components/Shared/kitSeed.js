@@ -151,3 +151,87 @@ export function seedFromKit({ model, kit }) {
 export function kitsForSeeding(parts = []) {
     return parts.filter(p => String(p?.partClass || '') === 'Kit' && p?.manufacturingSpecs?.kitAlign);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// THE KIT IS THE FIRST LINE, AND THE FEET ABOVE IT ARE THE SECOND
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+//
+// Stuart, 2026-08-22: "the 4ft kit bills as top line item, then additional feet bill below it at
+// same price as in cpq engine. so a 10 ft kit will bill at 4ft kit + 6ft additional feet. and
+// anything else added in bills additional lines… all forms quotes, sales orders, packing slips,
+// invoices will be app created and match the kit # and additional part#'s so the paperwork will be
+// honest for the client."
+//
+// So the customer's paperwork reads the way they ordered: their kit code, then what they added.
+//
+// ── WHY THIS IS SO SMALL ─────────────────────────────────────────────────────────────────────
+// Only the PER-FOOT lines need touching. Everything else already behaves:
+//   • the component chart bills nothing at its own quantity — configuratorTotal sums only lines
+//     flagged `billable`, so the brackets and carriers that come with a length are already inside
+//     the per-foot price, and only a count raised above the chart bills the difference;
+//   • a finial, a ring, an added item is a customisation and bills as its own line, which is
+//     exactly what "anything else added in bills additional lines" asks for.
+//
+// So the kit line goes on top, the first `baseFeet` of every per-foot line are inside it, and the
+// remainder bills at the engine's own per-foot rate — which Stuart confirms is (or will be)
+// aligned with the kit's, so there is no second rate to reconcile and nothing bills twice.
+//
+// ⚠ THE CUT LENGTH IS NOT THE BILLED LENGTH. A 10 ft order still cuts a 10 ft fascia; what changes
+// is that 4 of those feet were already paid for in the kit. `cutLength` is what the bench reads and
+// is deliberately left alone — reducing it would ship a short pole.
+
+/** Rod-ish roles are the ones priceConfiguration bills by the foot. */
+const isPerFootLine = (l) => !!l.perFoot;
+
+/**
+ * Re-shape a priced configuration as: the kit, then what was added to it.
+ *
+ * Pure. Applied ONLY where a kit was chosen — every other configuration is returned untouched, so
+ * no existing flow's pricing can move.
+ *
+ * @returns {{lines, total}} in the same shape priceConfiguration returns.
+ */
+export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet } = {}) {
+    if (!priced || !kitCode) return priced;
+    const base = Number(baseFeet) > 0 ? Number(baseFeet) : 4;
+    const price = Number(kitPrice) > 0 ? Number(kitPrice) : 0;
+
+    const rest = [];
+    for (const l of priced.lines || []) {
+        if (!isPerFootLine(l)) { rest.push(l); continue; }
+        const extra = (Number(l.feet) || 0) - base;
+        // Wholly inside the kit — the 4 ft set already paid for it, so it must not appear again.
+        // It is not dropped from the ORDER (the components still travel); it is dropped from the
+        // BILL, which is the only thing this function has an opinion about.
+        if (extra <= 0) continue;
+        rest.push({
+            ...l,
+            feet: extra,
+            total: (Number(l.unit) || 0) * extra,
+            detail: `${extra} ft above the ${base} ft kit`,
+            aboveKit: true,
+        });
+    }
+
+    const kitLine = {
+        partId: kitCode,
+        name: kitName || kitCode,
+        sku: kitCode,
+        billedId: kitCode,
+        qty: 1,
+        perFoot: false,
+        finishCode: '',
+        noFinish: false,
+        unit: price,
+        total: price,
+        source: 'kit',
+        detail: `${base} ft kit`,
+        hidden: false,
+        role: 'KIT',
+        position: '',
+        isKit: true,
+    };
+
+    const lines = [kitLine, ...rest];
+    return { ...priced, lines, total: lines.reduce((s, l) => s + (Number(l.total) || 0), 0) };
+}

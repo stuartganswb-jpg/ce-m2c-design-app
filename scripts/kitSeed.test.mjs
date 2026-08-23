@@ -8,7 +8,7 @@
 // stubbed `axes` would prove nothing about the day the brackets arrive.
 
 import { resolve } from '../src/components/Shared/hardwareModel.js';
-import { seedFromKit, kitsForSeeding } from '../src/components/Shared/kitSeed.js';
+import { seedFromKit, kitsForSeeding, applyKitPricing } from '../src/components/Shared/kitSeed.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -114,6 +114,53 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
     ok('so is no model at all', !!seedFromKit({ model: null, kit: kit({ setup: 'SINGLE' }) }).blocked);
     const parts = [{ partClass: 'Kit', manufacturingSpecs: { kitAlign: {} } }, { partClass: 'Inventory' }, { partClass: 'Kit' }];
     eq('only Kit records carrying an alignment are offerable', kitsForSeeding(parts).length, 1);
+}
+
+// ── 8. THE BILL: THE KIT, THEN WHAT WAS ADDED TO IT ──────────────────────────────────────────
+// Stuart 2026-08-22: "a 10 ft kit will bill at 4ft kit + 6ft additional feet."
+{
+    const priced = {
+        lines: [
+            { partId: 'H1-2TRVF', name: 'fascia', qty: 1, perFoot: true, feet: 10, unit: 9, total: 90, cutLength: 120, role: 'FASCIA' },
+            { partId: 'H1-2TRVT', name: 'track', qty: 1, perFoot: true, feet: 10, unit: 6, total: 60, role: 'TRACK' },
+            { partId: 'H1-1CC', name: 'finial', qty: 2, perFoot: false, unit: 15, total: 30, role: 'FINIAL' },
+        ],
+        total: 180,
+    };
+    const r = applyKitPricing(priced, { kitCode: 'H1-2TRV-4/EP', kitName: '2in wall mount', kitPrice: 318, baseFeet: 4 });
+
+    eq('the kit is the first line', [r.lines[0].partId, r.lines[0].qty, r.lines[0].total], ['H1-2TRV-4/EP', 1, 318]);
+    ok('and says what it is', r.lines[0].detail === '4 ft kit' && r.lines[0].isKit === true);
+
+    const fascia = r.lines.find(l => l.partId === 'H1-2TRVF');
+    eq('a 10 ft fascia bills 6 ft above the kit', [fascia.feet, fascia.total], [6, 54]);
+    ok('and says so on the line', /6 ft above the 4 ft kit/.test(fascia.detail));
+    eq('THE CUT LENGTH IS UNTOUCHED — the bench still cuts 10 ft', fascia.cutLength, 120);
+
+    eq('the track bills its 6 ft too', r.lines.find(l => l.partId === 'H1-2TRVT').total, 36);
+    eq('a customisation bills in full — it was never in the kit', r.lines.find(l => l.partId === 'H1-1CC').total, 30);
+    eq('318 + 54 + 36 + 30', r.total, 438);
+}
+
+// ── 9. A KIT-LENGTH ORDER BILLS THE KIT AND NOTHING ELSE ─────────────────────────────────────
+// The 4 ft set already paid for those 4 feet, so they must not appear a second time.
+{
+    const priced = { lines: [{ partId: 'F', qty: 1, perFoot: true, feet: 4, unit: 9, total: 36 }], total: 36 };
+    const r = applyKitPricing(priced, { kitCode: 'K', kitPrice: 318, baseFeet: 4 });
+    eq('only the kit line survives', r.lines.length, 1);
+    eq('and the total IS the kit', r.total, 318);
+
+    const shortCut = applyKitPricing({ lines: [{ partId: 'F', qty: 1, perFoot: true, feet: 3, unit: 9, total: 27 }], total: 27 },
+        { kitCode: 'K', kitPrice: 318, baseFeet: 4 });
+    eq('a shorter cut still bills the set, never less', shortCut.total, 318);
+}
+
+// ── 10. EVERY OTHER CONFIGURATION IS UNTOUCHED ───────────────────────────────────────────────
+// The safety property the whole change rests on: no kit, no transform.
+{
+    const priced = { lines: [{ partId: 'X', qty: 1, perFoot: true, feet: 10, unit: 9, total: 90 }], total: 90 };
+    eq('no kit code leaves it exactly as it was', applyKitPricing(priced, {}), priced);
+    eq('and so does no priced object at all', applyKitPricing(null, { kitCode: 'K' }), null);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);

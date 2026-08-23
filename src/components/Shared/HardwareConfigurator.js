@@ -7,7 +7,7 @@ import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAud
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
 import { configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
 import { seedFromVision } from './visionBridge';
-import { seedFromKit } from './kitSeed';
+import { seedFromKit, applyKitPricing } from './kitSeed';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
@@ -118,6 +118,7 @@ function HardwareConfiguratorInner({
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
     const [kitPick, setKitPick] = useState('');      // the kit chosen as a starting point
+    const [kitSource, setKitSource] = useState(null);  // { code, name, baseFeet, record } — bills as line 1
     const [kitReport, setKitReport] = useState(null);  // what it carried, missed, or refused
     const [showDiag, setShowDiag] = useState(false);
     const [showGeo, setShowGeo] = useState(false);   // the untagged-node list, behind its count
@@ -353,18 +354,22 @@ function HardwareConfiguratorInner({
     // runs reseatPicks on every model, exactly as the Vision seed relies on.
     const applyKit = (id) => {
         setKitPick(id);
-        if (!id) { setKitReport(null); return; }
+        if (!id) { setKitReport(null); setKitSource(null); return; }
         const chosen = kits.find(k => String(k.id || k.legacyErpId || '') === id);
         if (!chosen) return;
         const name = String(chosen.legacyErpId || chosen.itemName || 'the kit');
         const seed = seedFromKit({ model, kit: chosen });
         // A REFUSAL WRITES NOTHING. A kit the assembly cannot build would otherwise seed every
         // answer it CAN honour and look more convincing the more of it landed.
-        if (seed.blocked) { setKitReport({ name, blocked: seed.blocked, carried: [], missed: [] }); return; }
+        if (seed.blocked) { setKitReport({ name, blocked: seed.blocked, carried: [], missed: [] }); setKitSource(null); return; }
         if (Object.keys(seed.answers).length) setAnswers(a => ({ ...a, ...seed.answers }));
         if (Object.keys(seed.picks).length) setPicks(p => ({ ...p, ...seed.picks }));
         if (seed.lengthInches) { setPoleIn(String(Math.floor(seed.lengthInches))); setPoleFrac(''); }
         setKitReport({ name, blocked: null, carried: seed.carried, missed: seed.missed });
+        // The kit now OWNS the first line of the bill, and the feet above its base set bill under
+        // it. Held as the record, not a number: the price is resolved at pricing time through the
+        // same rules every other line uses (customer row, level, alias) rather than re-derived.
+        setKitSource({ code: name, name: chosen.itemName || name, baseFeet: Number(chosen.manufacturingSpecs.kitAlign.minFeet) || 4, record: chosen });
     };
 
     // The bracket recommendation, from the engineering in 6.5 rather than a number in this file.
@@ -545,7 +550,14 @@ function HardwareConfiguratorInner({
         billedFeet: lengthFeet || 0,
         lengthInches: lengthInches || 0,
     }), [customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, findPart, lengthFeet, lengthInches, flow]);
-    const priced = useMemo(() => priceConfiguration(resolved, priceCtx), [resolved, priceCtx]);
+    // ⚠ THE KIT TRANSFORM RUNS ONLY WHERE A KIT WAS CHOSEN. Every other configuration gets
+    // priceConfiguration's answer verbatim, which is what keeps four tested collections still.
+    const priced = useMemo(() => {
+        const p = priceConfiguration(resolved, priceCtx);
+        if (!kitSource) return p;
+        const kp = priceChoice({ partId: kitSource.code }, kitSource.record, priceCtx);
+        return applyKitPricing(p, { kitCode: kitSource.code, kitName: kitSource.name, kitPrice: kp?.price || 0, baseFeet: kitSource.baseFeet });
+    }, [resolved, priceCtx, kitSource]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
     // The finishes this configuration actually wears — the configuration's own, plus any per-part
@@ -1148,8 +1160,29 @@ function HardwareConfiguratorInner({
                             </option>
                         ))}
                     </select>
+                    {/* ADDITIONAL FEET (Stuart 2026-08-22): "on rod qty it starts at the 4ft set
+                        then each additional foot so add a field for additional qty." The kit's base
+                        set is the floor, so this asks for what is ABOVE it rather than a total —
+                        which is how the order was sold and how the bill reads back. */}
+                    {kitSource && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ ...mono, fontSize: '8.5px', color: 'var(--ink-soft)' }}>{kitSource.baseFeet} ft set  +</span>
+                            <input type="number" min="0" step="1"
+                                value={Math.max(0, Math.round((lengthFeet || kitSource.baseFeet) - kitSource.baseFeet)) || ''}
+                                onChange={e => {
+                                    const extra = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                    setPoleIn(String((kitSource.baseFeet + extra) * 12));
+                                    setPoleFrac('');
+                                }}
+                                placeholder="0"
+                                style={{ width: '64px', padding: '6px 8px', border: '1px solid var(--line)', background: '#fff', fontSize: '12px' }} />
+                            <span style={{ ...mono, fontSize: '8.5px', color: 'var(--ink-soft)' }}>additional ft</span>
+                        </span>
+                    )}
                     <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
-                        Fills the opening answers. Everything stays editable — a kit that needed no changes would have gone out on tab 7.
+                        {kitSource
+                            ? `The ${kitSource.baseFeet} ft kit bills as the first line; the feet above it bill under it at the engine's per-foot rate. Anything else added bills its own line.`
+                            : 'Fills the opening answers. Everything stays editable — a kit that needed no changes would have gone out on tab 7.'}
                     </span>
                 </div>
             )}
