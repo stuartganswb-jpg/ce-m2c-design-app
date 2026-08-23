@@ -303,6 +303,55 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     setPageIndex(0);
   }, [sceneReady, engineChoices, pinForChoice]);
 
+  // Smallest box containing both — the MOUNTING is plate + arm together.
+  const unionBox = (a, b) => {
+    if (!a || !isFinite(a.minU)) return b;
+    if (!b || !isFinite(b.minU)) return a;
+    return { minU: Math.min(a.minU, b.minU), maxU: Math.max(a.maxU, b.maxU), minV: Math.min(a.minV, b.minV), maxV: Math.max(a.maxV, b.maxV) };
+  };
+
+  // ── CHOOSE YOUR WAY TO A PAGE (Stuart 2026-08-23) ────────────────────────────────────────
+  // "we need to narrow the choices down as it is still erroring and really hard to look at all
+  //  the choices … rod world, then setup, then projection, then arm."
+  //
+  // H1-138 pins 31 distinct arms; with projections and plate families that is seventy-odd sheets
+  // in one flat dropdown. These are the SAME questions the pages were built from — every page
+  // already carries the leaf it belongs to — so the controls are read back off the page list
+  // rather than asked of the engine a second time. Cascading: each answer is measured among the
+  // pages that survive the answers above it, so a question with one answer is not asked.
+  const NARROW = [
+    { key: 'rodKind', label: 'Rod' },
+    { key: 'setup', label: 'Setup' },
+    { key: 'drive', label: 'Drive' },
+    { key: 'mount', label: 'Mount' },
+    { key: 'proj', label: 'Projection', fmt: (v) => `${v}"` },
+    { key: '__arm', label: 'Bracket arm' },
+  ];
+  const valueOf = (page, key) => (key === '__arm' ? (page.bracketPin?.partName || '') : page.answers?.[key]);
+  const [narrow, setNarrow] = useState({});
+  useEffect(() => { setNarrow({}); }, [pages]);
+
+  // The questions, with their live values — and the pages that survive every answer.
+  const { steps, shownPages } = React.useMemo(() => {
+    const drawing = pages.filter(p => p.bracketPin);
+    const extras = pages.filter(p => !p.bracketPin);   // catalog + wall mounts: always reachable
+    let pool = drawing;
+    const out = [];
+    for (const ax of NARROW) {
+      const values = [...new Set(pool.map(p => valueOf(p, ax.key)).filter(v => v !== undefined && v !== null && v !== ''))]
+        .sort((a, b) => (typeof a === 'number' && typeof b === 'number') ? a - b : String(a).localeCompare(String(b)));
+      if (values.length > 1) out.push({ ...ax, values });
+      const picked = narrow[ax.key];
+      // eslint-disable-next-line eqeqeq
+      if (picked !== undefined && picked !== '' && values.some(v => String(v) === String(picked))) {
+        pool = pool.filter(p => String(valueOf(p, ax.key)) === String(picked));
+      }
+    }
+    return { steps: out, shownPages: [...pool, ...extras] };
+  }, [pages, narrow]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { setPageIndex(0); }, [narrow]);
+
   // ---- build rows for a page (cached per bracket × family) ----
   const buildRows = useCallback((bracketPin, familyPins, opts = {}) => {
     const scene = sceneRef.current;
@@ -464,7 +513,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // of rod either side. So the window is capped, and anything past the cap is cut with a break
     // mark, which is what a broken view means.
     const WINDOW_MAX_M = 22 * 0.0254;   // ~22" — the widest the reference elevations run
-    const clipFront = (front0, includeBoxes) => {
+    // The rod's centreline expressed in a given view's v axis — both the elevation and the
+    // section contain the rod, so this is the one height they can agree on.
+    const rodCentreV = (view) => { const b = viewBbox(pole, view); return (b.minV + b.maxV) / 2; };
+
+    // ⚠ THE WINDOW IS ANCHORED ON THE MOUNTING, NOT ON THE LEFT (Stuart 2026-08-23: "the double
+    // bracket is too far off to the right, so the backplates are out of the page view"). The cap
+    // used to keep `lo` and cut `hi`, which silently assumes the wall is at the left of the view.
+    // On a double it is not — the geometry runs the other way, so the cut took off the plates and
+    // kept a length of empty rod. The plate and arm are what a reader lines up on, so they are
+    // what the window is built around and the rod is what gets cut, whichever side it runs to.
+    const clipFront = (front0, includeBoxes, mountBox = null) => {
       const poleFull = viewBbox(pole, views.front);
       let lo = Infinity, hi = -Infinity;
       for (const b of includeBoxes) {
@@ -474,9 +533,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
       if (!isFinite(lo) || !isFinite(hi)) { lo = poleFull.minU; hi = poleFull.maxU; }
       lo -= 0.015; hi += 0.018; // extra visible rod so the parked ring clearly hangs on it
-      // Cap from the WALL end — the plate and arm are the anchor a reader lines up on, so it is
-      // the far end of the rod that gets cut, never the mounting.
-      if (hi - lo > WINDOW_MAX_M) hi = lo + WINDOW_MAX_M;
+      if (hi - lo > WINDOW_MAX_M) {
+        const m = (mountBox && isFinite(mountBox.minU)) ? mountBox : null;
+        const mountC = m ? (m.minU + m.maxU) / 2 : lo;
+        // Which way does the rod run away from the mounting? That end is the one to cut.
+        const runsRight = ((poleFull.minU + poleFull.maxU) / 2) >= mountC;
+        if (runsRight) { lo = Math.min(lo, (m ? m.minU : lo) - 0.015); hi = lo + WINDOW_MAX_M; }
+        else { hi = Math.max(hi, (m ? m.maxU : hi) + 0.018); lo = hi - WINDOW_MAX_M; }
+      }
       const vis = clipSegmentsU(front0.vis, lo, hi);
       if (poleFull.minU < lo) vis.push(...breakMarks(lo + 0.004, poleFull.minV, poleFull.maxV));
       if (poleFull.maxU > hi) vis.push(...breakMarks(hi - 0.006, poleFull.minV, poleFull.maxV));
@@ -494,7 +558,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const profile = renderHiddenLine([...bracket, ...pole], views.profile, 900);
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
-      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes]);
+      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF);
       const dims = { front: [], profile: [], detail: [] };
       let measProjIn = null; // captured for the geometry-vs-cell check (IM has no projection)
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
@@ -530,7 +594,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         measProjIn = Math.abs(poleU - wallU) * M2IN;
         dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: measProjIn });
       }
-      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, hasAsMounted: false }], axes, ringItems, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
+      // The rod centreline in each view — the row's shared datum, so the section reads across
+      // from the elevation instead of each cell floating on its own extents.
+      const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
+      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, hasAsMounted: false }], axes, ringItems, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
     }
     let measured = null; // first row's pole Ø + projection, for the geometry-vs-cell check
     const rows = plateChoices.map((platePin) => {
@@ -571,7 +638,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const ringF = ringBoxes[0] || null;
       const coverP = viewBbox(cover.length ? cover : plateAll, views.profile);
       const wallF = wallPlate.length ? viewBbox(wallPlate, views.front) : null;
-      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ...ringBoxes]);
+      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ...ringBoxes], unionBox(coverF, bracketF));
       const isRound = /-R$/i.test(platePin.partName || '');
       const dims = { front: [], profile: [], detail: [] };
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
@@ -606,10 +673,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         dims.detail.push({ t: 'h', u0: wallF.minU, u1: wallF.maxU, v: wallF.maxV, off: -12, in: (wallF.maxU - wallF.minU) * M2IN });
         dims.detail.push({ t: 'v', u: wallF.maxU, v0: wallF.maxV, v1: wallF.minV, off: 12, in: (wallF.maxV - wallF.minV) * M2IN });
       }
-      return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
+      const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
+      return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, ringItems, measured };
-  }, [allowedNodesFor, wallCfg]);
+  }, [allowedNodesFor, wallCfg, nodesFor]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
@@ -691,8 +759,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
 
   // ---- compose current page ----
   useEffect(() => {
-    if (!pages.length || error) return;
-    const page = pages[Math.min(pageIndex, pages.length - 1)];
+    if (!shownPages.length || error) return;
+    const page = shownPages[Math.min(pageIndex, shownPages.length - 1)];
     setStatus('Rendering…');
     const t = setTimeout(() => {
       try {
@@ -734,13 +802,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         setPageData(result);
         setStatus('');
       } catch (e) {
+        // ⚠ CLEAR THE DRAWING. A throw used to leave the PREVIOUS page's SVG on screen under a red
+        // banner, so two different arms showed the same picture and the error read as cosmetic.
+        // One bad page is now visibly one bad page, and the rest of the set stays usable.
         console.error('SpecSheet render failed', e);
-        setError(e?.message || String(e));
+        setPageData(null);
+        setError(`${page.title}: ${e?.message || String(e)}`);
         setStatus('');
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [pages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
+  }, [shownPages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
@@ -773,7 +845,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (a.rowKey !== hit.rowKey || a.view !== hit.view) { setStatus('Points must be on the same view — start again.'); return; }
     const value = window.prompt('Dimension value (inches — e.g. 2 3/4):');
     if (!value) { setStatus(''); return; }
-    const page = pages[Math.min(pageIndex, pages.length - 1)];
+    const page = shownPages[Math.min(pageIndex, shownPages.length - 1)];
     setManualDims(d => [...d, { id: `md_${d.length}_${a.rowKey}`, pageKey: page.key, rowKey: a.rowKey, view: a.view, aU: a.u, aV: a.v, bU: wu, bV: wv, value: value.trim() }]);
     setDirty(true);
     setStatus('');
@@ -796,7 +868,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   };
 
   // every page rendered (uses cache; builds missing ones) — for print/PDF
-  const buildAllPages = () => pages.map((page) => {
+  // Prints what you are looking at — the narrowed set, not all seventy.
+  const buildAllPages = () => shownPages.map((page) => {
+    try {
     if (page.kind === 'WALLMOUNTS') return composeWallMountsPage().svg;
     if (page.kind === 'CATALOG') return composeCatalogPage(page).svg;
     let built = rowCacheRef.current[page.key];
@@ -822,7 +896,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       footerNote: reducedNote,
       bottomItems: (built.ringItems || []).map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn })),
     }).svg;
-  });
+    } catch (e) {
+      // One page that cannot draw does not cost you the other sixty-nine.
+      console.error('SpecSheet page skipped', page.key, e);
+      return null;
+    }
+  }).filter(Boolean);
 
   const handlePrint = () => {
     try { openSpecSheetPrint(assembly.itemName || assembly.itemId, buildAllPages(), outputPaper); }
@@ -847,9 +926,27 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       <div style={{ background: '#f4f5f7', borderRadius: '8px', width: 'min(1240px, 96vw)', maxHeight: '94vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '1px solid #d5d8dd', flexWrap: 'wrap' }}>
           <strong style={{ fontSize: '0.95rem' }}>Spec Sheet — {baseAssembly?.itemName || baseAssembly?.itemId}</strong>
-          <select value={pageIndex} onChange={e => setPageIndex(+e.target.value)} style={{ padding: '5px', fontSize: '0.8rem' }}>
-            {pages.map((p, i) => <option key={p.key} value={i}>{p.title}</option>)}
+          {/* The CPQ's own questions, cascading — choose your way to a sheet rather than
+              scrolling seventy. Read back off the page list, so they cannot disagree with it. */}
+          {steps.map(ax => (
+            <select key={ax.key} value={narrow[ax.key] ?? ''} title={ax.label}
+              onChange={e => setNarrow(n => {
+                const next = { ...n, [ax.key]: e.target.value };
+                // answering higher up invalidates what was chosen below it
+                const from = NARROW.findIndex(a => a.key === ax.key);
+                NARROW.slice(from + 1).forEach(a => { delete next[a.key]; });
+                if (!e.target.value) delete next[ax.key];
+                return next;
+              })}
+              style={{ padding: '5px', fontSize: '0.8rem', maxWidth: '170px' }}>
+              <option value="">{ax.label}: all</option>
+              {ax.values.map(v => <option key={String(v)} value={String(v)}>{ax.fmt ? ax.fmt(v) : String(v)}</option>)}
+            </select>
+          ))}
+          <select value={pageIndex} onChange={e => setPageIndex(+e.target.value)} style={{ padding: '5px', fontSize: '0.8rem', maxWidth: '360px' }}>
+            {shownPages.map((p, i) => <option key={p.key} value={i}>{p.title}</option>)}
           </select>
+          <span style={{ fontSize: '0.72rem', color: '#666' }}>{shownPages.length} of {pages.length} sheets</span>
           <div style={{ display: 'flex', gap: '4px' }}>
             <button style={edition === 'H1' ? btnOn : btn} onClick={() => setEdition('H1')}>H1 codes</button>
             <button style={edition === 'FAB' ? btnOn : btn} onClick={() => setEdition('FAB')}>Fabricut codes</button>

@@ -84,10 +84,14 @@ const segPaths = (vis, mu, mv) => {
 
 // Place a rendered view centered at (cx, cy) at an explicit scale (px per world unit).
 // mapping carries what the manual-dim tool needs to invert page → world coords.
-function place(zb, cx, cy, scale) {
+// `datumV` (optional) is a world height that must land on cy — the shared datum that makes a row
+// read across. Without it the cell is simply centred, as before.
+function place(zb, cx, cy, scale, datumV = null) {
   const wWorld = zb.maxU - zb.minU, hWorld = zb.maxV - zb.minV;
   const x0 = cx - (wWorld * scale) / 2;
-  const y0 = cy + (hWorld * scale) / 2;
+  const y0 = (datumV != null && isFinite(datumV))
+    ? cy + (datumV - zb.minV) * scale
+    : cy + (hWorld * scale) / 2;
   const mu = (u) => x0 + (u - zb.minU) * scale;
   const mv = (v) => y0 - (v - zb.minV) * scale;
   return {
@@ -134,28 +138,46 @@ const wrapSvg = (P, inner) =>
 // makes 1:1 mean anything.
 const CELL_KEYS = ['detail', 'front', 'code', 'profile'];
 
-// Drawn size of one cell at a given scale, including the room its dimensions need.
-const cellSize = (view, scale) => (view && view.zb && isFinite(view.zb.maxU))
-  ? { w: (view.zb.maxU - view.zb.minU) * scale + PAD.x * 2, h: (view.zb.maxV - view.zb.minV) * scale + PAD.y * 2 }
-  : { w: 0, h: 0 };
+// ── ONE DATUM PER ROW, SO THE COLUMNS READ ACROSS (Stuart 2026-08-23) ────────────────────────
+// "maybe offset the vertical alignment of the bracket side view with the front view so
+//  horizontally they agree more."
+//
+// Each cell used to be centred on its own bounding box, so the rod in the elevation and the rod
+// in the section sat at whatever height their own extents put them — a row that does not line up
+// is a row you cannot read across. Both views contain the rod, so its centreline is the datum:
+// every cell in a row places that world height on the same page line, exactly as the reference
+// sheets do.
+const cellAboveBelow = (view, scale, datumV) => {
+  if (!view || !view.zb || !isFinite(view.zb.maxU)) return { w: 0, above: 0, below: 0 };
+  const zb = view.zb;
+  const d = (datumV != null && isFinite(datumV)) ? datumV : (zb.minV + zb.maxV) / 2;
+  return {
+    w: (zb.maxU - zb.minU) * scale + PAD.x * 2,
+    above: (zb.maxV - d) * scale + PAD.y,
+    below: (d - zb.minV) * scale + PAD.y,
+  };
+};
 
 /** Column widths and row heights that fit the content, at `scale`. */
 function measureGrid(rows, scale) {
   const colW = {};
   CELL_KEYS.forEach(k => { colW[k] = k === 'code' ? CODE_COL : 0; });
+  const above = [], below = [];
   const rowH = rows.map(r => {
-    let h = 0;
+    let a = 0, b = 0;
     CELL_KEYS.forEach(k => {
       if (k === 'code') return;
-      const { w, h: ch } = cellSize(r[k], scale);
-      if (w > colW[k]) colW[k] = w;
-      if (ch > h) h = ch;
+      const m = cellAboveBelow(r[k], scale, r.datum?.[k]);
+      if (m.w > colW[k]) colW[k] = m.w;
+      if (m.above > a) a = m.above;
+      if (m.below > b) b = m.below;
     });
-    return Math.max(h, 60);
+    above.push(a); below.push(b);
+    return Math.max(a + b, 60);
   });
   const totalW = CELL_KEYS.reduce((a, k) => a + (colW[k] ? colW[k] + GUTTER : 0), -GUTTER);
   const totalH = rowH.reduce((a, h) => a + h, 0);
-  return { colW, rowH, totalW, totalH };
+  return { colW, rowH, above, below, totalW, totalH };
 }
 
 // rows[i] = { rowKey, code, wallCode, front, profile, detail, dims } — dim specs:
@@ -212,12 +234,13 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   let cursor = bodyTop + lead;
   rows.forEach((r, i) => {
     const h = grid.rowH[i];
-    const cy = cursor + h / 2;
+    // cy is the row's DATUM line, not its centre — the cells hang from it consistently.
+    const cy = cursor + grid.above[i];
     for (const key of CELL_KEYS) {
       if (key === 'code' || cx[key] === undefined) continue;
       const view = r[key];
       if (!view) continue;
-      const { mu, mv, mapping } = place(view.zb, cx[key], cy, scale);
+      const { mu, mv, mapping } = place(view.zb, cx[key], cy, scale, r.datum?.[key]);
       svg += segPaths(view.vis, mu, mv);
       svg += drawDims(r.dims?.[key], mu, mv);
       if (key === 'detail' && r.wallCode) {
