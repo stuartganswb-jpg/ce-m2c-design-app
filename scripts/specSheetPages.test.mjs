@@ -218,5 +218,28 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     ok('no family is ever named by a doc id', rp.every(p => !/^CE-(INV|ASM)-/.test(p.plateFamily || '')));
 }
 
+// ── EVERY PAGE'S ROD IS ONE ITS OWN LEAF OFFERS ──────────────────────────────────────────────
+// Inside-mount pages picked theirs from the UNJUDGED model — 77 sheets in prod carrying a rod
+// their own leaf excludes, found by the audit rather than by a person.
+//
+// ⚠ THE FIXTURE HAS TO BE ABLE TO FAIL. Two earlier versions of this could not: rods are not gated
+// on `mount`, and where the offending rod is not the one rodForArm WOULD pick, judging the pool
+// changes nothing. So the bad rod must be the preferred one — here the inside mount is tiered BACK
+// and the only BACK rod is the traverse track, which the SOLID leaf excludes. Mutating this back
+// to rodForArm(model, im) produces exactly the prod message.
+{
+    const F = [
+        { id: 'ROD-F', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rf'] },
+        { id: 'TRK', partId: 'H1-2TRV', role: 'TRACK', rodKind: 'TRAVERSE', position: 'CENTER', tier: 'BACK', nodes: ['trk'] },
+        { id: 'ARM-S', partId: 'H1-138DS', role: 'BRACKET', position: 'LEFT', proj: '3.625', nodes: ['as'] },
+        { id: 'IM', partId: 'H1-138IM', role: 'INSIDE_MOUNT', position: 'LEFT', tier: 'BACK', nodes: ['im'] },
+    ];
+    const mp = specPages({ choices: F });
+    const im = mp.find(p => p.kind === 'INSIDE_MOUNT');
+    ok('an inside-mount sheet is among the pages', !!im);
+    eq('and it takes a rod its own leaf offers', im.rod?.partId, 'H1-138R');
+    eq('so nothing on the set carries a rod it should not', auditPages(mp, F).filter(v => /rod/.test(v.why)), []);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

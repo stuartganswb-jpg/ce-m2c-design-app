@@ -256,7 +256,11 @@ export function specPages({ choices, answers = {} }) {
             seen.add(sig);
             pages.push({
                 key: sig, kind: 'INSIDE_MOUNT', answers: leaf, label, subject: im,
-                rod: rodForArm(model, im), plates: [], rings: [], suppressedBy: null, reason: '',
+                // ⚠ `offered`, NOT `model` — same reason as the bracket pages above. Picking from
+                // the unjudged model handed inside-mount sheets a rod their own leaf excludes (a
+                // WALL-tagged pole on a CEILING page), which is what the audit was reporting across
+                // 77 sheets. The audit disagreeing with the builder is the audit working.
+                rod: rodForArm(offered, im), plates: [], rings: [], suppressedBy: null, reason: '',
                 isTraverse: false, riders: [],
             });
         }
