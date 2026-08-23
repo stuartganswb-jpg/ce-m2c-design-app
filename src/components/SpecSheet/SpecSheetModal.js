@@ -98,6 +98,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // The scene is loaded ONCE and counted, not described. What a page contains is the engine's
   // answer (specSheetPages), which needs pins and tags — not geometry — so the two no longer
   // have to agree about anything.
+  // Which hand the sheet draws. The reference sheets are all left-hand views; the right is the
+  // mirror, and drawing both is drawing the same thing twice.
+  const [side, setSide] = useState('LEFT');
   const [sceneReady, setSceneReady] = useState(0);
   // Parts drawn on a page the engine would not offer there — always empty if everything is right.
   const [bleed, setBleed] = useState([]);
@@ -126,22 +129,28 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const m = {}; clusters.forEach(c => { m[c.id] = c; }); return m;
   }, [clusters]);
 
-  const nodesFor = useCallback((cat) => {
-    const cls = clusters.filter(c => c.cat === cat && !c.hidden && (c.nodes || []).length && ['LEFT', 'SHARED', 'CENTER', ''].includes(c.pos || ''));
-    const preferred = cls.filter(c => c.pos === 'LEFT');
-    return (preferred.length ? preferred : cls).flatMap(c => c.nodes || []);
-  }, [clusters]);
-
-  // ⚠ EVERY CLUSTER OF A CATEGORY, UNFILTERED BY SIDE — for use where the ENGINE is doing the
-  // choosing. nodesFor() prefers the LEFT copy because the hand-made sheets are left-hand views,
-  // and for a left-hand arm that is right. Six of H1-138's arms are pinned CENTER only (the
-  // passing brackets, H1-138PS / PE / P6 and the ILP trio): the left-preferred pole nodes are not
-  // in the engine's allowed set for a CENTRE arm, the intersection came out empty, and every one
-  // of those pages threw "no rod geometry". Handing the engine ALL the names and letting its own
-  // answer do the filtering is both simpler and correct on either side.
-  const allNodesFor = useCallback((cat) => clusters
-    .filter(c => c.cat === cat && !c.hidden && (c.nodes || []).length)
-    .flatMap(c => c.nodes || []), [clusters]);
+  // ── ONE SIDE IS THE WHOLE DRAWING (Stuart 2026-08-23) ────────────────────────────────────
+  // "we only need to look at one side, either left side or right side, not all 3 as left and
+  //  right are mirrors of each other … if we just look at one side and if we respect the single,
+  //  double, and projection options along with the front and back/rear placements everything we
+  //  need is there."
+  //
+  // He is right, and it makes a per-assembly spec GLB unnecessary. A merged sales model holds
+  // every option stacked — but stacked ACROSS THE SIDES as much as anything else, and the two
+  // sides are mirrors, so half the pile is a duplicate of the other half. Take one side and what
+  // remains is separated by tags the engine already reads: setup, projection, and tier.
+  //
+  // The rule is a FILTER, never a preference. The old nodesFor() kept only LEFT clusters when any
+  // existed, which silently dropped CENTER — and six of H1-138's arms are pinned CENTER only (the
+  // passing brackets H1-138PS / PE / P6 and the ILP trio), so their rod resolved to nothing and
+  // every one of those pages threw. CENTRE and SHARED belong to both sides; only the far side is
+  // excluded.
+  const sideNodesFor = useCallback((cat) => {
+    const far = side === 'LEFT' ? 'RIGHT' : 'LEFT';
+    return clusters
+      .filter(c => c.cat === cat && !c.hidden && (c.nodes || []).length && (c.pos || '') !== far)
+      .flatMap(c => c.nodes || []);
+  }, [clusters, side]);
 
   // ── WHAT ONE PAGE IS ALLOWED TO DRAW (Stuart 2026-08-21) ─────────────────────────────────
   // "each drop down should filter and only show the rod and bracket and arm assigned to it, you can
@@ -266,11 +275,15 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const same = usable.filter(p => String(p.partId || '').trim().toUpperCase() === want);
     // The hand-made sheets are all left-hand views, so an arm pinned both sides draws its LEFT
     // copy — the same preference choicesFor() has always applied.
-    const pin = same.find(p => (clusterById[p.clusterId]?.pos || 'LEFT') === 'LEFT')
+    // The copy on the side being drawn; then a centre/shared copy, which belongs to both sides;
+    // then whatever exists, so a part pinned only on the far side still draws rather than
+    // vanishing from a sheet that names it.
+    const at = (pos) => same.find(p => (clusterById[p.clusterId]?.pos || side) === pos);
+    const pin = at(side) || at('CENTER') || at('SHARED') || at('')
       || same[0]
       || usable.find(p => String(p.id || p.choiceNode || '') === String(choice.id));
     return pin ? { ...pin, partName: pin.partName || choice.name || choice.partId } : null;
-  }, [pins, clusterById]);
+  }, [pins, clusterById, side]);
 
   useEffect(() => {
     if (!sceneReady) return;
@@ -377,7 +390,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const scene = sceneRef.current;
     const bracket = extractWorldMeshes(scene, [bracketPin.choiceNode]);
     if (!bracket.length) throw new Error(`Bracket node "${bracketPin.choiceNode}" not found in GLB.`);
-    // ⚠ ONLY THE ROD THIS BRACKET HOLDS. nodesFor('POLE') is every pole cluster in the file;
+    // ⚠ ONLY THE ROD THIS BRACKET HOLDS. sideNodesFor('POLE') is every pole cluster in the file;
     // allowedNodesFor is the engine's answer for THIS combination, so a double's rear rod stops
     // appearing on a single bracket's page. Null = no engine answer (untagged) → unchanged.
     const allowed = allowedNodesFor(bracketPin, opts.platePin || null);
@@ -398,9 +411,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const engineRod = (opts.rodNodes || []).filter(n => extractWorldMeshes(scene, [n]).length);
     // With an engine answer to filter by, offer it every pole in the file and let it choose; with
     // no answer (untagged), fall back to the left-hand convention.
-    const poleNodes = engineRod.length ? keep(engineRod)
-      : allowed ? keep(allNodesFor('POLE'))
-        : nodesFor('POLE');
+    const poleNodes = engineRod.length ? keep(engineRod) : keep(sideNodesFor('POLE'));
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
@@ -415,7 +426,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       .filter(r => r.meshes.length);
 
     const plateChoices = familyPins || [];
-    if (!pole.length) throw new Error(`No rod geometry for this page — the engine pairs the arm with ${(opts.rodNodes || []).join(', ') || 'no rod at all'}, and the POLE cluster carries ${nodesFor('POLE').length} node(s). Check the POLE pins in 1.6 / ⚖.`);
+    if (!pole.length) throw new Error(`No rod geometry for this page — the engine pairs the arm with ${(opts.rodNodes || []).join(', ') || 'no rod at all'}, and the POLE cluster carries ${sideNodesFor('POLE').length} node(s). Check the POLE pins in 1.6 / ⚖.`);
     // basic brackets have no plate — the bracket itself marks the wall side for axis inference
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
@@ -701,13 +712,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, ringItems, measured };
-  }, [allowedNodesFor, wallCfg, nodesFor, allNodesFor]);
+  }, [allowedNodesFor, wallCfg, sideNodesFor]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
     if (wallMountsRef.current) return wallMountsRef.current;
     const scene = sceneRef.current;
-    const poleNodes = nodesFor('POLE');
+    const poleNodes = sideNodesFor('POLE');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     const seen = new Map();
     // Every plate the SHEET actually draws, across its pages — so a wall mount that no page uses
@@ -738,14 +749,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     }
     wallMountsRef.current = [...seen.values()];
     return wallMountsRef.current;
-  }, [pages, nodesFor, wallCfg]);
+  }, [pages, sideNodesFor, wallCfg]);
 
   // ---- catalog page: the finials + accessories this leaf offers, at 1:1, L × Ø dims ----
   const buildCatalog = useCallback((itemPins = []) => {
     const cacheKey = itemPins.map(p => p.choiceNode).join('|');
     if (finialsRef.current?.key === cacheKey) return finialsRef.current.items;
     const scene = sceneRef.current;
-    const poleNodes = nodesFor('POLE');
+    const poleNodes = sideNodesFor('POLE');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     const items = [];
     let views = null;
@@ -762,7 +773,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     }
     finialsRef.current = { key: cacheKey, items };
     return items;
-  }, [nodesFor]);
+  }, [sideNodesFor]);
 
   const composeCatalogPage = useCallback((page) => buildItemsGridPage({
     title: `${baseAssembly?.itemName || baseAssembly?.itemId} — Finials & accessories${page?.family ? ` · ${page.family}` : ''}`,
@@ -839,7 +850,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [shownPages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
 
   // wall config affects measures → invalidate the caches when it changes
-  useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; }, [wallCfg]);
+  useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; finialsRef.current = null; }, [wallCfg, side]);
 
   // ---- manual dimension tool: two clicks on the SVG → value prompt ----
   const handleSvgClick = (e) => {
@@ -971,6 +982,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             {shownPages.map((p, i) => <option key={p.key} value={i}>{p.title}</option>)}
           </select>
           <span style={{ fontSize: '0.72rem', color: '#666' }}>{shownPages.length} of {pages.length} sheets</span>
+          <div style={{ display: 'flex', gap: '4px' }} title="Which hand the sheet draws — the other side is its mirror, so only one is needed">
+            <button style={side === 'LEFT' ? btnOn : btn} onClick={() => setSide('LEFT')}>Left</button>
+            <button style={side === 'RIGHT' ? btnOn : btn} onClick={() => setSide('RIGHT')}>Right</button>
+          </div>
           <div style={{ display: 'flex', gap: '4px' }}>
             <button style={edition === 'H1' ? btnOn : btn} onClick={() => setEdition('H1')}>H1 codes</button>
             <button style={edition === 'FAB' ? btnOn : btn} onClick={() => setEdition('FAB')}>Fabricut codes</button>
