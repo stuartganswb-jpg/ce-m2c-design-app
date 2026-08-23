@@ -32,6 +32,7 @@
 // consumers take every line, customer documents filter it out. One list, two audiences — which is
 // safer than two lists that can disagree about what is on the order.
 
+import { applyKitPricing } from './kitSeed.js';
 import { priceConfiguration } from './hardwarePricing.js';
 
 /** Lines a customer may see: no BOM-only parts. */
@@ -97,7 +98,13 @@ export function handoffItem(resolved, ctx = {}) {
         extras = [], stepNotes = {}, memo = '', trvComponents = [],
     } = ctx;
 
-    const priced = priceConfiguration(resolved, ctx);
+    // ⚠ PRICED AGAIN, HERE. This is the figure the CART, the documents and the ERP push all read —
+    // the configurator's own panel is a second, independent call. So a kit-seeded order must be
+    // re-shaped on BOTH paths or the screen and the paperwork quote different numbers, which is
+    // the one divergence a quote can never survive. `ctx.kit` is how it travels.
+    const priced = ctx.kit
+        ? applyKitPricing(priceConfiguration(resolved, ctx), ctx.kit)
+        : priceConfiguration(resolved, ctx);
     // Code → the name a human reads. The finish objects are already here for the item-level label;
     // the lines borrow the same list rather than a second one that could disagree with it.
     const finishNameOf = (code) => {

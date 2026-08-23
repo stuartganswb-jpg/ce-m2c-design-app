@@ -93,5 +93,30 @@ ok('the billable is in the money', item.pricing.finalPrice >= 78);
     ok('and it resolves to the finish name', finished.every(l => l.finishLabel === 'Gold Brass'));
 }
 
+// ── THE CART MUST BILL WHAT THE PANEL SHOWED (Stuart 2026-08-22) ─────────────────────────────
+// handoffItem prices the configuration AGAIN, independently of the configurator's own panel. A
+// kit-seeded order re-shaped only on screen would put one number in front of the customer and a
+// different one on the quote, the sales order and the NetSuite push. `ctx.kit` is the fix, and
+// this is the assertion that keeps the two paths honest.
+{
+    const baseCtx = {
+        findPart, assembly: { id: 'A1', itemName: 'H1-2TRV' }, flow: { id: 'F1', name: 'trv' },
+        sidemark: 'Living Room 1', priceLevel: 'STANDARD', lengthInches: 120, lengthFeet: 10,
+        billedFeet: 10, finishCode: 'P07', finishes: [],
+    };
+    const kit = { kitCode: 'H1-2TRV-4/EP', kitName: '2in wall mount', kitPrice: 318, baseFeet: 4 };
+    const withKit = handoffItem(resolved, { ...baseCtx, kit });
+    const noKit = handoffItem(resolved, baseCtx);
+
+    ok('the kit rides the cart item, not just the screen',
+        (withKit.pricingBreakdown || []).some(l => l.legacyErpId === 'H1-2TRV-4/EP'));
+    ok('and it moves the money the customer is quoted',
+        withKit.pricing.finalPrice !== noKit.pricing.finalPrice);
+    ok('the kit line carries our number, so the paperwork can print it',
+        (withKit.pricingBreakdown || []).some(l => l.legacyErpId === 'H1-2TRV-4/EP' && l.total === 318));
+    ok('a configuration with no kit is byte-identical to before',
+        JSON.stringify(noKit.pricingBreakdown) === JSON.stringify(handoffItem(resolved, baseCtx).pricingBreakdown));
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);

@@ -552,12 +552,19 @@ function HardwareConfiguratorInner({
     }), [customerId, customer, effectiveLevel, levelIsDefault, outsourceCodes, globalFinish, lineFinishFor, findPart, lengthFeet, lengthInches, flow]);
     // ⚠ THE KIT TRANSFORM RUNS ONLY WHERE A KIT WAS CHOSEN. Every other configuration gets
     // priceConfiguration's answer verbatim, which is what keeps four tested collections still.
+    // ⚠ ONE DESCRIPTION OF THE BILL, USED TWICE. The panel below and the cart item built at Add
+    // must never disagree about money, and handoffItem prices the configuration AGAIN from
+    // `resolved` — so the kit has to travel to it rather than being applied only on screen. It is
+    // computed once here and passed to both.
+    const kitBill = useMemo(() => {
+        if (!kitSource) return null;
+        const kp = priceChoice({ partId: kitSource.code }, kitSource.record, priceCtx);
+        return { kitCode: kitSource.code, kitName: kitSource.name, kitPrice: kp?.price || 0, baseFeet: kitSource.baseFeet };
+    }, [kitSource, priceCtx]);
     const priced = useMemo(() => {
         const p = priceConfiguration(resolved, priceCtx);
-        if (!kitSource) return p;
-        const kp = priceChoice({ partId: kitSource.code }, kitSource.record, priceCtx);
-        return applyKitPricing(p, { kitCode: kitSource.code, kitName: kitSource.name, kitPrice: kp?.price || 0, baseFeet: kitSource.baseFeet });
-    }, [resolved, priceCtx, kitSource]);
+        return kitBill ? applyKitPricing(p, kitBill) : p;
+    }, [resolved, priceCtx, kitBill]);
     // Their number for any part, chosen or not — the picker is where it is most useful.
     const aliasOf = useCallback((id) => aliasFor(findPart(id), priceCtx), [findPart, priceCtx]);
     // The finishes this configuration actually wears — the configuration's own, plus any per-part
@@ -904,6 +911,8 @@ function HardwareConfiguratorInner({
             finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
             priceLevel: effectiveLevel, lengthInches, lengthFeet,
             extras, stepNotes, answers, picks: livePicks, partFinish,
+            // The kit, so the cart bills exactly what the panel showed.
+            kit: kitBill,
             // The track's components, in the shape the cart has always carried them — the ERP push
             // reads `trvComponents` off the item and the documents read the breakdown rows, so
             // neither can tell which engine asked the question.
