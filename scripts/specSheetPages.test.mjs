@@ -195,5 +195,28 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     ok('a violation names its page, subject and part', !!v.page && !!v.subject && !!v.part);
 }
 
+// ── REAL PINS CARRY A DOC ID, NOT A CODE ─────────────────────────────────────────────────────
+// Prod pins have partId = 'CE-INV-56809' and name = 'H1-138CP-H'. Grouping families on partId made
+// every plate its own family — one row per sheet where the reference has four, and 187 sheets.
+// Every fixture above uses codes as ids, which is exactly why they all passed while prod did not.
+{
+    // prod's shape: the CODE is in name, and partId is a library doc id
+    const REAL = CHOICES.map((c, i) => (c.role === 'BACKPLATE'
+        ? { ...c, name: c.partId, partId: `CE-INV-${1000 + i}` }
+        : c));
+    const rp = specPages({ choices: REAL }).filter(p => p.kind !== 'CATALOG');
+    const ds = rp.filter(p => p.subject.partId === 'H1-138DS' && p.answers.proj === 3.625);
+    eq('doc-id pins still make exactly two plate families', ds.length, 2);
+    eq('and the family is named by the CODE, not the id', ds[0].plateFamily, 'H1-138BP');
+    eq('with all of that family\'s profiles on the one sheet',
+        ds[0].plates.map(p => p.name).sort(), ['H1-138BP-H', 'H1-138BP-S']);
+    // and the fixture shape — code in partId, name defaulted to the id by normalizeChoice —
+    // still groups the same way, because neither field is trusted on its own
+    const fx = drawings.filter(p => p.subject.partId === 'H1-138DS' && p.answers.proj === 3.625);
+    eq('the fixture shape groups identically', fx.length, 2);
+    eq('and names its family by the code too', fx[0].plateFamily, 'H1-138BP');
+    ok('no family is ever named by a doc id', rp.every(p => !/^CE-(INV|ASM)-/.test(p.plateFamily || '')));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

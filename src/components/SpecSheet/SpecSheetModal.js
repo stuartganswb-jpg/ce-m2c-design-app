@@ -664,6 +664,26 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         d[axes.vertAxis] = rootV - cb0.center[axes.vertAxis];
         plateAll = translateMeshes(plateAll0, d);
       }
+      // ── AND ALONG THE ROD (Stuart 2026-08-23) ────────────────────────────────────────────
+      // "others are rendering without the backplate or it is way off to the outside."
+      //
+      // A merged SALES model parks the plate variants at DIFFERENT STATIONS along the rod so they
+      // do not collide in the 3D render — H, R, S and V each get their own spot. That is right for
+      // a sales model and wrong for a drawing: on a spec sheet the plate is behind THIS arm, and
+      // drawing it where the sales model parked it puts it out at the end of the rod, detached.
+      //
+      // Only fired when they are genuinely apart. A plate already at the arm's station is left
+      // exactly where it is, so a purpose-built spec layout is never disturbed.
+      {
+        const ax = axes.poleAxis;
+        const pb = groupBbox(plateAll), bb = groupBbox(bracket);
+        const gap = bb.center[ax] - pb.center[ax];
+        if (isFinite(gap) && Math.abs(gap) > 0.02) {     // > ~3/4"
+          const d = [0, 0, 0];
+          d[ax] = gap;
+          plateAll = translateMeshes(plateAll, d);
+        }
+      }
       const wallPlate = plateAll.filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
       const cover = plateAll.filter(m => !WALL_PLATE_MATCH.test(m.name + m.path) && !SCREW_MATCH.test(m.name + m.path));
       // merged GLBs may drop the "/" from item codes ("H1-CPWP2P") — normalize back to ".../P"

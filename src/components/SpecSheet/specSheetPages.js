@@ -155,10 +155,27 @@ export function catalogOf(model) {
 // narrowed, and it is presentation rather than a rule: which plates belong to an arm is still
 // entirely the engine's answer, and this only decides how many sheets they are printed on.
 const SHAPE_SUFFIX = /-(H|R|S|V)$/i;
+// ⚠ THE FAMILY IS THE PART CODE, AND NO SINGLE FIELD RELIABLY HOLDS IT.
+//   · prod  — the adapter sets name = pin.partName ("H1-138CP-H") and partId = the library doc id
+//             ("CE-INV-56809"). Grouping on partId made every plate its own family: one row per
+//             sheet where the reference has four, 187 sheets instead of ~46, and a family label
+//             reading "CE-INV-56809".
+//   · tests — normalizeChoice DEFAULTS name to the choice id, so `name` there is "PL-H" and the
+//             code is in partId. Which is exactly why every fixture passed while prod did not.
+// So the code is whichever candidate actually looks like one. We are grouping by profile suffix,
+// so the string that carries a profile suffix is the string that means something here; anything
+// equal to the raw id is normalizeChoice's fallback and is never the answer.
+const codeOf = (c) => {
+    const id = String(c?.id || '');
+    const cands = [String(c?.name || ''), String(c?.partId || ''), id].filter(Boolean);
+    return cands.find(v => v !== id && SHAPE_SUFFIX.test(v))
+        || cands.find(v => v !== id)
+        || id;
+};
 export function plateFamilies(plates) {
     const fams = new Map();
     (plates || []).forEach(p => {
-        const code = String(p.partId || p.id || '');
+        const code = codeOf(p);
         const stem = code.replace(SHAPE_SUFFIX, '');
         if (!fams.has(stem)) fams.set(stem, []);
         fams.get(stem).push(p);
@@ -171,8 +188,8 @@ export function plateFamilies(plates) {
             stem,
             // H, R, S, V — the profile order the reference rows run in.
             plates: list.slice().sort((x, y) => {
-                const r = (o) => { const m = String(o.partId || '').match(SHAPE_SUFFIX); return m ? 'HRSV'.indexOf(m[1].toUpperCase()) : 9; };
-                return r(x) - r(y) || String(x.partId).localeCompare(String(y.partId));
+                const r = (o) => { const m = codeOf(o).match(SHAPE_SUFFIX); return m ? 'HRSV'.indexOf(m[1].toUpperCase()) : 9; };
+                return r(x) - r(y) || codeOf(x).localeCompare(codeOf(y));
             }),
         }));
 }
