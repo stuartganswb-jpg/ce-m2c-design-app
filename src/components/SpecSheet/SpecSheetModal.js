@@ -130,6 +130,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return (preferred.length ? preferred : cls).flatMap(c => c.nodes || []);
   }, [clusters]);
 
+  // ⚠ EVERY CLUSTER OF A CATEGORY, UNFILTERED BY SIDE — for use where the ENGINE is doing the
+  // choosing. nodesFor() prefers the LEFT copy because the hand-made sheets are left-hand views,
+  // and for a left-hand arm that is right. Six of H1-138's arms are pinned CENTER only (the
+  // passing brackets, H1-138PS / PE / P6 and the ILP trio): the left-preferred pole nodes are not
+  // in the engine's allowed set for a CENTRE arm, the intersection came out empty, and every one
+  // of those pages threw "no rod geometry". Handing the engine ALL the names and letting its own
+  // answer do the filtering is both simpler and correct on either side.
+  const allNodesFor = useCallback((cat) => clusters
+    .filter(c => c.cat === cat && !c.hidden && (c.nodes || []).length)
+    .flatMap(c => c.nodes || []), [clusters]);
+
   // ── WHAT ONE PAGE IS ALLOWED TO DRAW (Stuart 2026-08-21) ─────────────────────────────────
   // "each drop down should filter and only show the rod and bracket and arm assigned to it, you can
   // see the rear rods from doubles showing on the single bracket … if it respects the available
@@ -376,7 +387,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // So the engine still decides WHICH rod — `allowed` is its answer for this arm, and a double's
     // rear rod stays off a single's page — but the names handed to the GLB are the cluster's.
     const engineRod = (opts.rodNodes || []).filter(n => extractWorldMeshes(scene, [n]).length);
-    const poleNodes = engineRod.length ? keep(engineRod) : keep(nodesFor('POLE'));
+    // With an engine answer to filter by, offer it every pole in the file and let it choose; with
+    // no answer (untagged), fall back to the left-hand convention.
+    const poleNodes = engineRod.length ? keep(engineRod)
+      : allowed ? keep(allNodesFor('POLE'))
+        : nodesFor('POLE');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
@@ -677,7 +692,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, ringItems, measured };
-  }, [allowedNodesFor, wallCfg, nodesFor]);
+  }, [allowedNodesFor, wallCfg, nodesFor, allNodesFor]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
