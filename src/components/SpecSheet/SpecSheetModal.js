@@ -284,8 +284,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       pageList.push({
         key: p.key,
         kind: p.kind,
-        title: `${bracketPin.partName}${p.label ? ` · ${p.label}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
-        bracketPin, familyPins, ringPins, riderPins,
+        title: `${bracketPin.partName}${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
+        bracketPin, familyPins, ringPins, riderPins, plateFamily: p.plateFamily || '',
         rodNodes: (p.rod?.nodes || []),
         isTraverse: p.isTraverse,
         isIM: p.kind === 'INSIDE_MOUNT',
@@ -714,7 +714,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
         // engine paired with the arm — or, when there are none, the engine's own reason.
         const nPlates = (page.familyPins || []).length;
-        const famLabel = [page.family, nPlates ? `${nPlates} backplate${nPlates === 1 ? '' : 's'}` : (page.reason || 'drawn alone')]
+        const famLabel = [page.family, page.plateFamily, nPlates ? `${nPlates} plate${nPlates === 1 ? '' : 's'}` : (page.reason || 'drawn alone')]
           .filter(Boolean).join(' · ');
         const result = buildPageSvg({
           title: `${baseAssembly.itemName || baseAssembly.itemId} — ${titleCode}`,
@@ -807,7 +807,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
     // engine paired with the arm — or, when there are none, the engine's own reason.
     const nPlates = (page.familyPins || []).length;
-    const famLabel = [page.family, nPlates ? `${nPlates} backplate${nPlates === 1 ? '' : 's'}` : (page.reason || 'drawn alone')]
+    const famLabel = [page.family, page.plateFamily, nPlates ? `${nPlates} plate${nPlates === 1 ? '' : 's'}` : (page.reason || 'drawn alone')]
       .filter(Boolean).join(' · ');
     return buildPageSvg({
       title: `${baseAssembly.itemName || baseAssembly.itemId} — ${titleCode}`,

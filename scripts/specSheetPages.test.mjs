@@ -33,6 +33,8 @@ const CHOICES = [
 
     { id: 'PL-S', partId: 'H1-138BP-S', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', nodes: ['ps'] },
     { id: 'PL-H', partId: 'H1-138BP-H', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', nodes: ['ph'] },
+    { id: 'PL-CS', partId: 'H1-138CP-S', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', nodes: ['pcs'] },
+    { id: 'PL-CH', partId: 'H1-138CP-H', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', nodes: ['pch'] },
     { id: 'PL-E', partId: 'H1-138BP-SE', role: 'BACKPLATE', position: 'LEFT', proj: '4.625', nodes: ['pe'] },
     { id: 'PL-RTN', partId: 'H1-138RBP-S', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', returnOnly: true, nodes: ['pr'] },
 
@@ -47,8 +49,9 @@ const CHOICES = [
 
 const pages = specPages({ choices: CHOICES });
 const drawings = pages.filter(p => p.kind !== 'CATALOG');
-const of = (partId, proj) => drawings.find(p =>
-    p.subject?.partId === partId && (proj === undefined || p.answers.proj === proj));
+const of = (partId, proj, fam) => drawings.find(p =>
+    p.subject?.partId === partId && (proj === undefined || p.answers.proj === proj)
+    && (fam === undefined || p.plateFamily === fam));
 const plateIds = (p) => (p ? p.plates.map(x => x.partId).sort() : null);
 const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
 
@@ -73,11 +76,11 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
 // ── AND THE PLATES ON IT ARE THE ONES THE CPQ WOULD OFFER ────────────────────────────────────
 {
     eq('the shallow arm draws only the shallow plates',
-        plateIds(of('H1-138DS', 3.625)), ['H1-138BP-H', 'H1-138BP-S']);
+        plateIds(of('H1-138DS', 3.625, 'H1-138BP')), ['H1-138BP-H', 'H1-138BP-S']);
     eq('the deep arm draws only the deep plate',
         plateIds(of('H1-138DE', 4.625)), ['H1-138BP-SE']);
     ok('a return plate never lands on a plain arm',
-        !plateIds(of('H1-138DS', 3.625)).includes('H1-138RBP-S'));
+        !drawings.filter(p => p.subject.partId === 'H1-138DS').some(p => plateIds(p).includes('H1-138RBP-S')));
     eq('a basic arm draws alone', plateIds(of('H1-138B', 3.625)), []);
     ok('…and says why', /one piece/.test(of('H1-138B', 3.625).reason || ''));
 }
@@ -90,10 +93,26 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     eq('with the RETURN plates, not the plain ones', plateIds(fr), ['H1-138RBP-S']);
 }
 
+// ── ONE SHEET PER PLATE FAMILY, AS THE REFERENCE SET IS DRAWN ────────────────────────────────
+// Stuart's examples are named "…with screw Backplates" and "…with Hidden Backplates": the same
+// arm, drawn once against the BP set and once against the CP set, four profile rows each.
+{
+    const dsPages = drawings.filter(p => p.subject.partId === 'H1-138DS' && p.answers.proj === 3.625);
+    eq('the BP set and the CP set are separate sheets', dsPages.length, 2);
+    eq('backplates first', dsPages[0].plateFamily, 'H1-138BP');
+    eq('then cover plates', dsPages[1].plateFamily, 'H1-138CP');
+    eq('and neither sheet carries the other\'s plates',
+        plateIds(dsPages[1]), ['H1-138CP-H', 'H1-138CP-S']);
+    ok('rows run in profile order H, R, S, V',
+        dsPages[0].plates.map(p => p.partId).join(',') === 'H1-138BP-H,H1-138BP-S');
+    ok('an arm with no plates still gets exactly one sheet',
+        drawings.filter(p => p.subject.partId === 'H1-138B' && p.answers.proj === 3.625).length === 1);
+}
+
 // ── RINGS ARE THE RINGS THAT FIT THAT ROD ────────────────────────────────────────────────────
 {
     eq('a solid page carries every ring that fits its rod',
-        ringIds(of('H1-138DS', 3.625)), ['H1-138BPR', 'H1-138BR']);
+        ringIds(of('H1-138DS', 3.625, 'H1-138BP')), ['H1-138BPR', 'H1-138BR']);
     const trv = of('H1-2TRVBKT');
     ok('the traverse arm gets a page', !!trv);
     eq('a track carries no rings — carriers do that job', ringIds(trv), []);
@@ -111,7 +130,7 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
 
 // ── NOTHING IS PRINTED TWICE ─────────────────────────────────────────────────────────────────
 {
-    const sigs = drawings.map(p => `${p.subject.partId}|${p.answers.rodKind}|${p.answers.proj}`);
+    const sigs = drawings.map(p => `${p.subject.partId}|${p.answers.rodKind}|${p.answers.proj}|${p.plateFamily}`);
     eq('every drawing page is distinct', sigs.length, new Set(sigs).size);
 }
 

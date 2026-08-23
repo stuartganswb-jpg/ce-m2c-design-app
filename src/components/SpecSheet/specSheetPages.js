@@ -143,6 +143,40 @@ export function catalogOf(model) {
     };
 }
 
+// ── A PLATE FAMILY IS A SHEET (Stuart's own reference set, read 2026-08-23) ──────────────────
+// The example PDFs are named "…with screw Backplates" and "…with Hidden Backplates" — the same
+// arm, drawn twice, once against the BP set and once against the CP set. Each sheet carries four
+// rows, the four profiles H/R/S/V. H1-138 pins eleven plates (BP×4, CP×4, returns), so a page
+// holding everything the engine offers is eight rows or more where the reference holds four.
+//
+// So the family split the old code had was RIGHT — what was wrong was that it was the ONLY split:
+// families were regexed out of part codes and then crossed with every arm, unnarrowed by
+// projection or rod world. Here it is the LAST cut, applied to a pool the engine has already
+// narrowed, and it is presentation rather than a rule: which plates belong to an arm is still
+// entirely the engine's answer, and this only decides how many sheets they are printed on.
+const SHAPE_SUFFIX = /-(H|R|S|V)$/i;
+export function plateFamilies(plates) {
+    const fams = new Map();
+    (plates || []).forEach(p => {
+        const code = String(p.partId || p.id || '');
+        const stem = code.replace(SHAPE_SUFFIX, '');
+        if (!fams.has(stem)) fams.set(stem, []);
+        fams.get(stem).push(p);
+    });
+    // Backplates before cover plates before returns — the order the hand-made set runs in.
+    const rank = (stem) => (/RBP|RCP/i.test(stem) ? 2 : /CP$/i.test(stem) ? 1 : 0);
+    return [...fams.entries()]
+        .sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]))
+        .map(([stem, list]) => ({
+            stem,
+            // H, R, S, V — the profile order the reference rows run in.
+            plates: list.slice().sort((x, y) => {
+                const r = (o) => { const m = String(o.partId || '').match(SHAPE_SUFFIX); return m ? 'HRSV'.indexOf(m[1].toUpperCase()) : 9; };
+                return r(x) - r(y) || String(x.partId).localeCompare(String(y.partId));
+            }),
+        }));
+}
+
 /**
  * THE PAGE LIST.
  *
@@ -176,23 +210,27 @@ export function specPages({ choices, answers = {} }) {
         for (const { choice: subject, kind } of subjectsOf(model)) {
             const rod = rodForArm(offered, subject);
             const { plates, rings, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
+            const fams = plates.length ? plateFamilies(plates) : [{ stem: '', plates: [] }];
+            for (const fam of fams) {
             const sig = [
                 U(subject.partId || subject.id),
                 U(rod?.partId || ''),
-                plates.map(p => U(p.partId || p.id)).sort().join(','),
+                fam.plates.map(p => U(p.partId || p.id)).sort().join(','),
                 rings.map(r => U(r.partId || r.id)).sort().join(','),
             ].join('|');
             if (seen.has(sig)) continue;
             seen.add(sig);
             pages.push({
-                key: `${U(subject.partId || subject.id)}__${sig.length}__${pages.length}`,
-                kind, answers: leaf, label, subject, rod, plates, rings, suppressedBy, reason,
+                key: `${U(subject.partId || subject.id)}__${U(fam.stem)}__${pages.length}`,
+                kind, answers: leaf, label, subject, rod, plates: fam.plates, plateFamily: fam.stem,
+                rings, suppressedBy, reason,
                 isTraverse: !!rod && ROD_ROLES.includes(rod.role) && (U(rod.rodKind) === 'TRAVERSE' || rod.role === 'TRACK'),
                 // ⚠ RIDERS ARE ONLY THERE ONCE THE ROD IS. `ridersFor` is deliberately additive —
                 // nothing chosen, nothing rides — so asking with no selection returns nothing and a
                 // traverse page would draw an empty track. The page's own rod is what carries them.
                 riders: rod ? ridersFor(norm, leaf, [rod.id]) : [],
             });
+            }
         }
         const cat = catalogOf(model);
         for (const im of cat.insideMounts) {
