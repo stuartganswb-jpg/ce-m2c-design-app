@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
-import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM } from '../Shared/lineClassification';
+import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines} from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed } from '../Shared/orderLifecycle';
@@ -1610,12 +1610,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
     // Map an order + its linked CPQ quote into the FormPreview data shape. Line items come from the
     // quote's cpqData.breakdown (sans ▶ assembly headers); customer/ship-to from the quote.
-    const buildFormData = (order, job) => {
+    const buildFormData = (order, job, formType = '') => {
         const a = job?.customShippingAddress;
         const cityLine = a ? [a.city, a.state, a.zip].filter(Boolean).join(', ') : '';
         const shipTo = a ? [a.addressee || a.attention, a.addr1, a.addr2, cityLine].filter(Boolean) : null;
         const custName = job?.customer?.name || (typeof order?.customer === 'string' ? order.customer : '') || '';
-        const lines = getJobLines(job).map(l => ({
+        // ⚠ THE MONEY DOCUMENTS DROP BOM-ONLY PARTS (Stuart 2026-08-22: "hidden go to all shop
+        // doc's just not customer docs"). A packing slip keeps them — the standoff is in the box.
+        const lines = customerDocLines(job?.cpqData?.breakdown || [], formType).map(l => ({
             item: l.legacyErpId || l.partId || '',
             desc: String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim(),
             qty: l.qty,
@@ -1641,7 +1643,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const brand = order.brand || activeBrand;
         const docNumber = order.soId || order.woId || order.id;
         printForm(
-            <FormPreview type={formType} brand={brand} logoUrl={brandLogos[brand]} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={docNumber} data={buildFormData(order, job)} />,
+            <FormPreview type={formType} brand={brand} logoUrl={brandLogos[brand]} header={tpl.header} footer={tpl.footer} terms={tpl.terms} docNumber={docNumber} data={buildFormData(order, job, formType)} />,
             `${formType.replace('_', ' ')} ${docNumber}`
         );
     };

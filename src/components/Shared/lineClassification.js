@@ -30,6 +30,31 @@ export function isDisplayOnlyLine(line) {
     return noPart && noMoney && titleColonShape;
 }
 
+// ── WHAT A CUSTOMER MAY SEE (Stuart 2026-08-22) ──────────────────────────────────────────────
+// "hidden go to all shop doc's just not customer docs."
+//
+// `hidden` has always meant BOM-ONLY — built, picked, billed, and not something the customer chose
+// or should read. The floors and the ERP push take every line; a standoff is real work and real
+// stock. But it had no effect on printed paperwork, because the document builders filtered only
+// isDisplayOnlyLine — which is a different question (headers, discounts, size echoes are not lines
+// at all). So a customer's sales order has been listing standoffs.
+//
+// ⚠ THIS IS NOT isDisplayOnlyLine, AND MUST NOT BECOME IT. getJobLines feeds the shop screens as
+// well as the printed forms, so folding `hidden` in there would strip those parts from the floor —
+// the exact opposite of the rule. Two questions, two functions.
+//
+// ⚠ A PACKING SLIP IS A LIST OF WHAT IS IN THE BOX, not a list of what was sold. The standoff is
+// physically in there and the customer counts against it, so contents documents keep every line
+// and only the MONEY documents — the sales order, the invoice, the quote — drop the hidden ones.
+export const MONEY_DOC_TYPES = ['SALES_ORDER', 'INVOICE', 'QUOTE'];
+
+/** Lines a customer may read on a money document: no BOM-only parts, no shop-only rows. */
+export const customerDocLines = (lines = [], docType = '') => {
+    const real = (lines || []).filter(l => !isDisplayOnlyLine(l));
+    if (!MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase())) return real;
+    return real.filter(l => !l.hidden && !l.shopOnly);
+};
+
 export const DIVISION_SMALL = 'small';
 export const DIVISION_CUSTOM = 'custom';
 

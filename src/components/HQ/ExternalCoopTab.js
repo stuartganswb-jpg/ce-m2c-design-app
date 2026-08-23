@@ -8,6 +8,7 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { quoteDisplayNo, quoteAuthorLine } from '../Shared/quoteDisplay';
 import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
 import FormPreview from '../Shared/FormPreview';
+import { customerDocLines } from '../Shared/lineClassification';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq, reopenQuoteInVision } from '../Shared/reopenQuote';
@@ -1052,7 +1053,9 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       const quoteLines = isUnpricedRequest
           ? portalRequestLines(activeDocJob, docRequestCtx?.flow, docRequestCtx?.finishes || [], { flowById: docRequestCtx?.flowById })
               .map(l => ({ item: '', desc: l.name, qty: l.qty || '', price: null, amount: null }))
-          : (activeDocJob.cpqData?.breakdown || []).map(b => ({
+          // Money documents drop BOM-only parts — the same rule the RTG forms use, from the same
+          // helper so the two can never disagree about what a customer may read.
+          : customerDocLines(activeDocJob.cpqData?.breakdown || [], activeDocType).map(b => ({
               item: b.isHeader ? '▶' : '',
               desc: b.name,
               qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
