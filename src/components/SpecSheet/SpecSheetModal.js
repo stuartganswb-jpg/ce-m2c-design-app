@@ -30,6 +30,9 @@ import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 // Room a dropped caption needs under the artwork, in page units — the label's own height plus a
 // little air. Kept beside the offsets that place them so the two cannot drift apart.
 const FS_LABEL_ROOM = 18;
+// Ring/plate codes hang this far below the artwork, on one line — Stuart 2026-08-23: "make it one
+// longer text line rather than two". Two staggered lines cost vertical room the fourth row needed.
+const RING_LABEL_DROP = 34;
 const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP|WP\d)/i;
 // Full wall-plate code inside a mesh path — family-agnostic (was hardcoded H1-).
 const WALL_CODE_RX = /[A-Z]+\d*-[A-Z0-9]*WP\d+(\s*\/?\s*P)?/i;
@@ -470,6 +473,26 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
     const views = makeViews(axes);
+    // ── THE MOUNTING IS ON THE LEFT AND THE ROD RUNS RIGHT — ON EVERY SHEET ──────────────────
+    // Stuart 2026-08-23: "again the rod goes off to the wrong side, please fix this for all."
+    //
+    // Which way the rod runs was falling out of WHICH ROD SEGMENT got picked, and that varies by
+    // arm: the passing brackets are pinned CENTER, so the left-hand pole segment runs away to the
+    // left of them, while a LEFT arm sits at the end of its own segment and the rod runs right.
+    // Chasing that through the pin data would fix one family and break the next.
+    //
+    // It is a drawing decision, so it is made once, here. Mirroring the FRONT VIEW BASIS — negate
+    // `right` — is choosing to stand on the other side of the window, which is exactly what makes
+    // a right-hand bracket read as its left-hand mirror. Every measurement downstream is taken in
+    // this basis, so the dimensions are unaffected and nothing else needs to know.
+    {
+      const bF = viewBbox(bracket, views.front);
+      const pF = viewBbox(pole, views.front);
+      const mountC = (bF.minU + bF.maxU) / 2, rodC = (pF.minU + pF.maxU) / 2;
+      if (isFinite(mountC) && isFinite(rodC) && rodC < mountC) {
+        views.front = { ...views.front, right: views.front.right.map(v => -v) };
+      }
+    }
     // Some plate/bracket GLB nodes embed a RING instance modeled inside the assembly
     // (e.g. BP-H / CP-H carry one) — the plate-centering shift would drag it to the wrong
     // spot and double the parked ring. Strip ring meshes from those groups: matched by
@@ -633,7 +656,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       ringBoxes.forEach((rb, i) => {
         dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN });
         const code = rowRings[i]?.partName;
-        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: 34 + (i % 2) * 20, lead: true, text: code });
+        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP, lead: true, text: code });
       });
       if (opts.isIM) {
         // inside mount: barrel length + Ø; end view gets plate Ø + ring Ø leaders.
@@ -668,7 +691,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // The rod centreline in each view — the row's shared datum, so the section reads across
       // from the elevation instead of each cell floating on its own extents.
       const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
-      const padBelow = ringBoxes.length ? 34 + 20 + FS_LABEL_ROOM : 0;
+      const padBelow = ringBoxes.length ? RING_LABEL_DROP + FS_LABEL_ROOM : 0;
       return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, padBelow, hasAsMounted: false }], axes, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
     }
     let measured = null; // first row's pole Ø + projection, for the geometry-vs-cell check
@@ -763,6 +786,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ...ringBoxes], unionBox(coverF, bracketF));
       const isRound = /-R$/i.test(platePin.partName || '');
       const dims = { front: [], profile: [], detail: [] };
+      // The plate names itself where it is drawn (Stuart 2026-08-23: "we need to add the pattern
+      // id's for the backplates and coverplates"), on the same line as the ring ids so it costs
+      // no extra height.
+      if (platePin.partName) {
+        dims.front.push({ t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: coverF.minV, off: RING_LABEL_DROP, lead: true, text: platePin.partName });
+      }
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
       // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
       // plate width BELOW the plate — above it the rod crosses the dim on short plates
@@ -784,7 +813,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           // longer than the gap between rings, so they are dropped clear of the eyelets on two
           // alternating lines, each on its own leader back to the ring it names.
           const code = rowRings[i]?.partName;
-          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: 34 + (i % 2) * 20, lead: true, text: code });
+          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP, lead: true, text: code });
         });
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
@@ -830,7 +859,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // from mesh bounding boxes, so text dropped under a ring is invisible to the layout and the
       // next row lands on top of it (Stuart 2026-08-23: "the lower row is overlapping the text").
       // The row declares the room its captions need.
-      const padBelow = ringBoxes.length ? 34 + 20 + FS_LABEL_ROOM : 0;
+      const padBelow = ringBoxes.length ? RING_LABEL_DROP + FS_LABEL_ROOM : 0;
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, padBelow, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, measured };

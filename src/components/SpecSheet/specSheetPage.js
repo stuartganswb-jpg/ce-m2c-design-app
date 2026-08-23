@@ -200,10 +200,22 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
 
   // One scale for the page: true 1:1, reduced uniformly only if the content will not fit. A page
   // that had to shrink says so in the footer rather than quietly lying about being actual size.
+  // ⚠ THE FIT HAS TO CONVERGE, NOT BE GUESSED ONCE. A row's height is partly GEOMETRY, which
+  // shrinks with the scale, and partly TEXT — captions, dimension labels, the room they need —
+  // which does not. Scaling once by bodyH/totalH therefore undershoots: the drawings get smaller,
+  // the fixed part stays, and the last row still walks off the page (Stuart 2026-08-23: "the
+  // lowest row is now off the page and there is tons of wasted white space"). Re-measuring after
+  // each step converges in two or three passes and stops early once it fits.
   let scale = oneToOne;
   let grid = measureGrid(rows, scale);
-  const shrink = Math.min(bodyW / (grid.totalW || 1), bodyH / (grid.totalH || 1), 1);
-  if (shrink < 1) { scale = oneToOne * shrink; grid = measureGrid(rows, scale); }
+  for (let i = 0; i < 6; i++) {
+    if (grid.totalW <= bodyW && grid.totalH <= bodyH) break;
+    const k = Math.min(bodyW / (grid.totalW || 1), bodyH / (grid.totalH || 1), 1);
+    if (!isFinite(k) || k >= 0.999) break;
+    scale *= k;
+    grid = measureGrid(rows, scale);
+  }
+  const shrink = scale / oneToOne;
   const toScale = shrink >= 0.999;
 
   let svg = pageFrame(P, title, subtitle);
