@@ -220,8 +220,14 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
       if (d.t === 'h') s2 += dimH(mu(d.u0), mu(d.u1), mv(d.v) + (d.off || 0), d.in);
       else if (d.t === 'v') s2 += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia, d.side || 1, d.ldy || 0);
       else if (d.t === 'dia') s2 += leaderDia(mu(d.u), mv(d.v), d.in, d.dir || 1);
-      // A caption at a world point — the ring's pattern id, under the ring it names.
-      else if (d.t === 'text') s2 += `<text x="${mu(d.u)}" y="${mv(d.v) + (d.off || 0)}" font-size="${FS.label}" text-anchor="middle">${d.text}</text>`;
+      // A caption at a world point — the ring's pattern id, under the ring it names. `lead`
+      // draws the thin leader back up to the part, so a label dropped clear of a crowded row is
+      // still unambiguously attached to one ring.
+      else if (d.t === 'text') {
+        const x = mu(d.u), yTop = mv(d.v), y = yTop + (d.off || 0);
+        if (d.lead) s2 += `<line x1="${x}" y1="${yTop + 2}" x2="${x}" y2="${y - FS.label + 2}" stroke="black" stroke-width="0.4"/>`;
+        s2 += `<text x="${x}" y="${y}" font-size="${FS.label}" text-anchor="middle">${d.text}</text>`;
+      }
     }
     return s2;
   };

@@ -602,7 +602,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       ringBoxes.forEach((rb, i) => {
         dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN });
         const code = rowRings[i]?.partName;
-        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: 22, text: code });
+        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: 34 + (i % 2) * 20, lead: true, text: code });
       });
       if (opts.isIM) {
         // inside mount: barrel length + Ø; end view gets plate Ø + ring Ø leaders.
@@ -674,6 +674,27 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // The projection is a TAG on the page, so it does not have to be measured or guessed: with
       // the pole as the datum, the plate's wall face sits exactly `proj` inches behind the pole
       // centreline. Nothing else about the plate is touched.
+      // ── THE ARM IS DEAD CENTRE OF THE BACKPLATE (Stuart 2026-08-23) ─────────────────────
+      // "the bracket arm is showing off to the right of the backplate … the bracket arm is always
+      //  dead center of the backplate."
+      //
+      // Two different offsets were confused for one. DEPTH — how far behind the pole the plate
+      // sits — is the projection, fixed below. STATION — where along the rod the pair sits — is
+      // this, and the merged sales model parks each plate variant at its own station so they do
+      // not collide in 3D. I had a station fix, replaced it with the depth fix, and needed both:
+      // correcting the depth alone left the arm sitting off to one side of its plate.
+      //
+      // The arm holds the rod, so the arm keeps its station and the plate comes to it.
+      {
+        const ax = axes.poleAxis;
+        const pb = groupBbox(plateAll), bb = groupBbox(bracket);
+        const gap = bb.center[ax] - pb.center[ax];
+        if (isFinite(gap) && Math.abs(gap) > 1e-5) {
+          const d = [0, 0, 0];
+          d[ax] = gap;
+          plateAll = translateMeshes(plateAll, d);
+        }
+      }
       const projIn = Number(opts.projIn);
       if (isFinite(projIn) && projIn > 0) {
         const ax = axes.projAxis;
@@ -726,8 +747,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           // bottom just keep them along the rod on the left and add their pattern ids below each
           // one"). The bottom strip was a second drawing of parts already on the page, and it cost
           // the height that made everything else cramped.
+          // ⚠ THE IDS OVERLAP UNLESS THEY ARE STAGGERED (Stuart 2026-08-23: "the ring id's can be
+          // lower with a pencil line from the id to the [ring] as they overlap"). Ring codes are
+          // longer than the gap between rings, so they are dropped clear of the eyelets on two
+          // alternating lines, each on its own leader back to the ring it names.
           const code = rowRings[i]?.partName;
-          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: 22, text: code });
+          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: 34 + (i % 2) * 20, lead: true, text: code });
         });
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
@@ -749,8 +774,21 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const profTopV = viewBbox(meshes, views.profile).maxV;
       if (!measured) measured = { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: Math.abs(poleU - wallU) * M2IN };
       dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
-      // plate height: line + label in the empty space LEFT of the plate (wall side), off the artwork
-      dims.profile.push({ t: 'v', u: coverP.minU, v0: coverP.maxV, v1: coverP.minV, off: -12, side: -1, in: (coverP.maxV - coverP.minV) * M2IN, dia: isRound });
+      // ⚠ PLATE HEIGHT DIM GOES CLEAR OF THE ARTWORK, ON THE WALL SIDE (Stuart 2026-08-23: "the
+      // measurement line and dims for the backplate needs to move to the right so it is off
+      // behind the backplate"). It was pinned to the plate's minU with the label to its LEFT,
+      // which lands inside the section whenever the wall is on the right — which is where it is
+      // in these views. The side is read from the geometry rather than assumed: the dim sits on
+      // the plate face pointing away from the rod.
+      const plateRight = ((coverP.minU + coverP.maxU) / 2) >= poleU;
+      dims.profile.push({
+        t: 'v',
+        u: plateRight ? coverP.maxU : coverP.minU,
+        v0: coverP.maxV, v1: coverP.minV,
+        off: plateRight ? 16 : -16,
+        side: plateRight ? 1 : -1,
+        in: (coverP.maxV - coverP.minV) * M2IN, dia: isRound,
+      });
       if (wallF && detail) {
         dims.detail.push({ t: 'h', u0: wallF.minU, u1: wallF.maxU, v: wallF.maxV, off: -12, in: (wallF.maxU - wallF.minU) * M2IN });
         dims.detail.push({ t: 'v', u: wallF.maxU, v0: wallF.maxV, v1: wallF.minV, off: 12, in: (wallF.maxV - wallF.minV) * M2IN });
