@@ -466,6 +466,22 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const engineRod = (opts.rodNodes || []).filter(n => extractWorldMeshes(scene, [n]).length);
     const poleNodes = engineRod.length ? engineRod : keep(sideNodesFor('POLE'));
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
+    // ── RINGS RIDE THE FRONT ROD, AND ONLY THE FRONT ROD (Stuart 2026-08-23) ─────────────────
+    // "no rings need to be shown on rear rod." A double now draws both poles, so "the rod" is no
+    // longer a single thing: the ring stations, the ring drop datum and the rod Ø all have to
+    // name WHICH. The front rod is the one furthest from the wall — that is what projection
+    // means, and it needs no extra tag to determine.
+    const frontPole = (() => {
+      if (poleNodes.length < 2) return pole;
+      const groups = poleNodes.map(n => extractWorldMeshes(scene, [n])).filter(g => g.length);
+      if (groups.length < 2) return pole;
+      const ax = axes.projAxis;
+      const toWall = Math.sign(axes.wallCoord - axes.poleBox.center[ax]) || 1;
+      return groups.reduce((best, g) => {
+        const c = groupBbox(g).center[ax], b = groupBbox(best).center[ax];
+        return (toWall > 0 ? c < b : c > b) ? g : best;
+      }, groups[0]);
+    })();
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
@@ -550,7 +566,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // Returns [{ partName, meshes }] in the order they sit on the rod.
     const parkRings = (clearHalfM) => {
       if (!ringDetails.length) return [];
-      const pb = axes.poleBox, bb = groupBbox(bracket);
+      const pb = frontPole.length ? groupBbox(frontPole) : axes.poleBox;
+      const bb = groupBbox(bracket);
       const ax = axes.poleAxis;
       const sign = Math.sign(pb.center[ax] - bb.center[ax]) || 1;
       let edge = bb.center[ax] + sign * (clearHalfM + 0.008);
@@ -626,7 +643,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // kept a length of empty rod. The plate and arm are what a reader lines up on, so they are
     // what the window is built around and the rod is what gets cut, whichever side it runs to.
     const clipFront = (front0, includeBoxes, mountBox = null) => {
-      const poleFull = viewBbox(pole, views.front);
+      // Ø and the ring drop are quoted against the FRONT rod — see frontPole above.
+      const poleFull = viewBbox(frontPole.length ? frontPole : pole, views.front);
       let lo = Infinity, hi = -Infinity;
       for (const b of includeBoxes) {
         if (!b || !isFinite(b.minU)) continue;
