@@ -330,15 +330,26 @@ export function auditPages(pages, choices) {
                 if (!ok.has(String(part.id))) say(page, part, `this ${what} is not admissible at ${narrowingLabel(norm, page.answers) || 'this configuration'}`);
             }
         }
-        // 2 · the three pairing rules, in their plain form
+        // 2 · the pairing rules — ONLY the ones that hold unconditionally
+        //
+        // ⚠ An audit that fires when it should not is worse than none: it trains you to ignore it.
+        // The first cut of this reported 76 false alarms on 19 sheets because it tested
+        // `arm.inlineOnly` — a flag PLATES carry and arms do not. The engine keys on `arm.isInline`.
+        //
+        // It also claimed "a standard plate on an in-line arm", which is not a rule at all: the
+        // engine deliberately falls back to the plain plates for a RETURN that has neither in-line
+        // nor return copies, because a return always meets the wall. Only the statements that are
+        // true in every case survive here — anything conditional would need the builder's own
+        // reasoning, and an audit that re-runs the builder proves nothing.
         const arm = page.subject;
         if (arm && (page.plates || []).length) {
             if (arm.isBasic) say(page, page.plates[0], 'a basic arm is one piece and takes no backplate, but this page carries plates');
-            const armInline = !!arm.inlineOnly, armReturn = !!arm.usesReturnPlates || U(arm.role) === 'RETURN';
+            // A return and an in-line arm sit against the wall the same way and share each other's
+            // plates; an ordinary wall bracket is offered neither set.
+            const wallSharing = !!arm.isInline || U(arm.role) === 'RETURN' || !!arm.usesReturnPlates;
             for (const p of page.plates) {
-                if (p.inlineOnly && !armInline) say(page, p, 'an in-line plate on an arm that is not in-line');
-                if (!p.inlineOnly && armInline) say(page, p, 'a standard plate on an in-line arm');
-                if (p.returnOnly && !armReturn) say(page, p, 'a return plate on an arm that is not a return');
+                if (p.inlineOnly && !wallSharing) say(page, p, 'an in-line plate on an ordinary wall bracket');
+                if (p.returnOnly && !wallSharing) say(page, p, 'a return plate on an ordinary wall bracket');
             }
         }
         // 3 · a track carries carriers, not rings

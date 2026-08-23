@@ -182,16 +182,17 @@ function measureGrid(rows, scale) {
 
 // rows[i] = { rowKey, code, wallCode, front, profile, detail, dims } — dim specs:
 //   { t:'h', u0, u1, v, off? } | { t:'v', u, v0, v1, off?, side?, ldy?, dia? } | { t:'dia', u, v, val, dir? }
-export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], paper = 'tabloid', footerNote, bottomItems = [] }) {
+export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], paper = 'tabloid', footerNote }) {
   const P = PAPERS[paper] || PAPERS.tabloid;
   const oneToOne = scaleForPaper(paper || 'tabloid');
   const viewMaps = [];
 
   // Space the drawings may occupy, once the title block, the notes and the bottom strip are out.
   const bodyTop = MARGIN + 78;
-  const bottomStripH = bottomItems.length ? 210 : 0;
   const notesH = noteLines.length * (FS.note + 4) + 18;
-  const bodyH = P.H - MARGIN - bodyTop - bottomStripH - notesH;
+  // The bottom ring strip is gone (Stuart 2026-08-23): each ring is named where it hangs, so
+  // the whole body height belongs to the rows.
+  const bodyH = P.H - MARGIN - bodyTop - notesH;
   const bodyW = P.W - 2 * MARGIN - 80;
 
   // One scale for the page: true 1:1, reduced uniformly only if the content will not fit. A page
@@ -219,6 +220,8 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
       if (d.t === 'h') s2 += dimH(mu(d.u0), mu(d.u1), mv(d.v) + (d.off || 0), d.in);
       else if (d.t === 'v') s2 += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia, d.side || 1, d.ldy || 0);
       else if (d.t === 'dia') s2 += leaderDia(mu(d.u), mv(d.v), d.in, d.dir || 1);
+      // A caption at a world point — the ring's pattern id, under the ring it names.
+      else if (d.t === 'text') s2 += `<text x="${mu(d.u)}" y="${mv(d.v) + (d.off || 0)}" font-size="${FS.label}" text-anchor="middle">${d.text}</text>`;
     }
     return s2;
   };
@@ -258,26 +261,6 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     }
     cursor += h + lead;
   });
-
-  // ── EACH RING ON ITS OWN, ALONG THE BOTTOM (Stuart 2026-08-23) ─────────────────────────────
-  // "then along the bottom you can show each ring on its own from the side." Was a two-item huddle
-  // in the bottom-right corner; it is a strip across the page now, so a collection with four ring
-  // options shows four.
-  if (bottomItems.length) {
-    const stripTop = P.H - MARGIN - notesH - bottomStripH;
-    const cellW = (P.W - 2 * MARGIN - 80) / bottomItems.length;
-    const baseCy = stripTop + bottomStripH / 2;
-    svg += `<line x1="${MARGIN + 40}" y1="${stripTop}" x2="${P.W - MARGIN - 40}" y2="${stripTop}" stroke="#999" stroke-width="0.6"/>`;
-    bottomItems.forEach((it, i) => {
-      const bcx = MARGIN + 40 + cellW * i + cellW / 2;
-      const { mu, mv, mapping } = place(it.view.zb, bcx, baseCy, scale);
-      svg += segPaths(it.view.vis, mu, mv);
-      const [bx, by, bw, bh] = mapping.rect;
-      svg += `<text x="${bcx}" y="${stripTop + 20}" font-size="${FS.label}" text-anchor="middle">${it.code}</text>`;
-      if (it.odIn) svg += leaderDia(bx + bw * 0.18, by + bh * 0.15, it.odIn, -1);
-      if (it.hIn) svg += dimV(bx + bw + 12, by, by + bh, it.hIn);
-    });
-  }
 
   noteLines.forEach((line, i) => {
     svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 14 - (noteLines.length - 1 - i) * (FS.note + 4)}" font-size="${FS.note}">${line}</text>`;

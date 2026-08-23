@@ -313,6 +313,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         title: `${bracketPin.partName}${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
         bracketPin, familyPins, ringPins, riderPins, plateFamily: p.plateFamily || '',
         rodNodes: (p.rod?.nodes || []),
+        projIn: p.answers?.proj,
         isTraverse: p.isTraverse,
         isIM: p.kind === 'INSIDE_MOUNT',
         family: p.label,
@@ -505,20 +506,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const bracketHalfAlong = bracket.length
       ? (groupBbox(bracket).max[axes.poleAxis] - groupBbox(bracket).min[axes.poleAxis]) / 2
       : 0;
-    // ring-option detail images: FACE-ON (profile direction — the ring reads as a circle),
-    // body OD + overall height including the eyelet
-    const ringItems = ringDetails.map(s => {
-      const view = renderHiddenLine(s.meshes, views.profile, 350);
-      const body = s.meshes.filter(m => !/eyelet/i.test(m.name + m.path));
-      const bP = viewBbox(body.length ? body : s.meshes, views.profile);
-      const aP = viewBbox(s.meshes, views.profile);
-      return {
-        partName: s.partName,
-        view,
-        odIn: (bP.maxV - bP.minV) * M2IN,
-        hIn: (aP.maxV - aP.minV) * M2IN,
-      };
-    });
+    // NOTE: the per-ring detail views that used to feed a bottom strip are gone. Each ring is
+    // drawn where it hangs, on the rod, with its pattern id under it — one drawing of a part
+    // instead of two, and the height that strip took is what the rows were short of.
     const rootV = armRootCenter(bracket, axes);
     // ── THE CARRIER RIDES INSIDE THE TRACK, AND MUST STILL BE VISIBLE (Stuart 2026-08-23) ───
     // "traverse a sideview with the carrier inserted … just needs to be inserted into it."
@@ -608,8 +598,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const dims = { front: [], profile: [], detail: [] };
       let measProjIn = null; // captured for the geometry-vs-cell check (IM has no projection)
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
-      // one drop dim per ring option: top of rod → bottom of that ring's eyelet
-      ringBoxes.forEach(rb => dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN }));
+      // one drop dim per ring option, and its pattern id under it
+      ringBoxes.forEach((rb, i) => {
+        dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN });
+        const code = rowRings[i]?.partName;
+        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: 22, text: code });
+      });
       if (opts.isIM) {
         // inside mount: barrel length + Ø; end view gets plate Ø + ring Ø leaders.
         // No projection dim — IM mounts at the rod end, not on the wall.
@@ -643,7 +637,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // The rod centreline in each view — the row's shared datum, so the section reads across
       // from the elevation instead of each cell floating on its own extents.
       const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
-      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, hasAsMounted: false }], axes, ringItems, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
+      return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, hasAsMounted: false }], axes, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
     }
     let measured = null; // first row's pole Ø + projection, for the geometry-vs-cell check
     const rows = plateChoices.map((platePin) => {
@@ -664,25 +658,34 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         d[axes.vertAxis] = rootV - cb0.center[axes.vertAxis];
         plateAll = translateMeshes(plateAll0, d);
       }
-      // ── AND ALONG THE ROD (Stuart 2026-08-23) ────────────────────────────────────────────
-      // "others are rendering without the backplate or it is way off to the outside."
+      // ── THE POLE IS FIXED; EVERYTHING MOVES BACK FROM IT (Stuart 2026-08-23) ─────────────
+      // "the only one with the backplate in the correct place is the double … the rule in the cpq
+      //  engine states the front pole is always fixed and everything moves back from there, that
+      //  is why on the shortest projection bracket the backplate is the farthest out of correct
+      //  position."
       //
-      // A merged SALES model parks the plate variants at DIFFERENT STATIONS along the rod so they
-      // do not collide in the 3D render — H, R, S and V each get their own spot. That is right for
-      // a sales model and wrong for a drawing: on a spec sheet the plate is behind THIS arm, and
-      // drawing it where the sales model parked it puts it out at the end of the rod, detached.
+      // Exactly right, and it says the earlier fix was aimed down the wrong axis. Sliding the
+      // plate ALONG THE ROD to the arm's station addressed a station mismatch that was never the
+      // real fault; the error is in DEPTH. A merged sales model carries one plate mesh serving
+      // every projection, parked at whatever depth it was modelled at — so the further that depth
+      // is from THIS arm's projection, the further out the plate lands. The shortest arm is worst
+      // because it is furthest from the modelled depth, which is precisely what he observed.
       //
-      // Only fired when they are genuinely apart. A plate already at the arm's station is left
-      // exactly where it is, so a purpose-built spec layout is never disturbed.
-      {
-        const ax = axes.poleAxis;
-        const pb = groupBbox(plateAll), bb = groupBbox(bracket);
-        const gap = bb.center[ax] - pb.center[ax];
-        if (isFinite(gap) && Math.abs(gap) > 0.02) {     // > ~3/4"
-          const d = [0, 0, 0];
-          d[ax] = gap;
-          plateAll = translateMeshes(plateAll, d);
-        }
+      // The projection is a TAG on the page, so it does not have to be measured or guessed: with
+      // the pole as the datum, the plate's wall face sits exactly `proj` inches behind the pole
+      // centreline. Nothing else about the plate is touched.
+      const projIn = Number(opts.projIn);
+      if (isFinite(projIn) && projIn > 0) {
+        const ax = axes.projAxis;
+        const poleC = axes.poleBox.center[ax];
+        // Even a badly-parked plate is on the correct SIDE of the rod, so the sense is reliable.
+        const wallSign = Math.sign(axes.wallCoord - poleC) || 1;
+        const target = poleC + wallSign * (projIn / M2IN);
+        const pb = groupBbox(plateAll);
+        const face = wallSign > 0 ? pb.max[ax] : pb.min[ax];
+        const d = [0, 0, 0];
+        d[ax] = target - face;
+        if (isFinite(d[ax]) && Math.abs(d[ax]) > 1e-5) plateAll = translateMeshes(plateAll, d);
       }
       const wallPlate = plateAll.filter(m => WALL_PLATE_MATCH.test(m.name + m.path));
       const cover = plateAll.filter(m => !WALL_PLATE_MATCH.test(m.name + m.path) && !SCREW_MATCH.test(m.name + m.path));
@@ -717,7 +720,15 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition), for EVERY ring
         // option on the rod — that measurement is the thing that differs between them. Label
         // drops ~1/4" printed so the text clears the underside of the pole.
-        ringBoxes.forEach(rb => dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN }));
+        ringBoxes.forEach((rb, i) => {
+          dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN });
+          // ⚠ THE RING NAMES ITSELF WHERE IT HANGS (Stuart 2026-08-23: "lose the rings along the
+          // bottom just keep them along the rod on the left and add their pattern ids below each
+          // one"). The bottom strip was a second drawing of parts already on the page, and it cost
+          // the height that made everything else cramped.
+          const code = rowRings[i]?.partName;
+          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: 22, text: code });
+        });
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
         if (topHoleOff != null && wallF) {
@@ -726,7 +737,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         }
       }
       // profile: projection (wall face → pole centerline) + plate height
-      const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = axes.wallCoord;
+      // Wall face = the back of the plate we just placed, so the printed projection is the one
+      // the drawing shows. Reading axes.wallCoord here would quote the mis-parked depth back.
+      const placed = groupBbox(plateAll);
+      const wallAt = (Math.sign(axes.wallCoord - axes.poleBox.center[axes.projAxis]) || 1) > 0
+        ? placed.max[axes.projAxis] : placed.min[axes.projAxis];
+      const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = isFinite(wallAt) ? wallAt : axes.wallCoord;
       const polePt = [...axes.poleCenter];
       const wallU = projPoint(views.profile, wallPt)[0];
       const poleU = projPoint(views.profile, polePt)[0];
@@ -742,7 +758,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
-    return { rows, axes, ringItems, measured };
+    return { rows, axes, measured };
   }, [allowedNodesFor, wallCfg, sideNodesFor, side]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
@@ -834,7 +850,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         if (page.kind === 'CATALOG') { setPageData(composeCatalogPage(page)); setStatus(''); return; }
         let built = rowCacheRef.current[page.key];
         if (!built) {
-          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes });
+          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn });
           rowCacheRef.current[page.key] = built;
         }
         // GEOMETRY vs CELL (playbook 4.2, warn-only): the measured pole Ø / projection must agree
@@ -862,8 +878,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           ],
           paper: layoutPaper,
           footerNote: reducedNote,
-          // Each ring on its own, side view, along the bottom of the sheet.
-          bottomItems: (built.ringItems || []).map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn })),
         });
         setPageData(result);
         setStatus('');
@@ -940,7 +954,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (page.kind === 'WALLMOUNTS') return composeWallMountsPage().svg;
     if (page.kind === 'CATALOG') return composeCatalogPage(page).svg;
     let built = rowCacheRef.current[page.key];
-    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes }); rowCacheRef.current[page.key] = built; }
+    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn }); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName) }));
     const bSized = page.bracketPin.partName;
     const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
@@ -960,7 +974,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       ],
       paper: layoutPaper,
       footerNote: reducedNote,
-      bottomItems: (built.ringItems || []).map(r => ({ code: rowCode(r.partName), view: r.view, odIn: r.odIn, hIn: r.hIn })),
     }).svg;
     } catch (e) {
       // One page that cannot draw does not cost you the other sixty-nine.

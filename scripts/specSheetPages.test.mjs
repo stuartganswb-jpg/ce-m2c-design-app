@@ -241,5 +241,29 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     eq('so nothing on the set carries a rod it should not', auditPages(mp, F).filter(v => /rod/.test(v.why)), []);
 }
 
+// ── AN AUDIT THAT CRIES WOLF IS WORSE THAN NO AUDIT ──────────────────────────────────────────
+// The first cut reported 76 false alarms on 19 prod sheets: it tested `arm.inlineOnly`, a flag
+// PLATES carry and arms do not — the engine keys on `arm.isInline` (which normalizeChoice derives
+// from usesReturnPlates). It also called a plain plate on an in-line arm a fault, when the engine
+// deliberately falls back to the plain pool for a return that has no other copies.
+{
+    const INL = [
+        { id: 'ROD', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['r'] },
+        { id: 'ARM-IL', partId: 'H1-138ILS', role: 'BRACKET', position: 'LEFT', proj: '3.625', usesReturnPlates: true, nodes: ['ail'] },
+        { id: 'ARM-PLAIN', partId: 'H1-138DS', role: 'BRACKET', position: 'LEFT', proj: '3.625', nodes: ['ad'] },
+        { id: 'PL-INL', partId: 'H1-138BP-INL', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', inlineOnly: true, nodes: ['pi'] },
+        { id: 'PL-PLAIN', partId: 'H1-138BP-S', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', nodes: ['pp'] },
+    ];
+    const ip = specPages({ choices: INL });
+    const il = ip.find(p => p.subject?.partId === 'H1-138ILS');
+    ok('the in-line arm gets its in-line plate', plateIds(il).includes('H1-138BP-INL'));
+    eq('and the audit does NOT call that a fault', auditPages(ip, INL), []);
+    // the rule still bites where it should: an in-line plate under an ordinary wall bracket
+    const plain = ip.find(p => p.subject?.partId === 'H1-138DS');
+    const smuggled = [{ ...plain, plates: [{ id: 'PL-INL', partId: 'H1-138BP-INL', inlineOnly: true }] }];
+    ok('but an in-line plate on an ordinary bracket still is',
+        auditPages(smuggled, INL).some(v => /ordinary wall bracket/.test(v.why)));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
