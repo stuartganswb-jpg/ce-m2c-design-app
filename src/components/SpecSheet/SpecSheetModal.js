@@ -356,7 +356,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       pageList.push({
         key: p.key,
         kind: p.kind,
-        title: `${bracketPin.partName}${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
+        title: `${bracketPin.partName}${p.plateFamily ? ` + ${p.plateFamily}` : ''}${p.label ? ` · ${p.label}` : ''}${p.part ? ` · sheet ${p.part}` : ''}${p.plates.length ? '' : ' (draws alone)'}`,
         bracketPin, familyPins, ringPins, riderPins, plateFamily: p.plateFamily || '',
         // Every pole this configuration stands up, each taken on the drawn side — one on a
         // single, front and back on a double.

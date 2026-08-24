@@ -285,6 +285,10 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
         // prod pins carry trvSetup:"SINGLE" on single-world parts — without one the setup axis
         // never branches, no DOUBLE leaf exists, and every assertion below tests nothing.
         { id: 'P-ARM1', partId: 'CE-INV-56746', name: 'H1-138DS', role: 'BRACKET', position: 'LEFT', setup: 'SINGLE', proj: '3.625', nodes: ['arm-s'] },
+        { id: 'P-PLH', partId: 'CE-INV-1001', name: 'H1-138BP-H', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl-h'] },
+        { id: 'P-PLR', partId: 'CE-INV-1002', name: 'H1-138BP-R', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl-r'] },
+        { id: 'P-PLS', partId: 'CE-INV-1003', name: 'H1-138BP-S', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl-s'] },
+        { id: 'P-PLV', partId: 'CE-INV-1004', name: 'H1-138BP-V', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl-v'] },
     ];
     const dp = specPages({ choices: D });
     const rodIds = (p) => (p?.rods || []).map(r => r.id);
@@ -300,6 +304,16 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     eq('a single page still draws one rod', rodIds(single), ['P-RF']);
     eq('and the double\'s projection figure is the FRONT tier\'s',
         (() => { const t = dec?.subject?.projTiers; const tier = String(dec?.rod?.tier || '').toUpperCase(); return t?.[tier]; })(), 8.5);
+    // ── A DEEP DOUBLE PRINTS TWO ROWS PER SHEET (Stuart 2026-08-23) ──────────────────────────
+    // Its section is ~9" wide, so four rows are ~22" of columns — unprintable near scale in any
+    // 11×17 orientation. The split is presentation only: same plates, same order, two sheets.
+    const decs = dp.filter(p => p.subject?.partId === 'CE-INV-56737' && p.plateFamily === 'H1-138BP');
+    eq('a deep double splits its four plates two per sheet',
+        decs.map(p => p.plates.map(x => x.name)),
+        [['H1-138BP-H', 'H1-138BP-R'], ['H1-138BP-S', 'H1-138BP-V']]);
+    eq('and each sheet says which it is', decs.map(p => p.part), ['1/2', '2/2']);
+    eq('while a single arm keeps all four rows on one sheet',
+        dp.find(p => p.subject?.partId === 'CE-INV-56746' && p.plateFamily === 'H1-138BP')?.plates.length, 4);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -248,7 +248,23 @@ export function specPages({ choices, answers = {} }) {
                 ? [rod, backRodForArm(offered, subject, rod)].filter(Boolean)
                 : (rod ? [rod] : []);
             const { plates, rings, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
-            const fams = plates.length ? plateFamilies(plates) : [{ stem: '', plates: [] }];
+            const fams0 = plates.length ? plateFamilies(plates) : [{ stem: '', plates: [] }];
+            // ── A DEEP DOUBLE PRINTS TWO ROWS PER SHEET (Stuart 2026-08-23) ─────────────────
+            // "can we start with the deep doubles 2 per page and see how that looks."
+            // The dec double's section is ~9" wide (8.5" projection + plate), so a row is ~22"
+            // of columns — no orientation of 11×17 holds four such rows near scale. Two rows
+            // free the height so the width can bind at the best the columns allow. The split is
+            // presentation only, exactly like the family split above it: which plates belong to
+            // the arm is still entirely the engine's answer.
+            const fams = fams0.flatMap(f => {
+                if (!(subject?.projTiers && f.plates.length > 2)) return [f];
+                const out = [];
+                const n = Math.ceil(f.plates.length / 2);
+                for (let i = 0; i < f.plates.length; i += 2) {
+                    out.push({ ...f, plates: f.plates.slice(i, i + 2), part: `${i / 2 + 1}/${n}` });
+                }
+                return out;
+            });
             for (const fam of fams) {
             const sig = [
                 U(subject.partId || subject.id),
@@ -261,6 +277,7 @@ export function specPages({ choices, answers = {} }) {
             pages.push({
                 key: `${U(subject.partId || subject.id)}__${U(fam.stem)}__${pages.length}`,
                 kind, answers: leaf, label, subject, rod, rods, plates: fam.plates, plateFamily: fam.stem,
+                part: fam.part || '',
                 rings, suppressedBy, reason,
                 isTraverse: !!rod && ROD_ROLES.includes(rod.role) && (U(rod.rodKind) === 'TRAVERSE' || rod.role === 'TRACK'),
                 // ⚠ RIDERS ARE ONLY THERE ONCE THE ROD IS. `ridersFor` is deliberately additive —
