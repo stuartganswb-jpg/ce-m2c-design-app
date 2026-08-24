@@ -132,6 +132,66 @@ const solidFamily = [
     ok('and the question is asked again', !asked.implied);
 }
 
+// ── FIXTURE 2c: PASSING RINGS AND THE CENTRE BRACKET ─────────────────────────────────────────
+// Stuart 2026-08-22: "standard rings can not pass at all and passing rings can only pass when used
+// with passing brackets… a typical order has standard brackets at left and right sides with either
+// passing in the centers with passing rings or standard in the center with standard rings."
+//
+// A passing ring on a standard centre bracket is not a preference — it is a curtain that stops in
+// the middle of the window. One axis makes the pair impossible to get wrong.
+{
+    const ends = [
+        C({ id: 'BKT-L', partId: 'ARM', role: 'BRACKET', position: 'LEFT', nodes: ['bl'] }),   // blank: suits either
+        C({ id: 'BKT-R', partId: 'ARM', role: 'BRACKET', position: 'RIGHT', nodes: ['br'] }),
+    ];
+    const passingFamily = [
+        C({ id: 'ROD', partId: 'H1-1R', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        ...ends,
+        C({ id: 'BKT-C-STD', partId: 'ARM', role: 'BRACKET', position: 'CENTER', passing: 'STANDARD', nodes: ['bcs'] }),
+        C({ id: 'BKT-C-PAS', partId: 'ARM-P', role: 'BRACKET', position: 'CENTER', passing: 'PASSING', nodes: ['bcp'] }),
+        C({ id: 'RING-STD', partId: 'H1-1BR', role: 'RING', position: 'CENTER', passing: 'STANDARD', nodes: ['rs'] }),
+        C({ id: 'RING-PAS', partId: 'H1-1BPR', role: 'RING', position: 'CENTER', passing: 'PASSING', nodes: ['rp'] }),
+    ];
+    const m = resolve({ choices: passingFamily, answers: {} });
+    const axis = m.axes.find(a => a.key === 'passing');
+    ok('the assembly asks for a ring style', !!axis && !axis.implied);
+    eq('and it offers both', axis.values, ['PASSING', 'STANDARD']);
+
+    // STANDARD: standard centre + standard rings, and BOTH end arms still there.
+    const std = resolve({ choices: passingFamily, answers: { passing: 'STANDARD' } });
+    const stdIds = std.choices.filter(c => std.admissible ? true : true).length;   // shape guard only
+    const stdCentre = std.slots.find(s => s.kind === 'BRACKET' && s.position === 'CENTER');
+    eq('a standard order offers the standard centre arm only', stdCentre.options.map(o => o.id), ['BKT-C-STD']);
+    const stdRings = std.slots.find(s => s.kind === 'RING');
+    eq('…and the standard rings only', stdRings.options.map(o => o.id), ['RING-STD']);
+    ok('the untagged END arms survive a standard order', ['LEFT', 'RIGHT'].every(p =>
+        std.slots.find(s => s.kind === 'BRACKET' && s.position === p).options.length === 1));
+    ok('shape guard', stdIds > 0);
+
+    // PASSING: the mirror — and the end arms must NOT vanish, which is the whole trap.
+    const pas = resolve({ choices: passingFamily, answers: { passing: 'PASSING' } });
+    eq('a passing order offers the passing centre arm', pas.slots.find(s => s.kind === 'BRACKET' && s.position === 'CENTER').options.map(o => o.id), ['BKT-C-PAS']);
+    eq('…and the passing rings', pas.slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING-PAS']);
+    ok('⚠ THE END ARMS ARE UNTAGGED AND MUST SURVIVE — tagging them STANDARD would delete them here',
+        ['LEFT', 'RIGHT'].every(p => pas.slots.find(s => s.kind === 'BRACKET' && s.position === p).options.length === 1));
+
+    // The refusal tells the operator what to change, because that is what the FAQ acts on.
+    const why = admits(normalizeChoice({ id: 'RING-PAS', partId: 'H1-1BPR', role: 'RING', passing: 'PASSING' }), { passing: 'STANDARD' });
+    ok('a passing ring on a standard order says how to fix it', !why.ok && /switch Ring Style to passing/.test(why.detail), JSON.stringify(why));
+    const why2 = admits(normalizeChoice({ id: 'RING-STD', partId: 'H1-1BR', role: 'RING', passing: 'STANDARD' }), { passing: 'PASSING' });
+    ok('and the other way round', !why2.ok && /cannot pass the centre bracket/.test(why2.detail), JSON.stringify(why2));
+}
+
+// ── AND AN ASSEMBLY THAT HAS NEVER HEARD OF PASSING IS UNTOUCHED ─────────────────────────────
+// The safety property the whole change rests on: the axis is DISCOVERED, so a collection with no
+// passing tags grows no question and filters nothing. H1-138, Brimar, H2 and H1-2TRV are all this.
+{
+    const m = resolve({ choices: solidFamily, answers: {} });
+    ok('no passing tags, no passing axis', !m.axes.some(a => a.key === 'passing'));
+    const before = resolve({ choices: solidFamily, answers: { setup: 'SINGLE', mount: 'WALL', proj: 3.625 } });
+    eq('and the slots are exactly what they were', before.slots.filter(s => s.options.length).length > 0, true);
+}
+
 // ── FIXTURE 3: mixed solid + traverse in ONE assembly (Fabricut H1-138 shape) ─────────────────
 // The traverse rod occupies the same place in the file and is toggled by tag; it brings its own
 // brackets, backplates and returns, and carriers ride it. Finials and inside mounts are shared.

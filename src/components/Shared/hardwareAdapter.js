@@ -159,6 +159,9 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         ...(fits ? { fits } : {}),
         nodes: (hidden || parked) ? [] : splitNodes(pin.targetNode || pin.choiceNode || ''),
         setup: U(pin.trvSetup) === 'BOTH' ? '' : U(pin.trvSetup),
+        // STANDARD or PASSING, and blank means "suits either" — which is what every end bracket is,
+        // and what every part that is neither a bracket nor a ring is.
+        passing: U(pin.passing),
         drive: U(pin.driveType),
         proj: pin.projInches || '',
         mount: U(pin.mountType) || normalizeLocation(cluster?.location) || '',

@@ -319,6 +319,7 @@ export function normalizeChoice(input = {}) {
         tier: TIER_POSITIONS.includes(U(input.tier)) ? U(input.tier)
             : (TIER_POSITIONS.includes(U(input.position)) ? U(input.position) : ''),
         setup: U(input.setup),                       // '' = suits every setup
+        passing: U(input.passing),                   // '' = suits either — every end bracket, and everything that does not pass
         // Tri-state, and only carried when actually tagged — undefined means "let the role and the
         // position decide" (see carriesRings), which is the normal case for every existing pin.
         ...(input.carriesRings === true || input.carriesRings === false ? { carriesRings: input.carriesRings } : {}),
@@ -418,6 +419,25 @@ export const AXES = [
     // where no bracket is made at that depth — inventing a configuration that cannot be built. The
     // mounting hardware establishes the projections; everything else is filtered BY them.
     { key: 'proj', label: 'Bracket Projection', tag: 'proj', order: 40, scope: 'admissible', roles: MOUNTED_ROLES },
+    // ── PASSING (Stuart 2026-08-22) ──────────────────────────────────────────────────────────
+    // "standard rings can not pass at all and passing rings can only pass when used with passing
+    // brackets… a typical order has standard brackets at left and right sides with either passing
+    // in the centers with passing rings or standard in the center with standard rings."
+    //
+    // Two parts, one decision. A passing ring on a standard centre bracket is not a preference, it
+    // is a curtain that stops in the middle of the window — so the pair must be impossible to get
+    // wrong, not merely discouraged. As an axis it is exactly that: ONE answer filters the centre
+    // bracket and the rings together, and no combination of correct clicks produces a mismatch.
+    //
+    // ⚠ THE TAG BELONGS ON THE PIN, NOT THE ITEM, AND THE END BRACKETS STAY BLANK. Passing brackets
+    // are only ever used in the centre, so the left and right arms must suit either order — and
+    // blank already means "suits every value". Tagging an end bracket STANDARD would delete it from
+    // every passing order, which is the one way to get this wrong. The same physical arm is
+    // therefore untagged at the ends and tagged in the centre; tags are per-pin, so that costs
+    // nothing.
+    //
+    // Scoped to brackets and rings because nothing else has an opinion: a finial does not pass.
+    { key: 'passing', label: 'Ring Style', tag: 'passing', order: 45, scope: 'admissible', roles: ['BRACKET', 'RING'] },
 ];
 
 // A CONSTRAINT IS NOT AN OPTION. Only a part that IS a value votes for it; a part that merely
@@ -507,6 +527,15 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     }
     if (!skip('mount') && ctx.mount && choice.mount && choice.mount !== ctx.mount) {
         return no('mount', `tagged ${choice.mount}, this order is ${ctx.mount}`);
+    }
+    // ⚠ THE REASON IS WRITTEN TO BE ACTED ON, NOT JUST READ (Stuart 2026-08-22: "rather than hiding
+    // i would present a FAQ to switch to passing bracket if you would like to use passing rings").
+    // The operator meets this on the rings step, where the answer is one step behind them — so it
+    // says what to change, in the words of the thing they are looking at.
+    if (!skip('passing') && ctx.passing && choice.passing && choice.passing !== ctx.passing) {
+        return no('passing', ctx.passing === 'STANDARD'
+            ? 'a passing ring only slides past a PASSING centre bracket — switch Ring Style to passing to use it'
+            : 'a standard ring cannot pass the centre bracket — switch Ring Style to standard to use it');
     }
     // A rod has no projection either — the arm holding it does. (Setup and drive still apply: a
     // rear track genuinely is double-only.)
