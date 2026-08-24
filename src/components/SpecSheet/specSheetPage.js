@@ -231,6 +231,11 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   }
   const shrink = scale / oneToOne;
   const toScale = shrink >= 0.999;
+  // WHICH CONSTRAINT BOUND THE FIT. Height and width shrink the page for completely different
+  // reasons and want opposite fixes — a narrower elevation helps one and does nothing for the
+  // other. Saying which is binding turns "it looks small" into a number that points somewhere.
+  const bindW = grid.totalW / bodyW, bindH = grid.totalH / bodyH;
+  const boundBy = toScale ? '' : (bindW >= bindH ? 'width' : 'height');
 
   let svg = pageFrame(P, title, subtitle);
 
@@ -316,7 +321,7 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   });
   const footer = footerNote || (toScale
     ? `SCALE 1:1 ON ${P.label} LANDSCAPE (0.25" margins, print at 100%)`
-    : `REDUCED ${Math.round(shrink * 100)}% TO FIT ${P.label} — NOT TO SCALE, READ THE DIMENSIONS`);
+    : `REDUCED ${Math.round(shrink * 100)}% TO FIT ${P.label} (${rows.length} row${rows.length === 1 ? '' : 's'}, bound by ${boundBy}) — NOT TO SCALE, READ THE DIMENSIONS`);
   svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 14}" font-size="${FS.note}" text-anchor="end">${footer}</text>`;
 
   return { svg: wrapSvg(P, svg), viewMaps, paper: paper || 'tabloid', toScale, scale };

@@ -657,7 +657,22 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // length are the same dial turned opposite ways. Back to the tightest window that still holds
     // the plate, the arm and the ring options (Stuart 2026-08-23: "we are trying to maximize the
     // product and show it as close to scale that fits properly").
-    const WINDOW_MAX_M = 18 * 0.0254;
+    // ── THE ROD GETS THE WIDTH THE ROWS ARE NOT USING ────────────────────────────────────
+    // Stuart 2026-08-23: "the basic brackets and wood brackets render a good size, something
+    // about the brackets that use backplates is throwing off your formula … everything can be
+    // larger and the poles on the left can be longer."
+    //
+    // Those two families are the ONE-ROW sheets. A one-row page is bound by WIDTH — the elevation
+    // is the widest thing on it — so a tight window is what keeps it near 1:1. A four-row plate
+    // page is bound by HEIGHT: four plate-and-ring rows are about twenty inches of drawing on a
+    // ten-inch page, and no amount of narrowing helps. On those pages the width sat unused, which
+    // is exactly the empty middle of the sheet he is looking at.
+    //
+    // So the window is not a constant. It grows with the row count, because the more rows there
+    // are the more certain it is that height binds and the width is free. The longer rod costs
+    // nothing on the sheets that can afford it and is not taken on the sheets that cannot.
+    const rowN = Math.max(1, (familyPins || []).length);
+    const WINDOW_MAX_M = Math.min(44, 18 + (rowN - 1) * 9) * 0.0254;
     // The rod's centreline expressed in a given view's v axis — both the elevation and the
     // section contain the rod, so this is the one height they can agree on.
     const rodCentreV = (view) => { const b = viewBbox(pole, view); return (b.minV + b.maxV) / 2; };
