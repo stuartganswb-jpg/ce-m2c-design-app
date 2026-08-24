@@ -111,13 +111,54 @@ export function sheetRows({ choices, answers = {}, rodId = null }) {
 export function rodForArm(model, arm) {
     const rods = (model?.choices || []).filter(c => ROD_ROLES.includes(c.role) && !c.parked);
     if (!rods.length) return null;
-    const tier = U(arm?.tier || '');
-    // Same tier first — a FRONT arm draws the FRONT rod. Then an untagged rod, which serves both.
-    // Then the centre segment, which is the one a drawing shows: the ends are cut away by the view.
-    return rods.find(r => tier && U(r.tier) === tier)
-        || rods.find(r => !U(r.tier) && U(r.position) === 'CENTER')
+    // ⚠ A DOUBLE ARM'S OWN ROD IS THE FRONT ROD (Stuart 2026-08-23: "the front pole is always
+    // fixed and everything moves back from there"). The arm's `tier` field is blank on a double —
+    // its depths live in projTiers — so the old untagged-rod fallback handed H1-138D whichever rod
+    // happened to carry no tier tag: the acrylic BACK rod. The datum of the drawing, the axis
+    // inference and the projection figure all hang off this choice, so it is the front by rule.
+    const tier = U(arm?.tier || '') || (arm?.projTiers ? 'FRONT' : '');
+    if (tier) {
+        // Most specific first, each cut kept only if it leaves something (companionsFor's idiom).
+        const narrow = (pool, pred) => { const n = pool.filter(pred); return n.length ? n : pool; };
+        let pool = narrow(rods, r => U(r.tier) === tier);
+        // The front rod of a double is the one whose REAR counterpart is cut for this arm — same
+        // part, tier BACK, projTiers matching the arm's (the pairing visibleNodes already applies).
+        if (arm?.projTiers) {
+            const cut = JSON.stringify(arm.projTiers);
+            pool = narrow(pool, r => rods.some(b => b.partId && b.partId === r.partId
+                && U(b.tier) === 'BACK' && JSON.stringify(b.projTiers || null) === cut));
+        }
+        // Blank materials mean METAL (normalizeChoice) — the reference sheets draw the metal rod.
+        pool = narrow(pool, r => (Array.isArray(r.materials) ? r.materials : ['METAL']).includes('METAL'));
+        return pool[0];
+    }
+    // An untagged rod serves both tiers; the centre segment is the one a drawing shows.
+    return rods.find(r => !U(r.tier) && U(r.position) === 'CENTER')
         || rods.find(r => !U(r.tier))
         || rods[0];
+}
+
+/**
+ * THE BACK ROD THAT PAIRS WITH THIS ARM — the CPQ's own pairing, not a sweep.
+ *
+ * The double page used to carry EVERY rod whose tier differed from the arm's own (H1-138D drew an
+ * acrylic back rod, the metal front rod and a wood rod at once — 16 choices, 3 materials, both
+ * double families). The configurator never has that problem: a rear rod is offered only when its
+ * projTiers match the chosen bracket's (hardwareModel's cutKey dedupe, and visibleNodes' sameCut).
+ * Same rule here: tier BACK, cut for THIS arm, same rod family as the front where possible.
+ */
+export function backRodForArm(model, arm, front) {
+    const rods = (model?.choices || []).filter(c => ROD_ROLES.includes(c.role) && !c.parked
+        && c !== front && U(c.tier) !== U(front?.tier || ''));
+    if (!rods.length) return null;
+    const narrow = (pool, pred) => { const n = pool.filter(pred); return n.length ? n : pool; };
+    let pool = narrow(rods, c => U(c.tier) === 'BACK');   // a tiered pin beats an untagged one
+    if (arm?.projTiers) {
+        const cut = JSON.stringify(arm.projTiers);
+        pool = narrow(pool, c => JSON.stringify(c.projTiers || null) === cut);
+    }
+    if (front?.partId) pool = narrow(pool, c => c.partId === front.partId);
+    return pool[0] || null;
 }
 
 /**

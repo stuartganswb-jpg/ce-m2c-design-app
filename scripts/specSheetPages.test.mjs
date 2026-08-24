@@ -265,5 +265,42 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
         auditPages(smuggled, INL).some(v => /ordinary wall bracket/.test(v.why)));
 }
 
+// ── A DOUBLE PAGE DRAWS *THE* TWO RODS, PAIRED THE CPQ'S WAY ─────────────────────────────────
+// Prod shape (2026-08-23, read from H1-138): the FRONT rod carries no projTiers; each double
+// FAMILY has its own BACK rod cut — same part number, different pins — and the arm's tag names
+// which cut is its own ("FRONT:8.5, BACK:3.25"). One back rod (the acrylic) is pinned with NO
+// tier at all, which is exactly the pin that used to win rodForArm's untagged-rod fallback.
+// The bug this pins down: H1-138D drew an acrylic back rod + the metal front rod + a wood rod
+// (16 choices swept), and the profile printed the BASIC double's 6.5 figure on the DEC sheet.
+{
+    const D = [
+        { id: 'P-RF', partId: 'CE-INV-61954', name: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', tier: 'FRONT', nodes: ['rod-front'] },
+        { id: 'P-RB65', partId: 'CE-INV-61954', name: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'SHARED', tier: 'BACK', setup: 'DOUBLE', proj: 'FRONT:6.5, BACK:3.25', nodes: ['rod-back-65'] },
+        { id: 'P-RB85', partId: 'CE-INV-61954', name: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'SHARED', tier: 'BACK', setup: 'DOUBLE', proj: 'FRONT:8.5, BACK:3.25', nodes: ['rod-back-85'] },
+        // the trap: an untiered acrylic back rod ("serves both"), pinned setup DOUBLE like prod's P0
+        { id: 'P-RBA', partId: 'CE-INV-62618', name: 'H1-138AR', role: 'ROD', rodKind: 'SOLID', position: 'SHARED', setup: 'DOUBLE', noFinish: true, materials: 'CLEAR', nodes: ['rod-back-acr'] },
+        { id: 'P-RB85W', partId: 'CE-INV-62611', name: 'H1-138WR', role: 'ROD', rodKind: 'SOLID', position: 'SHARED', tier: 'BACK', setup: 'DOUBLE', proj: 'FRONT:8.5, BACK:3.25', materials: 'WOOD', nodes: ['rod-back-wood'] },
+        { id: 'P-DEC', partId: 'CE-INV-56737', name: 'H1-138D', role: 'BRACKET', position: 'LEFT', setup: 'DOUBLE', proj: 'FRONT:8.5, BACK:3.25', nodes: ['arm-dec'] },
+        { id: 'P-BAS', partId: 'CE-INV-56738', name: 'H1-138BD', role: 'BRACKET', position: 'LEFT', setup: 'DOUBLE', isBasic: true, proj: 'FRONT:6.5, BACK:3.25', nodes: ['arm-bas'] },
+        // prod pins carry trvSetup:"SINGLE" on single-world parts — without one the setup axis
+        // never branches, no DOUBLE leaf exists, and every assertion below tests nothing.
+        { id: 'P-ARM1', partId: 'CE-INV-56746', name: 'H1-138DS', role: 'BRACKET', position: 'LEFT', setup: 'SINGLE', proj: '3.625', nodes: ['arm-s'] },
+    ];
+    const dp = specPages({ choices: D });
+    const rodIds = (p) => (p?.rods || []).map(r => r.id);
+    const dec = dp.find(p => p.subject?.partId === 'CE-INV-56737');
+    const bas = dp.find(p => p.subject?.partId === 'CE-INV-56738');
+    const single = dp.find(p => p.subject?.partId === 'CE-INV-56746');
+    ok('the dec double gets a page', !!dec);
+    eq('its own rod is the FRONT rod, not whichever pin lacks a tier', dec?.rod?.id, 'P-RF');
+    eq('and its page draws exactly two rods: the front + the back cut for THIS arm',
+        rodIds(dec), ['P-RF', 'P-RB85']);
+    eq('the basic double pairs with ITS cut, not the dec\'s',
+        rodIds(bas), ['P-RF', 'P-RB65']);
+    eq('a single page still draws one rod', rodIds(single), ['P-RF']);
+    eq('and the double\'s projection figure is the FRONT tier\'s',
+        (() => { const t = dec?.subject?.projTiers; const tier = String(dec?.rod?.tier || '').toUpperCase(); return t?.[tier]; })(), 8.5);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

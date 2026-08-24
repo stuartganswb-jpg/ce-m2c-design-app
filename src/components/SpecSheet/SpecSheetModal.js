@@ -21,7 +21,7 @@ import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from '.
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
 import { specPages, auditPages } from './specSheetPages';
 import { choicesFromAssembly } from '../Shared/hardwareAdapter';
-import { resolve as resolveHardware } from '../Shared/hardwareModel';
+import { resolve as resolveHardware, parseProjTiers } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 
 // Wall-mount plate meshes are children of each backplate choice node in the merged GLB
@@ -298,10 +298,23 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // per side — so whichever SEGMENT the engine happened to name must not decide which way the
     // rod runs on the page (Stuart: "for some reason these brackets the pole went off to the left
     // rather than the right, keep them all the same"). Everything else takes the engine's node.
+    // ⚠ …BUT THE SIDE SWAP STAYS ON THE SAME ROD. H1-138R is the front rod AND the dec double's
+    // back rod — same part number, different pins, different tiers, different cuts — so preferring
+    // "any pin of this part on the drawn side" resolved the BACK rod choice to the FRONT rod's
+    // left segment, and the D page drew one pole twice. The pin pool is narrowed to the choice's
+    // own tier and cut first (kept only where it leaves something, so untagged collections are
+    // untouched); the side preference then picks among segments of the RIGHT rod.
     if (sideFirst) {
-      const onSide = same.find(p => posOf(p) === side)
-        || same.find(p => posOf(p) === 'CENTER')
-        || same.find(p => posOf(p) === 'SHARED');
+      const narrowPins = (pool, pred) => { const n = pool.filter(pred); return n.length ? n : pool; };
+      const ct = String(choice.tier || '').toUpperCase();
+      const cut = JSON.stringify(choice.projTiers || null);
+      let like = same;
+      if (ct) like = narrowPins(like, p => String(p.tier || '').toUpperCase() === ct);
+      like = narrowPins(like, p => JSON.stringify(
+        Object.keys(parseProjTiers(p.projInches || '')).length ? parseProjTiers(p.projInches || '') : null) === cut);
+      const onSide = like.find(p => posOf(p) === side)
+        || like.find(p => posOf(p) === 'CENTER')
+        || like.find(p => posOf(p) === 'SHARED');
       if (onSide) return { ...onSide, partName: onSide.partName || choice.name || choice.partId };
     }
     const named = new Set((choice.nodes || []).map(n => String(n).toLowerCase()));

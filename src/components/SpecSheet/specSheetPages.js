@@ -31,7 +31,7 @@
 // Pure — no React, no Firestore, no THREE. Tested by scripts/specSheetPages.test.mjs.
 
 import { resolve, slots, activeAxes, ridersFor, judge, AXES, ROD_ROLES } from '../Shared/hardwareModel.js';
-import { armsOf, platesForArm, rodForArm } from './specSheetRows.js';
+import { armsOf, platesForArm, rodForArm, backRodForArm } from './specSheetRows.js';
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -237,9 +237,15 @@ export function specPages({ choices, answers = {} }) {
             // wrong position") — H1-138's back-rod pins are not all tagged setup:DOUBLE, so the
             // gate does not exclude them and "admissible" is a weaker claim than "part of this
             // configuration". The arm's own rod always leads, so axis inference stays stable.
+            // ⚠ AND THE SECOND POLE IS *THE* SECOND POLE, NOT EVERY OTHER-TIER ROD IN THE FILE
+            // (Stuart 2026-08-23: "H1-138D is a mess … the poles are all in the wrong place").
+            // "Every admissible rod of the other tier" swept 15 choices onto the D page — acrylic,
+            // wood, and the BASIC double's 6.5" back rod alongside the DEC double's 8.5" — because
+            // material is not an axis and the two double families only differ by projTiers, which
+            // the leaf does not narrow. The configurator pairs the rear rod to the CHOSEN bracket
+            // by its cut; backRodForArm applies that same rule here.
             const rods = U(leaf.setup) === 'DOUBLE'
-                ? [rod, ...(offered.choices || []).filter(c => ROD_ROLES.includes(c.role) && !c.parked
-                    && c !== rod && U(c.tier) !== U(rod?.tier || ''))].filter(Boolean)
+                ? [rod, backRodForArm(offered, subject, rod)].filter(Boolean)
                 : (rod ? [rod] : []);
             const { plates, rings, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
             const fams = plates.length ? plateFamilies(plates) : [{ stem: '', plates: [] }];
