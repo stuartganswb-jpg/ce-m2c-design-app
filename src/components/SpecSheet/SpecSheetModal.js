@@ -96,8 +96,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // was where the column-scale defect lived, and a second layout that reads differently from the
   // master is a second thing to be wrong.
   const [paperMode, setPaperMode] = useState('tab11');
-  const layoutPaper = 'tabloid';
-  const outputPaper = paperMode === 'tab11' ? 'tabloid' : 'letter';
+  // 'tab11' = 11×17 landscape · 'tab11P' = 11×17 PORTRAIT (16.5" of drawing height, for the
+  // multi-row plate sheets that are bound by height) · 'letterReduced' = the master on letter.
+  const layoutPaper = paperMode === 'tab11P' ? 'tabloidP' : 'tabloid';
+  const outputPaper = paperMode === 'tab11' ? 'tabloid' : paperMode === 'tab11P' ? 'tabloidP' : 'letter';
   const reducedNote = paperMode === 'letterReduced'
     ? 'REDUCED PRINT OF THE 11×17 1:1 MASTER — NOT 1:1 AT THIS SIZE (dimensions are true; use 11×17 at 100% for actual scale)'
     : null;
@@ -350,6 +352,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // "FRONT: 6.5, BACK: 3.25" — and the plate's depth is measured from the pole THIS arm
         // holds, so it is that tier's figure. Reading the axis answer alone gives a double no
         // projection at all, which is why its plate never moved.
+        projTiers: (p.subject?.projTiers || p.rod?.projTiers || null),
         projIn: (() => {
           const direct = Number(p.answers?.proj);
           if (isFinite(direct) && direct > 0) return direct;
@@ -471,6 +474,18 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // picks can differ, which silently moves every plate placement that depends on it. The page
     // lists the arm's rod first for exactly this reason.
     const axisRod = poleNodes.length ? extractWorldMeshes(scene, [poleNodes[0]]) : [];
+    // ── THE RODS THEMSELVES ARE PLACED FROM THE TAGS (Stuart 2026-08-23) ──────────────────────
+    // "the poles are in wrong place and projection still not right."
+    //
+    // The plate was being placed from its projection tag while the RODS were left wherever the
+    // merged sales model parked them — so on H1-138D the printed steps came out wall→3-1/4 then
+    // 3-1/4→8-1/2, when the tags say FRONT 8.5 / BACK 3.25 and the second step should be 5-1/4.
+    // The plate obeyed the rule and the rods did not, so they could not agree.
+    //
+    // "the front pole is always fixed and everything moves back from there" applied properly: the
+    // FRONT rod is the datum and stays; the BACK rod moves to (front − (frontProj − backProj)).
+    // Everything on the sheet is then measured from one story instead of two.
+    const rodTiers = opts.projTiers || null;
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
@@ -513,6 +528,26 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         return (toWall > 0 ? c < b : c > b) ? g : best;
       }, groups[0]);
     })();
+
+    // Re-seat the BACK rod relative to the fixed FRONT rod, from the tags. Only when this page
+    // actually has two tiers and the tags give both figures — otherwise nothing moves.
+    let poleDrawn = pole;
+    if (frontPole.length && rodTiers && poleNodes.length > 1) {
+      const fp = Number(rodTiers.FRONT ?? rodTiers.front);
+      const bp = Number(rodTiers.BACK ?? rodTiers.back);
+      if (isFinite(fp) && isFinite(bp) && fp > bp) {
+        const ax = axes.projAxis;
+        const toWall = Math.sign(axes.wallCoord - groupBbox(frontPole).center[ax]) || 1;
+        const target = groupBbox(frontPole).center[ax] + toWall * ((fp - bp) / M2IN);
+        const front = new Set(frontPole.map(m => m.path + '/' + m.name));
+        const back = pole.filter(m => !front.has(m.path + '/' + m.name));
+        if (back.length) {
+          const d = [0, 0, 0];
+          d[ax] = target - groupBbox(back).center[ax];
+          poleDrawn = [...frontPole, ...translateMeshes(back, d)];
+        }
+      }
+    }
     // ── THE MOUNTING IS ON THE LEFT AND THE ROD RUNS RIGHT — ON EVERY SHEET ──────────────────
     // Stuart 2026-08-23: "again the rod goes off to the wrong side, please fix this for all."
     //
@@ -714,13 +749,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (!plateChoices.length) {
       const rowRings = parkRings(bracketHalfAlong);
       const ringMeshes = rowRings.flatMap(r => r.meshes);
-      const meshes = [...bracket, ...pole, ...ringMeshes];
-      const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...pole], views.front, 1600)), ringOverlay(ringMeshes));
+      const meshes = [...bracket, ...poleDrawn, ...ringMeshes];
+      const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes));
       // ⚠ NO RINGS IN THE PROFILE. Every ring is parked at its own station ALONG the rod, and the
       // profile looks down that axis — so they all land on the same spot and draw on top of each
       // other (Stuart 2026-08-23: "rendering over laps"). The reference's profile column is the
       // arm's section; each ring's own end view is on the bottom strip.
-      const profile = renderHiddenLine([...bracket, ...pole], views.profile, 900);
+      const profile = renderHiddenLine([...bracket, ...poleDrawn], views.profile, 900);
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF);
@@ -847,10 +882,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const plateHalfAlong = (cb0.max[axes.poleAxis] - cb0.min[axes.poleAxis]) / 2;
       const rowRings = parkRings(Math.max(plateHalfAlong, bracketHalfAlong));
       const ringMeshes = rowRings.flatMap(r => r.meshes);
-      const meshes = [...bracket, ...plateAll, ...pole, ...ringMeshes];
-      const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...pole], views.front, 1600)), ringOverlay(ringMeshes));
+      const meshes = [...bracket, ...plateAll, ...poleDrawn, ...ringMeshes];
+      const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes));
       // Rings excluded — see the note on the basic row: they stack in this view.
-      const profile = renderHiddenLine([...bracket, ...plateAll, ...pole], views.profile, 900);
+      const profile = renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.profile, 900);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
@@ -917,8 +952,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // One dim from the wall to the front rod describes neither pole on a double: what a fitter
       // needs is how far off the wall the REAR rod sits, and then the gap out to the front one.
       // So each rod centre is measured in turn, wall outwards.
-      const rodCentres = (poleNodes.length > 1 ? poleNodes : [])
-        .map(n => extractWorldMeshes(scene, [n]))
+      // ⚠ MEASURE THE RODS AS DRAWN. Re-seating the back rod from its tag and then dimensioning
+      // the model's original positions would print one story and draw another.
+      const frontKeys = new Set(frontPole.map(m => m.path + '/' + m.name));
+      const backDrawn = poleDrawn.filter(m => !frontKeys.has(m.path + '/' + m.name));
+      const rodCentres = (poleNodes.length > 1 && backDrawn.length
+        ? [frontPole, backDrawn] : [])
         .filter(g => g.length)
         .map(g => projPoint(views.profile, groupBbox(g).center)[0])
         .sort((x, y) => Math.abs(x - wallU) - Math.abs(y - wallU));
@@ -1050,7 +1089,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         if (page.kind === 'CATALOG') { setPageData(composeCatalogPage(page)); setStatus(''); return; }
         let built = rowCacheRef.current[page.key];
         if (!built) {
-          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn });
+          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn, projTiers: page.projTiers });
           rowCacheRef.current[page.key] = built;
         }
         // GEOMETRY vs CELL (playbook 4.2, warn-only): the measured pole Ø / projection must agree
@@ -1154,7 +1193,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (page.kind === 'WALLMOUNTS') return composeWallMountsPage().svg;
     if (page.kind === 'CATALOG') return composeCatalogPage(page).svg;
     let built = rowCacheRef.current[page.key];
-    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn }); rowCacheRef.current[page.key] = built; }
+    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn, projTiers: page.projTiers }); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(page.bracketPin.partName) }));
     const bSized = page.bracketPin.partName;
     const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
@@ -1236,6 +1275,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           </div>
           <div style={{ display: 'flex', gap: '4px' }} title="1:1 = actual size on 11×17 · Reduced = the same master printed on 8.5×11 (~64%; dimensions still read true)">
             <button style={paperMode === 'tab11' ? btnOn : btn} onClick={() => setPaperMode('tab11')}>1:1 · 11×17</button>
+            <button style={paperMode === 'tab11P' ? btnOn : btn} title="Same sheet turned — 16.5in of drawing height instead of 10.5in. The multi-row plate sheets are bound by height, so this is worth roughly double the drawn size on them." onClick={() => setPaperMode('tab11P')}>1:1 · 11×17 ↕</button>
             <button style={paperMode === 'letterReduced' ? btnOn : btn} onClick={() => setPaperMode('letterReduced')}>Reduced · 8.5×11</button>
 
           </div>

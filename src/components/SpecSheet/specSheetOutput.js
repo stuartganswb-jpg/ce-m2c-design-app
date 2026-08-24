@@ -5,8 +5,8 @@
 // (11×17). A tabloid-layout page printed on letter comes out reduced (~64%) automatically.
 import { PDFDocument } from 'pdf-lib';
 
-const PAPER_PT = { letter: [792, 612], tabloid: [1224, 792] }; // landscape, points
-const PAPER_CSS = { letter: 'letter landscape', tabloid: '11in 17in landscape' };
+const PAPER_PT = { letter: [792, 612], tabloid: [1224, 792], tabloidP: [792, 1224] }; // points
+const PAPER_CSS = { letter: 'letter landscape', tabloid: '11in 17in landscape', tabloidP: '11in 17in portrait' };
 
 export function openSpecSheetPrint(title, svgPages, paper = 'letter') {
   const w = window.open('', '_blank');

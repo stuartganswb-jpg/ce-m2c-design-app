@@ -12,6 +12,12 @@ import { fracSvg, fracSvgFromText } from './specSheetGeometry';
 export const PAPERS = {
   letter: { W: 1100, H: 850, printW: 10.5, printH: 8.0, label: '8.5×11' },
   tabloid: { W: 1700, H: 1100, printW: 16.5, printH: 10.5, label: '11×17' },
+  // ⚠ PORTRAIT EXISTS BECAUSE FOUR-ROW SHEETS ARE BOUND BY HEIGHT (Stuart 2026-08-23: "we either
+  // switch orientation away from landscape or fix the scaling"). Landscape 11×17 gives 10.5" of
+  // drawing height; four plate-and-ring rows want about twenty. Portrait gives 16.5" — the same
+  // sheet, turned — which is worth roughly a doubling of drawn size on exactly the pages that
+  // are short of it. It costs width, which those pages were not using.
+  tabloidP: { W: 1100, H: 1700, printW: 10.5, printH: 16.5, label: '11×17 portrait' },
 };
 // page units per world meter such that printed output (inside 0.25" margins) is actual size
 export const scaleForPaper = (paper) => (PAPERS[paper].W / PAPERS[paper].printW) / 0.0254;
