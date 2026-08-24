@@ -33,22 +33,24 @@ export const SCALE_1TO1 = scaleForPaper('letter');
 const MARGIN = 28;
 const SW = 0.6; // dimension line weight
 
-// ── TYPE SCALE (Stuart 2026-08-23) ───────────────────────────────────────────────────────────
-// "the prints will be printed on 8.5x11, i am ok having it scale 1:1 at 11 x17 as long as the page
-//  formats to print well at the reduced 8.5x11."
+// ── TYPE SCALE (Stuart 2026-08-23b) ──────────────────────────────────────────────────────────
+// "your scale on all the brackets with backplates is too aggressive in scaling down … there is
+//  plenty of room to not reduce the scale so much."
 //
-// That reduction is ~64%, and it is what decides the type size — not the 11×17 master. At 103 page
-// units per printed inch, the old 10–12 unit text came out at 5–7pt on the tabloid and 3–4.5pt
-// reduced, which is not readable. The hand-made sheets run ~11pt at 11×17 → ~7pt on letter, so the
-// scale below targets that and everything on the page is sized from it.
-const FS = { title: 17, sub: 13, code: 16, label: 13, dim: 14, note: 12, zone: 11 };
+// He is pointing at TEXT. Letter is the master now (no 64% reduction on the way to the binder),
+// and the type was still sized for one — so every fixed-size annotation was ~1.5× what the page
+// needs, and text is most of a row's fixed overhead, charged four times over. The hand-made
+// sheets run ~7pt on letter; at ~104 page units per printed inch that is ~10 units, and the
+// whole annotation system below is sized from it. Every unit shaved off the fixed overhead goes
+// straight back into drawn geometry on the height-bound multi-row sheets.
+const FS = { title: 13, sub: 10, code: 11, label: 10, dim: 10, note: 9, zone: 9 };
 // Breathing room around a drawing, in page units, so dimension lines and their labels have
 // somewhere to go. ~1/4" printed on either side.
 // ⚠ PADDING IS CHARGED PER ROW, SO IT IS SPENT FOUR TIMES. At 26 units a side this was ~1/2"
 // top and bottom of every row — over four rows, more than an inch of a ten-inch page before a
 // single part is drawn. Trimmed hard; the dimensions carry their own offsets anyway.
-const PAD = { x: 26, y: 10 };
-const GUTTER = 34;      // between columns
+const PAD = { x: 16, y: 10 };
+const GUTTER = 24;      // between columns
 
 export function dimH(x0, x1, y, inches) {
   let s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="black" stroke-width="${SW}"/>`;
@@ -63,13 +65,13 @@ export function dimV(x, y0, y1, inches, dia = false, side = 1, labelDy = 0) {
   let s = `<line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y0}" x2="${x + 4}" y2="${y0}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y1}" x2="${x + 4}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg(side < 0 ? x - 34 : x + 7, (y0 + y1) / 2 + 4 + labelDy, inches, 11, dia);
+  s += fracSvg(side < 0 ? x - 30 : x + 6, (y0 + y1) / 2 + 4 + labelDy, inches, 10, dia);
   return s;
 }
 // dir +1: leader runs up-right, text right of it (default); -1: up-left, text to the left.
 export function leaderDia(x, y, inches, dir = 1) {
   let s = `<line x1="${x}" y1="${y}" x2="${x + 24 * dir}" y2="${y - 16}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg(dir < 0 ? x - 24 - 46 : x + 26, y - 18, inches, 11, true);
+  s += fracSvg(dir < 0 ? x - 24 - 40 : x + 26, y - 18, inches, 10, true);
   return s;
 }
 // Aligned manual dimension between two arbitrary page points, label = user text.
@@ -127,8 +129,8 @@ function pageFrame(P, title, subtitle) {
     svg += `<text x="${MARGIN - 16}" y="${y}" font-size="${FS.zone}" text-anchor="middle">${z}</text>`;
     svg += `<text x="${P.W - MARGIN + 16}" y="${y}" font-size="${FS.zone}" text-anchor="middle">${z}</text>`;
   });
-  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 36}" font-size="${FS.title}">${title || ''}</text>`;
-  if (subtitle) svg += `<text x="${MARGIN + 40}" y="${MARGIN + 56}" font-size="${FS.sub}" fill="#444">${subtitle}</text>`;
+  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 28}" font-size="${FS.title}">${title || ''}</text>`;
+  if (subtitle) svg += `<text x="${MARGIN + 40}" y="${MARGIN + 42}" font-size="${FS.sub}" fill="#444">${subtitle}</text>`;
   return svg;
 }
 
@@ -176,11 +178,11 @@ const cellAboveBelow = (view, scale, datumV, dims) => {
   for (const dm of dims || []) {
     if (dm.t === 'h') {
       // line sits (zb.maxV - v)·scale + off below the top; label ~18 above the line
-      const room = 18 - ((zb.maxV - dm.v) * scale + (dm.off || 0));
+      const room = 14 - ((zb.maxV - dm.v) * scale + (dm.off || 0));
       if (room > extraAbove) extraAbove = room;
     } else if (dm.t === 'dia') {
       // leader rises 16 from the point, label above that
-      const room = 30 - (zb.maxV - dm.v) * scale;
+      const room = 24 - (zb.maxV - dm.v) * scale;
       if (room > extraAbove) extraAbove = room;
     }
   }
@@ -231,7 +233,7 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   const viewMaps = [];
 
   // Space the drawings may occupy, once the title block, the notes and the bottom strip are out.
-  const bodyTop = MARGIN + 78;
+  const bodyTop = MARGIN + 60;
   const notesH = (noteLines.length + 1) * (FS.note + 4) + 18;
   // The bottom ring strip is gone (Stuart 2026-08-23): each ring is named where it hangs, so
   // the whole body height belongs to the rows.

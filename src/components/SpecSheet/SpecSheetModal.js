@@ -29,17 +29,17 @@ import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 // H1 trios plus the generic "WP<digit>" token so new collections work without edits here.
 // Room a dropped caption needs under the artwork, in page units — the label's own height plus a
 // little air. Kept beside the offsets that place them so the two cannot drift apart.
-const FS_LABEL_ROOM = 18;
+const FS_LABEL_ROOM = 14;
 // Ring/plate codes hang this far below the artwork — Stuart 2026-08-23: "the ring id's can be
 // lower with a pencil line from the id to the [ring] as they overlap". The codes are TEXT, which
 // does not shrink with the page scale, so on any reduced sheet neighbouring ids collide whatever
 // the geometric spread is. Alternate ids drop one line further (their leaders already bridge the
 // gap), which is his own fix, re-applied now that each id is centred under its own ring.
-const RING_LABEL_DROP = 34;
+const RING_LABEL_DROP = 26;
 // Three levels, not two (Stuart 2026-08-23b: "please stagger further as the text is
 // overlapping") — with two, alternate ids sat one thin line apart and long codes still touched.
 // On three levels a code's same-level neighbour is three ring pitches away.
-const RING_LABEL_STAGGER = 20;
+const RING_LABEL_STAGGER = 14;
 const RING_LABEL_LEVELS = 3;
 const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP|WP\d)/i;
 // Full wall-plate code inside a mesh path — family-agnostic (was hardcoded H1-).
@@ -713,7 +713,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // page is width-bound — every inch of ring spread comes straight off the drawn size that
         // is already at 96-100%. A multi-row page is height-bound with its width sitting unused
         // (same split as WINDOW_MAX_M below). So the rings breathe where the width is free.
-        const gap = plateChoices.length > 1 ? 0.025 : 0.013;   // ~1" spread · ~1/2" tight
+        const gap = plateChoices.length > 1 ? 0.028 : 0.019;   // ~1-1/4" spread · ~3/4" tight — room for each drop dim beside its ring (Stuart 2026-08-23b: 'the ring measurement text is being covered up by the rings themselves')
         edge = target + sign * (half + gap);
       }
       return out;
@@ -819,7 +819,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // Extra visible rod so the rings clearly hang on it — longer on the open end, which is
       // what makes the elevation read as a rod rather than a stub ("we can make the rod on the
       // left side longer for all").
-      lo -= 0.020; hi += 0.035;
+      lo -= 0.012; hi += 0.022;
       if (hi - lo > WINDOW_MAX_M) {
         const m = (mountBox && isFinite(mountBox.minU)) ? mountBox : null;
         const mountC = m ? (m.minU + m.maxU) / 2 : lo;
@@ -852,7 +852,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       // one drop dim per ring option, and its pattern id under it
       ringBoxes.forEach((rb, i) => {
-        dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN });
+        dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 20, in: (poleF.maxV - rb.minV) * M2IN });
         const code = rowRings[i]?.partName;
         if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, text: code });
       });
@@ -1024,7 +1024,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // option on the rod — that measurement is the thing that differs between them. Label
         // drops ~1/4" printed so the text clears the underside of the pole.
         ringBoxes.forEach((rb, i) => {
-          dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN });
+          dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 20, in: (poleF.maxV - rb.minV) * M2IN });
           // ⚠ THE RING NAMES ITSELF WHERE IT HANGS (Stuart 2026-08-23: "lose the rings along the
           // bottom just keep them along the rod on the left and add their pattern ids below each
           // one"). The bottom strip was a second drawing of parts already on the page, and it cost
@@ -1074,7 +1074,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       if (rodCentres.length > 1) {
         let from = wallU;
         rodCentres.forEach((c, i) => {
-          dims.profile.push({ t: 'h', u0: Math.min(from, c), u1: Math.max(from, c), v: profTopV, off: -8 - i * 20, in: Math.abs(c - from) * M2IN });
+          dims.profile.push({ t: 'h', u0: Math.min(from, c), u1: Math.max(from, c), v: profTopV, off: -8 - i * 16, in: Math.abs(c - from) * M2IN });
           from = c;
         });
       } else {
