@@ -160,13 +160,30 @@ const CELL_KEYS = ['detail', 'front', 'profile'];
 // is a row you cannot read across. Both views contain the rod, so its centreline is the datum:
 // every cell in a row places that world height on the same page line, exactly as the reference
 // sheets do.
-const cellAboveBelow = (view, scale, datumV) => {
+const cellAboveBelow = (view, scale, datumV, dims) => {
   if (!view || !view.zb || !isFinite(view.zb.maxU)) return { w: 0, above: 0, below: 0 };
   const zb = view.zb;
   const d = (datumV != null && isFinite(datumV)) ? datumV : (zb.minV + zb.maxV) / 2;
+  // ⚠ DIMENSION LINES TAKE ROOM THE GEOMETRY BOX CANNOT SEE. A double's two-step projection dims
+  // stack at -8 and -28 above the section, plus a label — ~46 page units of TEXT that does not
+  // shrink with the scale. Measured only by mesh bounds, a tight page let one row's dims walk
+  // straight into the caption of the row above (H1-138D, first render of the paired-rod sheet).
+  // Same rule as padBelow: the row declares the room its annotations need.
+  let extraAbove = 0;
+  for (const dm of dims || []) {
+    if (dm.t === 'h') {
+      // line sits (zb.maxV - v)·scale + off below the top; label ~18 above the line
+      const room = 18 - ((zb.maxV - dm.v) * scale + (dm.off || 0));
+      if (room > extraAbove) extraAbove = room;
+    } else if (dm.t === 'dia') {
+      // leader rises 16 from the point, label above that
+      const room = 30 - (zb.maxV - dm.v) * scale;
+      if (room > extraAbove) extraAbove = room;
+    }
+  }
   return {
     w: (zb.maxU - zb.minU) * scale + PAD.x * 2,
-    above: (zb.maxV - d) * scale + PAD.y,
+    above: (zb.maxV - d) * scale + PAD.y + extraAbove,
     below: (d - zb.minV) * scale + PAD.y,
   };
 };
@@ -189,7 +206,7 @@ function measureGrid(rows, scale) {
     };
     let a = 0, b = 0;
     CELL_KEYS.forEach(k => {
-      const m = cellAboveBelow(r[k], scale, r.datum?.[k]);
+      const m = cellAboveBelow(r[k], scale, r.datum?.[k], r.dims?.[k]);
       if (m.w > colW[k]) colW[k] = m.w;
       if (m.above > a) a = m.above;
       const cellBelow = m.below + (m.w ? (extra[k] || 0) : 0);

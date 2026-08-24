@@ -30,9 +30,13 @@ import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 // Room a dropped caption needs under the artwork, in page units — the label's own height plus a
 // little air. Kept beside the offsets that place them so the two cannot drift apart.
 const FS_LABEL_ROOM = 18;
-// Ring/plate codes hang this far below the artwork, on one line — Stuart 2026-08-23: "make it one
-// longer text line rather than two". Two staggered lines cost vertical room the fourth row needed.
+// Ring/plate codes hang this far below the artwork — Stuart 2026-08-23: "the ring id's can be
+// lower with a pencil line from the id to the [ring] as they overlap". The codes are TEXT, which
+// does not shrink with the page scale, so on any reduced sheet neighbouring ids collide whatever
+// the geometric spread is. Alternate ids drop one line further (their leaders already bridge the
+// gap), which is his own fix, re-applied now that each id is centred under its own ring.
 const RING_LABEL_DROP = 34;
+const RING_LABEL_STAGGER = 16;
 const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP|WP\d)/i;
 // Full wall-plate code inside a mesh path — family-agnostic (was hardcoded H1-).
 const WALL_CODE_RX = /[A-Z]+\d*-[A-Z0-9]*WP\d+(\s*\/?\s*P)?/i;
@@ -786,7 +790,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       ringBoxes.forEach((rb, i) => {
         dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN });
         const code = rowRings[i]?.partName;
-        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP, lead: true, text: code });
+        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % 2) * RING_LABEL_STAGGER, lead: true, text: code });
       });
       if (opts.isIM) {
         // inside mount: barrel length + Ø; end view gets plate Ø + ring Ø leaders.
@@ -821,7 +825,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // The rod centreline in each view — the row's shared datum, so the section reads across
       // from the elevation instead of each cell floating on its own extents.
       const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
-      const padBelow = ringBoxes.length ? RING_LABEL_DROP + FS_LABEL_ROOM : 0;
+      const padBelow = ringBoxes.length ? RING_LABEL_DROP + RING_LABEL_STAGGER + FS_LABEL_ROOM : 0;
       return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, padBelow, hasAsMounted: false }], axes, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
     }
     let measured = null; // first row's pole Ø + projection, for the geometry-vs-cell check
@@ -944,7 +948,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           // longer than the gap between rings, so they are dropped clear of the eyelets on two
           // alternating lines, each on its own leader back to the ring it names.
           const code = rowRings[i]?.partName;
-          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP, lead: true, text: code });
+          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % 2) * RING_LABEL_STAGGER, lead: true, text: code });
         });
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
@@ -1014,7 +1018,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // from mesh bounding boxes, so text dropped under a ring is invisible to the layout and the
       // next row lands on top of it (Stuart 2026-08-23: "the lower row is overlapping the text").
       // The row declares the room its captions need.
-      const padBelow = ringBoxes.length ? RING_LABEL_DROP + FS_LABEL_ROOM : 0;
+      const padBelow = ringBoxes.length ? RING_LABEL_DROP + RING_LABEL_STAGGER + FS_LABEL_ROOM : 0;
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, padBelow, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, measured };
