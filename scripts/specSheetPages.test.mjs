@@ -40,10 +40,15 @@ const CHOICES = [
 
     { id: 'RING-BR', partId: 'H1-138BR', role: 'RING', nodes: ['rb'] },
     { id: 'RING-BPR', partId: 'H1-138BPR', role: 'RING', nodes: ['rp'] },
+    // Explicitly both worlds — the prod condition (untagged rings serve both), so the
+    // carriers-only rule on traverse pages below can actually fail.
+    { id: 'RING-U', partId: 'HT-UNIV', role: 'RING', fits: ['SOLID', 'TRAVERSE'], nodes: ['ru'] },
     { id: 'CARRIER', partId: 'H1-2TRVC', role: 'CARRIER', rodKind: 'TRAVERSE', nodes: ['car'] },
 
     { id: 'RTN-FR', partId: 'H1-138RBP', role: 'RETURN', position: 'LEFT', proj: '3.625', usesReturnPlates: true, nodes: ['fr'] },
     { id: 'FIN', partId: 'HNFSBLR138', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] },
+    { id: 'FIN-W', partId: 'H1-138WGF', role: 'FINIAL', position: 'LEFT', materials: 'WOOD', nodes: ['finw'] },
+    { id: 'FIN-A', partId: 'H1-138AGF', role: 'FINIAL', position: 'LEFT', noFinish: true, nodes: ['fina'] },
     // Traverse-only, so the two worlds offer DIFFERENT catalog sets — which is exactly what used
     // to print a second catalog page. The union test below cannot fail without this.
     { id: 'FIN-TRV', partId: 'H1-2TRVFIN', role: 'FINIAL', position: 'LEFT', fits: ['TRAVERSE'], nodes: ['fint'] },
@@ -115,9 +120,11 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
 // ── RINGS ARE THE RINGS THAT FIT THAT ROD ────────────────────────────────────────────────────
 {
     eq('a solid page carries every ring that fits its rod',
-        ringIds(of('H1-138DS', 3.625, 'H1-138BP')), ['H1-138BPR', 'H1-138BR']);
+        ringIds(of('H1-138DS', 3.625, 'H1-138BP')), ['H1-138BPR', 'H1-138BR', 'HT-UNIV']);
     const trv = of('H1-2TRVBKT');
     ok('the traverse arm gets a page', !!trv);
+    // Stuart 2026-08-23b: "on the traverse poles remove the rings, only show the carriers" —
+    // even a ring tagged for both worlds stays off a track's page; carriers do that job there.
     eq('a track carries no rings — carriers do that job', ringIds(trv), []);
     ok('and the carriers ride with it', (trv.riders || []).some(r => r.partId === 'H1-2TRVC'));
     ok('the traverse page knows it is one', trv.isTraverse === true);
@@ -140,14 +147,17 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
 // ── THE CATALOG COMES LAST, AND ONCE ─────────────────────────────────────────────────────────
 {
     const cats = pages.filter(p => p.kind === 'CATALOG');
-    // ONE catalog for the whole set (Stuart 2026-08-23: "once is enough for group") — the solid
-    // and traverse worlds offer different finials, which used to print one catalog per leaf.
-    eq('there is exactly one catalog page', cats.length, 1);
-    ok('it carries the finials', cats[0].finials.some(f => f.partId === 'HNFSBLR138'));
+    // ONE catalog per MATERIAL (Stuart 2026-08-23b: "put metal on one page, wood on one page and
+    // acrylic all on one page") — still unioned across every leaf, never one per leaf.
+    eq('the catalog splits by material, one page each', cats.map(c => c.label), ['Metal', 'Wood', 'Acrylic']);
+    ok('metal carries the finials', cats[0].finials.some(f => f.partId === 'HNFSBLR138'));
     ok('…from every world unioned', cats[0].finials.some(f => f.partId === 'H1-2TRVFIN'));
     ok('and the accessories', cats[0].accessories.some(a => a.partId === 'H1-HOLDBACK'));
+    ok('wood on its own page, off the metal one',
+        cats[1].finials.some(f => f.partId === 'H1-138WGF') && !cats[0].finials.some(f => f.partId === 'H1-138WGF'));
+    ok('acrylic (no-finish) on its own page', cats[2].finials.some(f => f.partId === 'H1-138AGF'));
     const model = resolve({ choices: CHOICES, answers: { rodKind: 'SOLID', proj: 3.625 } });
-    eq('catalogOf reads them off the model', catalogOf(model).finials.length, 1);
+    eq('catalogOf reads them off the model', catalogOf(model).finials.length, 3);
 }
 
 // ── AND NOTHING IS INVENTED WHERE THERE IS NOTHING ───────────────────────────────────────────

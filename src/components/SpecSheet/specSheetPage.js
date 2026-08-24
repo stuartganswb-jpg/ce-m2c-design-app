@@ -359,32 +359,77 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
 
 // Generic 1:1 items-grid page — used for the wall-mounts reference and the finials catalog.
 // items: [{ code, view, wIn, hIn, note? }] — each drawn face-on at actual size with W/H dims.
-export function buildItemsGridPage({ title, subtitle, items = [], noteLines = [], paper = 'letter', footerNote, perRowOverride }) {
-  const P = PAPERS[paper];
-  const oneToOne = scaleForPaper(paper);
+// ── THE GRID IS PACKED BY WHAT THE PARTS MEASURE, NOT BY COUNT (Stuart 2026-08-23b) ──────────
+// "finials are all overlapping." The old grid divided the page into count-many equal cells and
+// drew every item at 1:1 regardless — a six-inch finial in a two-inch cell lands on its
+// neighbours. Items now flow into rows by their true 1:1 width (plus the room their dims take),
+// and the page shrinks uniformly — saying so in the footer, same honesty as the sheets — only
+// when even that does not fit.
+export function buildItemsGridPage({ title, subtitle, items = [], noteLines = [], paper = 'letterP', footerNote }) {
+  const P = PAPERS[paper] || PAPERS.letterP;
+  const oneToOne = scaleForPaper(PAPERS[paper] ? paper : 'letterP');
+  const bodyTop = MARGIN + 56;
+  const bodyW = P.W - 2 * MARGIN - 80;
+  const bodyH = P.H - MARGIN - bodyTop - (noteLines.length + 1) * 14 - 8;
+  // fixed annotation room per item: code above + W dim above (left/right ticks), H dim right,
+  // optional note below — text, so it does not scale.
+  const PADW = 44, PADH = 58;
+  const measure = (scale) => {
+    const rows = [];
+    let cur = [], curW = 0;
+    for (const it of items) {
+      const zb = it.view.zb;
+      const w = (zb.maxU - zb.minU) * scale + PADW;
+      const h = (zb.maxV - zb.minV) * scale + PADH + (it.note ? 12 : 0);
+      if (cur.length && curW + w > bodyW) { rows.push(cur); cur = []; curW = 0; }
+      cur.push({ it, w, h }); curW += w;
+    }
+    if (cur.length) rows.push(cur);
+    const rowH = rows.map(r => Math.max(...r.map(c => c.h)));
+    const widest = Math.max(...rows.flat().map(c => c.w), 1);
+    return { rows, rowH, totalH: rowH.reduce((a, b) => a + b, 0), widest };
+  };
+  let scale = oneToOne;
+  let grid = items.length ? measure(scale) : { rows: [], rowH: [], totalH: 0, widest: 0 };
+  for (let i = 0; i < 6 && items.length; i++) {
+    if (grid.totalH <= bodyH && grid.widest <= bodyW) break;
+    const k = Math.min(bodyH / (grid.totalH || 1), bodyW / (grid.widest || 1), 1);
+    if (!isFinite(k) || k >= 0.999) break;
+    scale *= k;
+    grid = measure(scale);
+  }
+  const toScale = scale / oneToOne >= 0.999;
   let svg = '';
   svg += `<rect x="${MARGIN}" y="${MARGIN}" width="${P.W - 2 * MARGIN}" height="${P.H - 2 * MARGIN}" fill="none" stroke="black" stroke-width="1.5"/>`;
-  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 34}" font-size="13">${title || ''}</text>`;
-  if (subtitle) svg += `<text x="${MARGIN + 40}" y="${MARGIN + 50}" font-size="11" fill="#444">${subtitle}</text>`;
-  const perRow = perRowOverride || (paper === 'tabloid' ? 4 : 3);
-  const cellW = (P.W - 2 * MARGIN - 80) / perRow;
-  const cellH = (P.H - 2 * MARGIN - 110) / Math.max(1, Math.ceil(items.length / perRow));
-  items.forEach((it, i) => {
-    const cx = MARGIN + 40 + cellW * (i % perRow) + cellW / 2;
-    const cy = MARGIN + 100 + cellH * Math.floor(i / perRow) + cellH / 2;
-    const { mu, mv, mapping } = place(it.view.zb, cx, cy, oneToOne);
-    svg += segPaths(it.view.vis, mu, mv);
-    svg += `<text x="${cx}" y="${mapping.rect[1] - 30}" font-size="11" text-anchor="middle">${it.code}</text>`;
-    const [bx, by, bw, bh] = mapping.rect;
-    svg += dimH(bx, bx + bw, by - 12, it.wIn);
-    svg += dimV(bx + bw + 12, by, by + bh, it.hIn);
-    if (it.note) svg += `<text x="${cx}" y="${by + bh + 22}" font-size="9" text-anchor="middle">${it.note}</text>`;
+  svg += `<text x="${MARGIN + 40}" y="${MARGIN + 26}" font-size="${FS.title}">${title || ''}</text>`;
+  if (subtitle) svg += `<text x="${MARGIN + 40}" y="${MARGIN + 40}" font-size="${FS.sub}" fill="#444">${subtitle}</text>`;
+  const lead = Math.max(0, bodyH - grid.totalH) / (grid.rows.length + 1);
+  let y = bodyTop + lead;
+  grid.rows.forEach((row, ri) => {
+    const rowW = row.reduce((a, c) => a + c.w, 0);
+    let x = MARGIN + 40 + Math.max(0, bodyW - rowW) / 2;
+    const rh = grid.rowH[ri];
+    for (const cell of row) {
+      const cx = x + cell.w / 2, cy = y + rh / 2;
+      const { mu, mv, mapping } = place(cell.it.view.zb, cx, cy, scale);
+      svg += segPaths(cell.it.view.vis, mu, mv);
+      const [bx, by, bw, bh] = mapping.rect;
+      svg += `<text x="${cx}" y="${by - 24}" font-size="${FS.label}" text-anchor="middle">${cell.it.code}</text>`;
+      svg += dimH(bx, bx + bw, by - 10, cell.it.wIn);
+      svg += dimV(bx + bw + 10, by, by + bh, cell.it.hIn);
+      if (cell.it.note) svg += `<text x="${cx}" y="${by + bh + 16}" font-size="${FS.note}" text-anchor="middle">${cell.it.note}</text>`;
+      x += cell.w;
+    }
+    y += rh;
   });
   noteLines.forEach((line, i) => {
-    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 12 - (noteLines.length - i) * 14}" font-size="10">${line}</text>`;
+    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 12 - (noteLines.length - i) * 14}" font-size="${FS.note}">${line}</text>`;
   });
-  svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="10" text-anchor="end">${footerNote || `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`}</text>`;
-  return { svg: wrapSvg(P, svg), viewMaps: [], paper };
+  const footer = footerNote || (toScale
+    ? `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`
+    : `REDUCED ${Math.round((scale / oneToOne) * 100)}% TO FIT ${P.label} — NOT TO SCALE, READ THE DIMENSIONS`);
+  svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="${FS.note}" text-anchor="end">${footer}</text>`;
+  return { svg: wrapSvg(P, svg), viewMaps: [], paper: PAPERS[paper] ? paper : 'letterP' };
 }
 
 // Dedicated wall-mounts reference page: every unique style at TRUE 1:1, face-on.

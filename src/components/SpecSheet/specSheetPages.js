@@ -253,7 +253,15 @@ export function specPages({ choices, answers = {} }) {
             const rods = U(leaf.setup) === 'DOUBLE'
                 ? [rod, backRodForArm(offered, subject, rod)].filter(Boolean)
                 : (rod ? [rod] : []);
-            const { plates, rings, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
+            const { plates, rings: rings0, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
+            const isTrav = !!rod && ROD_ROLES.includes(rod.role) && (U(rod.rodKind) === 'TRAVERSE' || rod.role === 'TRACK');
+            // ── A TRAVERSE PAGE DRAWS CARRIERS, NEVER RINGS (Stuart 2026-08-23b) ────────────
+            // "on the traverse poles remove the rings, only show the carriers." The untagged
+            // rings serve both worlds, so the slot still offers them here — but the audit's own
+            // unconditional rule already says a track carries its drapery on carriers, and the
+            // builder now agrees. The H1-2TRV fascia (traverse + stationary front rod) keeps its
+            // rings when that collection arrives: they hang on the SOLID front rod's page.
+            const rings = isTrav ? [] : rings0;
             const fams0 = plates.length ? plateFamilies(plates) : [{ stem: '', plates: [] }];
             // ── A DEEP DOUBLE PRINTS TWO ROWS PER SHEET (Stuart 2026-08-23) ─────────────────
             // "can we start with the deep doubles 2 per page and see how that looks."
@@ -285,7 +293,7 @@ export function specPages({ choices, answers = {} }) {
                 kind, answers: leaf, label, subject, rod, rods, plates: fam.plates, plateFamily: fam.stem,
                 part: fam.part || '',
                 rings, suppressedBy, reason,
-                isTraverse: !!rod && ROD_ROLES.includes(rod.role) && (U(rod.rodKind) === 'TRAVERSE' || rod.role === 'TRACK'),
+                isTraverse: isTrav,
                 // ⚠ RIDERS ARE ONLY THERE ONCE THE ROD IS. `ridersFor` is deliberately additive —
                 // nothing chosen, nothing rides — so asking with no selection returns nothing and a
                 // traverse page would draw an empty track. The page's own rod is what carries them.
@@ -311,11 +319,25 @@ export function specPages({ choices, answers = {} }) {
         cat.finials.forEach(f => { const k = U(f.partId || f.id); if (k && !catFinials.has(k)) catFinials.set(k, f); });
         cat.accessories.forEach(a => { const k = U(a.partId || a.id); if (k && !catAccessories.has(k)) catAccessories.set(k, a); });
     }
-    if (catFinials.size || catAccessories.size) {
+    // ── ONE CATALOG PAGE PER MATERIAL (Stuart 2026-08-23b) ───────────────────────────────────
+    // "finials are all overlapping, put metal on one page, wood on one page and acrylic all on
+    //  one page, probably fit that way at 1:1." The bucket is the TAG: no-finish/clear parts are
+    // the acrylic page, WOOD-tagged the wood page, everything else metal (blank means METAL, the
+    // engine's own rule). An untagged wood finial lands on the metal page — the fix is its tag.
+    const bucketOf = (c) => {
+        const mats = (Array.isArray(c.materials) ? c.materials : [String(c.materials || '')]).map(U);
+        if (c.noFinish || mats.some(m => m.includes('CLEAR') || m.includes('ACRYL'))) return 'Acrylic';
+        if (mats.some(m => m.includes('WOOD'))) return 'Wood';
+        return 'Metal';
+    };
+    for (const mat of ['Metal', 'Wood', 'Acrylic']) {
+        const finials = [...catFinials.values()].filter(c => bucketOf(c) === mat);
+        const accessories = [...catAccessories.values()].filter(c => bucketOf(c) === mat);
+        if (!finials.length && !accessories.length) continue;
         pages.push({
-            key: 'CATALOG__ALL', kind: 'CATALOG', answers: {}, label: '',
+            key: `CATALOG__${mat.toUpperCase()}`, kind: 'CATALOG', answers: {}, label: mat,
             subject: null, rod: null, plates: [], rings: [],
-            finials: [...catFinials.values()], accessories: [...catAccessories.values()],
+            finials, accessories,
             suppressedBy: null, reason: '', isTraverse: false, riders: [],
         });
     }
