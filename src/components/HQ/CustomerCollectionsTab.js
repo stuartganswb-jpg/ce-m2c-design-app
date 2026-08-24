@@ -438,6 +438,51 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
         setSaving(false);
     };
 
+    // ---- REFRESH EVERY ROW FROM THE PRICING BOX (Stuart 2026-08-22) --------------------------
+    // Moved here from the Master Library item editor, where a CATALOGUE-WIDE write sat inside one
+    // item's detail panel with no customer picked, no collection scope and nothing shown about what
+    // it was about to touch. It belongs where the pricing work happens.
+    //
+    // Two differences from the Library version, both of which make it safer and more correct:
+    //   · it reads the tier the way this page reads it — PLATED for a /EP //P25 doc, painted
+    //     otherwise — where the old one stamped the painted price onto every variant;
+    //   · it writes in batches keyed to the CUSTOMER YOU PICKED, rather than one document at a
+    //     time against a name match.
+    // Unlike Adopt, this REPLACES rows that already exist: it is the "the sheet changed, make the
+    // rows say so" button, which is exactly why it must announce how many it will overwrite.
+    const refreshAllFromBox = async () => {
+        if (!custId || !legacySrc) return;
+        const findByCode = (c) => byCode.get(upper(c)) || null;
+        const targets = [];
+        inventory.forEach(p => {
+            const s2 = legacySrc.read(p, findByCode, outsourceFinishes);
+            if (s2 && (s2.clientSku || s2.price !== '' || s2.clientSalesPrice !== '' || s2.clientRetailPrice !== '')) targets.push({ p, s: s2 });
+        });
+        if (!targets.length) return alert(`No items in this brand carry a ${legacySrc.label}.`);
+        const overwrite = targets.filter(({ p }) => !!rowFor(p)).length;
+        if (!window.confirm(`Refresh ${customer?.name || custId}'s Client Pricing from the ${legacySrc.label} on ${targets.length} item(s)?\n\n• Their SKU = the pattern #\n• Their Net = CE → Fabricut · Sales = wholesale · Retail = MSRP\n• A /EP //P25 item takes the PLATED tier, everything else the painted one\n\n⚠ ${overwrite} item(s) already have a ${customer?.name || 'customer'} row and will be REPLACED. Other customers' rows are untouched.\n\nThis is brand-wide — it is not limited to ${coll || 'the chosen collection'}.`)) return;
+        setSaving(true);
+        try {
+            let batch = writeBatch(db), n = 0, written = 0;
+            for (const { p, s: sug } of targets) {
+                const others = (p.clientPricing || []).filter(r => !custKeys.has(upper(r?.customerId)));
+                batch.update(doc(db, 'Approved_Designs', p.id), {
+                    clientPricing: [...others, {
+                        customerId: custId, customerName: customer?.name || '',
+                        clientSku: sug.clientSku || '', price: sug.price, clientSalesPrice: sug.clientSalesPrice, clientRetailPrice: sug.clientRetailPrice ?? '',
+                        source: 'REFRESHED_' + (legacySrc.label || '').toUpperCase().replace(/[^A-Z]+/g, '_'),
+                        updatedAt: Date.now(), updatedBy: String(currentUser || ''),
+                    }],
+                });
+                written++;
+                if (++n >= 400) { await batch.commit(); batch = writeBatch(db); n = 0; }
+            }
+            if (n) await batch.commit();
+            alert(`✅ ${written} item(s) refreshed from the ${legacySrc.label} for ${customer?.name || custId}.`);
+        } catch (e) { console.error(e); alert('Refresh failed:\n\n' + (e.message || e)); }
+        setSaving(false);
+    };
+
     // ---- ADOPT THE SUGGESTIONS ----------------------------------------------------------------
     // Copies the legacy struct's values into real clientPricing rows for this customer, which is
     // what makes them count everywhere (CPQ / Quick Ship / portal all read clientPricing, not the
@@ -962,6 +1007,20 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                 <b>{suggestions.size} part(s) already carry {customer?.name} numbers in the {legacySrc?.label}</b> — shown below in brass. They are <i>not</i> customer price rows yet, so CPQ, Quick Ship and the portal don't use them. Adopt them to make them real, or edit a cell first and save it yourself.
                             </span>
                             <button onClick={adoptSuggestions} disabled={saving} style={btn(true, { background: theme.brass, borderColor: theme.brass })}>{saving ? 'Writing…' : `⇄ Adopt ${suggestions.size} into Client Pricing`}</button>
+                        </div>
+                    )}
+
+                    {/* THE BRAND-WIDE REFRESH — moved out of the Master Library item editor (Stuart
+                        2026-08-22). Adopt above only fills items with NO row and is scoped to the
+                        collection on screen; this one rewrites EVERY row from the pricing box across
+                        the brand, which is what you want after a sheet re-import and what you never
+                        want by accident. Shown for the accounts that have a pricing box at all. */}
+                    {legacySrc && custId && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: theme.paper2, border: `1px solid ${theme.line}`, padding: '12px 18px' }}>
+                            <span style={{ fontSize: '0.85rem', color: theme.inkSoft, flex: 1, minWidth: '360px' }}>
+                                Sheet re-imported? <b>Refresh every {customer?.name} row from the {legacySrc.label}</b> — brand-wide, not just {coll || 'this collection'}, and it <b>replaces</b> rows that already exist. A /EP or /P25 item takes the plated tier; everything else takes painted.
+                            </span>
+                            <button onClick={refreshAllFromBox} disabled={saving} style={btn(false)}>{saving ? 'Writing…' : `⇄ Refresh ALL from the ${legacySrc.label}`}</button>
                         </div>
                     )}
 

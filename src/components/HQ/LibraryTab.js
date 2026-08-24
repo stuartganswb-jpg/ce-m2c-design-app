@@ -82,7 +82,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const [isSaving, setIsSaving] = useState(false);
   
   const [newClientPricing, setNewClientPricing] = useState({ customerId: '', clientSku: '', price: '', clientSalesPrice: '' });
-  const [isBulkFab, setIsBulkFab] = useState(false); // bulk Fabricut → clientPricing writer running
   const [aliasAudit, setAliasAudit] = useState(null); // 🔎 "where is this used?" scan { code, loading, hits, scanned }
   const [aliasForm, setAliasForm] = useState({ code: '', name: '', price: '', collection: '' }); // alias creator
   const [orphanMode, setOrphanMode] = useState(false);     // show only unreferenced, NS-less items
@@ -653,30 +652,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       const sku = fabricutCodeOf({ ...part, manufacturingSpecs: { ...(part.manufacturingSpecs || {}), fabricut: fab } }, findByCode, outsourceFinishes) || '';
       return { customerId: custId, clientSku: sku, price: (cost === null || cost === undefined) ? '' : cost, clientSalesPrice: sales === null ? '' : sales, source: 'FABRICUT' };
   };
-  // Bulk: every item carrying direct Fabricut pricing gets/refreshes its Fabricut client-pricing
-  // row — the in-app control surface Stuart asked for (no more sheet re-upload just to see them).
-  const bulkFabricutClientPricing = async () => {
-      const cust = fabricutCustomer();
-      if (!cust) return alert("No CRM customer matching 'Fabricut' found for this brand — sync the Fabricut customer (11.1) first, or add rows manually.");
-      const targets = inventory.filter(p => {
-          const f = p.manufacturingSpecs?.fabricut;
-          return f && (f.cost !== undefined || f.retail !== undefined) && !(f.cost === null && f.retail === null);
-      });
-      if (!targets.length) return alert('No items with direct Fabricut pricing found in this brand.');
-      if (!window.confirm(`Write/refresh the "${cust.name}" Client Pricing row on ${targets.length} item(s)?\n\n• Client SKU = Fabricut pattern #\n• Client Cost = CE → Fabricut price\n• Client Sales = Fabricut wholesale (retail ÷ 2 when blank)\n\nExisting ${cust.name} rows are replaced; other customers' rows are untouched. Group-priced plates ($0 included) are skipped.`)) return;
-      setIsBulkFab(true);
-      let n = 0, failed = 0;
-      for (const p of targets) {
-          const row = fabClientRowFor(p, p.manufacturingSpecs.fabricut, cust.id);
-          if (!row) continue;
-          const rows = [...(p.clientPricing || []).filter(cp => cp.customerId !== cust.id), row];
-          try { await setDoc(doc(db, 'Approved_Designs', p.id), { clientPricing: rows }, { merge: true }); n++; }
-          catch (e) { console.error('Fabricut client-pricing write failed:', p.legacyErpId, e); failed++; }
-      }
-      setIsBulkFab(false);
-      alert(`✅ ${n} item(s) now carry the ${cust.name} Client Pricing row${failed ? ` (${failed} failed — see console)` : ''}.\n\nReopen any item to review; rows are editable/removable per item.`);
-  };
-
   // ---- 🔎 ALIAS USAGE AUDIT (Stuart 2026-07-30: "run that search and confirm we can get rid of
   // them") -------------------------------------------------------------------------------------
   // An alias is only safe to delete when NOTHING pins it. Knowing every field a code could hide in
@@ -2004,8 +1979,14 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                                      if (!row) return alert('This item has no direct sellable Fabricut price (group-priced $0 plates stay out of Client Pricing — their rule shows above).');
                                      setEditSpecs(prev => ({ ...prev, clientPricing: [...(prev.clientPricing || []).filter(cp => cp.customerId !== cust.id), row] }));
                                  }} style={{ padding: '10px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>↑ Add to Client Pricing (this item)</button>
-                                 <button onClick={bulkFabricutClientPricing} disabled={isBulkFab} style={{ padding: '10px 16px', background: isBulkFab ? 'var(--paper-2)' : 'var(--brass)', color: isBulkFab ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: isBulkFab ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{isBulkFab ? 'Writing…' : '⇄ Populate Client Pricing — ALL Fabricut items'}</button>
-                                 <span style={{ alignSelf: 'center', fontSize: '0.75rem', color: 'var(--ink-soft)' }}>SKU = pattern # · Client Cost = CE → Fabricut · Sales = wholesale. Save the record to keep field edits.</span>
+                                 {/* The BRAND-WIDE write used to live here too (Stuart 2026-08-22: "that should
+                                     probably not be there but rather on 4.6 only"). A catalogue-wide
+                                     write does not belong inside one item's detail panel — there is no
+                                     customer picked, no collection scope, and nothing shown about what
+                                     it is going to touch. It is now 4.6 → Customer Collections, where
+                                     the customer and collection are already chosen and the rows it
+                                     writes are the rows on screen. */}
+                                 <span style={{ alignSelf: 'center', fontSize: '0.75rem', color: 'var(--ink-soft)' }}>SKU = pattern # · Client Cost = CE → Fabricut · Sales = wholesale. Save the record to keep field edits. <b>All items at once: 4.6 → Customer Collections.</b></span>
                              </div>
                          </div>
                      );
