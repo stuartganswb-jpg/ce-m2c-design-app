@@ -866,7 +866,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // On a double it is not — the geometry runs the other way, so the cut took off the plates and
     // kept a length of empty rod. The plate and arm are what a reader lines up on, so they are
     // what the window is built around and the rod is what gets cut, whichever side it runs to.
-    const clipFront = (front0, includeBoxes, mountBox = null) => {
+    const clipFront = (front0, includeBoxes, mountBox = null, keepToU = -Infinity) => {
       // Ø and the ring drop are quoted against the FRONT rod — see frontPole above.
       const poleFull = viewBbox(frontPole.length ? frontPole : pole, views.front);
       let lo = Infinity, hi = -Infinity;
@@ -880,6 +880,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // what makes the elevation read as a rod rather than a stub ("we can make the rod on the
       // left side longer for all").
       lo -= 0.012; hi += 0.022;
+      // ── A RETURN'S ROD STUB IS SHORT (Stuart 2026-08-24) ──────────────────────────────────
+      // "the pole on right is too long and makes the pole on left side too short so the rings
+      //  are bunched up again, shorten the length of the straight rod shown on the right by
+      //  1.5\"." The bend carries its own pole tail, so the window was paying for bend + rings +
+      // tail; the open end trims by 1.5", floored so the cut can never land on a ring or plate.
+      if (opts.isReturn) hi = Math.max(hi - 0.038, (isFinite(keepToU) ? keepToU : -Infinity) + 0.006, lo + 0.05);
       if (hi - lo > WINDOW_MAX_M) {
         const m = (mountBox && isFinite(mountBox.minU)) ? mountBox : null;
         const mountC = m ? (m.minU + m.maxU) / 2 : lo;
@@ -906,7 +912,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const profile = withSection(renderHiddenLine([...bracket, ...poleDrawn], topView || views.profile, 900));
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
-      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF);
+      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF, Math.max(...ringBoxes.map(b => b.maxU), -Infinity));
       const dims = { front: [], profile: [], detail: [] };
       let measProjIn = null; // captured for the geometry-vs-cell check (IM has no projection)
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
@@ -1106,7 +1112,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const ringF = ringBoxes[0] || null;
       const coverP = viewBbox(cover.length ? cover : plateAll, views.profile);
       const wallF = wallPlate.length ? viewBbox(wallPlate, views.front) : null;
-      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ...ringBoxes], unionBox(coverF, bracketF));
+      const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [coverF, bracketF, ...ringBoxes], unionBox(coverF, bracketF), Math.max(...ringBoxes.map(b => b.maxU), coverF.maxU, -Infinity));
       const isRound = /-R$/i.test(platePin.partName || '');
       const dims = { front: [], profile: [], detail: [] };
       // The plate names itself where it is drawn (Stuart 2026-08-23: "we need to add the pattern
