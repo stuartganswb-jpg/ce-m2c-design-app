@@ -373,7 +373,7 @@ export function buildItemsGridPage({ title, subtitle, items = [], noteLines = []
   const bodyH = P.H - MARGIN - bodyTop - (noteLines.length + 1) * 14 - 8;
   // fixed annotation room per item: code above + W dim above (left/right ticks), H dim right,
   // optional note below — text, so it does not scale.
-  const PADW = 44, PADH = 58;
+  const PADW = 66, PADH = 72;
   const measure = (scale) => {
     const rows = [];
     let cur = [], curW = 0;

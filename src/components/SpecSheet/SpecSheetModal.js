@@ -355,9 +355,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       if (p.kind === 'CATALOG') {
         // The CHOICE rides along with its pin: the collar pairing (requiresCollar) is a fact on
         // the choice, and the catalog needs it to draw a two-part acrylic finial whole.
-        const items = [...(p.finials || []), ...(p.accessories || [])]
+        // Finials ONLY — the accessories (carrier strips, standoffs) threw off the finial scale
+        // and are gone from these pages (Stuart 2026-08-23b).
+        const items = (p.finials || [])
           .map(c => ({ choice: c, pin: pinForChoice(c) })).filter(x => x.pin);
-        if (items.length) pageList.push({ key: p.key, kind: 'CATALOG', title: `❖ Finials & accessories${p.label ? ` · ${p.label}` : ''}`, itemPins: items, family: p.label });
+        if (items.length) pageList.push({ key: p.key, kind: 'CATALOG', title: `❖ Finials${p.label ? ` · ${p.label}` : ''}`, itemPins: items, family: p.label });
         continue;
       }
       const bracketPin = pinForChoice(p.subject);
@@ -763,6 +765,31 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       },
     });
     const withCarrier = (view) => mergeViews(view, carrierView);
+    // ── THE SECTION SHOWS HOW IT WORKS (Stuart 2026-08-23b) ─────────────────────────────────
+    // "on the passing brackets page please include one passing ring on the rod in the side
+    //  profile, as we have a lot of questions how that works and it looks from the front view the
+    //  same as the standard ring. then on the traverse track items please also add one carrier in
+    //  the track from the side profile."
+    // Both use the cutaway convention the carriers already have in the elevation: rendered
+    // against their OWN depth buffer and merged, so the part draws THROUGH the bracket or track
+    // it rides instead of being occluded by it. The TAGS name the part — the pin's `passing` tag
+    // marks the passing ring, `traverseRole: CARRIER` marks the carrier — and the part sits where
+    // the model put it: on the rod, which is exactly the story the section is asked to tell.
+    const sectionRider = (() => {
+      const tag = (v) => String(v || '').trim().toUpperCase();
+      if (tag(bracketPin.passing) === 'PASSING') {
+        const rp = (opts.ringPins || []).find(p => tag(p.passing) === 'PASSING');
+        const m = rp ? extractWorldMeshes(scene, [rp.choiceNode]) : [];
+        if (m.length) return m;
+      }
+      if (opts.isTraverse) {
+        const cp = (opts.riderPins || []).find(p => tag(p.traverseRole) === 'CARRIER');
+        const m = cp ? extractWorldMeshes(scene, [cp.choiceNode]) : [];
+        if (m.length) return m;
+      }
+      return null;
+    })();
+    const withSection = (view) => (sectionRider ? mergeViews(view, renderHiddenLine(sectionRider, views.profile, 900)) : view);
 
     // Rod break: clip the front view to a window around plate/bracket/ring and mark the
     // cut — a full rod can't print at 1:1, and the hand-made sheets truncate it the same way.
@@ -843,7 +870,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // profile looks down that axis — so they all land on the same spot and draw on top of each
       // other (Stuart 2026-08-23: "rendering over laps"). The reference's profile column is the
       // arm's section; each ring's own end view is on the bottom strip.
-      const profile = renderHiddenLine([...bracket, ...poleDrawn], views.profile, 900);
+      const profile = withSection(renderHiddenLine([...bracket, ...poleDrawn], views.profile, 900));
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF);
@@ -995,7 +1022,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const meshes = [...bracket, ...plateAll, ...poleDrawn, ...ringMeshes];
       const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes));
       // Rings excluded — see the note on the basic row: they stack in this view.
-      const profile = renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.profile, 900);
+      const profile = withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.profile, 900));
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
@@ -1125,7 +1152,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     for (const sub of subs) {
       let b = rowCacheRef.current[sub.key];
       if (!b) {
-        b = buildRows(sub.bracketPin, sub.familyPins, { isIM: sub.isIM, ringPins: sub.ringPins, riderPins: sub.riderPins, rodNodes: sub.rodNodes, projIn: sub.projIn, projTiers: sub.projTiers });
+        b = buildRows(sub.bracketPin, sub.familyPins, { isIM: sub.isIM, isTraverse: sub.isTraverse, ringPins: sub.ringPins, riderPins: sub.riderPins, rodNodes: sub.rodNodes, projIn: sub.projIn, projTiers: sub.projTiers });
         rowCacheRef.current[sub.key] = b;
       }
       if (!first) first = b;
@@ -1209,8 +1236,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [sideNodesFor, engineChoices, pinForChoice]);
 
   const composeCatalogPage = useCallback((page, paper) => buildItemsGridPage({
-    title: `${baseAssembly?.itemName || baseAssembly?.itemId} — Finials & accessories${page?.family ? ` · ${page.family}` : ''}`,
-    subtitle: 'Every end treatment and accessory, once, from the front, at actual size. Socket depth is hidden geometry — add it with the manual dim tool.',
+    title: `${baseAssembly?.itemName || baseAssembly?.itemId} — Finials${page?.family ? ` · ${page.family}` : ''}`,
+    subtitle: 'Every finial, once, from the front, at actual size. Socket depth is hidden geometry — add it with the manual dim tool.',
     items: buildCatalog(page?.itemPins || []).map(f => ({ code: rowCode(f.partName), view: f.view, wIn: f.wIn, hIn: f.hIn })),
     paper: paper || layoutPaper,
     footerNote: reducedNote,

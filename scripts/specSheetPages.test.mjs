@@ -152,7 +152,10 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     eq('the catalog splits by material, one page each', cats.map(c => c.label), ['Metal', 'Wood', 'Acrylic']);
     ok('metal carries the finials', cats[0].finials.some(f => f.partId === 'HNFSBLR138'));
     ok('…from every world unioned', cats[0].finials.some(f => f.partId === 'H1-2TRVFIN'));
-    ok('and the accessories', cats[0].accessories.some(a => a.partId === 'H1-HOLDBACK'));
+    // Stuart 2026-08-23b: "remove the accessories no need to show those carriers there, that
+    // throws off the scale of the metal finials" — a 20-1/2" carrier strip was the widest thing
+    // on the page and the whole grid shrank to hold it.
+    ok('and no accessories crowd the finial pages', cats.every(c => !(c.accessories || []).length));
     ok('wood on its own page, off the metal one',
         cats[1].finials.some(f => f.partId === 'H1-138WGF') && !cats[0].finials.some(f => f.partId === 'H1-138WGF'));
     ok('acrylic (no-finish) on its own page', cats[2].finials.some(f => f.partId === 'H1-138AGF'));

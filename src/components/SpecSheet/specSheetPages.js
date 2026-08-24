@@ -214,7 +214,6 @@ export function specPages({ choices, answers = {} }) {
     // world and per bracket family, so the per-leaf catalogs listed the same parts again and
     // again. They are unioned by part across every leaf and printed once, at the end.
     const catFinials = new Map();
-    const catAccessories = new Map();
     // ⚠ THE WALK NEEDS NORMALIZED CHOICES, AND ONLY ONCE. `admits` reads `fits`, which
     // `applyFitsDefaults` puts there — raw pins have none, so walking them throws. resolve() does
     // that normalization, so the walk is handed its output; the RAW list still goes to every
@@ -316,8 +315,10 @@ export function specPages({ choices, answers = {} }) {
                 isTraverse: false, riders: [],
             });
         }
+        // ⚠ FINIALS ONLY (Stuart 2026-08-23b: "remove the accessories no need to show those
+        // carriers there, that throws off the scale of the metal finials"). The 20-1/2" carrier
+        // strip was the widest thing on the metal page, and the whole grid shrank to hold it.
         cat.finials.forEach(f => { const k = U(f.partId || f.id); if (k && !catFinials.has(k)) catFinials.set(k, f); });
-        cat.accessories.forEach(a => { const k = U(a.partId || a.id); if (k && !catAccessories.has(k)) catAccessories.set(k, a); });
     }
     // ── ONE CATALOG PAGE PER MATERIAL (Stuart 2026-08-23b) ───────────────────────────────────
     // "finials are all overlapping, put metal on one page, wood on one page and acrylic all on
@@ -332,12 +333,11 @@ export function specPages({ choices, answers = {} }) {
     };
     for (const mat of ['Metal', 'Wood', 'Acrylic']) {
         const finials = [...catFinials.values()].filter(c => bucketOf(c) === mat);
-        const accessories = [...catAccessories.values()].filter(c => bucketOf(c) === mat);
-        if (!finials.length && !accessories.length) continue;
+        if (!finials.length) continue;
         pages.push({
             key: `CATALOG__${mat.toUpperCase()}`, kind: 'CATALOG', answers: {}, label: mat,
             subject: null, rod: null, plates: [], rings: [],
-            finials, accessories,
+            finials, accessories: [],
             suppressedBy: null, reason: '', isTraverse: false, riders: [],
         });
     }
