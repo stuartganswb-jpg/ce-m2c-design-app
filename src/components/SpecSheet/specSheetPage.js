@@ -35,7 +35,10 @@ const SW = 0.6; // dimension line weight
 const FS = { title: 17, sub: 13, code: 16, label: 13, dim: 14, note: 12, zone: 11 };
 // Breathing room around a drawing, in page units, so dimension lines and their labels have
 // somewhere to go. ~1/4" printed on either side.
-const PAD = { x: 30, y: 26 };
+// ⚠ PADDING IS CHARGED PER ROW, SO IT IS SPENT FOUR TIMES. At 26 units a side this was ~1/2"
+// top and bottom of every row — over four rows, more than an inch of a ten-inch page before a
+// single part is drawn. Trimmed hard; the dimensions carry their own offsets anyway.
+const PAD = { x: 26, y: 10 };
 const GUTTER = 34;      // between columns
 
 export function dimH(x0, x1, y, inches) {
@@ -168,18 +171,24 @@ function measureGrid(rows, scale) {
   CELL_KEYS.forEach(k => { colW[k] = 0; });
   const above = [], below = [];
   const rowH = rows.map(r => {
+    // ⚠ A CAPTION BELONGS TO ITS CELL, NOT TO THE ROW. Ring ids hang under the ELEVATION; the arm
+    // and plate codes sit under the SECTION. Adding both to the row's own depth charged the row
+    // for text that is nowhere near its tallest cell — and the section is far shorter than the
+    // elevation, so its codes fit in space the row already had. Charging the row twice for room
+    // it did not need is what drove four-row sheets down to a third of size while single-row
+    // sheets (H1-138BD, H1-138BE) looked right (Stuart 2026-08-23).
+    const extra = {
+      front: Number(r.padBelow) || 0,
+      profile: ([r.armCode, r.code].filter(Boolean).length) * (FS.code + 3) + 6,
+    };
     let a = 0, b = 0;
     CELL_KEYS.forEach(k => {
       const m = cellAboveBelow(r[k], scale, r.datum?.[k]);
       if (m.w > colW[k]) colW[k] = m.w;
       if (m.above > a) a = m.above;
-      if (m.below > b) b = m.below;
+      const cellBelow = m.below + (m.w ? (extra[k] || 0) : 0);
+      if (cellBelow > b) b = cellBelow;
     });
-    // A row may carry captions BELOW its geometry — ring ids on leaders, and the arm/plate codes
-    // under the section — which no bounding box knows about. It declares that room itself, or the
-    // next row lands on the text.
-    b += Number(r.padBelow) || 0;
-    b += ([r.armCode, r.code].filter(Boolean).length) * (FS.code + 4) + 8;
     above.push(a); below.push(b);
     return Math.max(a + b, 60);
   });

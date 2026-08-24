@@ -623,13 +623,23 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // rest are cut with the track — which is what a broken view means.
     // Union of two rendered views: segments concatenated, bounds widened. Only the bounds are
     // read downstream (place/clip), so a merged view needs nothing from the depth raster.
-    const withCarrier = (view) => (!carrierView ? view : {
-      vis: [...view.vis, ...carrierView.vis],
+    // ⚠ A RING ENCIRCLES THE ROD, SO IT IS NEVER BEHIND IT (Stuart 2026-08-23: "rings are shown
+    // behind rod not 'over' rod"). The depth raster is built from the whole composed group, and
+    // the rod's front face is nearer the camera than the far side of the ring, so most of each
+    // ring was correctly — and uselessly — hidden. Rendered against its own buffer and merged in,
+    // exactly as the carriers are: nothing moves, the ring simply is not occluded by the thing it
+    // is threaded onto.
+    const ringOverlay = (meshes) => (meshes.length ? renderHiddenLine(meshes, views.front, 1200) : null);
+    // Union of two rendered views: segments concatenated, bounds widened. Only the bounds are
+    // read downstream (place/clip), so a merged view needs nothing from the depth raster.
+    const mergeViews = (view, other) => (!other ? view : {
+      vis: [...view.vis, ...other.vis],
       zb: {
-        minU: Math.min(view.zb.minU, carrierView.zb.minU), maxU: Math.max(view.zb.maxU, carrierView.zb.maxU),
-        minV: Math.min(view.zb.minV, carrierView.zb.minV), maxV: Math.max(view.zb.maxV, carrierView.zb.maxV),
+        minU: Math.min(view.zb.minU, other.zb.minU), maxU: Math.max(view.zb.maxU, other.zb.maxU),
+        minV: Math.min(view.zb.minV, other.zb.minV), maxV: Math.max(view.zb.maxV, other.zb.maxV),
       },
     });
+    const withCarrier = (view) => mergeViews(view, carrierView);
 
     // Rod break: clip the front view to a window around plate/bracket/ring and mark the
     // cut — a full rod can't print at 1:1, and the hand-made sheets truncate it the same way.
@@ -688,8 +698,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // BASIC bracket / INSIDE MOUNT page: one row, choice + pole + ring only
     if (!plateChoices.length) {
       const rowRings = parkRings(bracketHalfAlong);
-      const meshes = [...bracket, ...pole, ...rowRings.flatMap(r => r.meshes)];
-      const front0 = withCarrier(renderHiddenLine(meshes, views.front, 1600));
+      const ringMeshes = rowRings.flatMap(r => r.meshes);
+      const meshes = [...bracket, ...pole, ...ringMeshes];
+      const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...pole], views.front, 1600)), ringOverlay(ringMeshes));
       // ⚠ NO RINGS IN THE PROFILE. Every ring is parked at its own station ALONG the rod, and the
       // profile looks down that axis — so they all land on the same spot and draw on top of each
       // other (Stuart 2026-08-23: "rendering over laps"). The reference's profile column is the
@@ -820,8 +831,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // park the ring past THIS row's plate edge — wide -H plates push it further out
       const plateHalfAlong = (cb0.max[axes.poleAxis] - cb0.min[axes.poleAxis]) / 2;
       const rowRings = parkRings(Math.max(plateHalfAlong, bracketHalfAlong));
-      const meshes = [...bracket, ...plateAll, ...pole, ...rowRings.flatMap(r => r.meshes)];
-      const front0 = withCarrier(renderHiddenLine(meshes, views.front, 1600));
+      const ringMeshes = rowRings.flatMap(r => r.meshes);
+      const meshes = [...bracket, ...plateAll, ...pole, ...ringMeshes];
+      const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...pole], views.front, 1600)), ringOverlay(ringMeshes));
       // Rings excluded — see the note on the basic row: they stack in this view.
       const profile = renderHiddenLine([...bracket, ...plateAll, ...pole], views.profile, 900);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
@@ -883,7 +895,27 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const poleU = projPoint(views.profile, polePt)[0];
       const profTopV = viewBbox(meshes, views.profile).maxV;
       if (!measured) measured = { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: Math.abs(poleU - wallU) * M2IN };
-      dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
+      // ── A DOUBLE IS DIMENSIONED IN TWO STEPS (Stuart 2026-08-23) ────────────────────────
+      // "projection measuring from front of rod to middle of rear rod should be from wall to
+      //  middle of rear rod and from there to middle of front rod."
+      //
+      // One dim from the wall to the front rod describes neither pole on a double: what a fitter
+      // needs is how far off the wall the REAR rod sits, and then the gap out to the front one.
+      // So each rod centre is measured in turn, wall outwards.
+      const rodCentres = (poleNodes.length > 1 ? poleNodes : [])
+        .map(n => extractWorldMeshes(scene, [n]))
+        .filter(g => g.length)
+        .map(g => projPoint(views.profile, groupBbox(g).center)[0])
+        .sort((x, y) => Math.abs(x - wallU) - Math.abs(y - wallU));
+      if (rodCentres.length > 1) {
+        let from = wallU;
+        rodCentres.forEach((c, i) => {
+          dims.profile.push({ t: 'h', u0: Math.min(from, c), u1: Math.max(from, c), v: profTopV, off: -8 - i * 20, in: Math.abs(c - from) * M2IN });
+          from = c;
+        });
+      } else {
+        dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: Math.abs(poleU - wallU) * M2IN });
+      }
       // ⚠ PLATE HEIGHT DIM GOES CLEAR OF THE ARTWORK, ON THE WALL SIDE (Stuart 2026-08-23: "the
       // measurement line and dims for the backplate needs to move to the right so it is off
       // behind the backplate"). It was pinned to the plate's minU with the label to its LEFT,
