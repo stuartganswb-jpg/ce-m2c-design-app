@@ -1150,7 +1150,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // order gets a CUT ORDER in front of it rather than a pull it can never satisfy.
                 // It lands in WMS → ROD CUTS under "Cuts for Finishing"; completing it prints this
                 // order's finishing label, and from there it is an ordinary job.
-                const cut = poleCutPlan(r.itemid, qty);
+                // info.isPole is the product-type test the whole snapshot already uses.
+                const cut = poleCutPlan(r.itemid, qty, { isPole: info.isPole });
                 if (cut) {
                     const srcPart = partByKey['erp:' + cut.sourceItemId.toUpperCase()];
                     const tgtPart = partByKey['erp:' + cut.targetItemId.toUpperCase()];
@@ -2349,7 +2350,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         productType to say POLE/ROD, which finished rods carry and RAW ones often do not,
                                                         so the ✂ vanished on exactly the rows finishing needs it for. poleLengthOf reads
                                                         the length out of the code itself — the same grammar the cut planner uses. */}
-                                                    {(poleLengthOf(r.itemid) === 8) ? <button title="Cut 8 ft rods down to 6 ft / 4 ft" onClick={() => setCutModal({ itemid: r.itemid, internalId: r.internalId, available: info.available, qty: '', target: '4FT' })} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
+                                                    {(info.isPole && poleLengthOf(r.itemid) === 8) ? <button title="Cut 8 ft rods down to 6 ft / 4 ft" onClick={() => setCutModal({ itemid: r.itemid, internalId: r.internalId, available: info.available, qty: '', target: '4FT' })} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                 </tr>
                                                 {convSugFor === r.itemid && (() => {
                                                     // Donor picker: sister finished variants of the same base with shelf stock.

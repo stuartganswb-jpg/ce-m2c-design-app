@@ -14,7 +14,9 @@
 // = 4 ft, HCUMP610 = 6 ft; the trailing 10/15 is the profile family. Same grammar the Sales
 // Snapshot's ✂ builder already uses, so the two agree by construction.
 
-const LEN_RE = /([468])(1[05])/;
+// Length is the digit before the DIAMETER family. Diameters seen in the catalogue: 10 = 1",
+// 15 = 1-3/8", 35 = 35 mm (the wood poles) — Stuart 2026-08-22.
+const LEN_RE = /([468])(10|15|35)/;
 
 /** The raw item behind a finished code: HCUMP410/G → HCUMP410. */
 const rawOf = (erp) => { const s = String(erp || '').trim().toUpperCase(); const i = s.lastIndexOf('/'); return i > 0 ? s.slice(0, i) : s; };
@@ -35,7 +37,15 @@ export function poleLengthOf(erp) {
  * @param {string} erpId finished or raw item on the work order (HCUMP410/G)
  * @param {number} qty   finished pieces wanted
  */
-export function poleCutPlan(erpId, qty) {
+export function poleCutPlan(erpId, qty, opts = {}) {
+    // CATEGORY FIRST, GRAMMAR SECOND (Stuart 2026-08-22: "MB is bracket … you are safe to go to
+    // the category pole, restrict it").
+    //
+    // The code grammar alone is not enough and was actively dangerous: HCUMB415 is a 1-3/8"
+    // BRACKET, and reading its "415" as "4 ft" would have had the app raise a cut order against an
+    // HCUMB815 that does not exist — or, worse, against one that does and means something else.
+    // The product type is the authority on what a pole is; the code only says how long it is.
+    if (opts.isPole !== true) return null;
     const raw = rawOf(erpId);
     const m = LEN_RE.exec(raw);
     if (!m) return null;
@@ -62,4 +72,4 @@ export function poleCutPlan(erpId, qty) {
 }
 
 /** Does this work order need a cut before it can be picked? */
-export const needsPoleCut = (erpId, qty) => !!poleCutPlan(erpId, qty);
+export const needsPoleCut = (erpId, qty, opts) => !!poleCutPlan(erpId, qty, opts);
