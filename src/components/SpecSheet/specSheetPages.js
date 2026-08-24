@@ -232,7 +232,15 @@ export function specPages({ choices, answers = {} }) {
             // right answer for the projection and for the rings. But a double bracket physically
             // carries a front rod and a back rod, and a drawing showing one is a drawing of a
             // single. So the page carries the whole admissible set alongside its own rod.
-            const rods = (offered.choices || []).filter(c => ROD_ROLES.includes(c.role) && !c.parked);
+            // ⚠ ONLY A DOUBLE HAS A SECOND POLE. Taking every admissible rod put a back rod on
+            // SINGLE sheets (Stuart 2026-08-23: "the single is showing the double pole in the
+            // wrong position") — H1-138's back-rod pins are not all tagged setup:DOUBLE, so the
+            // gate does not exclude them and "admissible" is a weaker claim than "part of this
+            // configuration". The arm's own rod always leads, so axis inference stays stable.
+            const rods = U(leaf.setup) === 'DOUBLE'
+                ? [rod, ...(offered.choices || []).filter(c => ROD_ROLES.includes(c.role) && !c.parked
+                    && c !== rod && U(c.tier) !== U(rod?.tier || ''))].filter(Boolean)
+                : (rod ? [rod] : []);
             const { plates, rings, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
             const fams = plates.length ? plateFamilies(plates) : [{ stem: '', plates: [] }];
             for (const fam of fams) {

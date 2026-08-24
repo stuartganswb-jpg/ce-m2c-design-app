@@ -466,6 +466,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const engineRod = (opts.rodNodes || []).filter(n => extractWorldMeshes(scene, [n]).length);
     const poleNodes = engineRod.length ? engineRod : keep(sideNodesFor('POLE'));
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
+    // ⚠ AXES ARE INFERRED FROM THE ARM'S OWN ROD, NOT THE SET. inferAxes reads the pole to decide
+    // which way is up, along and out — hand it a double's two rods and the projection axis it
+    // picks can differ, which silently moves every plate placement that depends on it. The page
+    // lists the arm's rod first for exactly this reason.
+    const axisRod = poleNodes.length ? extractWorldMeshes(scene, [poleNodes[0]]) : [];
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
@@ -486,7 +491,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     }
     // basic brackets have no plate — the bracket itself marks the wall side for axis inference
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
-    const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
+    const axes = inferAxes(axisRod.length ? axisRod : pole, firstPlate.length ? firstPlate : bracket);
     const views = makeViews(axes);
     // ⚠ THIS RUNS AFTER `axes`, AND MUST. It reads axes.projAxis / axes.wallCoord, and an IIFE
     // assigned to a const evaluates where it is WRITTEN — placed above `const axes` it threw
@@ -586,7 +591,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         out.push({ partName: rc.partName, meshes: translateMeshes(rc.meshes, d) });
         // Next station: past this ring, with a gap wide enough for its drop dimension AND its
         // pattern id. Stuart 2026-08-23: "spread the rings out some as they appear very busy".
-        edge = target + sign * (half + 0.062);   // ~2-7/16" of clear rod between rings
+        edge = target + sign * (half + 0.013);   // ~1/2" of clear rod between rings
       }
       return out;
     };
@@ -635,7 +640,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // it empty. The hand-made sheets show a SHORT broken view: plate, arm, the rings, and a stub
     // of rod either side. So the window is capped, and anything past the cap is cut with a break
     // mark, which is what a broken view means.
-    const WINDOW_MAX_M = 34 * 0.0254;   // ~34" — four well-spread rings and a real run of rod
+    // ⚠ THE WINDOW IS THE SCALE, AND EVERY WIDENING SHRANK THE SHEET. There are ~15" of drawable
+    // width on 11×17; an elevation wider than that forces the WHOLE page to reduce to fit, so the
+    // 22" → 26" → 34" growth across three rounds — each one a reasonable-sounding request to
+    // lengthen the rod and spread the rings — is exactly what made everything tiny. Scale and rod
+    // length are the same dial turned opposite ways. Back to the tightest window that still holds
+    // the plate, the arm and the ring options (Stuart 2026-08-23: "we are trying to maximize the
+    // product and show it as close to scale that fits properly").
+    const WINDOW_MAX_M = 18 * 0.0254;
     // The rod's centreline expressed in a given view's v axis — both the elevation and the
     // section contain the rod, so this is the one height they can agree on.
     const rodCentreV = (view) => { const b = viewBbox(pole, view); return (b.minV + b.maxV) / 2; };
@@ -659,7 +671,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // Extra visible rod so the rings clearly hang on it — longer on the open end, which is
       // what makes the elevation read as a rod rather than a stub ("we can make the rod on the
       // left side longer for all").
-      lo -= 0.030; hi += 0.090;
+      lo -= 0.020; hi += 0.035;
       if (hi - lo > WINDOW_MAX_M) {
         const m = (mountBox && isFinite(mountBox.minU)) ? mountBox : null;
         const mountC = m ? (m.minU + m.maxU) / 2 : lo;
