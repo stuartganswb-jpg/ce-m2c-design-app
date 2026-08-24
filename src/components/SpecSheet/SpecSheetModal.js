@@ -1040,7 +1040,32 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       {
         const ax = axes.poleAxis;
         const pb = groupBbox(plateAll), bb = groupBbox(bracket);
-        const gap = bb.center[ax] - pb.center[ax];
+        // ── A RETURN'S PLATE SITS AT ITS WALL LEG (Stuart 2026-08-23b) ───────────────────
+        // "the backplates are still not aligned with the returns, they are shown off to the
+        //  right." The station used to be the bracket's bbox centre — but a return's bbox
+        // middle is halfway along the bend, not where it mounts. The leg is the geometry
+        // NEAREST THE WALL (a ~3/4" band at the bracket's wall-most extent); the plate goes to
+        // that band's centre along the rod. An ordinary arm is symmetric about its mount, so
+        // nothing changes for it — the bbox centre remains its answer.
+        let target = bb.center[ax];
+        if (opts.isReturn) {
+          const pj = axes.projAxis;
+          const wallSign = Math.sign(axes.wallCoord - axes.poleBox.center[pj]) || 1;
+          const wallEdge = wallSign > 0 ? bb.max[pj] : bb.min[pj];
+          const band = 0.02;
+          let lo = Infinity, hi = -Infinity;
+          for (const m of bracket) {
+            const P = m.positions;
+            for (let k = 0; k < P.length; k += 3) {
+              const depth = [P[k], P[k + 1], P[k + 2]][pj];
+              if (Math.abs(depth - wallEdge) > band) continue;
+              const s = [P[k], P[k + 1], P[k + 2]][ax];
+              if (s < lo) lo = s; if (s > hi) hi = s;
+            }
+          }
+          if (isFinite(lo)) target = (lo + hi) / 2;
+        }
+        const gap = target - pb.center[ax];
         if (isFinite(gap) && Math.abs(gap) > 1e-5) {
           const d = [0, 0, 0];
           d[ax] = gap;
