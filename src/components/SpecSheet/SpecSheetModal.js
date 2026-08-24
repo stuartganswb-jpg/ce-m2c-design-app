@@ -36,13 +36,20 @@ const FS_LABEL_ROOM = 18;
 // the geometric spread is. Alternate ids drop one line further (their leaders already bridge the
 // gap), which is his own fix, re-applied now that each id is centred under its own ring.
 const RING_LABEL_DROP = 34;
-const RING_LABEL_STAGGER = 16;
+// Three levels, not two (Stuart 2026-08-23b: "please stagger further as the text is
+// overlapping") — with two, alternate ids sat one thin line apart and long codes still touched.
+// On three levels a code's same-level neighbour is three ring pitches away.
+const RING_LABEL_STAGGER = 20;
+const RING_LABEL_LEVELS = 3;
 const WALL_PLATE_MATCH = /(CPWP|BPWP|IMWP|WP\d)/i;
 // Full wall-plate code inside a mesh path — family-agnostic (was hardcoded H1-).
 const WALL_CODE_RX = /[A-Z]+\d*-[A-Z0-9]*WP\d+(\s*\/?\s*P)?/i;
 const SCREW_MATCH = /screw/i;
 
 const AS_MOUNTED_NOTE = 'As-mounted dim marks the height from the center of the top hole of the wall mount to the bottom of the ring.';
+// The one drawing-convention note, Stuart's own wording (2026-08-23b) — the 'Measured from 3D
+// geometry' line is gone at his ask.
+const RING_NOTE = 'Ring dimension shown is drop from top of the rod to the bottom of the eyelet. Profile view displays wall projection = wall face to pole centerline, and vertical height of bracket at wall mounting.';
 
 const btn = { padding: '6px 12px', fontSize: '0.8rem', cursor: 'pointer', border: '1px solid #444', background: '#fff', borderRadius: '4px' };
 const btnOn = { ...btn, background: '#1c2025', color: '#fff' };
@@ -388,8 +395,52 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         isIM: p.kind === 'INSIDE_MOUNT',
         family: p.label,
         reason: p.reason || '',
+        // Pairing facts for the basics rule below — tags, never code sniffing.
+        __isBasic: !!p.subject?.isBasic,
+        __famKey: [
+          Array.isArray(p.subject?.materials) ? p.subject.materials.join(',') : String(p.subject?.materials || 'METAL'),
+          p.subject?.rodKind || '', String(p.subject?.mount || ''),
+        ].join('|'),
+        __proj: Number(p.answers?.proj ?? (p.subject?.projTiers?.FRONT)) || 0,
       });
     }
+    // ── BASICS COMBINE, TWO PER SHEET (Stuart 2026-08-23b) ─────────────────────────────────
+    // "the basic brackets can be combined to two per page, so H1-138BD and H1-138B6 together
+    //  and H1-138BE and H1-138BS together, that can basically be a rule if from same family and
+    //  tagged the same combine when possible."
+    // A basic draws alone — one row — so two share a sheet the way the reference books do.
+    // Family is read from TAGS (materials, rod world, mount), never from the code. Doubles
+    // lead, then deepest projection first, which is exactly the order he paired them in.
+    // Presentation only: the engine's per-arm pages (and the audit) are untouched; the combo
+    // page simply builds both arms' rows onto one sheet.
+    const paged = (() => {
+      const groups = new Map();
+      pageList.forEach((pg) => {
+        if (!(pg.kind === 'BRACKET' && pg.__isBasic && !(pg.familyPins || []).length)) return;
+        if (!groups.has(pg.__famKey)) groups.set(pg.__famKey, []);
+        groups.get(pg.__famKey).push(pg);
+      });
+      const merged = new Map(); // first member key -> combined page · other members dropped
+      const drop = new Set();
+      for (const group of groups.values()) {
+        group.sort((a, b) => ((b.rodNodes || []).length - (a.rodNodes || []).length) || (b.__proj - a.__proj));
+        for (let i = 0; i + 1 < group.length; i += 2) {
+          const [a, b] = [group[i], group[i + 1]];
+          merged.set(a.key, {
+            ...a,
+            key: `${a.key}+${b.key}`,
+            title: `${a.bracketPin.partName} + ${b.bracketPin.partName} · basics, 2 per sheet`,
+            combo: [a, b],
+          });
+          drop.add(b.key);
+        }
+      }
+      return pageList
+        .filter(pg => !drop.has(pg.key))
+        .map(pg => merged.get(pg.key) || pg);
+    })();
+    pageList.length = 0;
+    pageList.push(...paged);
     if (!pageList.length) {
       setError('The engine offers no bracket this GLB carries — check that the pinned nodes still exist in the model.');
       return;
@@ -803,7 +854,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       ringBoxes.forEach((rb, i) => {
         dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 26, in: (poleF.maxV - rb.minV) * M2IN });
         const code = rowRings[i]?.partName;
-        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % 2) * RING_LABEL_STAGGER, lead: true, text: code });
+        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, text: code });
       });
       if (opts.isIM) {
         // inside mount: barrel length + Ø; end view gets plate Ø + ring Ø leaders.
@@ -834,11 +885,33 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         const profTopV = viewBbox(meshes, views.profile).maxV;
         measProjIn = Math.abs(poleU - wallU) * M2IN;
         dims.profile.push({ t: 'h', u0: Math.min(wallU, poleU), u1: Math.max(wallU, poleU), v: profTopV, off: -8, in: measProjIn });
+        // ── THE BRACKET'S HEIGHT AT THE WALL (Stuart 2026-08-23b) ───────────────────────────
+        // "the basic brackets are missing the vertical dimension at the far right of the bracket
+        //  (see brackets with backplates)." A basic IS its own mounting, so the dim the plate
+        // sheets hang on the plate reads off the bracket's own wall face instead: the vertical
+        // extent of its geometry in a ~1/2" band at the wall end of the section.
+        const bP = viewBbox(bracket, views.profile);
+        const faceRight = Math.abs(bP.maxU - wallU) <= Math.abs(bP.minU - wallU);
+        const face = faceRight ? bP.maxU : bP.minU;
+        const band = 0.014;
+        let fLo = Infinity, fHi = -Infinity;
+        for (const m of bracket) {
+          const P = m.positions;
+          for (let k = 0; k < P.length; k += 3) {
+            const u = P[k] * views.profile.right[0] + P[k + 1] * views.profile.right[1] + P[k + 2] * views.profile.right[2];
+            if (Math.abs(u - face) > band) continue;
+            const v = P[k] * views.profile.up[0] + P[k + 1] * views.profile.up[1] + P[k + 2] * views.profile.up[2];
+            if (v < fLo) fLo = v; if (v > fHi) fHi = v;
+          }
+        }
+        if (isFinite(fLo) && fHi - fLo > 0.004) {
+          dims.profile.push({ t: 'v', u: face, v0: fHi, v1: fLo, off: faceRight ? 16 : -16, side: faceRight ? 1 : -1, in: (fHi - fLo) * M2IN });
+        }
       }
       // The rod centreline in each view — the row's shared datum, so the section reads across
       // from the elevation instead of each cell floating on its own extents.
       const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
-      const padBelow = ringBoxes.length ? RING_LABEL_DROP + RING_LABEL_STAGGER + FS_LABEL_ROOM : 0;
+      const padBelow = ringBoxes.length ? RING_LABEL_DROP + (RING_LABEL_LEVELS - 1) * RING_LABEL_STAGGER + FS_LABEL_ROOM : 0;
       return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, padBelow, hasAsMounted: false }], axes, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
     }
     let measured = null; // first row's pole Ø + projection, for the geometry-vs-cell check
@@ -961,7 +1034,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           // longer than the gap between rings, so they are dropped clear of the eyelets on two
           // alternating lines, each on its own leader back to the ring it names.
           const code = rowRings[i]?.partName;
-          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % 2) * RING_LABEL_STAGGER, lead: true, text: code });
+          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, text: code });
         });
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
@@ -1014,13 +1087,16 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // in these views. The side is read from the geometry rather than assumed: the dim sits on
       // the plate face pointing away from the rod.
       const plateRight = ((coverP.minU + coverP.maxU) / 2) >= poleU;
+      // ⚠ NO Ø ON THE HEIGHT DIM (Stuart 2026-08-23b: "the text measurements need to be
+      // uniformed some say 3 and others say ⌀3") — a round plate's height happens to be its
+      // diameter, but the column reads as one measurement, so it is written as one.
       dims.profile.push({
         t: 'v',
         u: plateRight ? coverP.maxU : coverP.minU,
         v0: coverP.maxV, v1: coverP.minV,
         off: plateRight ? 16 : -16,
         side: plateRight ? 1 : -1,
-        in: (coverP.maxV - coverP.minV) * M2IN, dia: isRound,
+        in: (coverP.maxV - coverP.minV) * M2IN,
       });
       if (wallF && detail) {
         dims.detail.push({ t: 'h', u0: wallF.minU, u1: wallF.maxU, v: wallF.maxV, off: -12, in: (wallF.maxU - wallF.minU) * M2IN });
@@ -1031,11 +1107,32 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // from mesh bounding boxes, so text dropped under a ring is invisible to the layout and the
       // next row lands on top of it (Stuart 2026-08-23: "the lower row is overlapping the text").
       // The row declares the room its captions need.
-      const padBelow = ringBoxes.length ? RING_LABEL_DROP + RING_LABEL_STAGGER + FS_LABEL_ROOM : 0;
+      const padBelow = ringBoxes.length ? RING_LABEL_DROP + (RING_LABEL_LEVELS - 1) * RING_LABEL_STAGGER + FS_LABEL_ROOM : 0;
       return { rowKey: platePin.partName, partName: platePin.partName, wallCode, front, profile, detail, dims, datum, padBelow, hasAsMounted: ringF && parseInches(wallCfg[wallCode]?.topHole) != null };
     }).filter(r => !r.missing);
     return { rows, axes, measured };
   }, [allowedNodesFor, wallCfg, sideNodesFor, side]);
+
+  // One page's rows, combo-aware: a combined basics sheet builds each arm's own rows — its own
+  // rod set, its own projection — and stacks them. Cached per SUB page, so narrowing in and out
+  // of the combined sheet never rebuilds what a single sheet already drew.
+  // ⚠ SITS BELOW buildRows AND MUST — the useCallback deps array evaluates where it is WRITTEN
+  // (the temporal-dead-zone trap, fourth sighting in this codebase).
+  const builtRowsFor = useCallback((page) => {
+    const subs = page.combo || [page];
+    let first = null;
+    const rows = [];
+    for (const sub of subs) {
+      let b = rowCacheRef.current[sub.key];
+      if (!b) {
+        b = buildRows(sub.bracketPin, sub.familyPins, { isIM: sub.isIM, ringPins: sub.ringPins, riderPins: sub.riderPins, rodNodes: sub.rodNodes, projIn: sub.projIn, projTiers: sub.projTiers });
+        rowCacheRef.current[sub.key] = b;
+      }
+      if (!first) first = b;
+      rows.push(...b.rows.map(r => ({ ...r, __arm: sub.bracketPin.partName })));
+    }
+    return { ...first, rows };
+  }, [buildRows]);
 
   // ---- wall-mounts reference page: every unique wall-mount style at 1:1 ----
   const buildWallMounts = useCallback(() => {
@@ -1136,19 +1233,16 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       try {
         if (page.kind === 'WALLMOUNTS') { setPageData(composeWallMountsPage()); setStatus(''); return; }
         if (page.kind === 'CATALOG') { setPageData(composeCatalogPage(page)); setStatus(''); return; }
-        let built = rowCacheRef.current[page.key];
-        if (!built) {
-          built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn, projTiers: page.projTiers });
-          rowCacheRef.current[page.key] = built;
-        }
+        const built = builtRowsFor(page);
         // GEOMETRY vs CELL (playbook 4.2, warn-only): the measured pole Ø / projection must agree
         // with what the selected dia×proj cell CLAIMS (sizeMatrix inches). The sheet still renders
         // — borrowing geometry is sometimes deliberate — but it stops doing so silently. This was
         // the most likely silent failure of the H1 mass load (a ¾" file registered under 1-3/8").
-                const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(page.bracketPin.partName) }));
+                const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(r.__arm || page.bracketPin.partName) }));
         const anyAsMounted = rows.some(r => r.hasAsMounted);
-        const bSized = page.bracketPin.partName;
-        const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
+        const titleCode = (page.combo || [page])
+          .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName) : s.bracketPin.partName))
+          .join(' + ');
         // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
         // engine paired with the arm — or, when there are none, the engine's own reason.
         const nPlates = (page.familyPins || []).length;
@@ -1161,8 +1255,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           manualDims: manualDims.filter(d => d.pageKey === page.key),
           noteLines: [
             ...(anyAsMounted ? [AS_MOUNTED_NOTE] : []),
-            'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
-            'Measured from 3D geometry, nearest 1/16". Manual dims entered where geometry cannot provide them.',
+            RING_NOTE,
           ],
           paper: layoutPaper,
           footerNote: reducedNote,
@@ -1180,7 +1273,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [shownPages, pageIndex, edition, manualDims, wallCfg, buildRows, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
+  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; finialsRef.current = null; }, [wallCfg, side]);
@@ -1243,11 +1336,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     try {
     if (page.kind === 'WALLMOUNTS') return { svg: composeWallMountsPage('letterP').svg, paper: 'letterP' };
     if (page.kind === 'CATALOG') return { svg: composeCatalogPage(page, 'letterP').svg, paper: 'letterP' };
-    let built = rowCacheRef.current[page.key];
-    if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn, projTiers: page.projTiers }); rowCacheRef.current[page.key] = built; }
-    const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(page.bracketPin.partName) }));
-    const bSized = page.bracketPin.partName;
-    const titleCode = edition === 'FAB' ? (fabCodeFor(bSized) || bSized) : bSized;
+    const built = builtRowsFor(page);
+    const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(r.__arm || page.bracketPin.partName) }));
+    const titleCode = (page.combo || [page])
+      .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName) : s.bracketPin.partName))
+      .join(' + ');
     // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
     // engine paired with the arm — or, when there are none, the engine's own reason.
     const nPlates = (page.familyPins || []).length;
@@ -1262,7 +1355,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         manualDims: manualDims.filter(d => d.pageKey === page.key),
         noteLines: [
           ...(rows.some(r => r.hasAsMounted) ? [AS_MOUNTED_NOTE] : []),
-          'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
+          RING_NOTE,
         ],
         paper: pagePaper,
         footerNote: reducedNote,

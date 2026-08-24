@@ -232,7 +232,7 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
 
   // Space the drawings may occupy, once the title block, the notes and the bottom strip are out.
   const bodyTop = MARGIN + 78;
-  const notesH = noteLines.length * (FS.note + 4) + 18;
+  const notesH = (noteLines.length + 1) * (FS.note + 4) + 18;
   // The bottom ring strip is gone (Stuart 2026-08-23): each ring is named where it hangs, so
   // the whole body height belongs to the rows.
   const bodyH = P.H - MARGIN - bodyTop - notesH;
@@ -342,8 +342,10 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     cursor += h + lead;
   });
 
+  // Notes end one line ABOVE the footer — on letter the two shared a baseline and the long
+  // convention note ran straight through the scale statement (Stuart's 2026-08-23b screenshots).
   noteLines.forEach((line, i) => {
-    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 14 - (noteLines.length - 1 - i) * (FS.note + 4)}" font-size="${FS.note}">${line}</text>`;
+    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 14 - (noteLines.length - i) * (FS.note + 4)}" font-size="${FS.note}">${line}</text>`;
   });
   const footer = footerNote || (toScale
     ? `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`
@@ -377,7 +379,7 @@ export function buildItemsGridPage({ title, subtitle, items = [], noteLines = []
     if (it.note) svg += `<text x="${cx}" y="${by + bh + 22}" font-size="9" text-anchor="middle">${it.note}</text>`;
   });
   noteLines.forEach((line, i) => {
-    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
+    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 12 - (noteLines.length - i) * 14}" font-size="10">${line}</text>`;
   });
   svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="10" text-anchor="end">${footerNote || `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`}</text>`;
   return { svg: wrapSvg(P, svg), viewMaps: [], paper };
