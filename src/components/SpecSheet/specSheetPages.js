@@ -230,6 +230,13 @@ export function specPages({ choices, answers = {} }) {
         // pool first is the same gate the configurator applies before it offers anything.
         const offered = { choices: judge(norm, leaf).in };
         for (const { choice: subject, kind } of subjectsOf(model)) {
+            // ── A RETURN MEETS THE WALL (Stuart 2026-08-23b) ────────────────────────────────
+            // The ceiling leaf offered the returns too (an END option votes on no mount), so
+            // every return got a SECOND page whose plates deduped to the CEILING pins — which is
+            // exactly the "showing them with ceiling backplates" he reported, plus audit noise
+            // once the rtn-only swap put wall plates on a ceiling page. The engine's own pairing
+            // comment already states the rule: a return always meets the wall.
+            if (kind === 'RETURN' && U(leaf.mount) === 'CEILING') continue;
             const rod = rodForArm(offered, subject);
             // ── A DOUBLE HAS TWO POLES AND THE SHEET SHOWS BOTH ─────────────────────────────
             // Stuart 2026-08-23: "on doubles you should show both poles in their place not just
@@ -262,9 +269,13 @@ export function specPages({ choices, answers = {} }) {
             // returnOnly option is left to filter to. Each plate is therefore swapped for its
             // returnOnly TWIN — same part, the pin tagged rtn-only, same side where possible —
             // which is the one-code-many-pins resolution again, decided by the tag.
+            // ⚠ THE TWIN COMES FROM THE LEAF'S OWN ADMISSIBLE SET. Searching the whole choice
+            // list handed a single-return page the DOUBLE world's rtn plates — the audit caught
+            // it ("not admissible at SOLID · SINGLE · WALL · 3.625"). judge() has already said
+            // which copies belong at this leaf; the swap picks among those.
             const plates = kind !== 'RETURN' ? plates0 : plates0.map(p => {
                 if (p.returnOnly) return p;
-                const twin = norm.find(c => c.returnOnly && U(c.role) === 'BACKPLATE'
+                const twin = (offered.choices || []).find(c => c.returnOnly && U(c.role) === 'BACKPLATE'
                     && U(c.partId) === U(p.partId)
                     && (!c.position || !p.position || c.position === p.position));
                 return twin || p;

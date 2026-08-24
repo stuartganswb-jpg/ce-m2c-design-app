@@ -1033,7 +1033,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         if (!opts.isReturn) return null;
         const away = [0, 0, 0];
         away[axes.projAxis] = -(Math.sign(axes.wallCoord - axes.poleBox.center[axes.projAxis]) || 1);
-        return { right: views.front.right, up: away };
+        const right = views.front.right;
+        // ⚠ A VIEW IS THREE VECTORS, NOT TWO. renderHiddenLine reads view.viewDir for edge
+        // collection and the depth raster — handing it {right, up} alone crashed every return
+        // page. The camera direction is derived so the basis keeps makeViews' handedness
+        // invariant (cross(right, up) = −viewDir), whatever the mirror decision did to `right`.
+        const viewDir = [
+          -(right[1] * away[2] - right[2] * away[1]),
+          -(right[2] * away[0] - right[0] * away[2]),
+          -(right[0] * away[1] - right[1] * away[0]),
+        ];
+        return { right, up: away, viewDir };
       })();
       const profile = withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900));
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
