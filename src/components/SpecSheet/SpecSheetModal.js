@@ -301,12 +301,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   //
   // The engine's choice already names its own node — that IS the pin, with nothing to resolve.
   // Code matching survives only as a fallback for a choice carrying no node at all.
-  const pinForChoice = useCallback((choice, { sideFirst = false } = {}) => {
+  const pinForChoice = useCallback((choice, { sideFirst = false, centerFirst = false } = {}) => {
     if (!choice) return null;
     const usable = (pins || []).filter(p => p.choiceNode && !p.isHiddenPart);
     const want = String(choice.partId || '').trim().toUpperCase();
     const same = usable.filter(p => String(p.partId || '').trim().toUpperCase() === want);
     const posOf = (p) => clusterById[p.clusterId]?.pos || '';
+    // ⚠ NAME IT BY OUR PATTERN ID (Stuart 2026-08-23b: "pull the actual erp item id for these
+    // bends not the node name"). A pin's partName is sometimes the node it was built from — an
+    // artefact of the .fbx that means nothing to anyone reading a sheet. The Legacy ERP ID field
+    // is the item number, so it leads wherever it is filled; partName remains the fallback.
+    const named = (p) => ({ ...p, partName: p.legacyErpId || p.partName || choice.name || choice.partId });
     // ⚠ THE ROD IS THE ONE EXCEPTION. The sheet draws one hand, and a three-piece pole is pinned
     // per side — so whichever SEGMENT the engine happened to name must not decide which way the
     // rod runs on the page (Stuart: "for some reason these brackets the pole went off to the left
@@ -325,19 +330,25 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       if (ct) like = narrowPins(like, p => String(p.tier || '').toUpperCase() === ct);
       like = narrowPins(like, p => JSON.stringify(
         Object.keys(parseProjTiers(p.projInches || '')).length ? parseProjTiers(p.projInches || '') : null) === cut);
-      const onSide = like.find(p => posOf(p) === side)
-        || like.find(p => posOf(p) === 'CENTER')
-        || like.find(p => posOf(p) === 'SHARED');
-      if (onSide) return { ...onSide, partName: onSide.partName || choice.name || choice.partId };
+      // ⚠ A RETURN'S ROD IS THE CENTRE SEGMENT (Stuart 2026-08-23b: "you have the miter and the
+      // french return on one sheet together merged into each other"). The subject of a return
+      // page IS a length of pole with the bend or miter on its end — drawing the drawn side's
+      // rod segment on top of it drew the straight rod THROUGH the bend, and the overlap read
+      // as both shapes merged. The configurator agrees: a chosen return replaces that end's rod
+      // segment (segmentShows: answered && !isReturn). So a return page's rod leads from the
+      // CENTRE, and the bend carries its own pole.
+      const order = centerFirst ? ['CENTER', side, 'SHARED'] : [side, 'CENTER', 'SHARED'];
+      const onSide = order.map(pos => like.find(p => posOf(p) === pos)).find(Boolean);
+      if (onSide) return named(onSide);
     }
-    const named = new Set((choice.nodes || []).map(n => String(n).toLowerCase()));
-    const exact = usable.find(p => named.has(String(p.choiceNode || '').toLowerCase())
-      || named.has(String(p.targetNode || '').toLowerCase()));
-    if (exact) return { ...exact, partName: exact.partName || choice.name || choice.partId };
+    const wanted = new Set((choice.nodes || []).map(n => String(n).toLowerCase()));
+    const exact = usable.find(p => wanted.has(String(p.choiceNode || '').toLowerCase())
+      || wanted.has(String(p.targetNode || '').toLowerCase()));
+    if (exact) return named(exact);
     const at = (pos) => same.find(p => (posOf(p) || side) === pos);
     const pin = at(side) || at('CENTER') || at('SHARED') || at('') || same[0]
       || usable.find(p => String(p.id || p.choiceNode || '') === String(choice.id));
-    return pin ? { ...pin, partName: pin.partName || choice.name || choice.partId } : null;
+    return pin ? named(pin) : null;
   }, [pins, clusterById, side]);
 
   useEffect(() => {
@@ -376,7 +387,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // single, front and back on a double.
         rodNodes: (() => {
           const set = (p.rods && p.rods.length ? p.rods : [p.rod]).filter(Boolean);
-          const nodes = set.map(r => pinForChoice(r, { sideFirst: true })?.choiceNode).filter(Boolean);
+          // A return page's rod leads from the CENTRE segment — the bend IS that end's rod.
+          const nodes = set.map(r => pinForChoice(r, { sideFirst: true, centerFirst: p.kind === 'RETURN' })?.choiceNode).filter(Boolean);
           return nodes.length ? [...new Set(nodes)] : (p.rod?.nodes || []);
         })(),
         // ⚠ THE PROJECTION OF A DOUBLE IS PER TIER. A double's tag is not a number but a map —
@@ -790,6 +802,27 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       return null;
     })();
     const withSection = (view) => (sectionRider ? mergeViews(view, renderHiddenLine(sectionRider, views.profile, 900)) : view);
+    // ── A RETURN IS SHOWN FROM OVERHEAD (Stuart 2026-08-23b) ────────────────────────────────
+    // "instead of showing from the side profile, we need to show these (all when marked as
+    //  returns) from overhead view, so that we can clearly mark the projection and show the
+    //  curved vs miter shape between the two." Shared by BOTH row builders — the traverse miters
+    // draw alone (no plates) and need the plan view too. Same `right` basis as the elevation so
+    // the row reads across; the wall sits at the bottom edge.
+    // ⚠ A VIEW IS THREE VECTORS. renderHiddenLine reads view.viewDir for edge collection and the
+    // depth raster; the camera direction is derived so the basis keeps makeViews' handedness
+    // invariant (cross(right, up) = −viewDir), whatever the mirror decision did to `right`.
+    const topView = (() => {
+      if (!opts.isReturn) return null;
+      const away = [0, 0, 0];
+      away[axes.projAxis] = -(Math.sign(axes.wallCoord - axes.poleBox.center[axes.projAxis]) || 1);
+      const right = views.front.right;
+      const viewDir = [
+        -(right[1] * away[2] - right[2] * away[1]),
+        -(right[2] * away[0] - right[0] * away[2]),
+        -(right[0] * away[1] - right[1] * away[0]),
+      ];
+      return { right, up: away, viewDir };
+    })();
 
     // Rod break: clip the front view to a window around plate/bracket/ring and mark the
     // cut — a full rod can't print at 1:1, and the hand-made sheets truncate it the same way.
@@ -870,7 +903,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // profile looks down that axis — so they all land on the same spot and draw on top of each
       // other (Stuart 2026-08-23: "rendering over laps"). The reference's profile column is the
       // arm's section; each ring's own end view is on the bottom strip.
-      const profile = withSection(renderHiddenLine([...bracket, ...poleDrawn], views.profile, 900));
+      const profile = withSection(renderHiddenLine([...bracket, ...poleDrawn], topView || views.profile, 900));
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF);
@@ -905,6 +938,15 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           const rP = viewBbox(ringBody.length ? ringBody : endRing, views.profile);
           dims.profile.push({ t: 'dia', u: rP.maxU - (rP.maxU - rP.minU) * 0.15, v: rP.maxV - (rP.maxV - rP.minV) * 0.15, in: (rP.maxV - rP.minV) * M2IN });
         }
+      } else if (topView) {
+        // Overhead return with no plate (the traverse miters): projection is the vertical
+        // measure in the plan view, wall edge to pole centreline, marked clear on the right.
+        const topB = viewBbox([...bracket, ...poleDrawn], topView);
+        const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = axes.wallCoord;
+        const wallV = projPoint(topView, wallPt)[1];
+        const poleV = projPoint(topView, [...axes.poleCenter])[1];
+        measProjIn = Math.abs(poleV - wallV) * M2IN;
+        dims.profile.push({ t: 'v', u: topB.maxU, v0: Math.max(wallV, poleV), v1: Math.min(wallV, poleV), off: 16, side: 1, in: measProjIn });
       } else {
         const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = axes.wallCoord;
         const wallU = projPoint(views.profile, wallPt)[0];
@@ -937,7 +979,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
       // The rod centreline in each view — the row's shared datum, so the section reads across
       // from the elevation instead of each cell floating on its own extents.
-      const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
+      const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: topView ? undefined : rodCentreV(views.profile) };
       const padBelow = ringBoxes.length ? RING_LABEL_DROP + (RING_LABEL_LEVELS - 1) * RING_LABEL_STAGGER + FS_LABEL_ROOM : 0;
       return { rows: [{ rowKey: bracketPin.partName, partName: bracketPin.partName, wallCode: '', front, profile, detail: null, dims, datum, padBelow, hasAsMounted: false }], axes, measured: { poleDiaIn: (poleF.maxV - poleF.minV) * M2IN, projIn: measProjIn } };
     }
@@ -955,7 +997,15 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const plateOnCenterline = Math.abs(cb0.center[axes.vertAxis] - poleCV) < 0.004; // < ~5/32"
       const rootOffCenterline = rootV != null && Math.abs(rootV - poleCV) > 0.008;    // > ~5/16"
       let plateAll = plateAll0;
-      if (plateOnCenterline && rootOffCenterline) {
+      if (opts.isReturn) {
+        // ── A RETURN'S PLATE IS CENTRED ON THE POLE (Stuart 2026-08-23b) ─────────────────
+        // "the backplates should line up directly in the middle of the pole." A return has no
+        // arm — the bent pole itself meets the wall — so the plate sits with the pole through
+        // its centre, wherever the borrowed pin's copy was modelled.
+        const d = [0, 0, 0];
+        d[axes.vertAxis] = poleCV - cb0.center[axes.vertAxis];
+        if (Math.abs(d[axes.vertAxis]) > 1e-5) plateAll = translateMeshes(plateAll0, d);
+      } else if (plateOnCenterline && rootOffCenterline) {
         const d = [0, 0, 0];
         d[axes.vertAxis] = rootV - cb0.center[axes.vertAxis];
         plateAll = translateMeshes(plateAll0, d);
@@ -1022,29 +1072,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const meshes = [...bracket, ...plateAll, ...poleDrawn, ...ringMeshes];
       const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes));
       // Rings excluded — see the note on the basic row: they stack in this view.
-      // ── A RETURN IS SHOWN FROM OVERHEAD (Stuart 2026-08-23b) ────────────────────────────
-      // "instead of showing from the side profile, we need to show these (all when marked as
-      //  returns) from overhead view, so that we can clearly mark the projection and show the
-      //  curved vs miter shape between the two." The plan view keeps the elevation's left-right
-      // (same `right` basis, so the row still reads across) and looks straight down: the wall
-      // sits at the bottom edge, the rod runs across, and the french curve or miter angle is the
-      // shape between them — which is exactly the thing the side view could never show.
-      const topView = (() => {
-        if (!opts.isReturn) return null;
-        const away = [0, 0, 0];
-        away[axes.projAxis] = -(Math.sign(axes.wallCoord - axes.poleBox.center[axes.projAxis]) || 1);
-        const right = views.front.right;
-        // ⚠ A VIEW IS THREE VECTORS, NOT TWO. renderHiddenLine reads view.viewDir for edge
-        // collection and the depth raster — handing it {right, up} alone crashed every return
-        // page. The camera direction is derived so the basis keeps makeViews' handedness
-        // invariant (cross(right, up) = −viewDir), whatever the mirror decision did to `right`.
-        const viewDir = [
-          -(right[1] * away[2] - right[2] * away[1]),
-          -(right[2] * away[0] - right[0] * away[2]),
-          -(right[0] * away[1] - right[1] * away[0]),
-        ];
-        return { right, up: away, viewDir };
-      })();
       const profile = withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900));
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
