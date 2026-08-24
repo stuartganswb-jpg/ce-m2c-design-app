@@ -208,7 +208,13 @@ export function plateFamilies(plates) {
 export function specPages({ choices, answers = {} }) {
     const pages = [];
     const seen = new Set();
-    const catalogSeen = new Set();
+    // ── ONE CATALOG, NOT ONE PER LEAF (Stuart 2026-08-23) ────────────────────────────────────
+    // "there is no need to duplicate them as the finials are in many locations just show them
+    //  from the front single once is enough for group." A finial is pinned per side, per rod
+    // world and per bracket family, so the per-leaf catalogs listed the same parts again and
+    // again. They are unioned by part across every leaf and printed once, at the end.
+    const catFinials = new Map();
+    const catAccessories = new Map();
     // ⚠ THE WALK NEEDS NORMALIZED CHOICES, AND ONLY ONCE. `admits` reads `fits`, which
     // `applyFitsDefaults` puts there — raw pins have none, so walking them throws. resolve() does
     // that normalization, so the walk is handed its output; the RAW list still goes to every
@@ -302,15 +308,14 @@ export function specPages({ choices, answers = {} }) {
                 isTraverse: false, riders: [],
             });
         }
-        const items = [...cat.finials, ...cat.accessories];
-        if (!items.length) continue;
-        const csig = items.map(i => U(i.partId || i.id)).sort().join(',');
-        if (catalogSeen.has(csig)) continue;
-        catalogSeen.add(csig);
+        cat.finials.forEach(f => { const k = U(f.partId || f.id); if (k && !catFinials.has(k)) catFinials.set(k, f); });
+        cat.accessories.forEach(a => { const k = U(a.partId || a.id); if (k && !catAccessories.has(k)) catAccessories.set(k, a); });
+    }
+    if (catFinials.size || catAccessories.size) {
         pages.push({
-            key: `CATALOG__${catalogSeen.size}`, kind: 'CATALOG', answers: leaf, label,
+            key: 'CATALOG__ALL', kind: 'CATALOG', answers: {}, label: '',
             subject: null, rod: null, plates: [], rings: [],
-            finials: cat.finials, accessories: cat.accessories,
+            finials: [...catFinials.values()], accessories: [...catAccessories.values()],
             suppressedBy: null, reason: '', isTraverse: false, riders: [],
         });
     }

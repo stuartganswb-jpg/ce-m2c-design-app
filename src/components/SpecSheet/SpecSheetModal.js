@@ -21,7 +21,7 @@ import { buildPageSvg, buildWallMountsPage, buildItemsGridPage, PAPERS } from '.
 import { rodForArm, visibleNodesForRow } from './specSheetRows';
 import { specPages, auditPages } from './specSheetPages';
 import { choicesFromAssembly } from '../Shared/hardwareAdapter';
-import { resolve as resolveHardware, parseProjTiers } from '../Shared/hardwareModel';
+import { resolve as resolveHardware, parseProjTiers, companionsFor } from '../Shared/hardwareModel';
 import { openSpecSheetPrint, downloadSpecSheetPdf } from './specSheetOutput';
 
 // Wall-mount plate meshes are children of each backplate choice node in the merged GLB
@@ -99,14 +99,16 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // it on. The third mode ('fit', a compact letter layout with its own scale rules) is gone: it
   // was where the column-scale defect lived, and a second layout that reads differently from the
   // master is a second thing to be wrong.
-  const [paperMode, setPaperMode] = useState('tab11');
-  // 'tab11' = 11×17 landscape · 'tab11P' = 11×17 PORTRAIT (16.5" of drawing height, for the
-  // multi-row plate sheets that are bound by height) · 'letterReduced' = the master on letter.
-  const layoutPaper = paperMode === 'tab11P' ? 'tabloidP' : 'tabloid';
-  const outputPaper = paperMode === 'tab11' ? 'tabloid' : paperMode === 'tab11P' ? 'tabloidP' : 'letter';
-  const reducedNote = paperMode === 'letterReduced'
-    ? 'REDUCED PRINT OF THE 11×17 1:1 MASTER — NOT 1:1 AT THIS SIZE (dimensions are true; use 11×17 at 100% for actual scale)'
-    : null;
+  // ── THE PAPER IS THE BINDER'S (Stuart 2026-08-23) ────────────────────────────────────────
+  // "let's lose the 11x17 format, not needed go with 8.5x11 standard should be portrait,
+  //  landscape only for long doubles as is now." The 11×17 master and its reduced-print mode are
+  // gone: the sheets live in an 8.5×11 catalog binder, so letter IS the master and the footer's
+  // % is honest against the page that prints. 'auto' follows the page — a double stands up two
+  // rods and its section is the projection deep, so it is a WIDE drawing and turns landscape;
+  // everything else is portrait. Clicking an orientation overrides the page you are looking at;
+  // moving to another page returns to auto. layoutPaper is derived below, after the page list.
+  const [paperMode, setPaperMode] = useState('auto'); // 'auto' | 'P' | 'L'
+  const reducedNote = null; // letter is the master now — nothing is a reduced print of anything
   // The scene is loaded ONCE and counted, not described. What a page contains is the engine's
   // answer (specSheetPages), which needs pins and tags — not geometry — so the two no longer
   // have to agree about anything.
@@ -344,7 +346,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const pageList = [];
     for (const p of built) {
       if (p.kind === 'CATALOG') {
-        const items = [...(p.finials || []), ...(p.accessories || [])].map(pinForChoice).filter(Boolean);
+        // The CHOICE rides along with its pin: the collar pairing (requiresCollar) is a fact on
+        // the choice, and the catalog needs it to draw a two-part acrylic finial whole.
+        const items = [...(p.finials || []), ...(p.accessories || [])]
+          .map(c => ({ choice: c, pin: pinForChoice(c) })).filter(x => x.pin);
         if (items.length) pageList.push({ key: p.key, kind: 'CATALOG', title: `❖ Finials & accessories${p.label ? ` · ${p.label}` : ''}`, itemPins: items, family: p.label });
         continue;
       }
@@ -450,6 +455,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [pages, narrow]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setPageIndex(0); }, [narrow]);
+
+  // A WIDE page is one that stands up two rods (a double) — its section is the projection deep,
+  // so landscape is its natural orientation. Everything else prints portrait. The same rule keys
+  // the bulk print/PDF below, so what you see per page is what the binder set contains.
+  const paperFor = useCallback((page) => ((((page?.rodNodes || []).length > 1) || page?.projTiers) ? 'letter' : 'letterP'), []);
+  const curPage = shownPages[Math.min(pageIndex, Math.max(0, shownPages.length - 1))] || null;
+  const layoutPaper = paperMode === 'P' ? 'letterP' : paperMode === 'L' ? 'letter' : paperFor(curPage);
+  useEffect(() => { setPaperMode('auto'); }, [pageIndex]);
 
   // ---- build rows for a page (cached per bracket × family) ----
   const buildRows = useCallback((bracketPin, familyPins, opts = {}) => {
@@ -1062,43 +1075,55 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }, [pages, sideNodesFor, wallCfg]);
 
   // ---- catalog page: the finials + accessories this leaf offers, at 1:1, L × Ø dims ----
-  const buildCatalog = useCallback((itemPins = []) => {
-    const cacheKey = itemPins.map(p => p.choiceNode).join('|');
+  const buildCatalog = useCallback((itemPairs = []) => {
+    const cacheKey = itemPairs.map(x => x.pin.choiceNode).join('|');
     if (finialsRef.current?.key === cacheKey) return finialsRef.current.items;
     const scene = sceneRef.current;
     const poleNodes = sideNodesFor('POLE');
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
+    // companionsFor reads projTiers/tier off NORMALIZED choices — resolve once for the page.
+    const norm = engineChoices ? (resolveHardware({ choices: engineChoices, answers: {}, selectedIds: [] }).choices || []) : [];
     const items = [];
     let views = null;
-    for (const p of itemPins) {
-      const meshes = extractWorldMeshes(scene, [p.choiceNode]);
+    for (const { choice, pin } of itemPairs) {
+      let meshes = extractWorldMeshes(scene, [pin.choiceNode]);
       if (!meshes.length) continue;
+      // ── A TWO-PART ACRYLIC FINIAL IS DRAWN WHOLE (Stuart 2026-08-23) ────────────────────
+      // "the acrylic finials need to be shown with the collars, they are tagged that way on
+      //  1.6/cpq." The collar is never a choice — it is the companion of the finial that
+      // requires it (companionsFor, the same call the configurator and the BOM make), so the
+      // catalog asks the same question and draws the pair as one item.
+      if (choice?.requiresCollar) {
+        for (const col of companionsFor(norm, [String(choice.id)])) {
+          const colPin = pinForChoice(col);
+          if (colPin) meshes = [...meshes, ...extractWorldMeshes(scene, [colPin.choiceNode])];
+        }
+      }
       if (!views) {
         const axes = inferAxes(pole.length ? pole : meshes, meshes);
         views = makeViews(axes);
       }
       const view = renderHiddenLine(meshes, views.front, 400);
       const b = viewBbox(meshes, views.front);
-      items.push({ partName: p.partName, view, wIn: (b.maxU - b.minU) * M2IN, hIn: (b.maxV - b.minV) * M2IN });
+      items.push({ partName: pin.partName, view, wIn: (b.maxU - b.minU) * M2IN, hIn: (b.maxV - b.minV) * M2IN });
     }
     finialsRef.current = { key: cacheKey, items };
     return items;
-  }, [sideNodesFor]);
+  }, [sideNodesFor, engineChoices, pinForChoice]);
 
-  const composeCatalogPage = useCallback((page) => buildItemsGridPage({
+  const composeCatalogPage = useCallback((page, paper) => buildItemsGridPage({
     title: `${baseAssembly?.itemName || baseAssembly?.itemId} — Finials & accessories${page?.family ? ` · ${page.family}` : ''}`,
-    subtitle: 'Every end treatment and accessory this configuration offers, at actual size. Socket depth is hidden geometry — add it with the manual dim tool.',
+    subtitle: 'Every end treatment and accessory, once, from the front, at actual size. Socket depth is hidden geometry — add it with the manual dim tool.',
     items: buildCatalog(page?.itemPins || []).map(f => ({ code: rowCode(f.partName), view: f.view, wIn: f.wIn, hIn: f.hIn })),
-    paper: layoutPaper,
+    paper: paper || layoutPaper,
     footerNote: reducedNote,
-    perRowOverride: layoutPaper === 'tabloid' ? 5 : 4,
   }), [buildCatalog, rowCode, layoutPaper, reducedNote, baseAssembly?.itemName, baseAssembly?.itemId]);
 
-  const composeWallMountsPage = useCallback(() => buildWallMountsPage({
+  const composeWallMountsPage = useCallback((paper) => buildWallMountsPage({
     title: `${baseAssembly?.itemName || baseAssembly?.itemId} — Wall mounts`,
     items: buildWallMounts(),
     noteLines: ['Top-hole offsets come from the Wall mounts panel and drive the as-mounted dims.'],
-    paper: layoutPaper,
+    paper: paper || layoutPaper,
     footerNote: reducedNote,
   }), [buildWallMounts, layoutPaper, reducedNote, baseAssembly?.itemName, baseAssembly?.itemId]);
 
@@ -1211,11 +1236,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   };
 
   // every page rendered (uses cache; builds missing ones) — for print/PDF
-  // Prints what you are looking at — the narrowed set, not all seventy.
+  // Prints what you are looking at — the narrowed set, not all seventy. Each page carries its
+  // OWN paper (the auto rule): portrait standard, landscape for the wide double sheets, so the
+  // binder set prints mixed and the output lane turns the landscape ones onto the portrait page.
   const buildAllPages = () => shownPages.map((page) => {
     try {
-    if (page.kind === 'WALLMOUNTS') return composeWallMountsPage().svg;
-    if (page.kind === 'CATALOG') return composeCatalogPage(page).svg;
+    if (page.kind === 'WALLMOUNTS') return { svg: composeWallMountsPage('letterP').svg, paper: 'letterP' };
+    if (page.kind === 'CATALOG') return { svg: composeCatalogPage(page, 'letterP').svg, paper: 'letterP' };
     let built = rowCacheRef.current[page.key];
     if (!built) { built = buildRows(page.bracketPin, page.familyPins, { isIM: page.isIM, ringPins: page.ringPins, riderPins: page.riderPins, rodNodes: page.rodNodes, projIn: page.projIn, projTiers: page.projTiers }); rowCacheRef.current[page.key] = built; }
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(page.bracketPin.partName) }));
@@ -1226,18 +1253,22 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const nPlates = (page.familyPins || []).length;
     const famLabel = [page.family, page.plateFamily, nPlates ? `${nPlates} plate${nPlates === 1 ? '' : 's'}` : (page.reason || 'drawn alone')]
       .filter(Boolean).join(' · ');
-    return buildPageSvg({
-      title: `${baseAssembly.itemName || baseAssembly.itemId} — ${titleCode}`,
-      subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel}`,
-      rows,
-      manualDims: manualDims.filter(d => d.pageKey === page.key),
-      noteLines: [
-        ...(rows.some(r => r.hasAsMounted) ? [AS_MOUNTED_NOTE] : []),
-        'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
-      ],
-      paper: layoutPaper,
-      footerNote: reducedNote,
-    }).svg;
+    const pagePaper = paperFor(page);
+    return {
+      svg: buildPageSvg({
+        title: `${baseAssembly.itemName || baseAssembly.itemId} — ${titleCode}`,
+        subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel}`,
+        rows,
+        manualDims: manualDims.filter(d => d.pageKey === page.key),
+        noteLines: [
+          ...(rows.some(r => r.hasAsMounted) ? [AS_MOUNTED_NOTE] : []),
+          'Ring dim = top of rod to bottom of eyelet. Profile horizontal dim = wall face to pole centerline.',
+        ],
+        paper: pagePaper,
+        footerNote: reducedNote,
+      }).svg,
+      paper: pagePaper,
+    };
     } catch (e) {
       // One page that cannot draw does not cost you the other sixty-nine.
       console.error('SpecSheet page skipped', page.key, e);
@@ -1246,13 +1277,13 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   }).filter(Boolean);
 
   const handlePrint = () => {
-    try { openSpecSheetPrint(assembly.itemName || assembly.itemId, buildAllPages(), outputPaper); }
+    try { openSpecSheetPrint(assembly.itemName || assembly.itemId, buildAllPages()); }
     catch (e) { alert('Print failed: ' + (e?.message || e)); }
   };
   const handlePdf = async () => {
     try {
       setStatus('Building PDF…');
-      await downloadSpecSheetPdf(assembly.itemName || assembly.itemId, buildAllPages(), outputPaper);
+      await downloadSpecSheetPdf(assembly.itemName || assembly.itemId, buildAllPages());
       setStatus('');
     } catch (e) { console.error(e); alert('PDF failed: ' + (e?.message || e)); setStatus(''); }
   };
@@ -1297,11 +1328,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             <button style={edition === 'H1' ? btnOn : btn} onClick={() => setEdition('H1')}>H1 codes</button>
             <button style={edition === 'FAB' ? btnOn : btn} onClick={() => setEdition('FAB')}>Fabricut codes</button>
           </div>
-          <div style={{ display: 'flex', gap: '4px' }} title="1:1 = actual size on 11×17 · Reduced = the same master printed on 8.5×11 (~64%; dimensions still read true)">
-            <button style={paperMode === 'tab11' ? btnOn : btn} onClick={() => setPaperMode('tab11')}>1:1 · 11×17</button>
-            <button style={paperMode === 'tab11P' ? btnOn : btn} title="Same sheet turned — 16.5in of drawing height instead of 10.5in. The multi-row plate sheets are bound by height, so this is worth roughly double the drawn size on them." onClick={() => setPaperMode('tab11P')}>1:1 · 11×17 ↕</button>
-            <button style={paperMode === 'letterReduced' ? btnOn : btn} onClick={() => setPaperMode('letterReduced')}>Reduced · 8.5×11</button>
-
+          <div style={{ display: 'flex', gap: '4px' }} title="8.5×11 binder pages — portrait is the standard; a double is a wide drawing, so its sheets turn landscape automatically. Click to override the page you are on.">
+            <button style={layoutPaper === 'letterP' ? btnOn : btn} onClick={() => setPaperMode('P')}>8.5×11 ↕</button>
+            <button style={layoutPaper === 'letter' ? btnOn : btn} onClick={() => setPaperMode('L')}>8.5×11 ↔</button>
           </div>
           <button style={dimTool ? btnOn : btn} onClick={() => { setDimTool(v => !v); pendingPtRef.current = null; }}>＋ Manual dim</button>
           {manualDims.length > 0 && (

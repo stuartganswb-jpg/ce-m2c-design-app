@@ -44,6 +44,9 @@ const CHOICES = [
 
     { id: 'RTN-FR', partId: 'H1-138RBP', role: 'RETURN', position: 'LEFT', proj: '3.625', usesReturnPlates: true, nodes: ['fr'] },
     { id: 'FIN', partId: 'HNFSBLR138', role: 'FINIAL', position: 'LEFT', nodes: ['fin'] },
+    // Traverse-only, so the two worlds offer DIFFERENT catalog sets — which is exactly what used
+    // to print a second catalog page. The union test below cannot fail without this.
+    { id: 'FIN-TRV', partId: 'H1-2TRVFIN', role: 'FINIAL', position: 'LEFT', fits: ['TRAVERSE'], nodes: ['fint'] },
     { id: 'ACC', partId: 'H1-HOLDBACK', role: 'ACCESSORY', nodes: ['acc'] },
 ];
 
@@ -137,8 +140,11 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
 // ── THE CATALOG COMES LAST, AND ONCE ─────────────────────────────────────────────────────────
 {
     const cats = pages.filter(p => p.kind === 'CATALOG');
-    ok('there is a catalog page', cats.length >= 1);
+    // ONE catalog for the whole set (Stuart 2026-08-23: "once is enough for group") — the solid
+    // and traverse worlds offer different finials, which used to print one catalog per leaf.
+    eq('there is exactly one catalog page', cats.length, 1);
     ok('it carries the finials', cats[0].finials.some(f => f.partId === 'HNFSBLR138'));
+    ok('…from every world unioned', cats[0].finials.some(f => f.partId === 'H1-2TRVFIN'));
     ok('and the accessories', cats[0].accessories.some(a => a.partId === 'H1-HOLDBACK'));
     const model = resolve({ choices: CHOICES, answers: { rodKind: 'SOLID', proj: 3.625 } });
     eq('catalogOf reads them off the model', catalogOf(model).finials.length, 1);

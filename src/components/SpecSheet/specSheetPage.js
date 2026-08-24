@@ -10,13 +10,16 @@
 import { fracSvg, fracSvgFromText } from './specSheetGeometry';
 
 export const PAPERS = {
-  letter: { W: 1100, H: 850, printW: 10.5, printH: 8.0, label: '8.5×11' },
+  // ── THE PAPER IS THE BINDER'S (Stuart 2026-08-23) ──────────────────────────────────────────
+  // "let's lose the 11x17 format, not needed go with 8.5x11 standard should be portrait,
+  //  landscape only for long doubles as is now." The sheets live in an 8.5×11 catalog binder, so
+  // letter IS the master: no reduced mode, and the footer's % is honest against the page that
+  // actually prints. Portrait is the standard; a double is a wide drawing (its section alone is
+  // the projection deep), so those sheets turn landscape and bind on the long edge.
+  letter: { W: 1100, H: 850, printW: 10.5, printH: 8.0, label: '8.5×11 landscape' },
+  letterP: { W: 850, H: 1100, printW: 8.0, printH: 10.5, label: '8.5×11 portrait' },
+  // Legacy sizes — kept only so an old saved reference to them cannot crash a render.
   tabloid: { W: 1700, H: 1100, printW: 16.5, printH: 10.5, label: '11×17' },
-  // ⚠ PORTRAIT EXISTS BECAUSE FOUR-ROW SHEETS ARE BOUND BY HEIGHT (Stuart 2026-08-23: "we either
-  // switch orientation away from landscape or fix the scaling"). Landscape 11×17 gives 10.5" of
-  // drawing height; four plate-and-ring rows want about twenty. Portrait gives 16.5" — the same
-  // sheet, turned — which is worth roughly a doubling of drawn size on exactly the pages that
-  // are short of it. It costs width, which those pages were not using.
   tabloidP: { W: 1100, H: 1700, printW: 10.5, printH: 16.5, label: '11×17 portrait' },
 };
 // page units per world meter such that printed output (inside 0.25" margins) is actual size
@@ -222,9 +225,9 @@ function measureGrid(rows, scale) {
 
 // rows[i] = { rowKey, code, wallCode, front, profile, detail, dims } — dim specs:
 //   { t:'h', u0, u1, v, off? } | { t:'v', u, v0, v1, off?, side?, ldy?, dia? } | { t:'dia', u, v, val, dir? }
-export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], paper = 'tabloid', footerNote }) {
-  const P = PAPERS[paper] || PAPERS.tabloid;
-  const oneToOne = scaleForPaper(paper || 'tabloid');
+export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines = [], paper = 'letterP', footerNote }) {
+  const P = PAPERS[paper] || PAPERS.letterP;
+  const oneToOne = scaleForPaper(PAPERS[paper] ? paper : 'letterP');
   const viewMaps = [];
 
   // Space the drawings may occupy, once the title block, the notes and the bottom strip are out.
@@ -343,11 +346,11 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 14 - (noteLines.length - 1 - i) * (FS.note + 4)}" font-size="${FS.note}">${line}</text>`;
   });
   const footer = footerNote || (toScale
-    ? `SCALE 1:1 ON ${P.label} LANDSCAPE (0.25" margins, print at 100%)`
+    ? `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`
     : `REDUCED ${Math.round(shrink * 100)}% TO FIT ${P.label} (${rows.length} row${rows.length === 1 ? '' : 's'}, bound by ${boundBy}) — NOT TO SCALE, READ THE DIMENSIONS`);
   svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 14}" font-size="${FS.note}" text-anchor="end">${footer}</text>`;
 
-  return { svg: wrapSvg(P, svg), viewMaps, paper: paper || 'tabloid', toScale, scale };
+  return { svg: wrapSvg(P, svg), viewMaps, paper: PAPERS[paper] ? paper : 'letterP', toScale, scale };
 }
 
 // Generic 1:1 items-grid page — used for the wall-mounts reference and the finials catalog.
@@ -376,7 +379,7 @@ export function buildItemsGridPage({ title, subtitle, items = [], noteLines = []
   noteLines.forEach((line, i) => {
     svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 12 - (noteLines.length - 1 - i) * 14}" font-size="10">${line}</text>`;
   });
-  svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="10" text-anchor="end">${footerNote || `SCALE 1:1 ON ${P.label} LANDSCAPE (0.25" margins, print at 100%)`}</text>`;
+  svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="10" text-anchor="end">${footerNote || `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`}</text>`;
   return { svg: wrapSvg(P, svg), viewMaps: [], paper };
 }
 
