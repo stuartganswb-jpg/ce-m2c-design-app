@@ -19,6 +19,36 @@ export const PRICE_LEVELS = [
 
 export const priceLevelShort = (id) => PRICE_LEVELS.find(l => l.id === id)?.short || 'STANDARD';
 
+// ── WHICH LEVEL DOES THIS CUSTOMER PRICE AT (Stuart 2026-08-22) ───────────────────────────────
+// "one pricing engine for whole site, portal, etc. … tab 4.6 for all customers whom get their own
+//  pricing/id's is the place with those tools, all other customers either base price or we create
+//  them their own pricing on 4.6."
+//
+// The engine used to default ANY named customer to Fabricut Cost. That was written to solve a real
+// problem — a mill item has no base price, so a connected customer saw a screen of $0.00 lines —
+// but it made somebody else's sheet the fallback for every account. Brimar's french return came in
+// at Fabricut's $35 instead of their own $45, and making the customer's row outrank the default
+// patched the symptom while leaving the fallback in place for every item they had no row on.
+//
+// So the level a customer prices at is a fact ABOUT THE CUSTOMER, stored on their CRM record and
+// edited in 4.6 — not something inferred from their name in four different files. An account with
+// no answer prices at STANDARD: their own rows, then base price. That is the whole rule, and it is
+// the same rule for CPQ, Quick Ship and the portal.
+//
+// `chosen` = a level a human picked on screen this session; it always wins.
+// Returns { level, isDefault } — isDefault says the level was not chosen by anyone, which is what
+// lets a customer's own negotiated row outrank it (see hardwarePricing's precedence).
+export function customerPriceLevel(customer, chosen) {
+    if (chosen && chosen !== 'STANDARD') return { level: chosen, isDefault: false };
+    const set = String(customer?.defaultPriceLevel || '').trim().toUpperCase();
+    if (set && PRICE_LEVELS.some(l => l.id === set)) return { level: set, isDefault: set !== 'STANDARD' };
+    // ⚠ TRANSITIONAL: Fabricut priced this way before the field existed, and losing it on deploy
+    // would silently reprice their whole catalogue at base price. Set defaultPriceLevel on the CRM
+    // record in 4.6 — an explicit STANDARD turns it off — and this shim can be deleted.
+    if (/fabricut/i.test(String(customer?.name || customer?.companyName || ''))) return { level: 'FAB_COST', isDefault: true };
+    return { level: 'STANDARD', isDefault: false };
+}
+
 // ---- WHICH FINISHES ARE "PREMIUM" (Stuart 2026-07-29) ---------------------------------------
 // "the premium rule really should apply to OUTSOURCED FINISHES rather than just looking at the EP,
 // so that it covers P25 — the import tool missed this at times as well."

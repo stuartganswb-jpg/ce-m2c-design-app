@@ -11,7 +11,7 @@ import { seedFromKit, applyKitPricing } from './kitSeed';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
-import { priceLevelShort } from './priceLevels';
+import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { handoffItem, customerLines } from './hardwareHandoff';
 import { finishLabelOf } from './finishLabel';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
@@ -533,9 +533,9 @@ function HardwareConfiguratorInner({
     // tier data still falls through to its customer row and then its base price, and the level in
     // force is named on screen beside the total so a quote can never be priced off a tier nobody
     // could see.
-    const effectiveLevel = (priceLevel && priceLevel !== 'STANDARD') ? priceLevel
-        : (customerId ? 'FAB_COST' : 'STANDARD');
-    const levelIsDefault = effectiveLevel !== 'STANDARD' && (!priceLevel || priceLevel === 'STANDARD');
+    // ⚠ THE LEVEL IS THE CUSTOMER'S, NOT "any customer gets Fabricut's" (Stuart 2026-08-22). One
+    // shared answer, read by CPQ, Quick Ship and the portal alike — see Shared/priceLevels.
+    const { level: effectiveLevel, isDefault: levelIsDefault } = customerPriceLevel(customer, priceLevel);
 
     const priceCtx = useMemo(() => ({
         customerId, customer, priceLevel: effectiveLevel, outsourceCodes,

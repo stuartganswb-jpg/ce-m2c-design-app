@@ -23,7 +23,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatch, deleteField } from "firebase/firestore";
 import { parseControlWorkbook, workbookFileToSheets, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } from '../Shared/traverseKitImport';
-import { fabricutCodeOf, isPlatedSuffix } from '../Shared/priceLevels';
+import { fabricutCodeOf, isPlatedSuffix, PRICE_LEVELS, customerPriceLevel } from '../Shared/priceLevels';
 import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable } from '../Shared/feeRules';
 import { PLATE_ROLES, plateRoleOf, pairedBackplateCode, includesPlate } from '../Shared/plateRules';
 
@@ -221,6 +221,17 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
 
     const codeOf = (p) => upper((p.legacyErpId && p.legacyErpId !== 'PENDING' ? p.legacyErpId : p.itemId) || p.id || '');
     const customer = customers.find(c => c.id === custId) || null;
+    // The customer's pricing tier, read through the one shared answer so this screen and the engines
+    // can never disagree about what it is (the Fabricut name shim shows here too, until it is set).
+    const custLevel = customerPriceLevel(customer, 'STANDARD').level;
+    const saveCustLevel = async (lvl) => {
+        if (!custId) return;
+        setSaving(true);
+        try {
+            await updateDoc(doc(db, 'crm_records', custId), { defaultPriceLevel: lvl });
+        } catch (e) { console.error(e); alert('Could not save the pricing level:\n\n' + (e.message || e)); }
+        setSaving(false);
+    };
 
     const allCollections = useMemo(() => Array.from(new Set(
         inventory.flatMap(p => collectionsOf(p.manufacturingSpecs))
@@ -967,6 +978,21 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     <option value="">— pick a customer —</option>
                     {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
+                {/* ⚠ WHICH LEVEL THIS CUSTOMER PRICES AT (Stuart 2026-08-22). It used to be inferred:
+                    ANY named customer defaulted to Fabricut Cost, which made somebody else's sheet
+                    the fallback for every account. It is a fact about the customer, so it is stored
+                    on the customer and set here — the one place their pricing is maintained. Blank
+                    or Standard = their own rows, then base price. */}
+                {custId && (
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                        title="The pricing tier this customer is quoted at everywhere — CPQ, Order Entry and the portal. Standard means their own Client Pricing rows, then our base price. A Fabricut level reads the item's Customer Alias & Pricing box instead, for the items that carry one.">
+                        <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft }}>Prices at</span>
+                        <select value={custLevel} onChange={e => saveCustLevel(e.target.value)} disabled={saving}
+                            style={{ ...fld, minWidth: '210px', borderColor: custLevel && custLevel !== 'STANDARD' ? theme.brass : theme.line }}>
+                            {PRICE_LEVELS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+                        </select>
+                    </label>
+                )}
                 <div style={{ display: 'flex', border: `1px solid ${theme.line}` }}>
                     {[['COLLECTION', 'Collection'], ['FEES', '💲 Fees & Add-ons'], ['KITS', '📦 Kit Builder'], ['CHECKOUT', '🛒 Checkout Items'], ['PLATES', '🔗 Plate Pricing'], ['ARMS', '🦾 Arms & Returns']].map(([k, l]) => (
                         <button key={k} onClick={() => { setMode(k); setEdits({}); setSearch(''); }} title={k === 'FEES' ? 'The brand\'s fee catalogue — rush, packaging, shipping, returns, colour upcharges. Fees are not collection-scoped, so they all show here.' : k === 'KITS' ? 'Kit records — a customer part# wrapping component items (the 4ft traverse starter). Build the kit, its contents, and the customer\'s SKU/pricing in one place. Shop documents always see the exploded components, never the kit.' : k === 'ARMS' ? 'Which bracket arms and return fees carry a free backplate in their price. Everything does by default — untick the exceptions.' : k === 'PLATES' ? 'Backplate / cover-plate pricing roles for the whole brand at once — which plates ride free with the arm, and what the upgrade costs painted vs premium.' : k === 'CHECKOUT' ? 'What the CPQ checkout screen offers as add-on lines — fees OR real items. Only ticked items appear there.' : 'Parts carrying the chosen collection'} style={{ padding: '11px 15px', background: mode === k ? theme.ink : '#fff', color: mode === k ? '#fff' : theme.inkSoft, border: 'none', borderLeft: k === 'COLLECTION' ? 'none' : `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{l}</button>

@@ -5,7 +5,7 @@
 // follows the pricing rules for the /P and /EP."
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fabricutPriceOf } from './priceLevels.mjs';
+import { fabricutPriceOf, customerPriceLevel } from './priceLevels.mjs';
 
 const BASE = {
     legacyErpId: 'H1-2TRV-EWB',
@@ -57,4 +57,43 @@ test('a variant whose base has no fabricut struct stays null — standard pricin
 test('inherited wholesale falls back to retail ÷ 2 when the tier has no wholesale', () => {
     const noWholesale = { legacyErpId: 'H1-NW', manufacturingSpecs: { fabricut: { paintedCost: 10, paintedRetail: 40 } } };
     assert.equal(fabricutPriceOf(bare('H1-NW/P'), 'FAB_WHOLESALE', 'P01', [], (c) => c === 'H1-NW' ? noWholesale : null), 20);
+});
+
+// ── WHICH LEVEL A CUSTOMER PRICES AT (Stuart 2026-08-22) ──────────────────────────────────────
+// The engine used to default ANY named customer to Fabricut Cost, which made one account's sheet
+// the fallback for every other account. The level is now a fact about the customer.
+test('a customer with no level set prices at STANDARD — their rows, then base price', () => {
+    const r = customerPriceLevel({ id: 'C1', name: 'Brimar' }, 'STANDARD');
+    assert.equal(r.level, 'STANDARD');
+    assert.equal(r.isDefault, false);
+});
+
+test('an account carrying a level prices at it, and it counts as a default', () => {
+    const r = customerPriceLevel({ name: 'Anyone', defaultPriceLevel: 'FAB_WHOLESALE' }, 'STANDARD');
+    assert.equal(r.level, 'FAB_WHOLESALE');
+    assert.equal(r.isDefault, true);   // nobody chose it on screen, so a negotiated row still wins
+});
+
+test('a level CHOSEN on screen always wins, and is not a default', () => {
+    const r = customerPriceLevel({ name: 'Fabricut' }, 'FAB_RETAIL');
+    assert.equal(r.level, 'FAB_RETAIL');
+    assert.equal(r.isDefault, false);
+});
+
+test('Fabricut keeps pricing at cost until the field is set — the transitional shim', () => {
+    assert.equal(customerPriceLevel({ name: 'Fabricut Inc' }, 'STANDARD').level, 'FAB_COST');
+    assert.equal(customerPriceLevel({ companyName: 'FABRICUT' }, 'STANDARD').level, 'FAB_COST');
+});
+
+test('…and an explicit STANDARD on the record turns the shim off', () => {
+    assert.equal(customerPriceLevel({ name: 'Fabricut', defaultPriceLevel: 'STANDARD' }, 'STANDARD').level, 'STANDARD');
+});
+
+test('no customer at all is STANDARD, never a tier', () => {
+    assert.equal(customerPriceLevel(null, '').level, 'STANDARD');
+    assert.equal(customerPriceLevel(undefined, undefined).level, 'STANDARD');
+});
+
+test('a junk level on the record is ignored rather than trusted', () => {
+    assert.equal(customerPriceLevel({ name: 'X', defaultPriceLevel: 'NONSENSE' }, 'STANDARD').level, 'STANDARD');
 });

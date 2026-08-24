@@ -6,6 +6,8 @@ import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clie
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
 import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary } from '../Shared/feeRules';
+import { priceChoice } from '../Shared/hardwarePricing';
+import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
@@ -510,10 +512,28 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     useEffect(() => { setKbDia(prev => (prev && !diaCells.some(d => d.cell === prev)) ? '' : prev); }, [diaCells]);
     useEffect(() => { setKbFinish(prev => (prev && !stockedFinishes.includes(prev)) ? '' : prev); }, [stockedFinishes]);
 
-    const rateFor = (it) => {
-        const r = parseFloat(it.manufacturingSpecs?.basePrice || 0) || 0;
-        return clientPriceFor(it.clientPricing, custKeys) ?? r;
-    };
+    // ── ONE PRICING ENGINE (Stuart 2026-08-22) ───────────────────────────────────────────────
+    // "one pricing engine for whole site, portal, etc."
+    //
+    // This tab used to answer the price question its own way — the customer's row, else base price —
+    // which meant the Customer Alias & Pricing box that governs CPQ did not reach an order entered
+    // here at all. Two engines, two answers, and the one that shipped depended on which door the
+    // order came through. It now asks the SAME resolver CPQ asks (Shared/hardwarePricing): authored
+    // override → the customer's price level → their negotiated row → base price → the flow default.
+    // For a customer with no level that is exactly the old behaviour, which is what makes this safe.
+    const priceCtx = useMemo(() => {
+        const lvl = customerPriceLevel(selectedCustomer, 'STANDARD');
+        return {
+            customerId, customer: selectedCustomer || null,
+            priceLevel: lvl.level, levelIsDefault: lvl.isDefault,
+            outsourceCodes: finishList.filter(f => f.outsourced),
+            // Tier inheritance needs the BASE doc for a /EP variant that carries no box of its own.
+            findByCode: (c) => allItems.find(x => erpOf(x) === String(c || '').trim().toUpperCase()) || null,
+        };
+    }, [customerId, selectedCustomer, finishList, allItems]);
+    // Quick Ship sells FINISHED skus, so the item on the line is already the record that is sold —
+    // finishVariantOf leaves it alone and the price comes off that doc, exactly as before.
+    const rateFor = (it) => (it ? (priceChoice({ partId: it.id }, it, priceCtx).price || 0) : 0);
 
     // qty is counted in PACKS; this is what the warehouse and NetSuite actually see.
     const eachQtyOf = (l) => (parseInt(l.qty) || 0) * (l.packSize || 1);
