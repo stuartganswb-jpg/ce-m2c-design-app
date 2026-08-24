@@ -638,8 +638,15 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         d[ax] = target - rb.center[ax];
         out.push({ partName: rc.partName, meshes: translateMeshes(rc.meshes, d) });
         // Next station: past this ring, with a gap wide enough for its drop dimension AND its
-        // pattern id. Stuart 2026-08-23: "spread the rings out some as they appear very busy".
-        edge = target + sign * (half + 0.013);   // ~1/2" of clear rod between rings
+        // pattern id. Stuart 2026-08-23: "spread the rings out some as they appear very busy",
+        // and again 2026-08-23b: "ideally are just spread a little further apart horizontally so
+        // that it is visually pleasing."
+        // ⚠ THE SPREAD IS FREE ON MULTI-ROW SHEETS AND COSTS SCALE ON ONE-ROW SHEETS. A one-row
+        // page is width-bound — every inch of ring spread comes straight off the drawn size that
+        // is already at 96-100%. A multi-row page is height-bound with its width sitting unused
+        // (same split as WINDOW_MAX_M below). So the rings breathe where the width is free.
+        const gap = plateChoices.length > 1 ? 0.025 : 0.013;   // ~1" spread · ~1/2" tight
+        edge = target + sign * (half + gap);
       }
       return out;
     };
