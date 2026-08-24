@@ -37,6 +37,17 @@ export function poleLengthOf(erp) {
  * @param {string} erpId finished or raw item on the work order (HCUMP410/G)
  * @param {number} qty   finished pieces wanted
  */
+// WHAT COUNTS AS A POLE — the PRODUCT CATEGORY, and nothing else.
+// Stuart 2026-08-22: "assign this rule to only items with category pole or rods, as we do have some
+// small items like brackets that get finished like poles recipe and i do not want you to get those
+// mixed up. All poles are tagged as either poles or rods."
+//
+// That distinction is the whole point. A bracket can run the POLE finishing stream — the elbow does
+// exactly that — and it is still a bracket: you cannot cut an 8 ft one in half. So this must never
+// be wired to `finishStream`, `poles.qty`, "rack of 8", or any of the other pole-ISH flags floating
+// around the work order. Those describe how a thing is FINISHED. This asks what it IS.
+export const isPoleCategory = (productType) => /\b(POLES?|RODS?)\b/i.test(String(productType == null ? '' : productType));
+
 export function poleCutPlan(erpId, qty, opts = {}) {
     // CATEGORY FIRST, GRAMMAR SECOND (Stuart 2026-08-22: "MB is bracket … you are safe to go to
     // the category pole, restrict it").
@@ -45,7 +56,10 @@ export function poleCutPlan(erpId, qty, opts = {}) {
     // BRACKET, and reading its "415" as "4 ft" would have had the app raise a cut order against an
     // HCUMB815 that does not exist — or, worse, against one that does and means something else.
     // The product type is the authority on what a pole is; the code only says how long it is.
-    if (opts.isPole !== true) return null;
+    //
+    // The caller passes the CATEGORY, not a boolean — a boolean is exactly how a pole-ish finishing
+    // flag would end up here by accident.
+    if (!isPoleCategory(opts.productType)) return null;
     const raw = rawOf(erpId);
     const m = LEN_RE.exec(raw);
     if (!m) return null;
