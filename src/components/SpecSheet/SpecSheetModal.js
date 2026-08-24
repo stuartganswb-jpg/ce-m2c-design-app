@@ -1022,7 +1022,20 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const meshes = [...bracket, ...plateAll, ...poleDrawn, ...ringMeshes];
       const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes));
       // Rings excluded — see the note on the basic row: they stack in this view.
-      const profile = withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.profile, 900));
+      // ── A RETURN IS SHOWN FROM OVERHEAD (Stuart 2026-08-23b) ────────────────────────────
+      // "instead of showing from the side profile, we need to show these (all when marked as
+      //  returns) from overhead view, so that we can clearly mark the projection and show the
+      //  curved vs miter shape between the two." The plan view keeps the elevation's left-right
+      // (same `right` basis, so the row still reads across) and looks straight down: the wall
+      // sits at the bottom edge, the rod runs across, and the french curve or miter angle is the
+      // shape between them — which is exactly the thing the side view could never show.
+      const topView = (() => {
+        if (!opts.isReturn) return null;
+        const away = [0, 0, 0];
+        away[axes.projAxis] = -(Math.sign(axes.wallCoord - axes.poleBox.center[axes.projAxis]) || 1);
+        return { right: views.front.right, up: away };
+      })();
+      const profile = withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900));
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
@@ -1037,15 +1050,37 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // The plate names itself where it is drawn (Stuart 2026-08-23: "we need to add the pattern
       // id's for the backplates and coverplates"), on the same line as the ring ids so it costs
       // no extra height.
+      // ⚠ THE PLATE'S DIM AND ID SIT BELOW EVERYTHING THE ROW DRAWS AT THAT STATION (Stuart
+      // 2026-08-23b: "the pattern and measurement of the back plate must move down as it is
+      // written off the pole"). On the traverse sheets the plate is SHORTER than the track, so a
+      // label anchored at the plate's own bottom landed inside the track lines. Anchoring at the
+      // lower of plate-bottom and rod-bottom clears every case, and changes nothing on the solid
+      // sheets where the plate already reaches lowest.
+      const plateAnchorV = Math.min(coverF.minV, viewBbox(poleDrawn, views.front).minV);
       if (platePin.partName) {
-        dims.front.push({ t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: coverF.minV, off: RING_LABEL_DROP, lead: true, text: platePin.partName });
+        dims.front.push({ t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP, lead: true, text: platePin.partName });
       }
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
       // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
       // plate width BELOW the plate — above it the rod crosses the dim on short plates
       if (isRound) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.maxV - (coverF.maxV - coverF.minV) * 0.15, dir: -1, in: plateWIn });
-      else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: coverF.minV, off: 16, in: plateWIn });
+      else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateAnchorV, off: 16, in: plateWIn });
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
+      // ── THE CARRIER'S DROP (Stuart 2026-08-23b) ─────────────────────────────────────────
+      // "the drop measurement shown for traverse should show the line from the bottom of the rod
+      //  to the bottom of the eyelet of the carrier." A track's drapery hangs from the carrier,
+      // so its drop is quoted from the track's UNDERSIDE — not the top, as a ring's is.
+      if (opts.isTraverse) {
+        const tag = (v) => String(v || '').trim().toUpperCase();
+        const cp = (opts.riderPins || []).find(p => tag(p.traverseRole) === 'CARRIER');
+        const cm = cp ? extractWorldMeshes(scene, [cp.choiceNode]) : [];
+        if (cm.length) {
+          const cF = viewBbox(cm, views.front);
+          if (isFinite(cF.minV) && cF.minV < poleF.minV - 0.002) {
+            dims.front.push({ t: 'v', u: cF.maxU, v0: poleF.minV, v1: cF.minV, off: 18, ldy: 12, in: (poleF.minV - cF.minV) * M2IN });
+          }
+        }
+      }
       if (ringF) {
         // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition), for EVERY ring
         // option on the rod — that measurement is the thing that differs between them. Label
@@ -1098,7 +1133,17 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         .filter(g => g.length)
         .map(g => projPoint(views.profile, groupBbox(g).center)[0])
         .sort((x, y) => Math.abs(x - wallU) - Math.abs(y - wallU));
-      if (rodCentres.length > 1) {
+      if (topView) {
+        // Overhead: the projection is a VERTICAL measure in this view — wall face at the bottom
+        // edge to the pole centreline — marked clear of the artwork on the right.
+        const topB = viewBbox([...bracket, ...plateAll, ...poleDrawn], topView);
+        const wallV = projPoint(topView, wallPt)[1];
+        const poleV = projPoint(topView, polePt)[1];
+        dims.profile.push({
+          t: 'v', u: topB.maxU, v0: Math.max(wallV, poleV), v1: Math.min(wallV, poleV),
+          off: 16, side: 1, in: Math.abs(poleV - wallV) * M2IN,
+        });
+      } else if (rodCentres.length > 1) {
         let from = wallU;
         rodCentres.forEach((c, i) => {
           dims.profile.push({ t: 'h', u0: Math.min(from, c), u1: Math.max(from, c), v: profTopV, off: -8 - i * 16, in: Math.abs(c - from) * M2IN });
@@ -1117,7 +1162,8 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // ⚠ NO Ø ON THE HEIGHT DIM (Stuart 2026-08-23b: "the text measurements need to be
       // uniformed some say 3 and others say ⌀3") — a round plate's height happens to be its
       // diameter, but the column reads as one measurement, so it is written as one.
-      dims.profile.push({
+      // (Not on the overhead return view — plate height is invisible looking straight down.)
+      if (!topView) dims.profile.push({
         t: 'v',
         u: plateRight ? coverP.maxU : coverP.minU,
         v0: coverP.maxV, v1: coverP.minV,
@@ -1129,7 +1175,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         dims.detail.push({ t: 'h', u0: wallF.minU, u1: wallF.maxU, v: wallF.maxV, off: -12, in: (wallF.maxU - wallF.minU) * M2IN });
         dims.detail.push({ t: 'v', u: wallF.maxU, v0: wallF.maxV, v1: wallF.minV, off: 12, in: (wallF.maxV - wallF.minV) * M2IN });
       }
-      const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: rodCentreV(views.profile) };
+      const datum = { front: (poleF.minV + poleF.maxV) / 2, profile: topView ? undefined : rodCentreV(views.profile) };
       // ⚠ THE LABELS ARE BELOW THE GEOMETRY AND THE GRID CANNOT SEE THEM. Row heights are measured
       // from mesh bounding boxes, so text dropped under a ring is invisible to the layout and the
       // next row lands on top of it (Stuart 2026-08-23: "the lower row is overlapping the text").
@@ -1152,7 +1198,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     for (const sub of subs) {
       let b = rowCacheRef.current[sub.key];
       if (!b) {
-        b = buildRows(sub.bracketPin, sub.familyPins, { isIM: sub.isIM, isTraverse: sub.isTraverse, ringPins: sub.ringPins, riderPins: sub.riderPins, rodNodes: sub.rodNodes, projIn: sub.projIn, projTiers: sub.projTiers });
+        b = buildRows(sub.bracketPin, sub.familyPins, { isIM: sub.isIM, isTraverse: sub.isTraverse, isReturn: sub.kind === 'RETURN', ringPins: sub.ringPins, riderPins: sub.riderPins, rodNodes: sub.rodNodes, projIn: sub.projIn, projTiers: sub.projTiers });
         rowCacheRef.current[sub.key] = b;
       }
       if (!first) first = b;

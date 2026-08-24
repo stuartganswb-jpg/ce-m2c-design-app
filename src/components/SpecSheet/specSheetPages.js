@@ -252,7 +252,23 @@ export function specPages({ choices, answers = {} }) {
             const rods = U(leaf.setup) === 'DOUBLE'
                 ? [rod, backRodForArm(offered, subject, rod)].filter(Boolean)
                 : (rod ? [rod] : []);
-            const { plates, rings: rings0, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
+            const { plates: plates0, rings: rings0, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
+            // ── A RETURN DRAWS THE RETURN PLATES (Stuart 2026-08-23b) ────────────────────────
+            // "on the miter and french returns, you are currently showing them with ceiling
+            //  backplates and they need to be shown with the backplates marked rtn-only." The
+            // return leaf answers no mount, so every copy of a plate is admissible and the
+            // slot's dedupe can keep ANY pin — a ceiling one included. And filtering the pool is
+            // not enough: the kept option IS a specific pin, so when the ceiling copy won, no
+            // returnOnly option is left to filter to. Each plate is therefore swapped for its
+            // returnOnly TWIN — same part, the pin tagged rtn-only, same side where possible —
+            // which is the one-code-many-pins resolution again, decided by the tag.
+            const plates = kind !== 'RETURN' ? plates0 : plates0.map(p => {
+                if (p.returnOnly) return p;
+                const twin = norm.find(c => c.returnOnly && U(c.role) === 'BACKPLATE'
+                    && U(c.partId) === U(p.partId)
+                    && (!c.position || !p.position || c.position === p.position));
+                return twin || p;
+            });
             const isTrav = !!rod && ROD_ROLES.includes(rod.role) && (U(rod.rodKind) === 'TRAVERSE' || rod.role === 'TRACK');
             // ── A TRAVERSE PAGE DRAWS CARRIERS, NEVER RINGS (Stuart 2026-08-23b) ────────────
             // "on the traverse poles remove the rings, only show the carriers." The untagged

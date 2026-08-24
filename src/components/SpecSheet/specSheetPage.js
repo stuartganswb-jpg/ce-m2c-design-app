@@ -234,7 +234,21 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
 
   // Space the drawings may occupy, once the title block, the notes and the bottom strip are out.
   const bodyTop = MARGIN + 60;
-  const notesH = (noteLines.length + 1) * (FS.note + 4) + 18;
+  // Notes are CENTERED and word-wrapped to the page (Stuart 2026-08-23b: "the text disclaimer
+  // on bottom is not centered it goes off page to right side") — the convention note is longer
+  // than a portrait page, and a clipped disclaimer is no disclaimer.
+  const noteMax = Math.max(20, Math.floor((P.W - 2 * MARGIN - 24) / (FS.note * 0.52)));
+  const wrappedNotes = noteLines.flatMap(line => {
+    const words = String(line).split(' ');
+    const out = []; let cur = '';
+    for (const w of words) {
+      if (cur && cur.length + 1 + w.length > noteMax) { out.push(cur); cur = w; }
+      else cur = cur ? `${cur} ${w}` : w;
+    }
+    if (cur) out.push(cur);
+    return out;
+  });
+  const notesH = (wrappedNotes.length + 1) * (FS.note + 4) + 18;
   // The bottom ring strip is gone (Stuart 2026-08-23): each ring is named where it hangs, so
   // the whole body height belongs to the rows.
   const bodyH = P.H - MARGIN - bodyTop - notesH;
@@ -346,8 +360,8 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
 
   // Notes end one line ABOVE the footer — on letter the two shared a baseline and the long
   // convention note ran straight through the scale statement (Stuart's 2026-08-23b screenshots).
-  noteLines.forEach((line, i) => {
-    svg += `<text x="${MARGIN + 40}" y="${P.H - MARGIN - 14 - (noteLines.length - i) * (FS.note + 4)}" font-size="${FS.note}">${line}</text>`;
+  wrappedNotes.forEach((line, i) => {
+    svg += `<text x="${P.W / 2}" y="${P.H - MARGIN - 14 - (wrappedNotes.length - i) * (FS.note + 4)}" font-size="${FS.note}" text-anchor="middle">${line}</text>`;
   });
   const footer = footerNote || (toScale
     ? `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`
