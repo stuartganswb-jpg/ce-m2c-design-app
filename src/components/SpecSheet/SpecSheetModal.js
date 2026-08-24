@@ -466,22 +466,6 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const engineRod = (opts.rodNodes || []).filter(n => extractWorldMeshes(scene, [n]).length);
     const poleNodes = engineRod.length ? engineRod : keep(sideNodesFor('POLE'));
     const pole = poleNodes.length ? extractWorldMeshes(scene, poleNodes) : [];
-    // ── RINGS RIDE THE FRONT ROD, AND ONLY THE FRONT ROD (Stuart 2026-08-23) ─────────────────
-    // "no rings need to be shown on rear rod." A double now draws both poles, so "the rod" is no
-    // longer a single thing: the ring stations, the ring drop datum and the rod Ø all have to
-    // name WHICH. The front rod is the one furthest from the wall — that is what projection
-    // means, and it needs no extra tag to determine.
-    const frontPole = (() => {
-      if (poleNodes.length < 2) return pole;
-      const groups = poleNodes.map(n => extractWorldMeshes(scene, [n])).filter(g => g.length);
-      if (groups.length < 2) return pole;
-      const ax = axes.projAxis;
-      const toWall = Math.sign(axes.wallCoord - axes.poleBox.center[ax]) || 1;
-      return groups.reduce((best, g) => {
-        const c = groupBbox(g).center[ax], b = groupBbox(best).center[ax];
-        return (toWall > 0 ? c < b : c > b) ? g : best;
-      }, groups[0]);
-    })();
     // ring CHOICES: the cluster can hold several ring options stacked in the model (BPR +
     // BR) — the composed views draw only the one actually hanging on the rod; every option
     // gets its own labeled detail image in the page corner.
@@ -504,6 +488,26 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const firstPlate = plateChoices.length ? extractWorldMeshes(scene, [plateChoices[0].choiceNode]) : [];
     const axes = inferAxes(pole, firstPlate.length ? firstPlate : bracket);
     const views = makeViews(axes);
+    // ⚠ THIS RUNS AFTER `axes`, AND MUST. It reads axes.projAxis / axes.wallCoord, and an IIFE
+    // assigned to a const evaluates where it is WRITTEN — placed above `const axes` it threw
+    // "Cannot access 'M' before initialization" on every page, which is the temporal-dead-zone
+    // trap this codebase has now hit three times (CPQ engine, twice, 2026-08-21).
+    // ── RINGS RIDE THE FRONT ROD, AND ONLY THE FRONT ROD (Stuart 2026-08-23) ─────────────────
+    // "no rings need to be shown on rear rod." A double now draws both poles, so "the rod" is no
+    // longer a single thing: the ring stations, the ring drop datum and the rod Ø all have to
+    // name WHICH. The front rod is the one furthest from the wall — that is what projection
+    // means, and it needs no extra tag to determine.
+    const frontPole = (() => {
+      if (poleNodes.length < 2) return pole;
+      const groups = poleNodes.map(n => extractWorldMeshes(scene, [n])).filter(g => g.length);
+      if (groups.length < 2) return pole;
+      const ax = axes.projAxis;
+      const toWall = Math.sign(axes.wallCoord - axes.poleBox.center[ax]) || 1;
+      return groups.reduce((best, g) => {
+        const c = groupBbox(g).center[ax], b = groupBbox(best).center[ax];
+        return (toWall > 0 ? c < b : c > b) ? g : best;
+      }, groups[0]);
+    })();
     // ── THE MOUNTING IS ON THE LEFT AND THE ROD RUNS RIGHT — ON EVERY SHEET ──────────────────
     // Stuart 2026-08-23: "again the rod goes off to the wrong side, please fix this for all."
     //
