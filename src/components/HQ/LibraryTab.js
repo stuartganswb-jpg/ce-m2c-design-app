@@ -2132,6 +2132,38 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                        </div>
                    )}
                    
+                   {/* ── FINISH STREAM — EVERY RECORD, INCLUDING FEES (Stuart 2026-08-25) ──────────
+                       Which recipe variant (-S / -P) this item's finishing runs follow. Auto reads
+                       the Product Type (POLE/ROD → poles).
+
+                       It used to live inside the "Logistics, Sourcing & Pricing" block, which is
+                       hidden on a FEE — so a fee could never be flagged. That is exactly Grace's
+                       bent returns: "those are using the small parts recipe … they should link to
+                       the Pole recipe as they are seen/designed more as an extension of the pole
+                       rather than a paired finial." A bent return IS a fee, so by category it was
+                       unreachable; the flag had to come out of that block to be usable at all.
+
+                       This changes only WHICH RECIPE the floor runs. Physical handling — sled
+                       capacity, S/M/L size, rack of 8 — is untouched, and it never makes an item
+                       eligible for rod cutting: cutting asks what a thing IS (product category),
+                       this asks how it is FINISHED. The elbow was the first of these; bent returns
+                       are the second. */}
+                   <div>
+                       <label style={labelStyle}>Finish Stream</label>
+                       <select name="finishStream" value={editSpecs.finishStream || ""} onChange={handleSpecChange}
+                           title="Exception flag — changes only WHICH recipe variant (-S/-P) the floor runs. Physical handling is untouched, and it never makes an item cuttable like a pole."
+                           style={{ ...fieldStyle, background: '#fff' }}>
+                           <option value="">Auto (by product type)</option>
+                           <option value="POLES">POLES — finish like a pole (-P recipe)</option>
+                           <option value="SMALL">SMALL — force small parts (-S recipe)</option>
+                       </select>
+                       {isFeeRecord && (
+                           <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '4px', lineHeight: 1.5 }}>
+                               Fees are finished work too — a bent return runs the POLE recipe.
+                           </div>
+                       )}
+                   </div>
+
                    {isFeeRecord && (
                    <>
                    {/* CUSTOM OVERRIDE FEE (Stuart 2026-07-28): ticking this puts the fee in CPQ's
@@ -2380,18 +2412,6 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                                 <option value="S">S — 70 / section</option>
                                 <option value="M">M — 35 / section</option>
                                 <option value="L">L — 22 / section</option>
-                            </select>
-                        </div>
-                        {/* FINISH-STREAM EXCEPTION (Stuart 2026-08-11): which recipe stream this
-                            item's finishing runs follow. Auto = by Product Type (POLE/ROD → poles).
-                            The elbow case: physically a small part (sled capacity, S/M/L size all
-                            unchanged) but finished to MATCH the poles → set POLES and its runs use
-                            the -P recipe variant. */}
-                        <div><label style={labelStyle}>Finish Stream</label>
-                            <select name="finishStream" value={editSpecs.finishStream || ""} onChange={handleSpecChange} title="Exception flag — only changes WHICH recipe variant (-S/-P) the floor runs; physical handling is untouched" style={{ ...fieldStyle, background: '#fff' }}>
-                                <option value="">Auto (by product type)</option>
-                                <option value="POLES">POLES — finish like a pole (-P recipe)</option>
-                                <option value="SMALL">SMALL — force small parts (-S recipe)</option>
                             </select>
                         </div>
                     </div>
