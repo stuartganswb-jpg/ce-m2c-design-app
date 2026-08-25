@@ -48,6 +48,27 @@ export function poleLengthOf(erp) {
 // around the work order. Those describe how a thing is FINISHED. This asks what it IS.
 export const isPoleCategory = (productType) => /\b(POLES?|RODS?)\b/i.test(String(productType == null ? '' : productType));
 
+// ── HOW A POLE IS TAGGED (Stuart 2026-08-25, from Grace's WO11485/11486) ────────────────────────
+// Grace: "Two orders of CP poles that are not correctly pulling the CP Pole Recipe … the system is
+// treating them as small parts and not poles. These are 4ft rods."
+//
+// Four different places asked "is this a pole?" four different ways, and only this one knew about
+// RODS. The Setup Queue's test was `productType.includes('POLE')` — so a 4 ft rod, tagged ROD
+// exactly as it should be, answered NO, got no pole count, and every piece fell into the small
+// parts stream and ran CP-S instead of CP-P. Grace was reading the consequence of a spelling.
+//
+// So the two tags a pole carries, derived from the one category rather than typed in per item:
+//   FINISH STREAM  — POLES for anything in the pole/rod category, always. This is the recipe
+//                    variant only (-P), and it is what was missing on her orders.
+//   PART HANDLING  — SMALL PARTS for a STOCKED pole. Stuart: "they need to be tagged small parts
+//                    in the parts handling as these are stocked poles and do not require custom".
+//                    Custom routes a line to the custom shop division; a stocked 4 ft rod is an
+//                    ordinary finishing job and does not belong there. A pole that is NOT stocked
+//                    is cut to order, so it stays Custom.
+export const autoFinishStream = (productType) => isPoleCategory(productType) ? 'POLES' : '';
+export const autoPartHandlingFor = (productType, isStocked) =>
+    isPoleCategory(productType) ? (isStocked ? 'Small Parts' : 'Custom') : 'Small Parts';
+
 export function poleCutPlan(erpId, qty, opts = {}) {
     // CATEGORY FIRST, GRAMMAR SECOND (Stuart 2026-08-22: "MB is bracket … you are safe to go to
     // the category pole, restrict it").

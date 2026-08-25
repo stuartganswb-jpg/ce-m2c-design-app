@@ -7,6 +7,7 @@ import { resolveStreamRecipe, streamRecipeStepCount } from '../Shared/finishingT
 import { propagateFloorState } from '../Shared/orderLifecycle';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { pickGateOf } from '../Shared/orderStatus';
+import { isPoleCategory } from '../Shared/poleCut';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
 // Source numbers first: the REAL NetSuite WO # leads wherever it exists; long app id is the fallback.
@@ -179,7 +180,11 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
               { finWo: wo, phase, by: (user && user.name) || '' });
       } catch (e) { console.warn('RTG propagate failed (floor state stands):', e); }
   };
-  const woHasPoles = (wo) => Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0 || wo.type === 'Poles';
+  // The pole COUNT is what splits the two streams, and orders raised before the category test was
+  // shared never carried one — so a rod order showed no pole row at all. The category is the
+  // fallback: a pole/rod order with no count is all poles, which is what it always was.
+  const woHasPoles = (wo) => Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0 || wo.type === 'Poles'
+      || isPoleCategory(wo && wo.productType);
   // A POLE-ONLY ORDER HAS NO SMALL PARTS (Grace 2026-08-18: "with orders that are only Poles, an
   // option to spray small parts shows up … in this instance there are no small parts and it's only
   // an order of 20 poles"). The small-parts stream was unconditional, so the floor was offered
@@ -193,7 +198,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
       if (!wo || !woHasPoles(wo)) return true;                       // no poles → it is all small parts
       const sizes = wo.paintSizes || null;
       if (sizes && Object.values(sizes).some(v => Number(v) > 0)) return true;
-      const poleQty = Number(wo.totalPoles || (wo.poles && wo.poles.qty) || 0);
+      // On a pole/rod order that never got a count stamped, the pieces ARE the poles — otherwise
+      // this falls straight back to "it is all small parts", which is the bug Grace reported.
+      const poleQty = Number(wo.totalPoles || (wo.poles && wo.poles.qty) || 0)
+          || (isPoleCategory(wo.productType) ? Number(wo.totalParts || 0) : 0);
       const total = Number(wo.totalParts || 0);
       if (!poleQty) return true;
       return total > poleQty;
@@ -206,8 +214,18 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
   // FINISH-STREAM EXCEPTION (the elbow): a WO stamped finishStream 'POLES' (from the item
   // master's flag) runs its PARTS stream on the -P recipe — physically still a small part on a
   // sled, finished to match the poles. 'SMALL' forces the reverse on a pole item.
-  const partsStreamOf = (wo) => String(wo?.finishStream || '').toUpperCase() === 'POLES' ? 'POLES' : 'SMALL';
-  const poleStreamOf = (wo) => String(wo?.finishStream || '').toUpperCase() === 'SMALL' ? 'SMALL' : 'POLES';
+  // AUTO (BY PRODUCT TYPE) NOW MEANS SOMETHING (Grace 2026-08-25). The Library's Finish Stream
+  // dropdown has always offered a blank option labelled "Auto (by product type)" — and blank simply
+  // fell through to SMALL here, whatever the item was. So her CP rods, correctly tagged ROD and
+  // needing no flag at all, ran CP-S. An untagged pole/rod now resolves to POLES, which is what
+  // the label says and what the floor expects; an explicit flag still wins over the category.
+  const streamFlagOf = (wo) => {
+      const flag = String(wo?.finishStream || '').toUpperCase();
+      if (flag === 'POLES' || flag === 'SMALL') return flag;
+      return isPoleCategory(wo?.productType) ? 'POLES' : '';
+  };
+  const partsStreamOf = (wo) => streamFlagOf(wo) === 'POLES' ? 'POLES' : 'SMALL';
+  const poleStreamOf = (wo) => streamFlagOf(wo) === 'SMALL' ? 'SMALL' : 'POLES';
   const recipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, partsStreamOf(wo));
   const poleRecipeLen = (wo) => streamRecipeStepCount(recipes, wo && wo.recipe, poleStreamOf(wo));
   const partsRecipeOf = (wo) => resolveStreamRecipe(recipes, wo && wo.recipe, partsStreamOf(wo));

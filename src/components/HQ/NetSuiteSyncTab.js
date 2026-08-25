@@ -4,6 +4,7 @@ import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch, onSnap
 import { parseFabricutWorkbook, buildFabricutPlan, buildPremiumTierRepairPlan } from '../Shared/fabricutImport';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { buildNsItemBody } from "../Shared/nsItemFields";
+import { isPoleCategory, autoFinishStream, autoPartHandlingFor } from "../Shared/poleCut";
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -489,6 +490,87 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         setIsSyncing(false);
     };
 
+
+    // ── FORCE FIX: EVERY POLE AND ROD CARRIES ITS TAGS (Stuart 2026-08-25) ──────────────────────
+    // "write a force fix for anything categorized as rod or poles always gets flagged poles … they
+    // need to be tagged small parts in the parts handling as these are stocked poles and do not
+    // require custom, then they need to be tagged finish stream pole (that was missing)".
+    //
+    // The sync stamps both tags going forward, but that only reaches an item the next time it is
+    // pulled — and Grace has two orders on the floor NOW (WO11485/11486) that were raised before
+    // any of this. So this repairs the library AND the open work orders, because a corrected item
+    // master does not travel backwards into an order already cut from it.
+    //
+    // It never overrides an explicit SMALL: that flag is the deliberate exception (the elbow, the
+    // bent returns) and a bulk fix that quietly reversed someone's decision would be a worse bug
+    // than the one it is fixing.
+    const [poleFixBusy, setPoleFixBusy] = useState(false);
+    const handleForcePoleTags = async () => {
+        const dry = !window.confirm('FORCE POLE TAGS\n\nEvery item categorised POLE or ROD gets:\n   • Finish Stream = POLES\n   • Part Handling = Small Parts (stocked poles only — unstocked stay Custom)\n\nOpen finishing work orders for those items are repaired too, so orders already on the floor pick up the pole recipe.\n\nAn item explicitly set to SMALL is left alone.\n\nOK = apply · Cancel = dry run (report only, changes nothing)');
+        setPoleFixBusy(true);
+        addLog(dry ? '🔍 DRY RUN — reporting what would change, writing nothing.' : '🔧 Applying pole tags…', dry ? 'warn' : 'info');
+        try {
+            let libScanned = 0, libFixed = 0, woFixed = 0, skippedExplicit = 0;
+            const parts = await getDocs(collection(db, 'Approved_Designs'));
+            const poleByErp = new Map();
+            let batch = writeBatch(db), ops = 0;
+            for (const d of parts.docs) {
+                const part = d.data() || {};
+                const specs = part.manufacturingSpecs || {};
+                if (!isPoleCategory(specs.productType)) continue;
+                libScanned++;
+                poleByErp.set(String(part.legacyErpId || '').toUpperCase(), true);
+                const explicit = String(specs.finishStream || '').toUpperCase();
+                if (explicit === 'SMALL') { skippedExplicit++; continue; }
+                const wantStream = 'POLES';
+                const wantHandling = autoPartHandlingFor(specs.productType, specs.isStocked);
+                if (explicit === wantStream && specs.partHandling === wantHandling) continue;
+                libFixed++;
+                if (libFixed <= 15) addLog(`   ${part.legacyErpId} (${specs.productType}) — stream ${explicit || '(blank)'} → POLES · handling ${specs.partHandling || '(blank)'} → ${wantHandling}`, 'info');
+                if (!dry) {
+                    batch.update(d.ref, { 'manufacturingSpecs.finishStream': wantStream, 'manufacturingSpecs.partHandling': wantHandling });
+                    if (++ops >= 400) { await batch.commit(); batch = writeBatch(db); ops = 0; }
+                }
+            }
+            if (!dry && ops) await batch.commit();
+            addLog(`Library: ${libScanned} pole/rod items · ${libFixed} ${dry ? 'would be' : ''} re-tagged · ${skippedExplicit} left alone (explicitly SMALL).`, 'success');
+
+            // OPEN ORDERS — the ones Grace is looking at. An order already on the floor keeps
+            // whatever it was stamped with at creation; nothing re-reads the item master.
+            const finSnap = await getDocs(collection(db, 'fin_workorders'));
+            let wb = writeBatch(db), wops = 0;
+            for (const d of finSnap.docs) {
+                const wo = d.data() || {};
+                if (['Complete', 'Completed', 'Closed', 'Cancelled'].includes(String(wo.currentPhase || wo.status || ''))) continue;
+                const ptype = wo.productType || '';
+                const code = String(wo.stockErpId || wo.type || '').toUpperCase();
+                if (!isPoleCategory(ptype) && !poleByErp.has(code)) continue;
+                if (String(wo.finishStream || '').toUpperCase() === 'SMALL') { skippedExplicit++; continue; }
+                const qty = Number(wo.totalParts) || 0;
+                const needsStream = String(wo.finishStream || '').toUpperCase() !== 'POLES';
+                const needsCount = !(Number(wo.totalPoles || (wo.poles && wo.poles.qty)) > 0) && qty > 0;
+                if (!needsStream && !needsCount) continue;
+                woFixed++;
+                addLog(`   ${wo.woNum || wo.id} · ${code || ptype} — ${needsStream ? 'finishStream → POLES' : ''}${needsStream && needsCount ? ' · ' : ''}${needsCount ? `poles ${qty}` : ''}`, 'info');
+                if (!dry) {
+                    wb.update(d.ref, {
+                        finishStream: 'POLES',
+                        ...(needsCount ? { poles: { qty, type: String(ptype || 'POLE').toUpperCase() }, totalPoles: qty, paintSize: null, paintSizes: null } : {}),
+                        poleTagFixedAt: Date.now(),
+                    });
+                    if (++wops >= 400) { await wb.commit(); wb = writeBatch(db); wops = 0; }
+                }
+            }
+            if (!dry && wops) await wb.commit();
+            addLog(`Open work orders: ${woFixed} ${dry ? 'would be' : ''} repaired.`, woFixed ? 'success' : 'info');
+            addLog(dry ? '🔍 Dry run complete — NOTHING was written. Re-run and press OK to apply.' : '✅ Pole tags applied. The floor picks them up on refresh.', 'success');
+        } catch (e) {
+            console.error(e);
+            addLog(`❌ Pole tag fix failed: ${e.message}`, 'error');
+        }
+        setPoleFixBusy(false);
+    };
+
     const handleSyncItems = async () => {
         const scopeTerms = parseScope(itemScope);
         if (scopeTerms.length && !window.confirm(`Sync ONLY items where the item # is ${scopeLabel(scopeTerms)}?\n\nEverything else in NetSuite is left alone — this is a targeted repair, not a full library sync.\n\nBOM components outside the scope still resolve from items already in the library.`)) return;
@@ -807,11 +889,22 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // 3. Part Handling Logic (Poles vs Small Parts)
                 const pTypeClean = (item.product_type || '').toLowerCase().trim();
                 const uomClean = (item.uom || '').toLowerCase().trim();
-                
-                const isPole = pTypeClean.includes('pole') || pTypeClean.includes('track') || 
+
+                // THE SYNC NOW CARRIES BOTH POLE TAGS (Stuart 2026-08-25, from Grace's WO11485/86).
+                // This test knew about 'pole' and 'track' but not ROD, so a 4 ft rod imported as an
+                // ordinary small part and nothing downstream could tell it was a pole.
+                const isPole = isPoleCategory(item.product_type) || pTypeClean.includes('track') ||
                                uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
-                
-                const partHandling = isPole ? "Custom" : "Small Parts";
+                // PART HANDLING — Stuart: "they need to be tagged small parts in the parts handling
+                // as these are stocked poles and do not require custom". Custom routes a line into
+                // the custom shop division; a stocked rod is an ordinary finishing job. A pole that
+                // is not stocked is cut to order, so it stays Custom.
+                const partHandling = isPoleCategory(item.product_type)
+                    ? autoPartHandlingFor(item.product_type, isStocked)
+                    : (isPole ? "Custom" : "Small Parts");
+                // FINISH STREAM — the tag that was missing on her orders. Category-derived, so a
+                // pole never depends on someone remembering to set it per item.
+                const finishStreamAuto = autoFinishStream(item.product_type);
 
                 const docId = existingAppRecord ? existingAppRecord.id : `${activeBrand.toUpperCase()}-${partClass === 'Inventory' ? 'INV' : 'ASM'}-${item.id}`;
                 const mergedBins = Array.from(item.all_bins || []).join(', ');
@@ -845,6 +938,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     ...(hasTempField ? { isTemp } : {}),
                     outsourceAction: outsourceAction,
                     partHandling: partHandling,
+                    ...(finishStreamAuto ? { finishStream: finishStreamAuto } : {}),
                     productType: item.product_type || 'Uncategorized',
                     uom: item.uom || 'EA',
                     bomRevision: item.bom_revision || '',
@@ -924,9 +1018,14 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         const gate = NS_MIRROR_KEYS.includes(k) ? 'nsMirror' : k;
                         if (pullFlags[gate] !== false) allowedSpecs[k] = v;
                     });
+                    // An EXPLICIT stream chosen in the app is a deliberate exception (the elbow,
+                    // the bent returns — small parts finished like poles) and outranks anything
+                    // derived from the category. The sync only fills the blank.
+                    const keepFinishStream = existingSpecs.finishStream || allowedSpecs.finishStream || '';
                     payload.manufacturingSpecs = {
                         ...existingSpecs,
                         ...allowedSpecs,
+                        ...(keepFinishStream ? { finishStream: String(keepFinishStream).toUpperCase() } : {}),
                         productType: keepProductType,
                         customData: pullFlags.customData === false
                             ? (existingSpecs.customData || {})
@@ -1459,6 +1558,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncAddresses} disabled={isSyncing} label="Sync Customer Address Books" sub="SuiteQL: Pulls address books and maps IDs." />
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
                         <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
+                        <SyncButton onClick={handleForcePoleTags} disabled={isSyncing || poleFixBusy} label="🪝 Force Pole / Rod Tags" sub="Every item categorised POLE or ROD gets Finish Stream = POLES and Part Handling = Small Parts (stocked). Repairs open finishing work orders too, so orders already on the floor run the pole recipe. Explicit SMALL is never overridden. Cancel at the prompt for a dry run." />
                         <FieldFlags
                             title="NetSuite may overwrite…"
                             note="Ticked = NetSuite wins on items the app already has. Un-tick a field to freeze the app's value through this import. New items always take everything — there's nothing to overwrite on a first import. Item name, category and routing type are always app-master."

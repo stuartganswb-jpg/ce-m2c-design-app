@@ -7,6 +7,7 @@ import { nsProxyFetch } from '../Shared/nsProxy';
 import { makeFullTasks, woItemCodeOf, woItemNameOf, isPlaceholderDims } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
+import { isPoleCategory, autoFinishStream } from '../Shared/poleCut';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -410,7 +411,10 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           const specs = part.manufacturingSpecs || {};
           const cut = code.lastIndexOf('/');
           const recipe = cut > 0 ? code.slice(cut + 1).split('-')[0] : 'PENDING-RECIPE';
-          const isPole = String(specs.productType || '').toUpperCase().includes('POLE');
+          // A 4 FT ROD IS A POLE (Grace 2026-08-25, WO11485/11486). `.includes('POLE')` said no to
+          // every item tagged ROD, so the re-make carried no pole count and the floor ran the
+          // small-parts recipe on poles. One shared category test now, the same one rod cuts use.
+          const isPole = isPoleCategory(specs.productType);
           const size = String(specs.paintSize || '').toUpperCase() || null;
           const woId = `WO-STK-${part.netSuiteInternalId || 'RM'}-${Date.now()}`;
           const reqDate = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
@@ -423,7 +427,10 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               stockErpId: code, stockInternalId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null,
               paintSize: isPole ? null : size, productType: String(specs.productType || '').toUpperCase() || null, paintSizes,
               ...(isPole ? { poles: { qty, type: String(specs.productType || 'POLE').toUpperCase() }, totalPoles: qty } : {}),
-              ...(specs.finishStream ? { finishStream: String(specs.finishStream).toUpperCase() } : {}),
+              // The item's own flag wins; a pole/rod with none defaults to the POLES stream rather
+              // than silently to SMALL — which is what the Library dropdown has always promised
+              // ("Auto (by product type)") and nothing ever implemented.
+              ...((specs.finishStream || autoFinishStream(specs.productType)) ? { finishStream: String(specs.finishStream || autoFinishStream(specs.productType)).toUpperCase() } : {}),
               note: `⟲ SCRAP RE-MAKE · ${rmNote || ''}`.trim(),
               remake: true,
               cpqSpecs: {}, imageUrl: part.finalImageUrl || null,
