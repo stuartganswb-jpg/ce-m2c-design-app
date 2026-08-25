@@ -740,7 +740,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // item's sales in BLUE where the current item had none — so a renamed SKU reads blue on the left and
     // fills black from the right over time. Sales are CHUNKED (60 ids/query) to stay under NetSuite's
     // 1000-row SuiteQL cap (that truncation was why items showed no history).
-    const openSalesHistory = async () => {
+    const openSalesHistory = async (forceRebuild = false) => {
         const months = last12Months(new Date());
         setSalesHist({ loading: true, error: null, rows: [], months, generatedAt: new Date().toLocaleString(), withOld: 0 });
         setSalesHistSearch('');
@@ -778,19 +778,72 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 if (row.stk === 'T' && row.inact !== 'T') stocked.push(rec);
                 if (row.old === 'T') oldByItemId[String(row.itemid).toUpperCase()] = rec;
             });
-            // 2) Sales, CHUNKED so each grouped query stays under the 1000-row cap (chunk × 12 months < 1000).
+            // ── 2) SALES — A CLOSED MONTH NEVER CHANGES, SO STOP RE-ASKING FOR IT ──────────────────
+            // Eric 2026-08-21, Stuart 2026-08-25: "when we open this report it takes a long time to
+            // compile all of the sales history … it is compiling for 12 months sales, yet the older
+            // months do not change, so can it save/cache this data?"
+            //
+            // Exactly so. Last October's sales are a fact; we were re-deriving them from NetSuite on
+            // every single open, chunked 60 items at a time across the whole catalogue. Now each
+            // CLOSED month is written once to sales_history/<brand>/months/<YYYY-MM> and read from
+            // there forever after. Only the CURRENT month is fetched live, because it is the only
+            // one that can still move.
+            //
+            // The cache is never the authority on a month that is still running, and "Rebuild" below
+            // throws all of it away — so a wrong cached month is always one button from being
+            // corrected, which is what makes caching safe to do at all.
             const allIds = itemRows.map(r => String(r.internal_id));
             const salesById = {};
             const CH = 60;
-            for (let i = 0; i < allIds.length; i += CH) {
-                const chunk = allIds.slice(i, i + CH);
-                const rows = await runSql(`SELECT tl.item AS internal_id, TO_CHAR(t.trandate,'YYYY-MM') AS ym, SUM(ABS(tl.quantity)) AS qty, COUNT(DISTINCT t.id) AS orders FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'SalesOrd' AND tl.item IN (${chunk.join(',')}) AND tl.quantity <> 0 AND t.trandate >= ADD_MONTHS(CURRENT_DATE, -12) GROUP BY tl.item, TO_CHAR(t.trandate,'YYYY-MM')`);
-                rows.forEach(row => {
-                    const iid = String(row.internal_id);
-                    let rec = salesById[iid]; if (!rec) { rec = { m: {}, orders: 0 }; salesById[iid] = rec; }
-                    rec.m[row.ym] = (rec.m[row.ym] || 0) + (parseInt(row.qty) || 0);
-                    rec.orders += parseInt(row.orders) || 0;
-                });
+            const nowYm = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+            const addRow = (iid, ym, qty, orders) => {
+                let rec = salesById[iid]; if (!rec) { rec = { m: {}, orders: 0 }; salesById[iid] = rec; }
+                rec.m[ym] = (rec.m[ym] || 0) + (parseInt(qty) || 0);
+                rec.orders += parseInt(orders) || 0;
+            };
+            // Cached under `system/…` on purpose: firestore.rules grants read/write there to any
+            // authenticated user, so this needs no rules change — and a rules change is a manual
+            // Cloud Shell deploy, i.e. a feature that would silently not cache until someone
+            // remembered to run it.
+            const cacheDoc = (ym) => doc(db, 'system', `salesCache_${activeBrand}_${ym}`);
+            const closedMonths = months.map(m => m.key).filter(k => k !== nowYm);
+            let fromCache = 0, fetchedMonths = [];
+            const cached = {};
+            if (!forceRebuild) {
+                await Promise.all(closedMonths.map(async (ym) => {
+                    try {
+                        const snap = await getDoc(cacheDoc(ym));
+                        if (snap.exists()) { cached[ym] = snap.data().items || {}; fromCache++; }
+                    } catch (e) { /* a missing cache just means we fetch it */ }
+                }));
+            }
+            Object.entries(cached).forEach(([ym, items]) => {
+                Object.entries(items).forEach(([iid, v]) => addRow(iid, ym, Array.isArray(v) ? v[0] : v, Array.isArray(v) ? v[1] : 0));
+            });
+            // Fetch the current month, plus any closed month we have never cached (first run, or a
+            // month that rolled over since the last visit).
+            const needMonths = months.map(m => m.key).filter(k => k === nowYm || !cached[k]);
+            if (needMonths.length) {
+                const earliest = needMonths.slice().sort()[0];
+                setSalesHist(h => ({ ...(h || {}), loading: true, note: `${fromCache} month(s) from cache · fetching ${needMonths.length} from NetSuite…` }));
+                const perMonth = {};
+                for (let i = 0; i < allIds.length; i += CH) {
+                    const chunk = allIds.slice(i, i + CH);
+                    const rows = await runSql(`SELECT tl.item AS internal_id, TO_CHAR(t.trandate,'YYYY-MM') AS ym, SUM(ABS(tl.quantity)) AS qty, COUNT(DISTINCT t.id) AS orders FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'SalesOrd' AND tl.item IN (${chunk.join(',')}) AND tl.quantity <> 0 AND t.trandate >= TO_DATE('${earliest}-01','YYYY-MM-DD') GROUP BY tl.item, TO_CHAR(t.trandate,'YYYY-MM')`);
+                    rows.forEach(row => {
+                        const ym = String(row.ym || '');
+                        if (!needMonths.includes(ym)) return;      // already cached — cache wins, no double count
+                        addRow(String(row.internal_id), ym, row.qty, row.orders);
+                        (perMonth[ym] = perMonth[ym] || {})[String(row.internal_id)] = [parseInt(row.qty) || 0, parseInt(row.orders) || 0];
+                    });
+                }
+                fetchedMonths = needMonths;
+                // Write ONLY closed months. The current month is deliberately never cached — it is
+                // still moving, and a stale "this month" is the one number nobody would question.
+                await Promise.all(needMonths.filter(ym => ym !== nowYm).map(async (ym) => {
+                    try { await setDoc(cacheDoc(ym), { month: ym, brand: activeBrand, items: perMonth[ym] || {}, cachedAt: Date.now(), itemCount: Object.keys(perMonth[ym] || {}).length }); }
+                    catch (e) { console.warn('Could not cache sales month', ym, e); }
+                }));
             }
             // 2b) Live AVAILABLE qty straight from NetSuite (AggregateItemLocation.quantityavailable at the
             // brand's location) — the report used to read the app's nsStock cache, which was empty here.
@@ -849,7 +902,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const newTotal = months.reduce((a, mo) => a + (newRec.m[mo.key] || 0), 0);
                 return { itemid: s.itemid, base: s.itemid, internalId: s.internalId, available: availById[s.internalId] || 0, onOrd: (inboundById[s.internalId] || {}).qty || 0, onOrdLines: (inboundById[s.internalId] || {}).lines || [], oldInternalId: oldSib ? oldSib.internalId : null, oldItemId: oldSib ? oldSib.itemid : null, cells, total, newTotal, avg: total / 12, orders: (newRec.orders || 0) + (oldRec.orders || 0), hasOld: !!oldSib };
             }).sort((a, b2) => String(a.itemid).localeCompare(String(b2.itemid), undefined, { numeric: true, sensitivity: 'base' }));
-            setSalesHist(s => (s ? { ...s, loading: false, rows, withOld: rows.filter(r => r.hasOld).length } : s));
+            setSalesHist(s => (s ? { ...s, loading: false, note: null, rows, withOld: rows.filter(r => r.hasOld).length,
+                cacheNote: `${fromCache} of ${months.length} month(s) read from cache${fetchedMonths.length ? ` · ${fetchedMonths.join(', ')} pulled live` : ''} · closed months are cached, the current month never is` } : s));
         } catch (e) {
             setSalesHist(s => (s ? { ...s, loading: false, error: e.message || String(e) } : s));
         }
@@ -2005,6 +2059,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                             </div>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '14px' }}>
                                 Last 12 months of demand (Sales Orders) per stocked item · {activeBrand?.toUpperCase()} · as of {salesHist.generatedAt}
+                                {/* Say where the numbers came from. A cached month is a fact we
+                                    already paid for; the live one is the only one that can move. */}
+                                {salesHist.cacheNote && (
+                                    <span style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                        {salesHist.cacheNote}
+                                        <button onClick={() => openSalesHistory(true)} title="Throw the cached months away and re-derive all 12 from NetSuite. Slow — only needed if a closed month looks wrong."
+                                            style={{ marginLeft: '10px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', padding: '2px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>↻ Rebuild all 12</button>
+                                    </span>
+                                )}
                                 <span style={{ marginLeft: '14px', color: 'var(--ink)' }}>■ current item</span>
                                 <span style={{ marginLeft: '10px', color: OLD_BLUE }}>■ old “STD-” item history (fallback)</span>
                                 <span style={{ marginLeft: '14px' }}>{salesHist.withOld || 0} of {(salesHist.rows || []).length} have an old version</span>
