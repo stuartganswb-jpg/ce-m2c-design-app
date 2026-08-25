@@ -868,19 +868,44 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // control of what appears here … french return is a fee but it is decided in the cpq itself").
   // Ticked items win — fees AND real items. Until anything is ticked it falls back to the whole fee
   // catalogue, so the screen never goes blank on the way to being curated.
+  // ── CHECKOUT IS SCOPED TO THE FLOW'S OWN COLLECTIONS (Stuart 2026-08-24) ─────────────────
+  // "he added checkout fees for Brimar and they are showing even for fabricut." Neither the flow
+  // nor the assembly carries a collection, but the PARTS do (manufacturingSpecs.collections[],
+  // maintained in 4.6) — so a flow's collections are derived from what it actually sells: the
+  // union across its pinned parts. A checkout item tagged to collections shows only where they
+  // intersect; an untagged item (rush, freight) stays global. A flow with no derivable scope
+  // (pillow, 2D, untagged parts) sees everything, exactly as before.
+  const flowCollections = useMemo(() => {
+      const byKey = new Map();
+      (libraryParts || []).forEach(p => {
+          [p.id, p.itemId, p.legacyErpId].forEach(k => { if (k) byKey.set(String(k).trim().toUpperCase(), p); });
+      });
+      const set = new Set();
+      (activeBomPins || []).forEach(pn => {
+          const p = byKey.get(String(pn.partId || '').trim().toUpperCase());
+          (p?.manufacturingSpecs?.collections || []).forEach(c => set.add(String(c).trim().toUpperCase()));
+      });
+      return set;
+  }, [activeBomPins, libraryParts]);
   const addOnCatalog = useMemo(() => {
       const priceFor = (p) => clientPriceFor(p.clientPricing, addOnCustKeys) ?? (parseFloat(p.manufacturingSpecs?.basePrice) || 0);
+      const inScope = (p) => {
+          const cols = p?.manufacturingSpecs?.collections || [];
+          if (!cols.length || !flowCollections.size) return true;
+          return cols.some(c => flowCollections.has(String(c).trim().toUpperCase()));
+      };
+      const scopedParts = (libraryParts || []).filter(inScope);
       // ITEMS and FEES curate INDEPENDENTLY (Eric 2026-08-12: ticking one real item made every
       // fee vanish — the old either/or swapped the WHOLE catalog). Ticked real items always show;
       // fees show ALL unless at least one FEE is itself ticked, in which case only the ticked
       // fees show (that's the curation Stuart asked for on 2026-07-31 — it was never meant to be
       // switched off by an unrelated item tick).
-      const checkout = buildCheckoutCatalog(libraryParts, { priceFor });
+      const checkout = buildCheckoutCatalog(scopedParts, { priceFor });
       const curatedFeeCount = checkout.filter(e => e.isFee).length;
-      const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(libraryParts, { priceFor });
+      const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(scopedParts, { priceFor });
       const seen = new Set(checkout.map(e => e.id));
       return [...checkout, ...fees.filter(e => !seen.has(e.id))];
-  }, [libraryParts, addOnCustKeys]);
+  }, [libraryParts, addOnCustKeys, flowCollections]);
 
   // TRADE DISCOUNT (customer's CRM discountCode, e.g. D20 = less 20%). Applies per cart item,
   // AFTER the full pricing chain, display-side only: STANDARD-level items only (Fabricut levels

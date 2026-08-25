@@ -162,6 +162,7 @@ function HardwareConfiguratorInner({
     const lengthFeetExact = lengthInches ? Math.round((lengthInches / 12) * 100) / 100 : null;
     const lengthFeet = lengthInches ? Math.ceil(lengthInches / 12) : null;
 
+
     // ── OUR PART NUMBER, RESOLVED ─────────────────────────────────────────────────────────────
     // This sits ABOVE the bracket advice on purpose. `advice` names ourId in its dependency list,
     // and a dependency list is read the moment the line runs — so with ourId still declared down in
@@ -177,6 +178,34 @@ function HardwareConfiguratorInner({
         return m;
     }, [parts]);
     const findPart = useCallback((id) => partIndex.get(String(id || '').trim().toUpperCase()) || null, [partIndex]);
+
+    // ── IS A SPLICE NECESSARY? (Stuart 2026-08-24) ───────────────────────────────────────────
+    // "add the splice ability [to] the rod length step on the cpq — is splice necessary and
+    //  default is center, explain if otherwise. this should help align it with the vision tool
+    //  which is where we actually draw the splice location."
+    // The splice among this flow's add-by-hand items is found the way tab 7 finds its splice
+    // slot — by what the ITEM says it is (splice/joiner in its name, product type or fee type).
+    // The threshold is the flow's `spliceOverInches` (tab 11), defaulting to 96": rod stock is
+    // eight feet, so anything longer cannot ship in one piece. Over the threshold the splice is
+    // added automatically at the default — CENTER of the run — and the note carries the exact
+    // location only when it differs, which is precisely what Vision reads to draw it.
+    const spliceCode = useMemo(() => {
+        for (const it of (extraItems || [])) {
+            const part = findPart(it.code);
+            const hay = `${it.label || ''} ${part?.itemName || ''} ${part?.manufacturingSpecs?.productType || ''} ${part?.customData?.feeType || ''}`.toUpperCase();
+            if (/SPLICE|JOINER|JNR/.test(hay)) return it.code;
+        }
+        return null;
+    }, [extraItems, findPart]);
+    const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 96;
+    const spliceNeeded = !!spliceCode && !!lengthInches && lengthInches > spliceOverIn;
+    const spliceAutoRef = useRef(false);
+    useEffect(() => {
+        if (!spliceNeeded) { spliceAutoRef.current = false; return; }
+        if (spliceAutoRef.current) return;   // added once; an operator's removal is respected
+        setExtras(a => (a.some(x => x.code === spliceCode) ? a : [...a, { code: spliceCode, qty: '1', note: '' }]));
+        spliceAutoRef.current = true;
+    }, [spliceNeeded, spliceCode]);
     // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
     // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
     // the app's own record id and means nothing off this screen. A pin can be tagged with either, so
@@ -1535,6 +1564,16 @@ function HardwareConfiguratorInner({
                             per line, and a splice's hint says what the shop assumes when it is blank. */}
                         {step?.kind === 'LENGTH' && !!extraItems.length && (
                             <div>
+                                {/* THE SPLICE QUESTION, ASKED WHERE THE LENGTH IS (Stuart 2026-08-24) — over the
+                                    one-piece limit the splice adds itself at the default, and the note is only
+                                    for a location that differs. Vision draws the splice where the note says. */}
+                                {spliceNeeded && (
+                                    <div style={{ border: '1px solid var(--brass)', background: '#faf6ee', padding: '9px 11px', marginBottom: '8px', fontSize: '11.5px', color: 'var(--ink)', lineHeight: 1.45 }}>
+                                        <b>⚠ Splice required</b> — {lengthInches}&Prime; exceeds the {spliceOverIn}&Prime; one-piece limit.
+                                        Default location is the <b>CENTER of the run</b>; note the exact location below only if
+                                        different. Vision draws the splice where the note says.
+                                    </div>
+                                )}
                                 <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '7px' }}>Add an item</div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
                                     {extraItems.map(it => {
@@ -1567,7 +1606,7 @@ function HardwareConfiguratorInner({
                                                 </div>
                                                 {!!row && (
                                                     <input value={row.note || ''} onChange={e => set({ note: e.target.value })}
-                                                        placeholder={it.notePlaceholder || 'Anything the shop needs to know about it'}
+                                                        placeholder={it.notePlaceholder || (it.code === spliceCode ? 'Default is CENTER — give the exact location only if different' : 'Anything the shop needs to know about it')}
                                                         style={{ padding: '6px 7px', border: '1px solid var(--line)', fontSize: '11.5px', background: '#fff', color: 'var(--ink)' }} />
                                                 )}
                                             </div>
