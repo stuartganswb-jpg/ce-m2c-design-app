@@ -330,6 +330,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       if (ct) like = narrowPins(like, p => String(p.tier || '').toUpperCase() === ct);
       like = narrowPins(like, p => JSON.stringify(
         Object.keys(parseProjTiers(p.projInches || '')).length ? parseProjTiers(p.projInches || '') : null) === cut);
+      // ⚠ RTN-ONLY IS PART OF THE PIN'S IDENTITY TOO (Stuart 2026-08-24b: "the rear rod goes
+      // thru the return rod and sticks out the other side — the correct rod in the 1.6 file is
+      // tagged rtn-only and double back"). The short return rear pole shares part, tier AND cut
+      // with the long dec rear pole — only the flag separates them, so the side-swap narrows on
+      // it in both directions, exactly as it narrows on tier and cut.
+      like = narrowPins(like, p => !!p.returnOnly === !!choice.returnOnly);
       // ⚠ A RETURN'S ROD IS THE CENTRE SEGMENT (Stuart 2026-08-23b: "you have the miter and the
       // french return on one sheet together merged into each other"). The subject of a return
       // page IS a length of pole with the bend or miter on its end — drawing the drawn side's
@@ -856,6 +862,22 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       ];
       return { right, up: away, viewDir };
     })();
+    // ── THE PLAN VIEW IS A WINDOW TOO (Stuart 2026-08-24b) ──────────────────────────────────
+    // "the pole is a little long and could be shortened some to make the lefthand side view
+    //  larger." The overhead never went through clipFront, so its rod ran the full segment
+    // length and the page's scale paid for it. The window ends a short stub past the return and
+    // its plate; the cut carries a break mark, which is what a broken view means.
+    const clipOverhead = (view, mountMeshes) => {
+      if (!topView || !view) return view;
+      const mount = viewBbox(mountMeshes, topView);
+      const rodT = viewBbox(poleDrawn, topView);
+      if (!isFinite(mount.maxU) || !isFinite(rodT.maxU)) return view;
+      const hiU = mount.maxU + 0.038;
+      if (rodT.maxU <= hiU + 0.008) return view;
+      const vis = clipSegmentsU(view.vis, view.zb.minU - 1, hiU);
+      vis.push(...breakMarks(hiU - 0.006, rodT.minV, rodT.maxV));
+      return { ...view, vis, zb: { ...view.zb, maxU: hiU } };
+    };
 
     // Rod break: clip the front view to a window around plate/bracket/ring and mark the
     // cut — a full rod can't print at 1:1, and the hand-made sheets truncate it the same way.
@@ -942,7 +964,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // profile looks down that axis — so they all land on the same spot and draw on top of each
       // other (Stuart 2026-08-23: "rendering over laps"). The reference's profile column is the
       // arm's section; each ring's own end view is on the bottom strip.
-      const profile = scrubSeams(withSection(renderHiddenLine([...bracket, ...poleDrawn], topView || views.profile, 900), topView || views.profile), topView || views.profile);
+      const profile = clipOverhead(scrubSeams(withSection(renderHiddenLine([...bracket, ...poleDrawn], topView || views.profile, 900), topView || views.profile), topView || views.profile), bracket);
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF, Math.max(...ringBoxes.map(b => b.maxU), -Infinity));
@@ -1140,7 +1162,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const meshes = [...bracket, ...plateAll, ...poleDrawn, ...ringMeshes];
       const front0 = scrubSeams(mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes)), views.front);
       // Rings excluded — see the note on the basic row: they stack in this view.
-      const profile = scrubSeams(withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900), topView || views.profile), topView || views.profile);
+      const profile = clipOverhead(scrubSeams(withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900), topView || views.profile), topView || views.profile), [...bracket, ...plateAll]);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
@@ -1171,7 +1193,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       if (platePin.partName) {
         dims.front.push(opts.isCeiling
           ? { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateTopV, off: -(RING_LABEL_DROP - 8), lead: true, text: platePin.partName }
-          : { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP, lead: true, text: platePin.partName });
+          // The id sits a clear line BELOW the width dim bar (Stuart 2026-08-24b: "the item id
+          // is printed really close to the line, can you lower the id's").
+          : { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP + 14, lead: true, text: platePin.partName });
       }
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
       // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
