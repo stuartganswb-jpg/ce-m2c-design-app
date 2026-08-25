@@ -52,7 +52,17 @@ export const MONEY_DOC_TYPES = ['SALES_ORDER', 'INVOICE', 'QUOTE'];
 export const customerDocLines = (lines = [], docType = '') => {
     const real = (lines || []).filter(l => !isDisplayOnlyLine(l));
     if (!MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase())) return real;
-    return real.filter(l => !l.hidden && !l.shopOnly);
+    // ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25) ──────────────
+    // The engine pins a per-foot line's qty at 1 (one pole on the router) and multiplies the money
+    // by the feet — so a money document printed "1 × $9.00 = $72.00", which reads as an error and
+    // disagrees with the NetSuite line (8 × $9.00). On MONEY documents the qty column shows the
+    // FEET billed, so qty × unit = amount and the paper matches the estimate; the physical
+    // documents (work order, router, packing list) keep qty = pieces with the cut length, because
+    // one pole is what is built and boxed.
+    return real.filter(l => !l.hidden && !l.shopOnly)
+        .map(l => (l.perFoot && Number(l.feet) > 0
+            ? { ...l, qty: (Number(l.qty) || 1) * Number(l.feet) }
+            : l));
 };
 
 export const DIVISION_SMALL = 'small';

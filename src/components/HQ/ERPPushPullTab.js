@@ -219,7 +219,31 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                   // The traverse components have their own loop below — they are on the breakdown
                   // for the documents, and pushing them from both places would double the order.
                   if (l.trvComponent) return;
-                  const qty = Number(l.qty) > 0 ? Number(l.qty) : 1;
+                  let qty = Number(l.qty) > 0 ? Number(l.qty) : 1;
+                  // ── ROD STOCK CONSUMES BY THE FOOT (Stuart 2026-08-25, first Brimar orders) ──
+                  // The engine prices per-foot lines with qty pinned at 1 (one pole on the router)
+                  // and the feet multiplying the money — but NetSuite's per-foot items bill and
+                  // relieve stock in FEET, exactly as the old engine's pole steps pushed (their
+                  // step qty WAS the footage). Pushing qty 1 sent the pole at one foot's rate and
+                  // left the balance riding the rollup as labor. So the NetSuite quantity is
+                  // qty × feet; the cut length still travels for the bench.
+                  // (No addLog here — this resolver also runs during render; the push loop logs.)
+                  let feetNote = 0;
+                  if (l.perFoot && Number(l.feet) > 0) {
+                      qty = qty * Number(l.feet);
+                  } else if (!l.perFoot && Number(l.cutLength) > 12 && Number(l.price) > 0 && Number(l.total) > 0) {
+                      // LEGACY LINE (saved before perFoot/feet were stamped): reconstruct the
+                      // footage only when the line's own arithmetic states it — total is a clean
+                      // integer multiple (≥2) of unit × qty AND that integer agrees with the cut
+                      // length (billed feet round the cut up to whole feet). Anything else pushes
+                      // exactly as stored.
+                      const ratio = Number(l.total) / (Number(l.price) * qty);
+                      const feet = Math.round(ratio);
+                      if (feet >= 2 && Math.abs(ratio - feet) < 0.01 && Math.abs(feet - Math.ceil(Number(l.cutLength) / 12)) <= 1) {
+                          qty = qty * feet;
+                          feetNote = feet;
+                      }
+                  }
                   let masterPart = matchPart(l.partId) || matchPart(l.legacyErpId);
                   if (!masterPart) { result.unresolved.push({ stepTitle: `${l.name || 'Configured line'}`, partId: l.partId || l.legacyErpId }); return; }
                   result.stepsConsidered++;
@@ -246,6 +270,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
                       masterPart,
                       aliasFace,
                       qty: qty * cart.assemblyQty,
+                      ...(feetNote ? { feetReconstructed: feetNote } : {}),
                       nsId,
                       finishedErpId,
                       finishUnmapped,
@@ -527,6 +552,7 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
           for (const line of linesToPush) {
               if (line.nsId !== 'UNMAPPED' && line.nsId !== 'PENDING') {
+                  if (line.feetReconstructed) addLog(`Per-foot line ${line.masterPart?.legacyErpId || line.masterPart?.itemId}: this quote predates the footage field — pushing qty ${line.qty} (ft), reconstructed from the line's own total ÷ per-foot price + cut length. Reopen in CPQ and re-save to stamp it permanently.`, 'warn');
                   // Rate = the customer's negotiated price for this part if one exists,
                   // otherwise the part's base price. This mirrors how CPQ built the quote
                   // total, so the line rates + rollup line always sum to the quoted total.

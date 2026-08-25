@@ -86,6 +86,13 @@ function handoffLine(l, part, finishName = '') {
         ...(l.inKit ? { inKit: true } : {}),
         ...(l.shopOnly ? { shopOnly: true } : {}),
         ...(l.billedFeet !== undefined ? { billedFeet: l.billedFeet } : {}),
+        // ⚠ PER-FOOT LINES SAY SO (Stuart 2026-08-25, first Brimar orders). The engine prices rod
+        // stock by the foot with qty pinned at 1 (one pole on the router — 2026-08-20), so without
+        // these two fields a downstream reader sees {qty:1, price:9, total:72} and has no way to
+        // know 8 ft was billed: the quote doc printed "1 × $9.00 = $72.00" and the NetSuite push
+        // sent qty 1, leaving $63 of pole to ride the rollup as labor. Money consumers read feet
+        // (doc qty column, NS quantity); physical consumers keep qty = pieces with the cut.
+        ...(l.perFoot ? { perFoot: true, feet: Number(l.feet) || 0 } : {}),
         ...(l.detail ? { detail: l.detail } : {}),
         ...(l.cutLength ? { cutLength: l.cutLength } : {}),
         ...(l.dimensions ? { dimensions: l.dimensions } : {}),

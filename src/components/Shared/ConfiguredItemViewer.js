@@ -299,7 +299,7 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                 {code && <div style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{code}</div>}
                                                 <div style={{ color: code ? 'var(--ink-soft)' : 'var(--ink)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</div>
-                                                {(l.partHandling || l.cutLength) && <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '2px' }}>{l.partHandling ? `→ ${l.partHandling}` : ''}{l.cutLength ? ` · cut ${l.cutLength}"` : ''}</div>}
+                                                {(l.partHandling || l.cutLength) && <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '2px' }}>{l.partHandling ? `→ ${l.partHandling}` : ''}{l.cutLength ? ` · cut ${l.cutLength}"` : ''}{l.perFoot && Number(l.feet) > 0 ? ` · ${l.feet} ft billed` : ''}</div>}
                                                 {l.customNote && <div style={{ fontSize: '0.74rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '2px' }}>“{l.customNote}”</div>}
                                             </div>
                                             {(() => { const t = qtyText(perUnitQty(l, mult), mult); return (

@@ -1,7 +1,7 @@
 // The downstream contract, pinned. These assertions are the six consumers' requirements written
 // down: if a field named here disappears, a floor, a push or a document silently loses a fact.
 import { readFileSync } from 'fs';
-import { classifyLine, isDisplayOnlyLine, DIVISION_SMALL, DIVISION_CUSTOM } from '../src/components/Shared/lineClassification.js';
+import { classifyLine, isDisplayOnlyLine, DIVISION_SMALL, DIVISION_CUSTOM, customerDocLines } from '../src/components/Shared/lineClassification.js';
 
 const src = (f) => readFileSync(new URL(`../src/components/Shared/${f}`, import.meta.url), 'utf8');
 const mod = async (f) => import(`data:text/javascript;base64,${Buffer.from(
@@ -128,6 +128,33 @@ ok('the billable is in the money', item.pricing.finalPrice >= 78);
     ok('and so does the motor side', withDraw.traverseMotorSide === 'LEFT');
     const none = handoffItem(resolved, base);
     ok('a pole order carries neither', !('traverseDraw' in none) && !('traverseMotorSide' in none));
+}
+
+// ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25, first Brimar
+// orders) ────────────────────────────────────────────────────────────────────────────────────
+// The engine pins a per-foot line's qty at 1 and multiplies the money by the feet — so the line
+// MUST carry perFoot/feet or every downstream reader sees {qty:1, price:9, total:72} and cannot
+// tell 8 ft was billed: the quote doc printed "1 × $9.00 = $72.00" and the NetSuite push sent
+// qty 1, with $63 of pole riding the rollup as labor.
+{
+    const ctx = {
+        findPart, assembly: { id: 'A1', itemName: 'H1-138' }, flow: { id: 'F1', name: 'flow' },
+        priceLevel: 'STANDARD', lengthInches: 96, lengthFeet: 8, billedFeet: 8,
+    };
+    const it = handoffItem(resolved, ctx);
+    const pole = (it.pricingBreakdown || []).find(l => l.legacyErpId === 'H1-138R' && !l.addedByHand);
+    ok('a rod line billed by the foot says so', !!pole && pole.perFoot === true && pole.feet === 8);
+    ok('its qty stays one pole and the feet multiply the money',
+        !!pole && pole.qty === 1 && pole.total === pole.price * 8);
+    ok('the cut travels for the bench', !!pole && pole.cutLength === 96);
+    ok('a money document quantifies it in feet, so qty × unit = amount',
+        customerDocLines(it.pricingBreakdown, 'QUOTE').find(l => l.legacyErpId === 'H1-138R' && !l.addedByHand)?.qty === 8);
+    ok('a physical document keeps one piece with the cut',
+        customerDocLines(it.pricingBreakdown, 'WORK_ORDER').find(l => l.legacyErpId === 'H1-138R' && !l.addedByHand)?.qty === 1);
+    // No length answered → nothing is per-foot and nothing changes shape.
+    const noLen = handoffItem(resolved, { findPart, assembly: ctx.assembly, flow: ctx.flow, priceLevel: 'STANDARD' });
+    ok('a line with no length is not per-foot',
+        !(noLen.pricingBreakdown || []).some(l => l.perFoot));
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
