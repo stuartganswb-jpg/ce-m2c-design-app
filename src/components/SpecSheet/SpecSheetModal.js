@@ -872,7 +872,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const mount = viewBbox(mountMeshes, topView);
       const rodT = viewBbox(poleDrawn, topView);
       if (!isFinite(mount.maxU) || !isFinite(rodT.maxU)) return view;
-      const hiU = mount.maxU + 0.038;
+      const hiU = mount.maxU + 0.051;   // 2" of straight rod past the return (Stuart 2026-08-24c)
       if (rodT.maxU <= hiU + 0.008) return view;
       const vis = clipSegmentsU(view.vis, view.zb.minU - 1, hiU);
       vis.push(...breakMarks(hiU - 0.006, rodT.minV, rodT.maxV));
@@ -973,7 +973,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       // one drop dim per ring option, and its pattern id under it
       ringBoxes.forEach((rb, i) => {
-        dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 20, in: (poleF.maxV - rb.minV) * M2IN });
+        dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 24, ldy: 20, in: (poleF.maxV - rb.minV) * M2IN });
         const code = rowRings[i]?.partName;
         if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, text: code });
       });
@@ -1195,14 +1195,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           ? { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateTopV, off: -(RING_LABEL_DROP - 8), lead: true, text: platePin.partName }
           // The id sits a clear line BELOW the width dim bar (Stuart 2026-08-24b: "the item id
           // is printed really close to the line, can you lower the id's").
-          : { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP + 14, lead: true, text: platePin.partName });
+          : { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP + 22, lead: true, text: platePin.partName });
       }
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
       // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
       // plate width BELOW the plate — above it the rod crosses the dim on short plates
       if (isRound && !opts.isCeiling) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.maxV - (coverF.maxV - coverF.minV) * 0.15, dir: -1, in: plateWIn });
       else if (opts.isCeiling) dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateTopV, off: -12, in: plateWIn });
-      else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateAnchorV, off: 26, in: plateWIn });
+      else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateAnchorV, off: 32, in: plateWIn });
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       // ── THE CARRIER'S DROP (Stuart 2026-08-23b) ─────────────────────────────────────────
       // "the drop measurement shown for traverse should show the line from the bottom of the rod
@@ -1224,7 +1224,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // option on the rod — that measurement is the thing that differs between them. Label
         // drops ~1/4" printed so the text clears the underside of the pole.
         ringBoxes.forEach((rb, i) => {
-          dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 18, ldy: 20, in: (poleF.maxV - rb.minV) * M2IN });
+          dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 24, ldy: 20, in: (poleF.maxV - rb.minV) * M2IN });
           // ⚠ THE RING NAMES ITSELF WHERE IT HANGS (Stuart 2026-08-23: "lose the rings along the
           // bottom just keep them along the rod on the left and add their pattern ids below each
           // one"). The bottom strip was a second drawing of parts already on the page, and it cost

@@ -308,6 +308,13 @@ export function specPages({ choices, answers = {} }) {
             for (const fam of fams) {
             const sig = [
                 U(subject.partId || subject.id),
+                // ⚠ THE PROJECTION IS PART OF A DRAWING'S IDENTITY (Stuart 2026-08-24c: "the
+                // H1-MRPF is available in 3 projections … we need the other two and we need to
+                // align the backplates with the correct return projections"). The dedupe was
+                // collapsing a subject tagged at several depths into its first leaf's page; one
+                // page per projection keeps each leaf's own plates and its own projection figure
+                // (the plate depth and the dim both read the LEAF's tag).
+                String(leaf.proj ?? ''),
                 U(rod?.partId || ''),
                 fam.plates.map(p => U(p.partId || p.id)).sort().join(','),
                 rings.map(r => U(r.partId || r.id)).sort().join(','),

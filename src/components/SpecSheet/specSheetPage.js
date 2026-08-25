@@ -56,7 +56,7 @@ export function dimH(x0, x1, y, inches) {
   let s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x0}" y1="${y - 4}" x2="${x0}" y2="${y + 4}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x1}" y1="${y - 4}" x2="${x1}" y2="${y + 4}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg((x0 + x1) / 2 - 7, y - 5, inches);
+  s += fracSvg((x0 + x1) / 2 - 7, y - 8, inches);
   return s;
 }
 // side: +1 label right of the line (default), -1 label to the left (clear of artwork).
@@ -65,7 +65,7 @@ export function dimV(x, y0, y1, inches, dia = false, side = 1, labelDy = 0) {
   let s = `<line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y0}" x2="${x + 4}" y2="${y0}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y1}" x2="${x + 4}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg(side < 0 ? x - 30 : x + 6, (y0 + y1) / 2 + 4 + labelDy, inches, 10, dia);
+  s += fracSvg(side < 0 ? x - 34 : x + 9, (y0 + y1) / 2 + 4 + labelDy, inches, 10, dia);
   return s;
 }
 // dir +1: leader runs up-right, text right of it (default); -1: up-left, text to the left.
