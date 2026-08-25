@@ -36,7 +36,7 @@ const CHOICES = [
     { id: 'PL-CS', partId: 'H1-138CP-S', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', nodes: ['pcs'] },
     { id: 'PL-CH', partId: 'H1-138CP-H', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', nodes: ['pch'] },
     { id: 'PL-E', partId: 'H1-138BP-SE', role: 'BACKPLATE', position: 'LEFT', proj: '4.625', nodes: ['pe'] },
-    { id: 'PL-RTN', partId: 'H1-138RBP-S', role: 'BACKPLATE', position: 'LEFT', proj: '3.625', returnOnly: true, nodes: ['pr'] },
+    { id: 'PL-RTN', partId: 'H1-138RBP-S', role: 'BACKPLATE', position: 'LEFT', proj: '6', returnOnly: true, nodes: ['pr'] },   // deliberately at a DIFFERENT depth: a rtn plate follows its return, not the proj axis
 
     { id: 'RING-BR', partId: 'H1-138BR', role: 'RING', nodes: ['rb'] },
     { id: 'RING-BPR', partId: 'H1-138BPR', role: 'RING', nodes: ['rp'] },

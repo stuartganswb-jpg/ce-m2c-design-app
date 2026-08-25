@@ -1002,7 +1002,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       } else if (topView) {
         // Overhead return with no plate (the traverse miters): projection is the vertical
         // measure in the plan view, wall edge to pole centreline, marked clear on the right.
-        const topB = viewBbox([...bracket, ...poleDrawn], topView);
+        const topB = viewBbox(bracket, topView);   // NOT the rod: its unclipped span put the dim ~18" off-cell (Stuart 2026-08-25: dim missing)
         const wallPt = [0, 0, 0]; wallPt[axes.projAxis] = axes.wallCoord;
         const wallV = projPoint(topView, wallPt)[1];
         const poleV = projPoint(topView, [...axes.poleCenter])[1];
@@ -1287,7 +1287,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       } else if (topView) {
         // Overhead: the projection is a VERTICAL measure in this view — wall face at the bottom
         // edge to the pole centreline — marked clear of the artwork on the right.
-        const topB = viewBbox([...bracket, ...plateAll, ...poleDrawn], topView);
+        const topB = viewBbox([...bracket, ...plateAll], topView);   // NOT the rod: its unclipped span put the dim ~18" off-cell (Stuart 2026-08-25: dim missing)
         const wallV = projPoint(topView, wallPt)[1];
         const poleV = projPoint(topView, polePt)[1];
         dims.profile.push({

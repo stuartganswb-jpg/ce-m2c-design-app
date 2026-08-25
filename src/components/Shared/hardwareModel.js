@@ -539,7 +539,14 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     }
     // A rod has no projection either — the arm holding it does. (Setup and drive still apply: a
     // rear track genuinely is double-only.)
-    if (!skip('proj') && !ROD_ROLES.includes(choice.role) && ctx.proj != null && choice.projs.length) {
+    // ── A RETURN PLATE FOLLOWS ITS RETURN, NOT THE PROJECTION AXIS (Stuart 2026-08-25) ──────
+    // "only the 6\" projection is shown with the correct backplate, the 3.625 and 4.625 both are
+    //  incorrect … we need to make all of this work with the tags so that this tool works well
+    //  with all assemblies not just this one." A rtn-only plate sits flat on the wall behind
+    // whichever return is chosen — the RETURN carries the projection, the plate merely meets the
+    // wall — so a proj tag on a rtn-only plate records where it was modelled, never which depths
+    // it may serve. The pairing rule still keeps rtn-only plates off ordinary arms.
+    if (!skip('proj') && !ROD_ROLES.includes(choice.role) && !choice.returnOnly && ctx.proj != null && choice.projs.length) {
         if (!choice.projs.some(p => sameMeasure(p, ctx.proj))) {
             return no('projection', `made in ${choice.projs.map(p => `${p}"`).join(', ')} — this order is ${ctx.proj}"`);
         }
@@ -1169,7 +1176,11 @@ export function slots(choices, answers = {}, selectedIds = []) {
         // narrowed to plates that share a projection with the arm actually chosen, answered or not.
         // A plate tagged for no projection fits them all and always passes.
         if (arm.projs && arm.projs.length) {
-            const paired = slot.options.filter(o => !o.projs.length || o.projs.some(p => arm.projs.some(q => sameMeasure(p, q))));
+            // A rtn-only plate follows its RETURN, not the projection pairing — same exemption as
+            // the axis gate above (Stuart 2026-08-25): the return carries the projection, the
+            // plate merely meets the wall behind it, and its own proj tag records where it was
+            // modelled. Ordinary plates still pair strictly by depth.
+            const paired = slot.options.filter(o => o.returnOnly || !o.projs.length || o.projs.some(p => arm.projs.some(q => sameMeasure(p, q))));
             if (paired.length) slot.options = paired;
             else {
                 slot.suppressedBy = arm.name;
