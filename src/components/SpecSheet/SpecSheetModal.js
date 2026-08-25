@@ -407,6 +407,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         })(),
         isTraverse: p.isTraverse,
         isIM: p.kind === 'INSIDE_MOUNT',
+        mount: String(p.answers?.mount || '').toUpperCase(),
         family: p.label,
         reason: p.reason || '',
         // Pairing facts for the basics rule below — tags, never code sniffing.
@@ -801,7 +802,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
       return null;
     })();
-    const withSection = (view) => (sectionRider ? mergeViews(view, renderHiddenLine(sectionRider, views.profile, 900)) : view);
+    // ⚠ THE OVERLAY RENDERS IN THE CELL'S OWN BASIS. A return page's right cell is the PLAN
+    // view — merging a side-profile render of the carrier into it put the part at nonsense
+    // coordinates (the floating ghost on the traverse miter sheets). The caller says which view
+    // the cell is drawn in; the overlay renders in the same one.
+    const withSection = (view, basis) => (sectionRider ? mergeViews(view, renderHiddenLine(sectionRider, basis || views.profile, 900)) : view);
     // ── A RETURN IS SHOWN FROM OVERHEAD (Stuart 2026-08-23b) ────────────────────────────────
     // "instead of showing from the side profile, we need to show these (all when marked as
     //  returns) from overhead view, so that we can clearly mark the projection and show the
@@ -909,7 +914,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // profile looks down that axis — so they all land on the same spot and draw on top of each
       // other (Stuart 2026-08-23: "rendering over laps"). The reference's profile column is the
       // arm's section; each ring's own end view is on the bottom strip.
-      const profile = withSection(renderHiddenLine([...bracket, ...poleDrawn], topView || views.profile, 900));
+      const profile = withSection(renderHiddenLine([...bracket, ...poleDrawn], topView || views.profile, 900), topView || views.profile);
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF, Math.max(...ringBoxes.map(b => b.maxU), -Infinity));
@@ -1079,7 +1084,11 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         }
       }
       const projIn = Number(opts.projIn);
-      if (isFinite(projIn) && projIn > 0) {
+      // ⚠ NOT ON A CEILING PAGE (Stuart 2026-08-24). A ceiling plate hangs the pole from above —
+      // there is no wall, so inferAxes' wallCoord is a fiction there, and sliding the plate to
+      // "projIn behind the pole" dragged a ceiling plate sideways. The ceiling geometry is
+      // modelled true (plate above the rod); it stays exactly where the designer put it.
+      if (!opts.isCeiling && isFinite(projIn) && projIn > 0) {
         const ax = axes.projAxis;
         const poleC = axes.poleBox.center[ax];
         // Even a badly-parked plate is on the correct SIDE of the rod, so the sense is reliable.
@@ -1103,7 +1112,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const meshes = [...bracket, ...plateAll, ...poleDrawn, ...ringMeshes];
       const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes));
       // Rings excluded — see the note on the basic row: they stack in this view.
-      const profile = withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900));
+      const profile = withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900), topView || views.profile);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
@@ -1201,7 +1210,20 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         .filter(g => g.length)
         .map(g => projPoint(views.profile, groupBbox(g).center)[0])
         .sort((x, y) => Math.abs(x - wallU) - Math.abs(y - wallU));
-      if (topView) {
+      if (opts.isCeiling) {
+        // ── A CEILING BRACKET IS DIMENSIONED BY ITS DROP (Stuart 2026-08-24) ─────────────
+        // "on ceiling brackets we do not measure the projection from the wall but rather the
+        //  drop from the ceiling to the top of pole." There is no wall: the mount plane is the
+        // plate's top face against the ceiling, and the figure a fitter needs is how far the
+        // pole hangs below it. Vertical dim, ceiling face → top of pole, clear on the side.
+        const profB = viewBbox([...bracket, ...plateAll, ...poleDrawn], views.profile);
+        const ceilV = placed.max[axes.vertAxis];
+        const poleTopV = axes.poleBox.max[axes.vertAxis];
+        dims.profile.push({
+          t: 'v', u: profB.maxU, v0: ceilV, v1: poleTopV,
+          off: 16, side: 1, in: (ceilV - poleTopV) * M2IN,
+        });
+      } else if (topView) {
         // Overhead: the projection is a VERTICAL measure in this view — wall face at the bottom
         // edge to the pole centreline — marked clear of the artwork on the right.
         const topB = viewBbox([...bracket, ...plateAll, ...poleDrawn], topView);
@@ -1266,7 +1288,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     for (const sub of subs) {
       let b = rowCacheRef.current[sub.key];
       if (!b) {
-        b = buildRows(sub.bracketPin, sub.familyPins, { isIM: sub.isIM, isTraverse: sub.isTraverse, isReturn: sub.kind === 'RETURN', ringPins: sub.ringPins, riderPins: sub.riderPins, rodNodes: sub.rodNodes, projIn: sub.projIn, projTiers: sub.projTiers });
+        b = buildRows(sub.bracketPin, sub.familyPins, { isIM: sub.isIM, isTraverse: sub.isTraverse, isReturn: sub.kind === 'RETURN', isCeiling: sub.mount === 'CEILING', ringPins: sub.ringPins, riderPins: sub.riderPins, rodNodes: sub.rodNodes, projIn: sub.projIn, projTiers: sub.projTiers });
         rowCacheRef.current[sub.key] = b;
       }
       if (!first) first = b;
