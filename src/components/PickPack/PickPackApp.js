@@ -1040,25 +1040,62 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // Note on what this deliberately does NOT do: the app has ensureBinExists, which CREATES a bin
     // when it is missing. Using it here would have quietly created a bin literally called
     // "E3L- N5- R2" in NetSuite. A mistyped bin must be rejected, never manufactured.
-    const [binIndex, setBinIndex] = useState({ loc: null, list: [], loaded: false });
+    //
+    // ONE PAGE OF BINS IS NOT THE BIN LIST (Andrea 2026-08-25: "trying to build rings on RTS-CUS
+    // location and shows the same error as the other item"). SuiteQL returns 1000 rows per page,
+    // and this query asked for one page and treated it as the whole warehouse — so every bin past
+    // the thousandth read as "does not exist" and the app refused a bin the packer was holding in
+    // her hand. The message even offers RTS-CUS as an EXAMPLE of a valid bin further down this
+    // file. Keyset-paginated now, the same way the item metadata sync has always done it.
+    //
+    // And the rule that follows from being wrong about this: A VALIDATOR MAY ONLY REFUSE ON
+    // COMPLETE KNOWLEDGE. If the list is short, unreachable, or truncated, the check drops to a
+    // warning the person can pass — which still puts Eric's typo in front of him, without telling
+    // someone correct that they are wrong. Refusing on partial data is worse than not checking:
+    // the operator knows the bin is real, so the app just looks broken and gets worked around.
+    const [binIndex, setBinIndex] = useState({ loc: null, list: [], complete: false, loaded: false });
     const loadBinIndex = async () => {
         const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location;
-        if (!loc || (binIndex.loaded && binIndex.loc === loc)) return binIndex.list;
+        if (!loc) return { list: [], complete: false };
+        if (binIndex.loaded && binIndex.loc === loc) return { list: binIndex.list, complete: binIndex.complete };
+        const PAGE = 1000, MAX_PAGES = 40;   // 40k bins is far past any real warehouse
+        let list = [], lastId = 0, complete = false;
         try {
-            const r = await nsProxyFetch({
-                targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
-                method: 'POST', payload: { q: `SELECT binnumber FROM bin WHERE location = ${loc}` },
-            });
-            const body = await r.json().catch(() => ({}));
-            const list = (body.items || []).map(x => String(x.binnumber || '').toUpperCase()).filter(Boolean);
-            setBinIndex({ loc, list, loaded: true });
-            return list;
+            for (let page = 0; page < MAX_PAGES; page++) {
+                const r = await nsProxyFetch({
+                    targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+                    method: 'POST',
+                    payload: { q: `SELECT bin.id, bin.binnumber FROM bin WHERE bin.location = ${loc} AND bin.id > ${lastId} ORDER BY bin.id ASC` },
+                });
+                const body = await r.json().catch(() => ({}));
+                if (!r.ok) throw new Error(JSON.stringify(body).slice(0, 200));
+                const rows = body.items || [];
+                list = list.concat(rows.map(x => String(x.binnumber || '').toUpperCase()).filter(Boolean));
+                if (rows.length < PAGE) { complete = true; break; }
+                lastId = rows[rows.length - 1].id;
+            }
+            setBinIndex({ loc, list, complete, loaded: true });
+            return { list, complete };
         } catch (e) {
             // Unreachable NetSuite must not block a put-away — warn instead of inventing certainty.
             console.warn('Bin list unavailable:', e);
-            setBinIndex({ loc, list: [], loaded: true });
-            return [];
+            setBinIndex({ loc, list, complete: false, loaded: true });
+            return { list, complete: false };
         }
+    };
+    // WHERE DOES THIS BIN ACTUALLY LIVE? Asked only when a bin fails the check, because "not at
+    // this location" is a dead end and "it is a bin at M2C Studio" is an answer. Andrea called
+    // RTS-CUS a location in her own words, so which it is — and where — is the thing worth saying.
+    const lookupBinAnywhere = async (bin) => {
+        try {
+            const r = await nsProxyFetch({
+                targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+                method: 'POST',
+                payload: { q: `SELECT bin.binnumber, BUILTIN.DF(bin.location) AS locname FROM bin WHERE UPPER(bin.binnumber) = '${String(bin).toUpperCase().replace(/'/g, "''")}'` },
+            });
+            const body = await r.json().catch(() => ({}));
+            return (body.items || []).map(x => String(x.locname || '').trim()).filter(Boolean);
+        } catch { return []; }
     };
     // "E3L- N5- R2" and "m e3l-n5-r2" are the same keystrokes as "M E3L-N5-R2" once the scanner's
     // stray spaces are taken out. Squeeze, don't guess: spaces AROUND hyphens go, the zone space stays.
@@ -1083,14 +1120,20 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const redoPutaway = async (job) => {
         if (!job) return;
         if (job.jfpAdjPosted) return alert(`${packRef(job)} already posted its NetSuite adjustment${job.jfpAdjTran ? ` (${job.jfpAdjTran})` : ''}.\n\nNothing to redo — re-posting would double the stock.`);
-        const known = await loadBinIndex();
+        const { list: known, complete: binsComplete } = await loadBinIndex();
         const entered = window.prompt(`↩ Re-post the put-away for ${packRef(job)}?\n\nThe last attempt used "${job.jfpAdjBin || job.putawayBin || '—'}" and NetSuite rejected it, so the pieces are physically away but NOT on the books.\n\nCorrect bin:`, job.putawayBin || '');
         if (entered === null) return;
         const bin = normalizeBin(entered);
         if (!bin) return alert('A bin is needed.');
         if (known.length && !known.includes(bin)) {
             const near = nearestBins(bin, known);
-            return alert(`"${entered.trim()}" is not a bin at this location.\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}\n\nNothing was posted.`);
+            const elsewhere = await lookupBinAnywhere(bin);
+            const where = elsewhere.length ? `\n\nNetSuite has a bin by that name at: ${elsewhere.join(', ')} — not at this brand's location.` : '';
+            const msg = `"${entered.trim()}" is not a bin at this location.${where}\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}`;
+            // Complete list → refuse. Incomplete → say so and let the person decide; they can see
+            // the bin and the app cannot see all of them.
+            if (binsComplete && !elsewhere.length) return alert(`${msg}\n\nNothing was posted.`);
+            if (!window.confirm(`${msg}\n\n(The bin list here may be incomplete, so this is a warning, not a refusal.)\n\nPost to "${bin}" anyway?`)) return;
         }
         const qty = Number(job.jfpAdjQty) || Number(job.completedParts) || Number(job.totalParts) || 0;
         if (!job.jfpItemId) return alert(`${packRef(job)} has no NetSuite item id recorded, so nothing can be adjusted automatically. Adjust ${job.jfpItemCode || 'the item'} into ${bin} by hand in NetSuite.`);
@@ -1133,10 +1176,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // receives the pieces. A finish suffix is the tell — no bin here is named "CODE/FIN".
             // IS IT A REAL BIN? (Eric 2026-08-24) Checked before posting, because NetSuite's answer
             // to a bad bin is a failed adjustment nobody sees until the stock does not add up.
-            const known = await loadBinIndex();
+            const { list: known, complete: binsComplete } = await loadBinIndex();
             if (known.length && !known.includes(bin)) {
                 const near = nearestBins(bin, known);
-                return alert(`"${putawayBin.trim()}" is not a bin at this location.${bin !== putawayBin.trim().toUpperCase() ? `\n\n(Read as "${bin}" after tidying the spacing.)` : ''}\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}\n\nNothing was posted — NetSuite rejects an unknown bin and the adjustment would have been lost.`);
+                const elsewhere = await lookupBinAnywhere(bin);
+                const read = bin !== putawayBin.trim().toUpperCase() ? `\n\n(Read as "${bin}" after tidying the spacing.)` : '';
+                const where = elsewhere.length ? `\n\nNetSuite has a bin by that name at: ${elsewhere.join(', ')} — not at this brand's location.` : '';
+                const msg = `"${putawayBin.trim()}" is not a bin at this location.${read}${where}\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}`;
+                if (binsComplete && !elsewhere.length) return alert(`${msg}\n\nNothing was posted — NetSuite rejects an unknown bin and the adjustment would have been lost.`);
+                if (!window.confirm(`${msg}\n\n(The bin list here may be incomplete, so this is a warning, not a refusal.)\n\nPut away to "${bin}" anyway?`)) return;
             }
             const itemCodes = [job.jfpItemCode, job.stockErpId, job.type].map(v => String(v || '').trim().toUpperCase()).filter(Boolean);
             if (itemCodes.includes(bin) || (bin.includes('/') && !/^[A-Z]{2,}-/.test(bin))) {
