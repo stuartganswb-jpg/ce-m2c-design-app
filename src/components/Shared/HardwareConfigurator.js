@@ -192,18 +192,24 @@ function HardwareConfiguratorInner({
     // 120") it is REQUIRED — added automatically at the default, CENTER of the run, and re-added
     // if removed, because a pole that long does not ship in one piece. The note carries the
     // exact location only when it differs, which is precisely what Vision reads to draw it.
-    const spliceCode = useMemo(() => {
+    // Joiners are DIAMETER-SPECIFIC, and a multi-size flow derives several candidates — the
+    // step must never guess a diameter, so with ONE candidate it adds it itself and with more
+    // it requires the operator to add the right one (the banner says so).
+    const spliceCodes = useMemo(() => {
+        const out = [];
         for (const it of (extraItems || [])) {
             const part = findPart(it.code);
-            const hay = `${it.label || ''} ${part?.itemName || ''} ${part?.manufacturingSpecs?.productType || ''} ${part?.customData?.feeType || ''}`.toUpperCase();
-            if (/SPLICE|JOINER|JNR/.test(hay)) return it.code;
+            const hay = `${it.code || ''} ${it.label || ''} ${part?.itemName || ''} ${part?.manufacturingSpecs?.productType || ''} ${part?.customData?.feeType || ''}`.toUpperCase();
+            if (/SPLICE|JOINER|JNR|SPLC/.test(hay)) out.push(it.code);
         }
-        return null;
+        return out;
     }, [extraItems, findPart]);
+    const spliceCode = spliceCodes.length === 1 ? spliceCodes[0] : null;
     const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 120;
-    const spliceNeeded = !!spliceCode && !!lengthInches && lengthInches > spliceOverIn;
+    const spliceNeeded = spliceCodes.length > 0 && !!lengthInches && lengthInches > spliceOverIn;
+    const spliceSatisfied = spliceCodes.some(c => extras.some(x => x.code === c && Number(x.qty) > 0));
     useEffect(() => {
-        if (!spliceNeeded) return;
+        if (!spliceNeeded || !spliceCode) return;   // several candidates → the operator picks
         setExtras(a => (a.some(x => x.code === spliceCode && Number(x.qty) > 0) ? a : [...a.filter(x => x.code !== spliceCode), { code: spliceCode, qty: '1', note: '' }]));
     }, [spliceNeeded, spliceCode, extras]);
     // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
@@ -1568,8 +1574,9 @@ function HardwareConfiguratorInner({
                                     one-piece limit the splice adds itself at the default, and the note is only
                                     for a location that differs. Vision draws the splice where the note says. */}
                                 {spliceNeeded && (
-                                    <div style={{ border: '1px solid var(--brass)', background: '#faf6ee', padding: '9px 11px', marginBottom: '8px', fontSize: '11.5px', color: 'var(--ink)', lineHeight: 1.45 }}>
-                                        <b>⚠ Splice required</b> — {lengthInches}&Prime; exceeds the {spliceOverIn}&Prime; one-piece limit.
+                                    <div style={{ border: `1px solid ${spliceSatisfied ? 'var(--line)' : 'var(--brass)'}`, background: spliceSatisfied ? 'var(--paper)' : '#faf6ee', padding: '9px 11px', marginBottom: '8px', fontSize: '11.5px', color: 'var(--ink)', lineHeight: 1.45 }}>
+                                        <b>{spliceSatisfied ? 'Splice included' : '⚠ Splice required'}</b> — {lengthInches}&Prime; exceeds the {spliceOverIn}&Prime; one-piece limit.
+                                        {!spliceSatisfied && spliceCodes.length > 1 && <> Add the splice/joiner for this rod size below.</>}{' '}
                                         Default location is the <b>CENTER of the run</b>; note the exact location below only if
                                         different. Vision draws the splice where the note says.
                                     </div>
@@ -1606,7 +1613,7 @@ function HardwareConfiguratorInner({
                                                 </div>
                                                 {!!row && (
                                                     <input value={row.note || ''} onChange={e => set({ note: e.target.value })}
-                                                        placeholder={it.notePlaceholder || (it.code === spliceCode ? 'Default is CENTER — give the exact location only if different' : 'Anything the shop needs to know about it')}
+                                                        placeholder={it.notePlaceholder || (spliceCodes.includes(it.code) ? 'Default is CENTER — give the exact location only if different' : 'Anything the shop needs to know about it')}
                                                         style={{ padding: '6px 7px', border: '1px solid var(--line)', fontSize: '11.5px', background: '#fff', color: 'var(--ink)' }} />
                                                 )}
                                             </div>
