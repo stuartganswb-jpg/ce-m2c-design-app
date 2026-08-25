@@ -5,7 +5,8 @@ import { DynamicModel } from '../HQ/CPQTab';
 import { StudioRig } from './studioScene';
 import { resolve as resolveHardware, diagnose as diagnoseHardware, projectionAudit, finishesFor, reseatPicks, recommendedQty, takesQty, bearingEnds, centreBracketsFor, TRAVERSE, ROD_ROLES } from './hardwareModel';
 import { TraverseConfiguratorPanel } from './TraverseConfiguratorModal';
-import { configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
+import { configuratorLines, configuratorTotal, defaultPicks} from './traverseConfigurator';
+import { traverseAnswersMissing, drawLabel } from './traverseDraw';
 import { seedFromVision } from './visionBridge';
 import { seedFromKit, applyKitPricing } from './kitSeed';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
@@ -633,7 +634,7 @@ function HardwareConfiguratorInner({
     // a stale count is a wrong count. Once the operator has answered, their answer stands.
     const [trvSel, setTrvSel] = useState(null);
     const trvSeed = useMemo(() => (trvRules && isTraverse
-        ? { carrierStyle: '', carrierQty: '', picks: defaultPicks({ rules: trvRules, drive: trvDrive, feet: trvFeet, trackCount: trvTracks }), accessories: {} }
+        ? { carrierStyle: '', carrierQty: '', draw: '', motorSide: '', picks: defaultPicks({ rules: trvRules, drive: trvDrive, feet: trvFeet, trackCount: trvTracks }), accessories: {} }
         : null), [trvRules, isTraverse, trvDrive, trvFeet, trvTracks]);
     const trvLive = trvSel || trvSeed;
     const trvComponents = useMemo(() => ((trvRules && isTraverse && trvLive)
@@ -922,6 +923,12 @@ function HardwareConfiguratorInner({
             // reads `trvComponents` off the item and the documents read the breakdown rows, so
             // neither can tell which engine asked the question.
             trvComponents,
+            // ── HOW IT OPENS, ON THE ORDER (Stuart 2026-08-22) ───────────────────────────────
+            // Not a part and not a price — an instruction. The bench assembles the carriers to it
+            // and hangs the master on the drawn side, so it has to reach the floor and the
+            // paperwork, not just the screen it was answered on.
+            traverseDraw: trvLive?.draw || '',
+            traverseMotorSide: trvLive?.motorSide || '',
             // ── THE FROZEN RENDER (Stuart 2026-08-21) ────────────────────────────────────────
             // The shop floor, the finishing floor and the HQ work-order window re-render a saved
             // order from this and nothing else (Shared/ConfiguredItemViewer). The old engine wrote
@@ -1466,11 +1473,20 @@ function HardwareConfiguratorInner({
                                 </div>
                                 <TraverseConfiguratorPanel rules={trvRules} drive={trvDrive} feet={trvFeet} trackCount={trvTracks}
                                     itemInfo={trvItemInfo} priceOf={trvPriceOf} sel={trvLive} onSel={setTrvSel} />
-                                {!trvLive?.carrierStyle && (
-                                    <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)' }}>
-                                        Pick a carrier style — the rest of the order is already priced, but a track with no carriers is not a finished configuration.
-                                    </div>
-                                )}
+                                {(() => {
+                                    // Everything still outstanding on this track, in one line. The draw and the
+                                    // motor side cost nothing and are therefore easy to walk past — and both are
+                                    // scrap if wrong, so they are named here beside the carrier style rather than
+                                    // left to be noticed.
+                                    const missing = [...traverseAnswersMissing({ drive: trvDrive, sel: trvLive }),
+                                        ...(trvLive?.carrierStyle ? [] : ['carrier style'])];
+                                    if (!missing.length) return null;
+                                    return (
+                                        <div style={{ ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--brass)' }}>
+                                            Still needed: {missing.join(' · ')} — the rest of the order is already priced, but a track missing any of these is not a finished configuration.
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         )}
 

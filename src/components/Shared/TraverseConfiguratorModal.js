@@ -4,7 +4,8 @@
 // method"). ONE component, mounted behind a guard by each surface — the logic lives in
 // Shared/traverseConfigurator (pure, node-tested); this renders it and nothing else.
 import React, { useMemo, useState } from 'react';
-import { configuratorOffer, configuratorLines, configuratorTotal, defaultPicks } from './traverseConfigurator';
+import { configuratorOffer, configuratorLines, configuratorTotal, defaultPicks} from './traverseConfigurator';
+import { DRAWS, MOTOR_SIDES } from './traverseDraw';
 
 // ── THE QUESTIONS THEMSELVES, WITHOUT THE POPUP AROUND THEM ──────────────────────────────────
 // Stuart 2026-08-21: "integrate that simple configurator at the last step of any traverse rod".
@@ -28,6 +29,58 @@ export function TraverseConfiguratorPanel({ rules, drive, feet, trackCount = 1, 
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    {/* ── HOW IT OPENS, BEFORE WHAT IT OPENS ON (Stuart 2026-08-22) ──────────────
+                        The draw is drawn as an arrow on every window of a take-off, and it decides
+                        how the carriers are assembled and which side the master goes on — so it is
+                        asked with the carriers, immediately before them, rather than buried in a
+                        note. There is no default: a track built to the wrong draw opens away from
+                        the room, and guessing CENTER because it is commonest is how that happens. */}
+                    <div>
+                        <div style={{ ...lbl, marginBottom: '8px' }}>Draw direction — how the curtain opens</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '10px' }}>
+                            {DRAWS.map(d => {
+                                const on = String(sel.draw || '') === d.value;
+                                return (
+                                    <label key={d.value} style={row(on)}>
+                                        <input type="radio" name="trv-draw" checked={on} onChange={() => setSel(p => ({ ...p, draw: d.value }))} style={{ cursor: 'pointer' }} />
+                                        <span style={{ flex: 1 }}>
+                                            <span style={{ display: 'block', fontSize: '0.9rem', color: 'var(--ink)' }}>{d.label}</span>
+                                            <span style={{ ...mono, color: 'var(--ink-soft)' }}>{d.hint}</span>
+                                        </span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                        {!sel.draw && (
+                            <div style={{ ...mono, fontSize: '10px', color: 'var(--brass)', marginTop: '8px' }}>
+                                Required — it is the arrow on the take-off, and the track is assembled to it.
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Only a motorised track has a side to put the motor on. */}
+                    {String(drive || '').toUpperCase() === 'MOTORIZED' && (
+                        <div>
+                            <div style={{ ...lbl, marginBottom: '8px' }}>Motor side</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '10px' }}>
+                                {MOTOR_SIDES.map(mset => {
+                                    const on = String(sel.motorSide || '') === mset.value;
+                                    return (
+                                        <label key={mset.value} style={row(on)}>
+                                            <input type="radio" name="trv-motor-side" checked={on} onChange={() => setSel(p => ({ ...p, motorSide: mset.value }))} style={{ cursor: 'pointer' }} />
+                                            <span style={{ flex: 1, fontSize: '0.9rem', color: 'var(--ink)' }}>{mset.label}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                            {!sel.motorSide && (
+                                <div style={{ ...mono, fontSize: '10px', color: 'var(--brass)', marginTop: '8px' }}>
+                                    Required on a motorised track — the head end is built to it.
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     <div>
                         <div style={{ ...lbl, marginBottom: '8px' }}>Carrier style — pick one; {feet}ft includes the chart count</div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '10px' }}>

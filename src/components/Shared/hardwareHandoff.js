@@ -105,6 +105,7 @@ export function handoffItem(resolved, ctx = {}) {
         assembly, flow, findPart, qty = 1, sidemark = '', finishes = [], finishLabel = '',
         priceLevel = 'STANDARD', lengthInches = null, lengthFeet = null,
         extras = [], stepNotes = {}, memo = '', trvComponents = [],
+        traverseDraw = '', traverseMotorSide = '',
     } = ctx;
 
     // ⚠ PRICED AGAIN, HERE. This is the figure the CART, the documents and the ERP push all read —
@@ -167,6 +168,13 @@ export function handoffItem(resolved, ctx = {}) {
         pricing: { finalPrice: total },
         // Every consumer's list. Customer documents filter `hidden`; the floors do not.
         pricingBreakdown: breakdown,
+        // ── THE TRACK'S INSTRUCTIONS (Stuart 2026-08-22) ────────────────────────────────────
+        // The draw and the motor side are neither parts nor money, so they have no line to ride.
+        // They sit on the ITEM, next to the finish label, because that is where every consumer
+        // already looks for "how is this one built" — and a track assembled to the wrong draw
+        // opens away from the room, which no downstream screen can catch for us.
+        ...(traverseDraw ? { traverseDraw } : {}),
+        ...(traverseMotorSide ? { traverseMotorSide } : {}),
         // The finish in words, stamped here because CPQ holds the finish objects and every
         // document downstream should read ONE field rather than re-deriving it.
         finishes,

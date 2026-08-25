@@ -118,5 +118,17 @@ ok('the billable is in the money', item.pricing.finalPrice >= 78);
         JSON.stringify(noKit.pricingBreakdown) === JSON.stringify(handoffItem(resolved, baseCtx).pricingBreakdown));
 }
 
+// ── THE TRACK'S INSTRUCTIONS REACH THE ORDER (Stuart 2026-08-22) ─────────────────────────────
+// The draw and the motor side are neither parts nor money, so nothing else on the item would carry
+// them — and a track assembled to the wrong draw opens away from the room.
+{
+    const base = { findPart, assembly: { id: 'A1', itemName: 'H1-2TRV' }, flow: { id: 'F1', name: 'trv' }, priceLevel: 'STANDARD' };
+    const withDraw = handoffItem(resolved, { ...base, traverseDraw: 'RIGHT', traverseMotorSide: 'LEFT' });
+    ok('the draw rides the order', withDraw.traverseDraw === 'RIGHT');
+    ok('and so does the motor side', withDraw.traverseMotorSide === 'LEFT');
+    const none = handoffItem(resolved, base);
+    ok('a pole order carries neither', !('traverseDraw' in none) && !('traverseMotorSide' in none));
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
