@@ -2657,6 +2657,43 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                         </div>
                                                     ))}
                                                     <button onClick={() => setExtras([...extras, { code: '', label: '', notePlaceholder: '' }])} style={chip(false)}>+ Add item</button>
+
+                                                    {/* ── STANDARD CHECKOUT ITEMS FOR THIS FLOW (Stuart 2026-08-25) ──────
+                                                        "for standard always appearing on checkout items on the cpq
+                                                        irregardless of customer we set those up on the tab 11 on the cpq
+                                                        flow." These codes appear on THIS flow's checkout screen for EVERY
+                                                        customer, bypassing collection scoping (naming it here IS the
+                                                        decision). Customer-specific checkout items live in 4.6 — that is
+                                                        the home base for anything assigned per customer. */}
+                                                    {(() => {
+                                                        const cks = (Array.isArray(af.checkoutItems) ? af.checkoutItems : []).map(c => String((c && c.code) || c || ''));
+                                                        // Rows save as typed (an empty just-added row must survive its own
+                                                        // save); the read side uppercases and dedups.
+                                                        const setCks = (next) => save({ checkoutItems: next.map(s => String(s || '')) });
+                                                        const nameOf = (code) => {
+                                                            const k = String(code || '').trim().toUpperCase();
+                                                            if (!k) return '';
+                                                            const it = allApprovedDesigns.find(x => [x.legacyErpId, x.itemId, x.id].some(v => String(v || '').trim().toUpperCase() === k));
+                                                            return it ? (it.itemName || '') : '— no library item matches this code —';
+                                                        };
+                                                        return (
+                                                            <>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '14px 0 7px' }}>
+                                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Checkout items — standard on this flow</span>
+                                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-faint)' }}>offered at checkout for every customer · customer-specific items are assigned in 4.6</span>
+                                                                </div>
+                                                                {cks.map((code, i) => (
+                                                                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: '5px', marginBottom: '5px', alignItems: 'center' }}>
+                                                                        <input value={code} placeholder="Item code" onChange={e => setCks(cks.map((y, j) => j === i ? e.target.value : y))}
+                                                                            style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }} />
+                                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: nameOf(code).startsWith('—') ? '#d9534f' : 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameOf(code)}</span>
+                                                                        <button onClick={() => setCks(cks.filter((_, j) => j !== i))} style={{ ...chip(false), padding: '6px 9px' }}>×</button>
+                                                                    </div>
+                                                                ))}
+                                                                <button onClick={() => setCks([...cks, ''])} style={chip(false)}>+ Add checkout item</button>
+                                                            </>
+                                                        );
+                                                    })()}
                                                 </div>
                                             );
                                         })()}

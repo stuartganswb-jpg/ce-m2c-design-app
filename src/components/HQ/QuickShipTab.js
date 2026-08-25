@@ -5,7 +5,7 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
-import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary } from '../Shared/feeRules';
+import { isFeeItemRecord, feeRuleOf, computeFee, feeRuleSummary, isCheckoutForCustomer } from '../Shared/feeRules';
 import { priceChoice } from '../Shared/hardwarePricing';
 import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
@@ -176,6 +176,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // fee is priced everywhere else (Shared/feeRules), so tab 7 and CPQ can never disagree.
     const [feeItemId, setFeeItemId] = useState('');
     const [feeQty, setFeeQty] = useState('');
+    const [ccQty, setCcQty] = useState({});               // customer checkout items — itemId → qty typed
     const [kb, setKb] = useState(EMPTY_KB);
     // The Kit Builder is a BUILD tool, not an order-entry one (Stuart 2026-08-22: "make the kit
     // builder a collapsed window at the bottom, so we open it only to build kits, but its out of
@@ -737,6 +738,24 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // kit builder's keyword pick of cut / splice / rush.)
     const allFeeItems = useMemo(() => allItems.filter(it =>
         isFeeItemRecord(it) && it.manufacturingSpecs?.isRetired !== true), [allItems]);
+
+    // ── THIS CUSTOMER'S CHECKOUT ITEMS (Stuart 2026-08-25) ───────────────────────────────────
+    // The items assigned to the picked customer in 4.6 (manufacturingSpecs.checkoutCustomers) —
+    // the SAME per-customer set CPQ checkout offers them, so an order entered here and an order
+    // configured there see one list, priced by the one chain (rateFor → priceChoice → their row).
+    // Fees and real items both: a fee rides its rule; a real item rides as a normal line.
+    const custCheckoutItems = useMemo(() => (customerId
+        ? allItems.filter(it => it.manufacturingSpecs?.isRetired !== true && isCheckoutForCustomer(it, customerId))
+        : []), [allItems, customerId]);
+    const addCustCheckout = (it) => {
+        const isFee = isFeeItemRecord(it);
+        const rule = isFee ? feeRuleOf(it.manufacturingSpecs) : null;
+        const qty = (isFee && rule.mode === 'PERCENT') ? 1 : (parseInt(ccQty[it.id]) || 1);
+        pushLine(it, qty, isFee && rule.mode === 'PERCENT' ? feeRuleSummary(rule, null) : '', null,
+            isFee ? { noPack: true, feeRule: rule } : {});
+        addLog(`Customer add-on: ${erpOf(it)}${isFee && rule.mode === 'PERCENT' ? ` (${rule.percent}% of the order)` : ` ×${qty}`}`, 'success');
+        setCcQty(prev => ({ ...prev, [it.id]: '' }));
+    };
 
     const tbfItem = itemById(tbfItemId) || null;
     // What this customer pays for it — their 4.6 row, else our base price. Shown rather than
@@ -1471,6 +1490,35 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', letterSpacing: '.06em', marginTop: '-6px' }}>
                                     {feeRuleSummary(feeRule, rateFor(feeItem)).toUpperCase()}
                                     {feeRule?.mode === 'PERCENT' && ' — WORKED OUT FROM THE ORDER, AND IT MOVES AS LINES ARE ADDED'}
+                                </div>
+                            )}
+
+                            {/* 4 — THIS CUSTOMER'S CHECKOUT ITEMS. Assigned per customer in 4.6;
+                                the same list CPQ checkout offers them, so the two doors agree. */}
+                            {custCheckoutItems.length > 0 && (
+                                <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '14px' }}>
+                                    <span style={lbl}>{(selectedCustomer?.name || 'Customer')}'s checkout items — assigned in 4.6, same list as CPQ checkout</span>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '4px' }}>
+                                        {custCheckoutItems.map(it => {
+                                            const isFee = isFeeItemRecord(it);
+                                            const rule = isFee ? feeRuleOf(it.manufacturingSpecs) : null;
+                                            const pct = isFee && rule.mode === 'PERCENT';
+                                            return (
+                                                <div key={it.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto 62px auto', gap: '10px', alignItems: 'center', padding: '7px 10px', border: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                                                    <div style={{ minWidth: 0 }}>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{erpOf(it)} <span style={{ color: 'var(--ink-soft)', fontFamily: 'var(--sans)', fontSize: '12px' }}>{it.itemName || ''}</span></div>
+                                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--brass)', letterSpacing: '.05em', marginTop: '2px' }}>{isFee ? feeRuleSummary(rule, rateFor(it)).toUpperCase() : `$${rateFor(it).toFixed(2)} EACH`}</div>
+                                                    </div>
+                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>{isFee ? 'FEE' : 'ITEM'}</span>
+                                                    <input type="number" min="1" value={pct ? '' : (ccQty[it.id] || '')} onChange={e => setCcQty(prev => ({ ...prev, [it.id]: e.target.value }))}
+                                                        disabled={pct} placeholder={pct ? '—' : '1'}
+                                                        title={pct ? 'A percentage fee is a share of the order, not a count' : ''}
+                                                        style={{ ...qtyInp, padding: '7px', background: pct ? 'var(--paper-2)' : '#fff' }} />
+                                                    <button onClick={() => addCustCheckout(it)} style={{ ...btn('var(--ink)', '#fff'), padding: '8px 14px' }}>Add</button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
                                 </div>
                             )}
                         </div>

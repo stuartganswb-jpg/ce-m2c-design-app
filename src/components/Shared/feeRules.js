@@ -155,9 +155,33 @@ export function buildFeeCatalog(parts, { priceFor, portalOnly = false } = {}) {
 export const isCheckoutSelectable = (part) => part?.manufacturingSpecs?.checkoutSelectable === true;
 export const anyCheckoutSelectable = (parts) => (parts || []).some(isCheckoutSelectable);
 
-export function buildCheckoutCatalog(parts, { priceFor } = {}) {
+// ── TWO ASSIGNMENT HOMES (Stuart 2026-08-25) ──────────────────────────────────────────────────
+// "all check out items i would like to assign in two places": CUSTOMER-SPECIFIC items are assigned
+// per customer in 4.6 (manufacturingSpecs.checkoutCustomers — the ids of the customers they are
+// offered to, alongside their price row and fee rule) and follow the CUSTOMER onto every screen
+// that sells to them (CPQ checkout AND tab-7 order entry). STANDARD always-appearing items are
+// assigned per FLOW in tab 11 (flow.checkoutItems — item codes) and follow the FLOW regardless of
+// customer. The original global tick (checkoutSelectable) still reads as "standard on every flow"
+// so nothing already curated goes dark; 4.6 shows it as the Std column.
+export const checkoutCustomerIds = (part) =>
+    (Array.isArray(part?.manufacturingSpecs?.checkoutCustomers) ? part.manufacturingSpecs.checkoutCustomers : [])
+        .map(id => String(id || '').trim()).filter(Boolean);
+export const isCheckoutForCustomer = (part, customerId) =>
+    !!customerId && checkoutCustomerIds(part).includes(String(customerId).trim());
+// Why is this part on the checkout screen? CUSTOMER (assigned to this customer in 4.6) beats FLOW
+// (on this flow's tab-11 standard list) beats GLOBAL (the item-wide tick) — the most specific
+// reason names the row. `flowCodes` is a Set of UPPERCASED codes/ids from flow.checkoutItems.
+export const checkoutAssignmentOf = (part, { customerId = null, flowCodes = null } = {}) => {
+    if (isCheckoutForCustomer(part, customerId)) return 'CUSTOMER';
+    if (flowCodes && flowCodes.size &&
+        [part?.id, part?.itemId, part?.legacyErpId].some(k => k && flowCodes.has(String(k).trim().toUpperCase()))) return 'FLOW';
+    if (isCheckoutSelectable(part)) return 'GLOBAL';
+    return null;
+};
+
+export function buildCheckoutCatalog(parts, { priceFor, customerId = null, flowCodes = null } = {}) {
     return (parts || [])
-        .filter(isCheckoutSelectable)
+        .filter(p => checkoutAssignmentOf(p, { customerId, flowCodes }) !== null)
         .filter(p => p?.manufacturingSpecs?.isRetired !== true)
         .map(p => {
             const rule = feeRuleOf(p.manufacturingSpecs);   // a plain item defaults to FLAT × EACH
@@ -171,6 +195,8 @@ export function buildCheckoutCatalog(parts, { priceFor } = {}) {
                 rule, unitPrice: unitPrice ?? null,
                 portalOk: rule.portalSelectable,
                 summary: feeRuleSummary(rule, unitPrice),
+                // Why the row is offered — 'CUSTOMER' | 'FLOW' | 'GLOBAL' — so pickers can badge it.
+                via: checkoutAssignmentOf(p, { customerId, flowCodes }),
             };
         })
         .sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));

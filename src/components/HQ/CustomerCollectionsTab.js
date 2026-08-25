@@ -24,7 +24,7 @@ import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatc
 import { parseControlWorkbook, workbookFileToSheets, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } from '../Shared/traverseKitImport';
 import { fabricutCodeOf, isPlatedSuffix, PRICE_LEVELS, customerPriceLevel } from '../Shared/priceLevels';
-import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable } from '../Shared/feeRules';
+import { FEE_MODES, FEE_UNITS, feeRuleOf, isCheckoutSelectable, isCheckoutForCustomer, checkoutCustomerIds } from '../Shared/feeRules';
 import { PLATE_ROLES, plateRoleOf, pairedBackplateCode, includesPlate } from '../Shared/plateRules';
 
 const theme = {
@@ -303,12 +303,15 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             const pt = String(p.manufacturingSpecs?.productType || '').toUpperCase();
             return /BRACKET|ARM/.test(pt) || isFeeItem(p);
         }));
+        // With no search the list shows the curated set: the Std ticks PLUS anything assigned to
+        // the picked customer (two-home model, Stuart 2026-08-25) — so with a customer picked you
+        // see exactly the union CPQ checkout and tab 7 offer them.
         if (mode === 'CHECKOUT') return fold(upper(search).trim()
             ? inventory.filter(p => p?.manufacturingSpecs?.isRetired !== true)
-            : inventory.filter(isCheckoutSelectable));
+            : inventory.filter(p => isCheckoutSelectable(p) || isCheckoutForCustomer(p, custId)));
         if (!coll) return [];
         return fold(inventory.filter(p => collectionsOf(p.manufacturingSpecs).includes(upper(coll))));
-    }, [inventory, coll, mode, search, aliasLinks]);
+    }, [inventory, coll, mode, search, aliasLinks, custId]);
 
     // Legacy-struct suggestions for THIS customer, keyed by doc id. Built once per customer/library
     // change rather than per render — it resolves a base doc per variant to find the pattern code.
@@ -347,6 +350,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     feeMin: rv('feeMin', rule.minAmount ?? ''),
                     feePortal: rv('feePortal', rule.portalSelectable),
                     checkout: rv('checkout', isCheckoutSelectable(p)),
+                    checkoutCust: rv('checkoutCust', isCheckoutForCustomer(p, custId)),
                     plateRole: rv('plateRole', plateRoleOf(p)),
                     carriesPlate: rv('carriesPlate', includesPlate(p)),
                     plateUpgradeOf: rv('plateUpgradeOf', p.manufacturingSpecs?.plateUpgradeOf || ''),
@@ -368,7 +372,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
             })
             .filter(r => !term || r.code.includes(term) || upper(r.name).includes(term) || r.aliasCodes.some(c => c.includes(term)))
             .filter(r => onlyPriced === 'ALL' || (onlyPriced === 'PRICED' ? money(r.price) !== '' : money(r.price) === ''));
-    }, [members, edits, search, onlyPriced, custKeys, suggestions, outsourceFinishes, aliasLinks]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [members, edits, search, onlyPriced, custKeys, custId, suggestions, outsourceFinishes, aliasLinks]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const pricedCount = members.filter(p => money(rowFor(p)?.price) !== '').length;
     const dirtyCount = Object.keys(edits).length;
@@ -414,9 +418,18 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 if (e.feePercent !== undefined) patch['manufacturingSpecs.feeRule.percent'] = money(e.feePercent);
                 if (e.feeMin !== undefined) patch['manufacturingSpecs.feeRule.minAmount'] = money(e.feeMin);
                 if (e.feePortal !== undefined) patch['manufacturingSpecs.feeRule.portalSelectable'] = !!e.feePortal;
-                // On the CPQ checkout screen? Works for fees AND real items — the flag is the item's,
-                // not the customer's, so ticking it once serves every quote.
+                // TWO CHECKOUT HOMES (Stuart 2026-08-25). Std = the item-wide tick, every flow and
+                // every customer, as it always was. The customer column writes membership in
+                // manufacturingSpecs.checkoutCustomers — the per-customer assignment CPQ checkout
+                // AND tab 7 both read, so the two screens can never disagree about what this
+                // customer may add. (Per-FLOW standard items are the third home: tab 11.)
                 if (e.checkout !== undefined) patch['manufacturingSpecs.checkoutSelectable'] = !!e.checkout;
+                if (e.checkoutCust !== undefined) {
+                    const cur = checkoutCustomerIds(p);
+                    patch['manufacturingSpecs.checkoutCustomers'] = e.checkoutCust
+                        ? [...new Set([...cur, custId])]
+                        : cur.filter(id => id !== custId);
+                }
                 // Plate pricing role + its tiered upcharge. Blank is stored as '' rather than 0 —
                 // "no figure entered" and "free" are different answers and the engine reads them so.
                 if (e.plateRole !== undefined) patch['manufacturingSpecs.plateRole'] = e.plateRole || '';
@@ -1201,10 +1214,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     {mode === 'CHECKOUT' && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', background: theme.paper2, border: `1px solid ${theme.line}`, padding: '14px 18px' }}>
                             <span style={{ fontSize: '0.88rem', color: theme.ink, flex: 1, minWidth: '420px' }}>
-                                Tick what the <b>CPQ checkout screen</b> offers as add-on lines — <b>fees or real items</b>, it doesn't matter which. Anything a flow already decides (a french return, a cover-plate upcharge) should stay <i>un</i>ticked: CPQ charges those itself, and offering them again here double-bills.
+                                Checkout items are assigned in <b>two homes</b>. <b style={{ color: theme.brassDark }}>Customer-specific</b> items live HERE: pick the customer, tick the <b>For&nbsp;{customer?.name ? String(customer.name).split(/\s+/)[0] : 'customer'}</b> column, and set their price on this same row — they then appear for that customer on <b>CPQ checkout and Quick Ship order entry</b>, priced by their row. <b>Standard</b> items that appear regardless of customer are set per flow on <b>tab&nbsp;11</b> (the flow's "Checkout items" list); the <b>Std</b> column here is the item-wide tick that shows on every flow. Anything a flow already decides (a french return, a cover-plate upcharge) should stay unticked everywhere: CPQ charges those itself, and offering them again double-bills.
                                 <span style={{ display: 'block', color: theme.inkSoft, marginTop: '4px' }}>
-                                    The list below <b>is</b> the checkout screen. To add something new, <b>search</b> — that searches the whole library — then tick it and Save. A real item added this way stays a real part on the quote: its own NetSuite line, routed by its own Part Handling.
-                                    {' '}<b style={{ color: theme.brassDark }}>{inventory.filter(isCheckoutSelectable).length} on checkout today.</b>
+                                    To add something new, <b>search</b> — that searches the whole library — then tick it and Save. A real item added this way stays a real part on the quote: its own NetSuite line, routed by its own Part Handling.
+                                    {' '}<b style={{ color: theme.brassDark }}>{inventory.filter(isCheckoutSelectable).length} standard{custId ? ` · ${inventory.filter(p => isCheckoutForCustomer(p, custId)).length} for ${String(customer?.name || 'this customer').split(/\s+/)[0]}` : ''}.</b>
                                     {inventory.filter(isCheckoutSelectable).length === 0 && <span style={{ color: theme.red }}> Until at least one is ticked, checkout falls back to showing every fee — which is what you're seeing now.</span>}
                                 </span>
                             </span>
@@ -1273,7 +1286,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                         <th style={{ ...th, textAlign: 'right' }} title="Flat upcharge for choosing this cover plate. Blank = this plate's base minus the backplate's.">Upcharge $</th>
                                         <th style={{ ...th, textAlign: 'right' }} title="The /EP and /P25 premium tier. Blank = same as the painted upcharge.">Premium $</th>
                                     </>}
-                                    {mode === 'CHECKOUT' && <th style={{ ...th, textAlign: 'center', width: '78px' }} title="Ticked = it appears on the CPQ checkout screen as an add-on line. Fees and real items both work; a real item stays a real part line (own NetSuite line, own routing).">On&nbsp;checkout</th>}
+                                    {mode === 'CHECKOUT' && <>
+                                        <th style={{ ...th, textAlign: 'center', width: '64px' }} title="STANDARD — ticked = offered on every flow's checkout for every customer (collection-scoped). Flow-specific standard items are set on the flow itself, tab 11.">Std<br/>(all)</th>
+                                        <th style={{ ...th, textAlign: 'center', width: '86px', color: theme.brass }} title={custId ? `Ticked = offered to ${customer?.name || 'this customer'} at CPQ checkout AND on Quick Ship order entry — fees and real items both. This is the per-customer assignment; their price comes from their row on this same screen.` : 'Pick a customer to assign checkout items to them.'}>{custId ? `For ${String(customer?.name || 'customer').split(/\s+/)[0]}` : 'For customer'}</th>
+                                    </>}
                                     {mode === 'KITS' && <th style={{ ...th, borderLeft: `2px solid ${theme.ink}`, width: '150px' }} title="The component items ONE kit wraps — what an order explodes to on every shop document. Item metadata, shared by every customer.">Contents</th>}
                                     <th style={th}>Item #</th>
                                     <th style={{ ...th, width: '38%' }}>Description</th>
@@ -1317,12 +1333,20 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 <input value={r.plateUpchargePremium} onChange={e => setEdit(r.p.id, 'plateUpchargePremium', e.target.value)} disabled={r.plateRole !== 'UPGRADE'} placeholder={r.plateRole === 'UPGRADE' ? 'same' : '—'} style={{ ...cellInput(edits[r.p.id]?.plateUpchargePremium !== undefined), width: '72px', background: r.plateRole !== 'UPGRADE' ? theme.paper2 : '#fff' }} />
                                             </td>
                                         </>}
-                                        {mode === 'CHECKOUT' && (
+                                        {mode === 'CHECKOUT' && <>
                                             <td style={{ ...td, textAlign: 'center' }}>
-                                                <input type="checkbox" checked={!!r.checkout} onChange={e => setEdit(r.p.id, 'checkout', e.target.checked)} title={r.checkout ? 'Showing on the checkout screen' : 'Not offered at checkout'} style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
+                                                <input type="checkbox" checked={!!r.checkout} onChange={e => setEdit(r.p.id, 'checkout', e.target.checked)} title={r.checkout ? 'Standard — on every flow’s checkout' : 'Not a standard checkout item'} style={{ cursor: 'pointer', width: '16px', height: '16px' }} />
                                                 <div style={{ fontFamily: theme.mono, fontSize: '9px', color: r.isFeeRec ? theme.brassDark : theme.inkSoft, marginTop: '3px' }}>{r.isFeeRec ? 'FEE' : 'ITEM'}</div>
                                             </td>
-                                        )}
+                                            <td style={{ ...td, textAlign: 'center' }}>
+                                                <input type="checkbox" checked={!!r.checkoutCust} disabled={!custId} onChange={e => setEdit(r.p.id, 'checkoutCust', e.target.checked)}
+                                                    title={!custId ? 'Pick a customer first' : r.checkoutCust ? `Offered to ${customer?.name || 'this customer'} — CPQ checkout and Quick Ship order entry` : `Not assigned to ${customer?.name || 'this customer'}`}
+                                                    style={{ cursor: custId ? 'pointer' : 'not-allowed', width: '16px', height: '16px', accentColor: '#b08d57' }} />
+                                                {checkoutCustomerIds(r.p).length > 0 && (
+                                                    <div style={{ fontFamily: theme.mono, fontSize: '8px', color: theme.brassDark, marginTop: '3px' }} title="How many customers this item is assigned to">{checkoutCustomerIds(r.p).length} cust</div>
+                                                )}
+                                            </td>
+                                        </>}
                                         {mode === 'KITS' && (() => {
                                             const comps = r.p.manufacturingSpecs?.kitComponents || [];
                                             const aligned = !!r.p.manufacturingSpecs?.kitAlign;

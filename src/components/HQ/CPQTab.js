@@ -22,7 +22,7 @@ import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
 import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
 import { priceChoice } from '../Shared/hardwarePricing';
-import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
+import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, checkoutAssignmentOf } from '../Shared/feeRules';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
@@ -909,17 +909,34 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           return cols.some(c => flowCollections.has(String(c).trim().toUpperCase()));
       };
       const scopedParts = (libraryParts || []).filter(inScope);
+      // ── TWO ASSIGNMENT HOMES (Stuart 2026-08-25) ──────────────────────────────────────────
+      // Checkout offers the union of three assignments: the item's global Std tick (as always,
+      // collection-scoped), THIS FLOW's tab-11 standard list (flow.checkoutItems — explicit for
+      // this flow, so it is never second-guessed by collection scope), and the items assigned to
+      // THIS CUSTOMER in 4.6 (manufacturingSpecs.checkoutCustomers — collection-scoped so a
+      // Brimar-tagged customer item still stays off a Fabricut flow; untagged customer items
+      // follow the customer everywhere). Tab 7 reads the same customer assignment, so the two
+      // screens offer the same customer-specific set.
+      // (activeFlow is declared BELOW this memo — resolve the flow doc here or the deps TDZ.)
+      const flowDoc = cpqFlows.find(f => f.id === activeFlowId) || null;
+      const flowCodes = new Set((Array.isArray(flowDoc?.checkoutItems) ? flowDoc.checkoutItems : [])
+          .map(c => String((c && c.code) || c || '').trim().toUpperCase()).filter(Boolean));
+      const eligible = (libraryParts || []).filter(p => {
+          const via = checkoutAssignmentOf(p, { customerId: jobData.customerId, flowCodes });
+          if (!via) return false;
+          return via === 'FLOW' ? true : inScope(p);
+      });
       // ITEMS and FEES curate INDEPENDENTLY (Eric 2026-08-12: ticking one real item made every
       // fee vanish — the old either/or swapped the WHOLE catalog). Ticked real items always show;
       // fees show ALL unless at least one FEE is itself ticked, in which case only the ticked
       // fees show (that's the curation Stuart asked for on 2026-07-31 — it was never meant to be
       // switched off by an unrelated item tick).
-      const checkout = buildCheckoutCatalog(scopedParts, { priceFor });
+      const checkout = buildCheckoutCatalog(eligible, { priceFor, customerId: jobData.customerId, flowCodes });
       const curatedFeeCount = checkout.filter(e => e.isFee).length;
       const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(scopedParts, { priceFor });
       const seen = new Set(checkout.map(e => e.id));
       return [...checkout, ...fees.filter(e => !seen.has(e.id))];
-  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections]);
+  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId]);
 
   // TRADE DISCOUNT (customer's CRM discountCode, e.g. D20 = less 20%). Applies per cart item,
   // AFTER the full pricing chain, display-side only: STANDARD-level items only (Fabricut levels
