@@ -828,15 +828,21 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const scrubSeams = (view, basis) => {
       if (!opts.isReturn || !view) return view;
       const bB = viewBbox(bracket, basis), rB = viewBbox(poleDrawn, basis);
+      // ⚠ ONLY THE ROD-SIDE END, ONLY ACROSS THE POLE (Stuart 2026-08-24: "you are suppressing
+      // the outer leftside of the returns — you should only suppress the small line that cuts
+      // across the straight section of the pole just to the right before the return begins").
+      // Pairing every bbox edge also matched the return's outer wall-leg edge. The joint is one
+      // place: the bracket's ROD-side end (the mounting sits left, the rod runs right in this
+      // basis), and the cap line spans only the pole's own height — everything outside that band
+      // is real geometry and stays.
       const seams = [];
-      for (const be of [bB.minU, bB.maxU]) {
-        for (const re of [rB.minU, rB.maxU]) {
-          if (isFinite(be) && isFinite(re) && Math.abs(be - re) < 0.006) seams.push((be + re) / 2);
-        }
+      for (const re of [rB.minU, rB.maxU]) {
+        if (isFinite(bB.maxU) && isFinite(re) && Math.abs(bB.maxU - re) < 0.006) seams.push((bB.maxU + re) / 2);
       }
       if (!seams.length) return view;
       const near = (u) => seams.some(s => Math.abs(u - s) < 0.004);
-      return { ...view, vis: view.vis.filter(([u0, , u1]) => !(near(u0) && near(u1))) };
+      const inPole = (v) => v > rB.minV - 0.012 && v < rB.maxV + 0.012;
+      return { ...view, vis: view.vis.filter(([u0, v0, u1, v1]) => !(near(u0) && near(u1) && inPole(v0) && inPole(v1))) };
     };
     const topView = (() => {
       if (!opts.isReturn) return null;
@@ -1155,14 +1161,23 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // label anchored at the plate's own bottom landed inside the track lines. Anchoring at the
       // lower of plate-bottom and rod-bottom clears every case, and changes nothing on the solid
       // sheets where the plate already reaches lowest.
+      // ── A CEILING PLATE IS ANNOTATED ABOVE THE POLE (Stuart 2026-08-24) ─────────────────
+      // "on the ceiling brackets on the left side, put the measurements of the backplates above
+      //  the pole, it is deceiving below as it does not align with their placement." The plate
+      // hangs the pole from above there, so its id and width ride above the artwork; on a wall
+      // page they stay below, clear of the rod, as before.
       const plateAnchorV = Math.min(coverF.minV, viewBbox(poleDrawn, views.front).minV);
+      const plateTopV = Math.max(coverF.maxV, viewBbox(poleDrawn, views.front).maxV);
       if (platePin.partName) {
-        dims.front.push({ t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP, lead: true, text: platePin.partName });
+        dims.front.push(opts.isCeiling
+          ? { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateTopV, off: -(RING_LABEL_DROP - 8), lead: true, text: platePin.partName }
+          : { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP, lead: true, text: platePin.partName });
       }
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
       // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
       // plate width BELOW the plate — above it the rod crosses the dim on short plates
-      if (isRound) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.maxV - (coverF.maxV - coverF.minV) * 0.15, dir: -1, in: plateWIn });
+      if (isRound && !opts.isCeiling) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.maxV - (coverF.maxV - coverF.minV) * 0.15, dir: -1, in: plateWIn });
+      else if (opts.isCeiling) dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateTopV, off: -12, in: plateWIn });
       else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateAnchorV, off: 26, in: plateWIn });
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       // ── THE CARRIER'S DROP (Stuart 2026-08-23b) ─────────────────────────────────────────

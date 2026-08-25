@@ -184,6 +184,10 @@ const cellAboveBelow = (view, scale, datumV, dims) => {
       // leader rises 16 from the point, label above that
       const room = 24 - (zb.maxV - dm.v) * scale;
       if (room > extraAbove) extraAbove = room;
+    } else if (dm.t === 'text' && (dm.off || 0) < 0) {
+      // a label riding ABOVE the artwork (ceiling plates) needs its line of room up there
+      const room = FS.label + 2 - ((zb.maxV - dm.v) * scale + dm.off);
+      if (room > extraAbove) extraAbove = room;
     }
   }
   return {
@@ -310,7 +314,13 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
       // still unambiguously attached to one ring.
       else if (d.t === 'text') {
         const x = mu(d.u), yTop = mv(d.v), y = yTop + (d.off || 0);
-        if (d.lead) s2 += `<line x1="${x}" y1="${yTop + 2}" x2="${x}" y2="${y - FS.label + 2}" stroke="black" stroke-width="0.4"/>`;
+        // Leader runs anchor→label on whichever side the label sits (negative off = above the
+        // artwork — the ceiling plates annotate over the pole), stopping clear of the text.
+        if (d.lead) {
+          s2 += (d.off || 0) < 0
+            ? `<line x1="${x}" y1="${yTop - 2}" x2="${x}" y2="${y + 3}" stroke="black" stroke-width="0.4"/>`
+            : `<line x1="${x}" y1="${yTop + 2}" x2="${x}" y2="${y - FS.label + 2}" stroke="black" stroke-width="0.4"/>`;
+        }
         s2 += `<text x="${x}" y="${y}" font-size="${FS.label}" text-anchor="middle">${d.text}</text>`;
       }
     }
