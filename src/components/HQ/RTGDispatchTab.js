@@ -1077,7 +1077,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     height: Number(hqOrder.height) || 2
                 },
 
-                partsList: [],
+                // A BOM EXPLODED AT CREATION SURVIVES THE REVIEW HOP (2026-08-25). Stock View's
+                // grid now plans its pull lines the way the Sales Snapshot always has; this branch
+                // hard-coded [] and would have thrown them away, leaving the floor to synthesize a
+                // raw pull of the assembly code — the very thing Eric reported. Empty when the
+                // order carries none, exactly as before.
+                partsList: Array.isArray(hqOrder.partsList) && hqOrder.partsList.length ? hqOrder.partsList : [],
+                ...(Array.isArray(hqOrder.partsList) && hqOrder.partsList.length ? { bomExploded: true } : {}),
                 currentPhase: "Setup",
                 stepStatus: 'Pending',
                 currentStepIndex: 0,

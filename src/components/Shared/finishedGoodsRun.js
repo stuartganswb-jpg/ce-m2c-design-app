@@ -80,14 +80,28 @@ export const planFinishedRun = ({ part, qty, pins = [], inventory = [] }) => {
     const comps = (pins || []).filter(usablePin)
         .map(pin => ({ code: pinErpOf(pin, inventory), name: pin.partName || pin.partId || '', per: Math.max(1, Number(pin.defaultQty) || 1) }))
         .filter(c => c.code);
-    const src = comps.length ? comps : [{ code: erp, name: (part && part.itemName) || erp, per: 1 }];
+    const exploded = comps.length > 0;
+    const src = exploded ? comps : [{ code: erp, name: (part && part.itemName) || erp, per: 1 }];
 
-    // What the warehouse pulls for one component:
-    //   plater run     → the MILL core (the plater receives raw metal)
-    //   in-house paint → the /P PHOSPHATED core (phosphate is its own convert stage; the sprayer
-    //                    never hangs raw steel). Falls back to the code as the BOM states it when
-    //                    no /P record exists (raw hardware that never phosphates).
+    // TWO PRODUCT MODELS, ONE RULE EACH (Stuart 2026-08-25).
+    //
+    // A — STOCKED FINISHED ASSEMBLY (HCUMLB415/CP and its SG/BL siblings; the whole H2 Simple
+    //     Elegance collection is being stocked the same way). The finished code IS a NetSuite
+    //     assembly, so it has pins, and "the stocked items have the phosphated part in the BOM"
+    //     already. TAKE THE BOM LITERALLY — pull exactly what it names. NetSuite's assembly build
+    //     consumes those component lines; if we picked a different code than the build consumes,
+    //     the app and NetSuite would disagree about what left the shelf.
+    //
+    // B — CUSTOM DIVISION (H1-138BE mill + H1-138BE/P phosphate only). The finished code is not a
+    //     stocked assembly and has no pins, so `src` is the item itself and the substitution below
+    //     is the routing: mill → phosphate → apply finish. Plater runs take the mill core instead,
+    //     because the plater receives raw metal.
+    //
+    // Until today the substitution ran on Model A components too. It was harmless only because no
+    // Brimar component happens to have a /P record — an accident of the data, not a rule. The day
+    // one gained a /P variant, that assembly's pull would have silently switched.
     const pullOf = (code) => {
+        if (exploded) return code;
         const mill = millBaseOf(code);
         if (outsourced) return mill;
         const phos = `${mill}/P`;
@@ -106,7 +120,7 @@ export const planFinishedRun = ({ part, qty, pins = [], inventory = [] }) => {
         merged.set(pull, row);
     });
 
-    return { erp, outsourced, finishSuffix: sfx, exploded: comps.length > 0, lines: [...merged.values()] };
+    return { erp, outsourced, finishSuffix: sfx, exploded, lines: [...merged.values()] };
 };
 
 // SuiteQL for live availability of the plan's pull codes (optionally at one location).

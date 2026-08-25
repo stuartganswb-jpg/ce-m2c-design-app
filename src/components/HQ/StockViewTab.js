@@ -601,6 +601,27 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const rootErpId = erpId.replace(/\/(P|EP[1-6])$/i, '');
                 const rootPart = hqParts.find(p => (p.legacyErpId || p.itemId || '').toUpperCase() === rootErpId) || part;
 
+                // EXPLODE THE BOM HERE TOO (Eric 2026-08-25, 9:20: "Using HWOWR35/W32 as an
+                // example. This BOM calls for HWMWR35 … When a work order is issued from Stock
+                // View, the BOM calls for the incorrect HWOWR35 to be picked. When marked Stocked
+                // and issued from the Stocked Sales screen, the BOM returns the correct HWMWR35").
+                //
+                // He was right and it is not a sync problem — "checked and synced multiple times"
+                // could never have fixed it, because this path never read the BOM at all. It wrote
+                // no partsList, so the floor synthesized one pull by stripping the finish off the
+                // ITEM (HWOWR35/W32 → HWOWR35) — the assembly, not its component. Same planner the
+                // Sales Snapshot uses, so both screens now answer the question identically:
+                // an assembly with pins pulls the components its BOM names (Model A, literal), a
+                // part without pulls its own phosphated core (Model B, the custom routing).
+                let bomLines = [];
+                if (isAssemblyPart(part)) {
+                    try {
+                        const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
+                        const pins = pinsSnap.docs.map(d => d.data());
+                        if (pins.length) bomLines = planFinishedRun({ part, qty: Number(qty), pins, inventory: hqParts }).lines;
+                    } catch (e) { console.warn('BOM explode failed for', erpId, e); }
+                }
+
                 // Firestore doc ids can't contain "/" — finished variants carry it (e.g. H1-138BF/EP1). Sanitize
                 // it out of the DOC id; keep the true code on the record (woDisplayId / variantErpId) for display.
                 const stamp = Date.now().toString().slice(-6);
@@ -648,6 +669,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     needsPhosphating: isPhosphate,
                     isPlatingDemand: isPlating,
                     rootItem: rootErpId,
+                    // Carried onto the fin work order by RTG's release. Absent (no pins) it stays
+                    // off the doc entirely, and the floor keeps the exact behaviour it had.
+                    ...(bomLines.length ? { partsList: bomLines, bomExploded: true } : {}),
                     createdAt: Date.now()
                 });
             }
