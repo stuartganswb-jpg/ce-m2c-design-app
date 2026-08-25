@@ -22,6 +22,9 @@
 // tag (Shared/hardwareAdapter.pinProjectionOf) — so there is nothing to translate and nothing that
 // can disagree. That was the whole point of collapsing the two fields into one.
 
+// The SAME rule the walk uses for which decisions carry a count — never a second copy of it.
+import { takesQty } from './hardwareModel.js';
+
 const U = (v) => String(v ?? '').trim().toUpperCase();
 
 /** Vision's mount vocabulary → the engine's `mount` axis. */
@@ -174,6 +177,29 @@ export function seedFromVision({ model, draft, flow = null, sameId }) {
         if (tryHinted(w)) return;
         missed.push({ what: w.partId, why: 'nothing in this assembly offers it — it may not be pinned' });
     });
+
+    // ── HOW MANY IS NOT THE DRAWING'S TO SAY (Stuart 2026-08-22) ─────────────────────────────
+    // Eric, testing Vision → CPQ: "⚠ CE-INV-10286 — nothing in this assembly offers it… this times
+    // 3, which should be the extension bracket where I had three."
+    //
+    // Three of one bracket is a QUANTITY, and the bridge has never carried one — visionPartIds
+    // records {partId, kind, position} and `picks` holds one option per slot, so a count has no
+    // field to travel in. That is deliberate rather than missing, and it should stay that way:
+    // THIS ENGINE ALREADY WORKS THE NUMBER OUT, and works it out from things the drawing does not
+    // know. centreBracketsFor takes the span 6.5 gives for the rod family at the quoted fabric
+    // weight and subtracts bearingEnds — the rule that a plated return or an inside mount spends a
+    // support while a no-plate return does not. A number sent across would be a second source of
+    // truth for a figure derived here, free to disagree with it.
+    //
+    // So the drawing states the BUILD STYLE — which bracket, and where — and the count is settled
+    // in the walk. Said out loud, because a silence reads as data lost in transit.
+    const qtySlots = Object.keys(picks)
+        .map(k => slots.find(s => s.key === k))
+        .filter(s => s && takesQty(s));
+    if (qtySlots.length) {
+        const what = [...new Set(qtySlots.map(s => s.kind === 'RING' ? 'ring' : 'centre bracket'))];
+        carried.push(`${what.join(' and ')} style — the COUNT is set here from the span, not by the drawing`);
+    }
 
     return { answers, picks, lengthInches, carried, missed };
 }

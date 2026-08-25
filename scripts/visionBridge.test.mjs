@@ -140,5 +140,39 @@ const draft = (over = {}) => ({
     eq('a part nothing offers is still reported, exactly once', ghost.missed.filter(m => m.what === 'H1-NOT-PINNED').length, 1);
 }
 
+// ── HOW MANY IS NOT THE DRAWING'S TO SAY (Stuart 2026-08-22) ─────────────────────────────────
+// Eric: "⚠ CE-INV-10286 — nothing in this assembly offers it… this times 3, which should be the
+// extension bracket where I had three."
+//
+// The bridge has never carried a quantity and should not start: centreBracketsFor derives the count
+// from the span 6.5 gives for the rod family at the quoted fabric weight, less bearingEnds. A number
+// sent across would be a second source of truth for a figure worked out here. What was missing was
+// SAYING so — a silence reads as data lost in transit.
+{
+    const model = {
+        axes: [],
+        slots: [
+            { key: 'BRACKET|CENTER', kind: 'BRACKET', position: 'CENTER', options: [{ id: 'o1', partId: 'CE-INV-10286' }] },
+            { key: 'BRACKET|LEFT', kind: 'BRACKET', position: 'LEFT', options: [{ id: 'o2', partId: 'ARM-L' }] },
+        ],
+    };
+    const draft = { id: 'd1', spatialData: { bracketIdCenter: 'CE-INV-10286', bracketId: 'ARM-L' }, specs: {} };
+    const r = seedFromVision({ model, draft, sameId: (a, b) => String(a).toUpperCase() === String(b).toUpperCase() });
+
+    ok('the centre bracket is placed', r.picks['BRACKET|CENTER'] === 'o1');
+    ok('and the report says the COUNT is settled here, not by the drawing',
+        r.carried.some(c => /centre bracket style/.test(c) && /COUNT is set here from the span/.test(c)));
+    ok('nothing is reported missing', !r.missed.some(m => m.what === 'CE-INV-10286'));
+
+    // An end arm has no count to argue about — one per side, by definition — so it must not
+    // attract the note. Saying it everywhere would make it wallpaper.
+    const endsOnly = {
+        axes: [],
+        slots: [{ key: 'BRACKET|LEFT', kind: 'BRACKET', position: 'LEFT', options: [{ id: 'o2', partId: 'ARM-L' }] }],
+    };
+    const r2 = seedFromVision({ model: endsOnly, draft: { id: 'd2', spatialData: { bracketId: 'ARM-L' }, specs: {} }, sameId: (a, b) => String(a).toUpperCase() === String(b).toUpperCase() });
+    ok('a left arm alone says nothing about counts', !r2.carried.some(c => /COUNT is set here/.test(c)));
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
