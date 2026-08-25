@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback} from 'react';
 import { TRAVERSE_ROLES, DRIVE_TYPES, TRV_SETUPS, suggestSetupFromName } from '../Shared/traverseTags';
 import { db, storage } from '../../firebase';
 import { doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
@@ -196,6 +196,31 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
         return next;
     });
     const [codeOptions, setCodeOptions] = useState([]);
+    // ── A FEE'S OWN CODE AND NAME, NOT ITS RECORD ID (Stuart 2026-08-22) ─────────────────────
+    // "the fee selections still show the old way CE-FEE-6294 even when i have given them a code and
+    // description, i need that code and description to show there to make the correct choice."
+    //
+    // Fees USED to have no ERP Legacy ID — their only stable reference was the itemId, CE-FEE-6294 —
+    // so that is what the pins store, and it is still the link client pricing resolves through. It
+    // must not change. But H1-MRPF · MITER RETURN is what the fee IS, and picking the right one off
+    // a list of CE-FEE numbers is guesswork: 4594 and 6294 are a french return and a miter return
+    // and nothing on the row says which.
+    //
+    // So the stored value stays exactly as it is and the row gains a caption that reads it back.
+    // Same idea as ourId() in the configurator: resolve the app's record id to OUR number, never
+    // print the record id as though it meant something.
+    const codeIdentity = useCallback((code) => {
+        const c = String(code || '').trim().toUpperCase();
+        if (!c) return null;
+        const hit = codeOptions.find(o => String(o.code || '').toUpperCase() === c
+            || String(o.erp || '').toUpperCase() === c);
+        if (!hit) return null;
+        const erp = String(hit.erp || '').trim();
+        const name = String(hit.name || '').replace(/\s*·\s*FEE$/i, '').trim();
+        // Nothing to add when the stored code IS our number and there is no description.
+        if ((!erp || erp.toUpperCase() === c) && !name) return null;
+        return [erp && erp.toUpperCase() !== c ? erp : '', name].filter(Boolean).join(' · ');
+    }, [codeOptions]);
     const [pickQuery, setPickQuery] = useState('');   // what is being typed RIGHT NOW, for the suggestion list // alphabetical Master-Library codes for the item # picker
     const assignGenRef = useRef(0);                      // invalidates in-flight thumbnail runs on reload
     const [zoomThumb, setZoomThumb] = useState(null);    // { url, label } — enlarged thumbnail overlay
@@ -2566,6 +2591,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                 {(() => { const willPark = !(c.itemNo && c.itemNo.trim()) && !c.isFee && !c.isHidden && looksRealPart(c.label); const missing = nodeMissing(c.nodeName); return (
                                                 <span style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
                                                 <ItemNoInput value={c.itemNo} list="ab-item-codes" onCommit={v => setChoicePatch(r.clusterId, c.nodeName, { itemNo: v })} onQuery={setPickQuery} title={willPark ? 'No item # yet — on save this choice PARKS: the node hides from the model AND the flow until you assign the # (Load Choices keeps listing it). Perfect for parts IT hasn\'t set up yet.' : undefined} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds it to the BOM)' : (willPark ? '⏸ parks on save — no item # yet' : 'item # — type to search (blank = hardware)'))} style={{ ...inp, padding: '5px 8px', fontSize: '0.78rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : (willPark ? 'var(--brass)' : 'var(--line)')), borderStyle: willPark ? 'dashed' : 'solid', opacity: c.isFee ? 0.5 : 1 }} />
+                                                {(() => {
+                                                    // What this fee actually IS. The stored CE-FEE number stays the link;
+                                                    // this is the only thing on the row that tells a miter return from a
+                                                    // french one.
+                                                    const who = c.isFee && codeIdentity(c.itemNo);
+                                                    return who ? <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{who}</div> : null;
+                                                })()}
                                                 <input value={c.note || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { note: e.target.value })} placeholder="designer note — what is it / where does it sit" maxLength={120} title="Typed at upload (or here) — saved on the pin, shown every time Load Choices lists this part." style={{ ...inp, padding: '3px 8px', fontSize: '0.72rem', fontStyle: 'italic', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.85 }} />
                                                 {r.is2d && (
                                                     <input value={c.imgUrl || ''} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { imgUrl: e.target.value })} placeholder="swatch image URL — the material photo the hybrid CPQ leader-lines to (m2cstudio materials page)" title="HYBRID material rail (Leyla): paste the material's image URL (e.g. the tassel color swatch from m2cstudio.com/materials). When this choice is selected in the CPQ, its swatch appears on the right with an architect leader line to the render." style={{ ...inp, padding: '3px 8px', fontSize: '0.7rem', fontFamily: 'var(--mono)', borderColor: c.imgUrl ? 'var(--brass)' : 'var(--line)', opacity: 0.9 }} />
@@ -2889,6 +2921,13 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                     </span>
                                                     <span style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
                                                         <ItemNoInput value={c.itemNo} list="ab-item-codes" onCommit={v => setSlotChoicePatch(slot.id, c.nodeName, { itemNo: v })} onQuery={setPickQuery} placeholder={c.isFee ? 'fee — item # optional (links the fee entity, e.g. CE-FEE-4594, for pricing)' : (c.isHidden ? 'hidden — item # optional (adds to BOM)' : 'item # — type to search')} style={{ ...inp, padding: '4px 7px', fontSize: '0.75rem', fontFamily: 'var(--mono)', borderColor: c.isFee ? 'var(--line)' : (c.itemNo ? 'var(--brass)' : 'var(--line)'), opacity: c.isFee ? 0.5 : 1 }} />
+                                                {(() => {
+                                                    // What this fee actually IS. The stored CE-FEE number stays the link;
+                                                    // this is the only thing on the row that tells a miter return from a
+                                                    // french one.
+                                                    const who = c.isFee && codeIdentity(c.itemNo);
+                                                    return who ? <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{who}</div> : null;
+                                                })()}
                                                         {/* DESIGNER NOTE — same grid CELL as the item # (a sibling input became its
                                                             own grid cell and wrecked the row layout, Stuart 2026-08-10). */}
                                                         <input value={c.note || ''} onChange={e => setSlotChoicePatch(slot.id, c.nodeName, { note: e.target.value })} placeholder="note — what is it / where does it sit" maxLength={120} style={{ ...inp, padding: '3px 7px', fontSize: '0.7rem', fontStyle: 'italic', borderColor: c.note ? 'var(--brass)' : 'var(--line)', opacity: 0.85 }} />
