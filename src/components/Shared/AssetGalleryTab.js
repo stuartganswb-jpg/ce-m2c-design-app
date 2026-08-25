@@ -881,7 +881,24 @@ const AssetGalleryTab = ({ currentUser, activeBrand }) => {
                                                 </span>
                                             )}
                                             {badge && <span style={{ fontSize: '8px', fontFamily: theme.mono, color: '#fff', background: badge.bg, padding: '2px 5px', alignSelf: 'flex-start', letterSpacing: '.06em' }}>{badge.txt}</span>}
-                                            {fabMissing && <span title="What the MISSING chips are catching. FAB # backfills via bulk APPLY (CrossReference codes on the library part); COLOR NAME needs the Fabricut client-name row in 4.5 Master Finishes, then APPLY." style={{ fontSize: '8px', fontFamily: theme.mono, color: '#d9534f', letterSpacing: '.06em' }}>⚠ MISSING: {fabMissing}</span>}
+                                            {/* SAY WHICH FINISH, AND WHERE TO GO (Christie 2026-08-24, twice in 40
+                                                minutes: "Finish/color will not upload"). The assets uploaded fine —
+                                                the Fabricut colour name simply is not set for that finish. The chip
+                                                said only "MISSING: COLOR NAME", which reads as a failed upload rather
+                                                than a blank field somewhere else, so she reported it as broken twice.
+                                                Naming the finish turns it into an errand. */}
+                                            {fabMissing && (() => {
+                                                const fin = String(asset.finishId || asset.fab?.finishId || asset.finishCode || '').toUpperCase();
+                                                const needsColor = /COLOR/i.test(String(fabMissing));
+                                                return (
+                                                    <span title={needsColor
+                                                        ? `Nothing is wrong with this image — the Fabricut COLOUR NAME for finish ${fin || '(unknown)'} has not been entered yet.\n\nSet it in 4.5 Master Finishes → that finish → the client-mapping row for customer Fabricut, then use bulk APPLY here to stamp it onto every asset on that finish.`
+                                                        : 'FAB # backfills via bulk APPLY, from the CrossReference codes on the library part.'}
+                                                        style={{ fontSize: '8px', fontFamily: theme.mono, color: '#d9534f', letterSpacing: '.06em' }}>
+                                                        ⚠ MISSING: {fabMissing}{needsColor && fin ? ` · set ${fin} in 4.5` : ''}
+                                                    </span>
+                                                );
+                                            })()}
                                         </div>
                                     )}
 

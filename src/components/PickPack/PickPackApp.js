@@ -457,6 +457,22 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // join here): explicit fee flags, or a fee-ish name on a line with NO real item #.
     // Names alone are NOT enough — real backplates echo the return option in their names
     // ("Backplate (Mounting Base for 1\" French Return)") and must stay pickable.
+    // ── NETSUITE CAPS THE MEMO AT 40 CHARACTERS (Sandra 2026-08-19) ────────────────────────────
+    // Her bin count came back: "The field memo contained more than the maximum number ( 40 ) of
+    // characters allowed." — so the whole adjustment was rejected and three bins' worth of counting
+    // was lost, over a sentence being too long.
+    //
+    // Every memo we send is built the same way ("Cycle count by Sandra B — moved to right bin"),
+    // so this is not one bad string, it is a pattern that happens to fit sometimes. The memo is a
+    // convenience; the transaction is the point. So it is cut to fit, front-first — the identifying
+    // half ("Cycle count by …") is what anyone reading NetSuite needs, and the FULL text is written
+    // to the app log either way, which is where the detail actually lives.
+    const NS_MEMO_MAX = 40;
+    const nsMemo = (s) => {
+        const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+        return t.length <= NS_MEMO_MAX ? t : `${t.slice(0, NS_MEMO_MAX - 1).trimEnd()}…`;
+    };
+
     const FEEISH_NAME_RE = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b|\bSPLICE\b|\bFEE\b/i;
     const lineIsFeeish = (l) => {
         if (l && (l.isFee || l.lineIsFee)) return true;
@@ -958,7 +974,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                         method: 'POST',
                         payload: {
                             account: { id: "254" }, subsidiary: { id: nsCfg.subsidiary },
-                            memo: `Packing scrap ${packRef(job)}: ${note}`,
+                            memo: nsMemo(`Packing scrap ${packRef(job)}: ${note}`),
                             inventory: { items: [{ item: { id: String(part.netSuiteInternalId) }, location: { id: nsCfg.location }, adjustQtyBy: -n, ...((bin && bin !== 'UNASSIGNED') ? { inventoryDetail: { quantity: -n, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: -n }] } } } : {}) }] }
                         },
                         writeBack: { collection: 'fin_workorders', docId: job.id, patch: { packScrapAdjPosted: true }, idField: 'packScrapAdjId', tranField: 'packScrapAdjTran' }
@@ -1207,7 +1223,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                         sourceApp: 'WMS', createdBy: operator?.name || '',
                         targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/${nsSoId}/!transform/itemFulfillment`,
                         method: 'POST',
-                        payload: { shipStatus: { id: 'B' }, memo: `Packed in app by ${operator?.name || 'Packer'}` },
+                        payload: { shipStatus: { id: 'B' }, memo: nsMemo(`Packed in app by ${operator?.name || 'Packer'}`) },
                         writeBack
                     });
                     await updateDoc(packDocOf(job), { nsFulfillQueued: true });
@@ -1506,7 +1522,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // 1) Bin transfers for the crossing moves (qty positive; direction is from→to).
             if (transferItems.length) {
                 await postNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/binTransfer`, {
-                    subsidiary: { id: nsConfig.subsidiary }, location: { id: nsConfig.location }, memo: memoText,
+                    subsidiary: { id: nsConfig.subsidiary }, location: { id: nsConfig.location }, memo: nsMemo(memoText),
                     inventory: { items: transferItems.map(t => {
                         const lineQty = t.moves.reduce((s, m) => s + m.qty, 0);
                         return ({
@@ -1522,7 +1538,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // 2) Inventory adjustment for the residual single-direction variance.
             if (adjustItems.length) {
                 await postNs(`https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`, {
-                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
+                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: nsMemo(memoText),
                     inventory: { items: adjustItems.map(adj => ({
                         item: { id: adj.internalId },
                         location: { id: nsConfig.location },
@@ -1580,7 +1596,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const consumeBin = String(srcBin).trim().toUpperCase();
             const receiveBin = String(destBin || '').trim().toUpperCase();
             if (!receiveBin) { setIsSyncing(false); return alert(`${erpOf(target)} has no destination bin — set its home bin (or use the Convert cart, which takes a put-away bin per line). The /P is bin-tracked, so NetSuite needs a receive bin.`); }
-            const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: memoText });
+            const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: nsMemo(memoText) });
 
             alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}, received into ${receiveBin}).`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
@@ -1619,7 +1635,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 payload: {
                     subsidiary: { id: nsConfig.subsidiary },
                     location: { id: nsConfig.location },
-                    memo: memoText,
+                    memo: nsMemo(memoText),
                     inventory: {
                         items: [{
                             item: { id: item.netSuiteInternalId },
@@ -1672,7 +1688,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
                 method: 'POST',
                 payload: {
-                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: memoText,
+                    account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: nsMemo(memoText),
                     inventory: { items: [
                         { item: { id: String(o.sourceInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: -o.qtySource, inventoryDetail: { quantity: -o.qtySource, inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: -o.qtySource }] } } },
                         { item: { id: String(o.targetInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: o.qtyTarget, inventoryDetail: { quantity: o.qtyTarget, inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: o.qtyTarget }] } } }
@@ -1803,7 +1819,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // Build via the RESTlet — it sources the BOM and sets the raw component's consume bin server-side,
             // and receives the finished /P into the operator's put-away bin. Raw is consumed from the CART bin.
             const consumeBin = (convBatch.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
-            await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: newBin, memo: `Phos convert ${convBatch.cartBin || ''}` });
+            await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: newBin, memo: nsMemo(`Phos convert ${convBatch.cartBin || ''}`) });
             const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
             // The HQ to-do is satisfied only now, once the /P actually exists in NetSuite.
@@ -1927,7 +1943,7 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
                 payload: {
                     subsidiary: { id: nsConfig.subsidiary },
                     location: { id: nsConfig.location },
-                    memo: memoText,
+                    memo: nsMemo(memoText),
                     inventory: {
                         items: [{
                             item: { id: item.netSuiteInternalId },
@@ -2075,7 +2091,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     ...(nsConfig.subsidiary
                         ? { subsidiary: { id: String(nsConfig.subsidiary) }, location: { id: String(nsConfig.location) } }
                         : {}),
-                    memo: `Weekly Plating Shipment ${shipId}${finishSummary ? ` (${finishSummary})` : ''} — ${lines.length} items, ${pcs} pcs`,
+                    memo: nsMemo(`Weekly Plating Shipment ${shipId}`),
                     item: { items: [{ item: { id: "61947" }, quantity: 1, rate: Number(total.toFixed(2)), description: lineDescription }] }
                 }
             };
@@ -2153,7 +2169,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             const payload = {
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder/${nsPoId}/!transform/itemreceipt`,
                 method: 'POST',
-                payload: { memo: `Plating return received — ${shipmentId}` }
+                payload: { memo: nsMemo(`Plating return received ${shipmentId}`) }
             };
             const response = await nsProxyFetch(payload);
             const result = await response.json().catch(() => ({}));
@@ -2855,7 +2871,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             if (!assembly) { setIsSyncing(false); return alert(`Couldn't find ${packCode} in NetSuite by item id — confirm the exact item id.`); }
             if (assembly.type && !/assembl/i.test(assembly.type)) { setIsSyncing(false); return alert(`${packCode} is type "${assembly.type}" in NetSuite, not an Assembly. A pack build needs an assembly with ${compCode} as its component.`); }
             const memoText = `Ring pack build by ${operator?.name || 'Unknown'}${packMemo.trim() ? ` — ${packMemo.trim()}` : ''}`;
-            const built = await postConvertBuild({ itemId: assembly.id, quantity: packQtyNum, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: memoText });
+            const built = await postConvertBuild({ itemId: assembly.id, quantity: packQtyNum, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: nsMemo(memoText) });
             alert(`✅ Pack build #${built.id || ''} posted: +${packQtyNum} × ${packCode} into ${receiveBin}, consumed from ${consumeBin}.`);
             writeLog(`Ring Pack Build: +${packQtyNum} ${packCode} / -${packEachesNeeded} ${compCode} (from ${consumeBin}).${packMemo.trim() ? ` Memo: ${packMemo.trim()}` : ''}`, 'wms');
             setPackQty(""); setPackSrcScan(""); setPackDestScan(""); setPackMemo("");
