@@ -19,7 +19,7 @@ import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i18n';
 import { holdOrder, releaseHold } from '../Shared/orderHold';
-import { poleLengthOf, isPoleCategory } from '../Shared/poleCut';
+import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
@@ -1341,42 +1341,47 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // Until now a cut could only be raised from HQ's Stocked Sales Snapshot, which is the wrong
     // room: the person who knows a rack is running short is standing at the rack. The live stock
     // pull is already on this tab, which is exactly Eric's point.
-    const [issueCut, setIssueCut] = useState({ code: '', qty: '', target: '4FT', open: false });
+    // ANY POLE, ANY LENGTH (Stuart 2026-08-25: "we shouldn't have to limit it by pattern … as long
+    // as it is category pole and the larger pole and smaller poles are all existing items in
+    // Netsuite that can be selected"). The 8-ft-source gate is gone and the cut length is a FIELD
+    // rather than a string substitution on the source code — the grammar only pre-fills it. Same
+    // planManualCut gate HQ uses, so the two benches cannot drift apart the way they already had.
+    const [issueCut, setIssueCut] = useState({ code: '', qty: '', target: '', per: '2', scrapFt: '0', open: false });
+    const cutLook = (code) => {
+        const k = String(code || '').trim().toUpperCase();
+        const part = k ? hqParts.find(p => erpOf(p) === k) : null;
+        if (!part) return null;
+        return { code: k, internalId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : '', productType: part.manufacturingSpecs?.productType || part.productType || '' };
+    };
     const issueRodCut = async () => {
         const src = String(issueCut.code || '').trim().toUpperCase();
+        const tgt = String(issueCut.target || '').trim().toUpperCase();
         const qn = parseInt(issueCut.qty) || 0;
-        if (!src) return alert('Which 8 ft rod is being cut?');
-        if (qn <= 0) return alert('How many 8 ft rods?');
-        const srcPart = hqParts.find(p => erpOf(p) === src);
-        if (!srcPart) return alert(`"${src}" is not in the Master Library.`);
-        if (!isPoleCategory(srcPart.manufacturingSpecs?.productType || srcPart.productType)) {
-            return alert(`${src} is not categorised as a POLE or ROD.\n\nOnly poles are cut — a bracket that happens to carry "8" in its code is still a bracket.`);
-        }
-        if (poleLengthOf(src) !== 8) return alert(`${src} does not read as an 8 ft rod, so there is nothing to cut it down from.`);
-        const is4 = issueCut.target === '4FT';
-        const tgt = src.replace(/([468])(10|15|35)/, is4 ? '4$2' : '6$2');
-        if (tgt === src) return alert(`Could not work out the ${is4 ? '4' : '6'} ft code for ${src}.`);
-        const tgtPart = hqParts.find(p => erpOf(p) === tgt);
-        if (!srcPart.netSuiteInternalId || !tgtPart?.netSuiteInternalId) {
-            return alert(`No NetSuite id for ${!srcPart.netSuiteInternalId ? src : tgt}.\n\nA cut moves real stock, so it is never raised against a guessed id — sync that item first (HQ 11.1).`);
-        }
-        const yieldQty = is4 ? qn * 2 : qn;
-        const scrapFt = is4 ? 0 : qn * 2;
-        if (!window.confirm(`✂ Issue a cut?\n\n${qn} × ${src} (8 ft)  →  ${yieldQty} × ${tgt}${scrapFt ? `  (+${scrapFt} ft scrap)` : ''}\n\nIt joins "Cuts for Sales Orders" below. NetSuite stock moves when the operator scans the bins and confirms the cut.`)) return;
+        const srcRec = cutLook(src), tgtRec = cutLook(tgt);
+        if (src && !srcRec) return alert(`"${src}" is not in the Master Library.`);
+        if (tgt && !tgtRec) return alert(`"${tgt}" is not in the Master Library — create & sync it first (HQ 11.1).`);
+        const plan = planManualCut({
+            source: srcRec || { code: src }, qtySource: qn, scrapFt: Number(issueCut.scrapFt) || 0,
+            targets: [{ code: tgt, per: issueCut.per, internalId: tgtRec && tgtRec.internalId, productType: tgtRec && tgtRec.productType }],
+        });
+        if (!plan.ok) return alert(`✂ Can't issue this cut:\n\n${plan.errors.map(e => `• ${e}`).join('\n')}`);
+        const line = plan.lines[0];
+        if (!window.confirm(`✂ Issue a cut?\n\n${plan.qtySource} × ${src}  →  ${line.qty} × ${line.itemId}${plan.scrapFt ? `  (+${plan.scrapFt} ft scrap)` : ''}\n\nIt joins "Cuts for Sales Orders" below. NetSuite stock moves when the operator scans the bins and confirms the cut.`)) return;
         try {
             const id = `RC-WMS-${Date.now()}`;
             await setDoc(doc(db, 'rod_cut_orders', id), {
                 id, brand: activeBrand, status: 'OPEN',
-                sourceItemId: src, sourceInternalId: String(srcPart.netSuiteInternalId),
-                targetItemId: tgt, targetInternalId: String(tgtPart.netSuiteInternalId),
-                qtySource: qn, qtyTarget: yieldQty, cutTo: issueCut.target, scrapFt,
+                sourceItemId: src, sourceInternalId: srcRec.internalId,
+                targets: plan.lines,
+                targetItemId: line.itemId, targetInternalId: line.internalId,
+                qtySource: plan.qtySource, qtyTarget: line.qty, cutTo: `${line.per}× ${line.itemId}`, scrapFt: plan.scrapFt,
                 sourceBin: null, destBin: null, nsAdjustmentId: null,
                 purpose: 'STOCK', createdVia: 'WMS_BENCH',
                 createdAt: Date.now(), createdBy: operator?.name || '', completedAt: null, completedBy: null,
             });
-            writeLog(`✂ Issued rod cut ${id}: ${qn} × ${src} → ${yieldQty} × ${tgt}`, 'wms');
-            setIssueCut({ code: '', qty: '', target: '4FT', open: false });
-            alert(`✂ Cut issued: ${qn} × ${src} → ${yieldQty} × ${tgt}.\n\nIt is in "Cuts for Sales Orders" below.`);
+            writeLog(`✂ Issued rod cut ${id}: ${plan.qtySource} × ${src} → ${line.qty} × ${line.itemId}`, 'wms');
+            setIssueCut({ code: '', qty: '', target: '', per: '2', scrapFt: '0', open: false });
+            alert(`✂ Cut issued: ${plan.qtySource} × ${src} → ${line.qty} × ${line.itemId}.\n\nIt is in "Cuts for Sales Orders" below.`);
         } catch (e) { alert('Could not issue the cut: ' + (e.message || e)); }
     };
     const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
@@ -1773,7 +1778,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!srcBin || !destBin || !cutConfirmed) return;
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
         if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
-        const memoText = `Rod cut by ${operator?.name || 'Unknown'}: ${o.qtySource} × ${o.sourceItemId} → ${o.qtyTarget} × ${o.targetItemId}${o.scrapFt ? ` (+${o.scrapFt} ft scrap)` : ''}${cutMemo.trim() ? ` — ${cutMemo.trim()}` : ''}`;
+        // ONE STICK CAN BECOME TWO LENGTHS (Eric 2026-08-19: a 12 ft HTA1235 cuts into "one 6-ft +
+        // one 4-ft"). `targets` is the real shape; a doc written before it existed carries only the
+        // three legacy fields, so it is read back as a single line and posts exactly as it always did.
+        const cutLines = Array.isArray(o.targets) && o.targets.length
+            ? o.targets
+            : [{ itemId: o.targetItemId, internalId: o.targetInternalId, qty: o.qtyTarget }];
+        const yieldText = cutLines.map(l => `${l.qty} × ${l.itemId}`).join(' + ');
+        const memoText = `Rod cut by ${operator?.name || 'Unknown'}: ${o.qtySource} × ${o.sourceItemId} → ${yieldText}${o.scrapFt ? ` (+${o.scrapFt} ft scrap)` : ''}${cutMemo.trim() ? ` — ${cutMemo.trim()}` : ''}`;
         try {
             setIsSyncing(true);
             await ensureBinExists(destBin, nsConfig.location);
@@ -1784,14 +1796,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     account: { id: "254" }, subsidiary: { id: nsConfig.subsidiary }, memo: nsMemo(memoText),
                     inventory: { items: [
                         { item: { id: String(o.sourceInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: -o.qtySource, inventoryDetail: { quantity: -o.qtySource, inventoryAssignment: { items: [{ binNumber: { refName: srcBin }, quantity: -o.qtySource }] } } },
-                        { item: { id: String(o.targetInternalId) }, location: { id: nsConfig.location }, adjustQtyBy: o.qtyTarget, inventoryDetail: { quantity: o.qtyTarget, inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: o.qtyTarget }] } } }
+                        ...cutLines.map(l => ({ item: { id: String(l.internalId) }, location: { id: nsConfig.location }, adjustQtyBy: l.qty, inventoryDetail: { quantity: l.qty, inventoryAssignment: { items: [{ binNumber: { refName: destBin }, quantity: l.qty }] } } }))
                     ] }
                 }
             });
             const body = await r.json().catch(() => ({}));
             if (!r.ok) throw new Error(typeof body === 'object' ? JSON.stringify(body) : String(body));
             await updateDoc(doc(db, "rod_cut_orders", o.id), { status: 'DONE', sourceBin: srcBin, destBin, nsAdjustmentId: body.id || null, completedAt: Date.now(), completedBy: operator?.name || '' });
-            writeLog(`Rod cut ${o.id}: -${o.qtySource} ${o.sourceItemId} (${srcBin}) → +${o.qtyTarget} ${o.targetItemId} (${destBin}).`, 'wms');
+            writeLog(`Rod cut ${o.id}: -${o.qtySource} ${o.sourceItemId} (${srcBin}) → ${cutLines.map(l => `+${l.qty} ${l.itemId}`).join(' ')} (${destBin}).`, 'wms');
 
             // ── A CUT FOR FINISHING RELEASES ITS WORK ORDER (Stuart 2026-08-19) ─────────────────
             // "Once confirmed as cut and complete it prints the work order label there for the
@@ -4654,38 +4666,68 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     <div onClick={() => setIssueCut(c => ({ ...c, open: !c.open }))} style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
                                         <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{issueCut.open ? '▾' : '▸'}</span>
                                         <span style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600, color: theme.ink }}>✂ Issue a rod cut</span>
-                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>cut 8 ft stock down without leaving the bench</span>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>any pole or rod — pick the stick and the length it becomes</span>
                                     </div>
-                                    {issueCut.open && (
+                                    {issueCut.open && (() => {
+                                        // The grammar SUGGESTS: a length read off the source code pre-fills the
+                                        // cut-down code and the pieces-per-rod. All of it stays editable, because a
+                                        // pattern that does not follow the house grammar is still a pole (Stuart).
+                                        const srcFt = poleLengthOf(issueCut.code);
+                                        const opts = cutOptionsFor(srcFt);
+                                        const qn = parseInt(issueCut.qty) || 0;
+                                        const per = Number(issueCut.per) || 0;
+                                        const tgtRec = cutLook(issueCut.target);
+                                        const fieldS = { padding: '10px 12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '0.95rem', outline: 'none' };
+                                        const capS = { display: 'block', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft, marginBottom: '5px' };
+                                        return (
                                         <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap', marginTop: '14px' }}>
                                             <label style={{ display: 'block' }}>
-                                                <span style={{ display: 'block', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft, marginBottom: '5px' }}>8 ft rod</span>
-                                                <input list="wms-8ft-rods" value={issueCut.code} onChange={e => setIssueCut(c => ({ ...c, code: e.target.value }))} placeholder="e.g. HCUMP810"
-                                                    style={{ padding: '10px 12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '0.95rem', outline: 'none', width: '190px' }} />
-                                                <datalist id="wms-8ft-rods">
-                                                    {hqParts.filter(p => poleLengthOf(erpOf(p)) === 8 && isPoleCategory(p.manufacturingSpecs?.productType || p.productType))
-                                                        .slice(0, 300).map(p => <option key={p.id} value={erpOf(p)}>{p.itemName || ''}</option>)}
+                                                <span style={capS}>Rod being cut</span>
+                                                <input list="wms-cut-rods" value={issueCut.code} onChange={e => setIssueCut(c => ({ ...c, code: e.target.value }))} placeholder="e.g. HCUMP810"
+                                                    style={{ ...fieldS, width: '190px' }} />
+                                                <datalist id="wms-cut-rods">
+                                                    {hqParts.filter(p => isPoleCategory(p.manufacturingSpecs?.productType || p.productType))
+                                                        .slice(0, 500).map(p => <option key={p.id} value={erpOf(p)}>{p.itemName || ''}</option>)}
                                                 </datalist>
                                             </label>
                                             <label style={{ display: 'block' }}>
-                                                <span style={{ display: 'block', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft, marginBottom: '5px' }}>How many 8 ft rods</span>
+                                                <span style={capS}>How many rods</span>
                                                 <input type="number" min="1" value={issueCut.qty} onChange={e => setIssueCut(c => ({ ...c, qty: e.target.value }))}
-                                                    style={{ padding: '10px 12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '0.95rem', outline: 'none', width: '120px' }} />
+                                                    style={{ ...fieldS, width: '110px' }} />
                                             </label>
-                                            <div style={{ display: 'flex', gap: '6px' }}>
-                                                {['4FT', '6FT'].map(t => (
-                                                    <button key={t} onClick={() => setIssueCut(c => ({ ...c, target: t }))}
-                                                        style={{ padding: '10px 16px', background: issueCut.target === t ? theme.ink : '#fff', color: issueCut.target === t ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px' }}>{t}</button>
-                                                ))}
-                                            </div>
+                                            <label style={{ display: 'block' }}>
+                                                <span style={capS}>Becomes</span>
+                                                <input list="wms-cut-rods" value={issueCut.target} onChange={e => setIssueCut(c => ({ ...c, target: e.target.value }))} placeholder="e.g. HCUMP410"
+                                                    style={{ ...fieldS, width: '190px' }} />
+                                            </label>
+                                            <label style={{ display: 'block' }}>
+                                                <span style={capS}>Per rod</span>
+                                                <input type="number" min="1" value={issueCut.per} onChange={e => setIssueCut(c => ({ ...c, per: e.target.value }))}
+                                                    style={{ ...fieldS, width: '80px', textAlign: 'center' }} />
+                                            </label>
+                                            <label style={{ display: 'block' }}>
+                                                <span style={capS}>Scrap ft</span>
+                                                <input type="number" min="0" value={issueCut.scrapFt} onChange={e => setIssueCut(c => ({ ...c, scrapFt: e.target.value }))}
+                                                    style={{ ...fieldS, width: '80px', textAlign: 'center' }} />
+                                            </label>
+                                            {opts.length > 0 && (
+                                                <div style={{ display: 'flex', gap: '6px', paddingBottom: '2px', flexWrap: 'wrap' }}>
+                                                    {opts.map(o => o.targets.map((t, i2) => (
+                                                        <button key={o.key + i2} title={`${srcFt} ft rod → ${o.label}`}
+                                                            onClick={() => setIssueCut(c => ({ ...c, target: targetCodeFor(c.code, t.ft) || c.target, per: String(t.per), scrapFt: String(o.scrapFt) }))}
+                                                            style={{ padding: '10px 14px', background: '#fff', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px' }}>{t.per} × {t.ft} ft</button>
+                                                    )))}
+                                                </div>
+                                            )}
                                             <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, paddingBottom: '10px' }}>
-                                                {(parseInt(issueCut.qty) || 0) > 0
-                                                    ? `→ ${(parseInt(issueCut.qty) || 0) * (issueCut.target === '4FT' ? 2 : 1)} pieces${issueCut.target === '6FT' ? ` (+${(parseInt(issueCut.qty) || 0) * 2} ft scrap)` : ''}`
-                                                    : '4 ft = two per rod · 6 ft = one per rod + 2 ft scrap'}
+                                                {qn > 0 && per > 0 && issueCut.target
+                                                    ? `→ ${qn * per} × ${String(issueCut.target).toUpperCase()}${Number(issueCut.scrapFt) ? ` (+${qn * Number(issueCut.scrapFt)} ft scrap)` : ''}${tgtRec ? '' : ' · not in the library'}`
+                                                    : (srcFt ? `reads as ${srcFt} ft — the buttons fill the rest in` : 'no length in the code — set it by hand')}
                                             </span>
                                             <button onClick={issueRodCut} style={{ padding: '11px 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>✂ Issue</button>
                                         </div>
-                                    )}
+                                        );
+                                    })()}
                                 </div>
                             )}
 

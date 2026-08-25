@@ -16,13 +16,57 @@
 
 // Length is the digit before the DIAMETER family. Diameters seen in the catalogue: 10 = 1",
 // 15 = 1-3/8", 35 = 35 mm (the wood poles) — Stuart 2026-08-22.
-const LEN_RE = /([468])(10|15|35)/;
+// 12 ADDED 2026-08-25 (Eric: "the items listed as HTA1235 are just under 12-ft in length").
+// The 12 alternative is FIRST because alternation is ordered — "1235" must read as 12 ft + 35 mm,
+// not fail to match at all, which is what it did before and why no 12 ft rod could be cut.
+const LEN_RE = /(12|[468])(10|15|35)/;
 
 /** The raw item behind a finished code: HCUMP410/G → HCUMP410. */
 const rawOf = (erp) => { const s = String(erp || '').trim().toUpperCase(); const i = s.lastIndexOf('/'); return i > 0 ? s.slice(0, i) : s; };
 
-/** 8 ft yields two 4 ft, or one 6 ft with 2 ft of scrap. Anything else is not a cut we make. */
+/** 8 ft yields two 4 ft, or one 6 ft with 2 ft of scrap. Used by the AUTOMATIC work-order path. */
 export const YIELD = { 4: { per: 2, scrapFt: 0 }, 6: { per: 1, scrapFt: 2 } };
+
+// ── WHAT ONE ROD CUTS INTO (Eric 2026-08-19, verbatim) ─────────────────────────────────────────
+// "One 8-ft can be cut to one 6-ft or two 4-ft and one 6-ft can be cut into one 4-ft. For the HTA
+//  rods specifically, the items listed as HTA1235 are just under 12-ft in length. They can be cut
+//  into one 8-ft or one 6-ft + one 4-ft."
+//
+// Encoded exactly as he stated it and no further. 12 → 8 + 4 is NOT here: his rods are just UNDER
+// 12 ft, so the two would not both come out of one stick. Inventing that option would have the
+// warehouse expect a piece that does not exist.
+//
+// A cut can produce TWO different lengths from one stick (his 6 + 4), so a yield is a LIST of
+// targets rather than one — the whole reason the old single-target shape could not express it.
+export const CUT_OPTIONS = {
+    12: [
+        { key: '8FT',     label: '1 × 8 ft',          targets: [{ ft: 8, per: 1 }],                 scrapFt: 4 },
+        { key: '6FT+4FT', label: '1 × 6 ft + 1 × 4 ft', targets: [{ ft: 6, per: 1 }, { ft: 4, per: 1 }], scrapFt: 2 },
+    ],
+    8: [
+        { key: '4FT', label: '2 × 4 ft', targets: [{ ft: 4, per: 2 }], scrapFt: 0 },
+        { key: '6FT', label: '1 × 6 ft', targets: [{ ft: 6, per: 1 }], scrapFt: 2 },
+    ],
+    6: [
+        { key: '4FT', label: '1 × 4 ft', targets: [{ ft: 4, per: 1 }], scrapFt: 2 },
+    ],
+};
+export const cutOptionsFor = (sourceFt) => CUT_OPTIONS[Number(sourceFt)] || [];
+
+/**
+ * The code for the same rod at a different length: HCUMP810 → 4 ft → HCUMP410.
+ * A SUGGESTION ONLY (Stuart 2026-08-25: "we shouldn't have to limit it by pattern, you could always
+ * add the input fields on the tool itself"). The grammar pre-fills the field; it never decides
+ * whether a cut is allowed. Returns '' when the code carries no length block, and the operator
+ * types the target themselves — which is the entire point, because HMLP810/SG and every other
+ * pattern that does not follow the house grammar was simply uncuttable before.
+ */
+export const targetCodeFor = (sourceErp, targetFt) => {
+    const raw = rawOf(sourceErp);
+    if (!LEN_RE.test(raw)) return '';
+    const out = raw.replace(LEN_RE, `${targetFt}$2`);
+    return out === raw ? '' : out;
+};
 
 export function poleLengthOf(erp) {
     const m = LEN_RE.exec(rawOf(erp));
@@ -108,3 +152,54 @@ export function poleCutPlan(erpId, qty, opts = {}) {
 
 /** Does this work order need a cut before it can be picked? */
 export const needsPoleCut = (erpId, qty, opts) => !!poleCutPlan(erpId, qty, opts);
+
+/**
+ * VALIDATE A HAND-BUILT CUT — the one gate both tools go through (Stuart 2026-08-25:
+ * "as long as it is category pole and the larger pole and smaller poles are all existing items in
+ *  Netsuite that can be selected this would solve the problem").
+ *
+ * That sentence IS the rule, so it is written once here rather than re-implemented per screen —
+ * the previous pair of tools drifted (HQ derived a target code, WMS demanded an 8 ft source) and
+ * between them refused every rod that did not follow the house code grammar.
+ *
+ * Three things must be true of the source and of EVERY target, and nothing else matters:
+ *   1. it is categorised POLE or ROD          — a bracket with an 8 in its code is still a bracket
+ *   2. it exists in the library               — the caller resolves it and passes what it found
+ *   3. it has a NetSuite internal id          — a cut moves real stock; a guessed id is worse than
+ *                                               no cut at all, which is the standing rule here
+ *
+ * Pure: callers pass resolved records, so this is node-testable and cannot reach Firestore.
+ *
+ * @param {{code,internalId,productType}} source
+ * @param {Array<{code,internalId,productType,per}>} targets  one entry per cut length (6 ft + 4 ft = two)
+ * @param {number} qtySource how many source rods are being cut
+ * @param {number} scrapFt   feet of offcut per source rod
+ */
+export function planManualCut({ source, targets = [], qtySource, scrapFt = 0 } = {}) {
+    const errors = [];
+    const q = Math.max(0, Math.floor(Number(qtySource) || 0));
+    const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
+    if (!q) errors.push('How many rods are being cut?');
+    if (!source || !U(source.code)) errors.push('Name the rod being cut.');
+    else {
+        if (!isPoleCategory(source.productType)) errors.push(`${U(source.code)} is not categorised POLE or ROD — only poles are cut.`);
+        if (!source.internalId) errors.push(`${U(source.code)} has no NetSuite id. Sync it first (HQ 11.1) — a cut moves real stock.`);
+    }
+    const tl = (targets || []).filter(t => t && U(t.code));
+    if (!tl.length) errors.push('Name at least one cut length.');
+    const seen = new Set();
+    tl.forEach(t => {
+        const code = U(t.code);
+        if (seen.has(code)) errors.push(`${code} is listed twice.`);
+        seen.add(code);
+        if (source && code === U(source.code)) errors.push(`${code} is the same item as the rod being cut.`);
+        if (!isPoleCategory(t.productType)) errors.push(`${code} is not categorised POLE or ROD.`);
+        if (!t.internalId) errors.push(`${code} has no NetSuite id. Create & sync it first (HQ 11.1).`);
+        if (!(Number(t.per) > 0)) errors.push(`${code}: how many come off one rod?`);
+    });
+    const lines = tl.map(t => ({
+        itemId: U(t.code), internalId: String(t.internalId || ''),
+        per: Number(t.per) || 0, qty: (Number(t.per) || 0) * q,
+    }));
+    return { ok: errors.length === 0, errors, qtySource: q, lines, scrapFt: (Number(scrapFt) || 0) * q };
+}

@@ -7,7 +7,7 @@ import { SOURCING, sourcingOf } from '../Shared/sourcing';
 import { makeFullTasks } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
-import { poleCutPlan, poleLengthOf, isPoleCategory } from '../Shared/poleCut';
+import { poleCutPlan, poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
@@ -63,7 +63,30 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [orderQty, setOrderQty] = useState({});   // per-row entered production amount (keyed by internalId)
     const [genBusy, setGenBusy] = useState(false);
     const [onOrdModal, setOnOrdModal] = useState(null); // snapshot row → open PO/WO inbound detail popup
-    const [cutModal, setCutModal] = useState(null);     // rod-cut order builder ({itemid, internalId, available, qty, target})
+    const [cutModal, setCutModal] = useState(null);     // rod-cut order builder — see openCutModal
+    // ── THE CUT TOOL OPENS ON ANY POLE (Stuart 2026-08-25) ──────────────────────────────────────
+    // "as long as category is rod or pole, then we should be able to use the tool … we shouldn't
+    //  have to limit it by pattern, you could always add the input fields on the tool itself, such
+    //  as this pole HMLP810/SG = .."
+    //
+    // Before this the ✂ appeared only where poleLengthOf() read exactly 8, so a rod whose code did
+    // not follow the house grammar had no cut at all — and Eric's HTA1235 could not even be READ
+    // as 12 ft. The grammar now only PRE-FILLS: it suggests the source length and the cut-down
+    // codes, and every one of them is an editable field. What decides whether the cut may be
+    // raised is planManualCut's three questions — pole/rod, in the library, has a NetSuite id.
+    const openCutModal = (itemid, internalId, available) => {
+        const ft = poleLengthOf(itemid);
+        const opts = cutOptionsFor(ft);
+        const opt = opts[0] || null;
+        setCutModal({
+            itemid, internalId, available, qty: '',
+            sourceFt: ft || '',
+            optionKey: opt ? opt.key : 'CUSTOM',
+            rows: opt ? opt.targets.map(t => ({ code: targetCodeFor(itemid, t.ft), per: String(t.per) }))
+                      : [{ code: '', per: '1' }],
+            scrapFt: opt ? String(opt.scrapFt) : '0',
+        });
+    };
     const [snapWatch, setSnapWatch] = useState('');     // snapshot watchlist filter (catalog is growing)
     const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants · TIER = raw + /P + plated read together
     const [snapSort, setSnapSort] = useState('item');   // 'item' (load order) | 'finish' (/SG · /N25 grouped — batch same-finish WOs)
@@ -2445,7 +2468,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         productType to say POLE/ROD, which finished rods carry and RAW ones often do not,
                                                         so the ✂ vanished on exactly the rows finishing needs it for. poleLengthOf reads
                                                         the length out of the code itself — the same grammar the cut planner uses. */}
-                                                    {(isPoleCategory(info.ptype) && poleLengthOf(r.itemid) === 8) ? <button title="Cut 8 ft rods down to 6 ft / 4 ft" onClick={() => setCutModal({ itemid: r.itemid, internalId: r.internalId, available: info.available, qty: '', target: '4FT' })} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
+                                                    {isPoleCategory(info.ptype) ? <button title="Cut this rod down — pick the source and the cut lengths on the tool" onClick={() => openCutModal(r.itemid, r.internalId, info.available)} style={{ padding: '3px 10px', background: 'transparent', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>✂</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                 </tr>
                                                 {convSugFor === r.itemid && (() => {
                                                     // Donor picker: sister finished variants of the same base with shelf stock.
@@ -2610,60 +2633,125 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             {/* ✂ ROD CUT ORDER BUILDER — turn stocked 8 ft rods into 2×4 ft or 1×6 ft (+2 ft scrap) */}
             {cutModal && (() => {
                 const qn = parseInt(cutModal.qty) || 0;
-                const is4 = cutModal.target === '4FT';
-                const targetCode = String(cutModal.itemid).replace(/8(1[05])/, is4 ? '4$1' : '6$1');
-                const validPattern = targetCode !== String(cutModal.itemid);
-                const targetRow = ((salesHist && salesHist.rows) || []).find(x => String(x.itemid).toUpperCase() === targetCode.toUpperCase());
-                const targetPart = partByKey['erp:' + targetCode.toUpperCase()];
-                const targetInternalId = targetRow ? targetRow.internalId : (targetPart && targetPart.netSuiteInternalId ? String(targetPart.netSuiteInternalId) : null);
-                const yieldQty = is4 ? qn * 2 : qn;
-                const scrapFt = is4 ? 0 : qn * 2;
-                const ready = qn > 0 && validPattern && !!targetInternalId;
+                const opts = cutOptionsFor(cutModal.sourceFt);
+                // Resolve every code the operator typed against the library — category + NetSuite id
+                // come from the record, never from the string.
+                const look = (code) => {
+                    const k = String(code || '').trim().toUpperCase();
+                    if (!k) return null;
+                    const row = ((salesHist && salesHist.rows) || []).find(x => String(x.itemid).toUpperCase() === k);
+                    const part = partByKey['erp:' + k];
+                    if (!row && !part) return null;
+                    return {
+                        code: k,
+                        internalId: row ? String(row.internalId) : (part && part.netSuiteInternalId ? String(part.netSuiteInternalId) : ''),
+                        productType: (part && (part.manufacturingSpecs?.productType || part.productType)) || (row ? row.ptype : ''),
+                        known: true,
+                    };
+                };
+                const srcRec = look(cutModal.itemid) || { code: String(cutModal.itemid).toUpperCase(), internalId: String(cutModal.internalId || ''), productType: 'POLE' };
+                const rows = cutModal.rows || [];
+                const targets = rows.map(r => { const rec = look(r.code); return { code: r.code, per: r.per, rec, missing: !!String(r.code || '').trim() && !rec }; });
+                const plan = planManualCut({
+                    source: srcRec,
+                    targets: targets.map(t => ({ code: t.code, per: t.per, internalId: t.rec?.internalId, productType: t.rec?.productType })),
+                    qtySource: qn, scrapFt: Number(cutModal.scrapFt) || 0,
+                });
+                const unknown = targets.filter(t => t.missing).map(t => String(t.code).toUpperCase());
+                const errs = [...plan.errors, ...unknown.map(c => `${c} is not in the synced library.`)];
+                const ready = plan.ok && !unknown.length;
+                const setRow = (i, patch) => setCutModal(m => ({ ...m, rows: m.rows.map((r, j) => j === i ? { ...r, ...patch } : r) }));
+                const pickOption = (o) => setCutModal(m => ({ ...m, optionKey: o.key, scrapFt: String(o.scrapFt), rows: o.targets.map(t => ({ code: targetCodeFor(m.itemid, t.ft), per: String(t.per) })) }));
                 const issue = async () => {
                     if (!ready) return;
                     try {
                         const id = `RC-${Date.now()}`;
+                        const first = plan.lines[0];
                         await setDoc(doc(db, 'rod_cut_orders', id), {
                             id, brand: activeBrand, status: 'OPEN',
-                            sourceItemId: cutModal.itemid, sourceInternalId: String(cutModal.internalId),
-                            targetItemId: targetCode, targetInternalId: String(targetInternalId),
-                            qtySource: qn, qtyTarget: yieldQty, cutTo: cutModal.target, scrapFt,
+                            sourceItemId: srcRec.code, sourceInternalId: srcRec.internalId,
+                            // MULTI-LENGTH CUTS (Eric: one 12 ft → one 6 ft + one 4 ft). `targets` is
+                            // the real shape; the three legacy fields mirror line 1 so every screen
+                            // and log written against the old single-target doc keeps working.
+                            targets: plan.lines,
+                            targetItemId: first.itemId, targetInternalId: first.internalId,
+                            qtySource: plan.qtySource, qtyTarget: first.qty,
+                            cutTo: cutModal.optionKey, scrapFt: plan.scrapFt,
                             sourceBin: null, destBin: null, nsAdjustmentId: null,
                             createdAt: Date.now(), createdBy: currentUser || '', createdVia: 'SALES_SNAPSHOT',
                             completedAt: null, completedBy: null
                         });
-                        addLog(`✂ Rod cut order ${id}: ${qn} × ${cutModal.itemid} → ${yieldQty} × ${targetCode}`, 'success');
-                        alert(`✂ Rod cut order issued:\n\n${qn} × ${cutModal.itemid} (8 ft) → ${yieldQty} × ${targetCode}${scrapFt ? ` + ${scrapFt} ft scrap` : ''}\n\nIt's queued on the WMS → ROD CUTS tab. NetSuite inventory adjusts when the operator scans the bins and confirms the cut.`);
+                        const summary = plan.lines.map(l => `${l.qty} × ${l.itemId}`).join(' + ');
+                        addLog(`✂ Rod cut order ${id}: ${plan.qtySource} × ${srcRec.code} → ${summary}`, 'success');
+                        alert(`✂ Rod cut order issued:\n\n${plan.qtySource} × ${srcRec.code} → ${summary}${plan.scrapFt ? ` + ${plan.scrapFt} ft scrap` : ''}\n\nIt's queued on the WMS → ROD CUTS tab. NetSuite inventory adjusts when the operator scans the bins and confirms the cut.`);
                         setCutModal(null);
                     } catch (e) { alert('Failed to create the rod cut order: ' + (e.message || e)); }
                 };
-                const tgl = (on) => ({ flex: 1, padding: '12px', background: on ? 'var(--ink)' : '#fff', color: on ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.05em' });
+                const tgl = (on) => ({ flex: 1, padding: '10px', background: on ? 'var(--ink)' : '#fff', color: on ? '#fff' : 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.04em' });
+                const inp = { padding: '10px', fontFamily: 'var(--mono)', fontSize: '12px', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box' };
+                const lbl = { display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' };
                 return (
                     <div onClick={() => setCutModal(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '560px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: '32px', width: '600px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
                                 <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>✂ Rod Cut</h2>
                                 <button onClick={() => setCutModal(null)} style={{ background: 'transparent', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
                             </div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>{cutModal.itemid} · 8 ft rod · {cutModal.available} available</div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>
+                                {cutModal.available} available{cutModal.sourceFt ? ` · reads as ${cutModal.sourceFt} ft` : ' · length not in the code — set the cut lengths by hand'}
+                            </div>
 
-                            <label style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>How many 8 ft rods to cut</label>
-                            <input type="number" min="1" value={cutModal.qty} onChange={e => setCutModal(m => ({ ...m, qty: e.target.value }))} placeholder="0" autoFocus style={{ width: '100%', padding: '12px', fontFamily: 'var(--mono)', fontSize: '1.2rem', textAlign: 'center', border: '2px solid var(--line)', outline: 'none', boxSizing: 'border-box', marginBottom: qn > cutModal.available ? '6px' : '20px' }} />
+                            <label style={lbl}>Rod being cut</label>
+                            <input value={cutModal.itemid} onChange={e => setCutModal(m => ({ ...m, itemid: e.target.value }))} style={{ ...inp, width: '100%', marginBottom: '6px' }} />
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginBottom: '18px', color: srcRec.internalId ? '#3a7d44' : '#d9534f' }}>
+                                {srcRec.internalId ? `✓ ${srcRec.code} · ${srcRec.productType || '—'} · NetSuite ${srcRec.internalId}` : `✗ ${srcRec.code} — no NetSuite id found`}
+                            </div>
+
+                            <label style={lbl}>How many rods to cut</label>
+                            <input type="number" min="1" value={cutModal.qty} onChange={e => setCutModal(m => ({ ...m, qty: e.target.value }))} placeholder="0" autoFocus style={{ ...inp, width: '100%', fontSize: '1.2rem', textAlign: 'center', border: '2px solid var(--line)', marginBottom: qn > cutModal.available ? '6px' : '20px' }} />
                             {qn > cutModal.available && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#b8860b', marginBottom: '14px' }}>⚠ Only {cutModal.available} available in NetSuite — the operator's source bin must actually hold {qn} or the adjustment will be rejected.</div>}
 
-                            <label style={{ display: 'block', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Cut down to</label>
-                            <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-                                <button onClick={() => setCutModal(m => ({ ...m, target: '4FT' }))} style={tgl(is4)}>1 × 8 ft → 2 × 4 ft</button>
-                                <button onClick={() => setCutModal(m => ({ ...m, target: '6FT' }))} style={tgl(!is4)}>1 × 8 ft → 1 × 6 ft <span style={{ opacity: .6 }}>(+2 ft scrap)</span></button>
+                            {opts.length > 0 && (
+                                <>
+                                    <label style={lbl}>Standard cuts for a {cutModal.sourceFt} ft rod</label>
+                                    <div style={{ display: 'flex', gap: '10px', marginBottom: '18px', flexWrap: 'wrap' }}>
+                                        {opts.map(o => <button key={o.key} onClick={() => pickOption(o)} style={tgl(cutModal.optionKey === o.key)}>{o.label}{o.scrapFt ? <span style={{ opacity: .6 }}> (+{o.scrapFt} ft scrap)</span> : null}</button>)}
+                                    </div>
+                                </>
+                            )}
+
+                            <label style={lbl}>Cut lengths — item # and how many come off ONE rod</label>
+                            {rows.map((r, i) => {
+                                const t = targets[i];
+                                return (
+                                    <div key={i} style={{ marginBottom: '10px' }}>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <input value={r.code} onChange={e => setRow(i, { code: e.target.value })} placeholder="e.g. HCUMP410" style={{ ...inp, flex: 1 }} />
+                                            <input type="number" min="1" value={r.per} onChange={e => setRow(i, { per: e.target.value })} title="Pieces from one source rod" style={{ ...inp, width: '80px', textAlign: 'center' }} />
+                                            {rows.length > 1 && <button onClick={() => setCutModal(m => ({ ...m, rows: m.rows.filter((_, j) => j !== i) }))} style={{ ...inp, cursor: 'pointer', background: '#fff' }}>×</button>}
+                                        </div>
+                                        {String(r.code || '').trim() && (
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '4px', color: t.rec?.internalId ? '#3a7d44' : '#d9534f' }}>
+                                                {!t.rec ? `✗ ${String(r.code).toUpperCase()} is not in the synced library — create & sync it first.`
+                                                    : t.rec.internalId ? `✓ ${t.rec.code} · ${t.rec.productType || '—'} · NetSuite ${t.rec.internalId}`
+                                                    : `✗ ${t.rec.code} has no NetSuite id.`}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '18px' }}>
+                                <button onClick={() => setCutModal(m => ({ ...m, rows: [...m.rows, { code: '', per: '1' }], optionKey: 'CUSTOM' }))} style={{ ...inp, cursor: 'pointer', background: '#fff', fontSize: '11px' }}>+ another length</button>
+                                <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>scrap ft / rod</label>
+                                <input type="number" min="0" value={cutModal.scrapFt} onChange={e => setCutModal(m => ({ ...m, scrapFt: e.target.value }))} style={{ ...inp, width: '70px', textAlign: 'center' }} />
                             </div>
 
                             <div style={{ border: '1px solid var(--line)', background: 'var(--paper)', padding: '16px', marginBottom: '20px' }}>
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--ink)', fontWeight: 600 }}>{qn || '—'} × {cutModal.itemid} → {qn ? yieldQty : '—'} × {targetCode}{scrapFt ? <span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}> + {scrapFt} ft scrap</span> : null}</div>
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '6px', color: targetInternalId ? '#3a7d44' : '#d9534f' }}>
-                                    {!validPattern ? '✗ Couldn\'t derive a cut-down code from this item number (no 810/815 block).'
-                                        : targetInternalId ? `✓ Target ${targetCode} found (NetSuite id ${targetInternalId})`
-                                        : `✗ ${targetCode} isn't in NetSuite / the synced library — create & sync it first.`}
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--ink)', fontWeight: 600 }}>
+                                    {qn || '—'} × {srcRec.code} → {plan.lines.length ? plan.lines.map(l => `${l.qty} × ${l.itemId}`).join(' + ') : '—'}
+                                    {plan.scrapFt ? <span style={{ color: 'var(--ink-soft)', fontWeight: 400 }}> + {plan.scrapFt} ft scrap</span> : null}
                                 </div>
+                                {errs.length > 0 && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', marginTop: '8px', color: '#d9534f', lineHeight: 1.7 }}>{errs.map((e, i) => <div key={i}>✗ {e}</div>)}</div>}
                             </div>
 
                             <button onClick={issue} disabled={!ready} style={{ width: '100%', padding: '15px', background: ready ? 'var(--brass)' : 'var(--paper-2)', color: ready ? '#fff' : 'var(--ink-soft)', border: ready ? 'none' : '1px solid var(--line)', cursor: ready ? 'pointer' : 'not-allowed', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Issue Rod Cut Order → WMS</button>
