@@ -1011,6 +1011,93 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     };
     // ===== END OB PLATING =====
 
+    // ── A BIN IS A REAL PLACE, NOT WHATEVER WAS TYPED (Eric 2026-08-24) ────────────────────────
+    // "WO-JFP-HSMCB1-04-983046 failed to create inventory adjustment due to the item BIN number
+    //  being input wrong … Invalid binnumber reference key E3L- N5- R2 … is missing M and has
+    //  improper spaces. Bin should have been M E3L-N5-R2."
+    //
+    // The bin goes to NetSuite as a binNumber refName, so a typo takes the whole adjustment down
+    // and the app reads PUT AWAY while NetSuite received nothing. Checking BEFORE posting turns a
+    // failed transaction into a corrected keystroke.
+    //
+    // Note on what this deliberately does NOT do: the app has ensureBinExists, which CREATES a bin
+    // when it is missing. Using it here would have quietly created a bin literally called
+    // "E3L- N5- R2" in NetSuite. A mistyped bin must be rejected, never manufactured.
+    const [binIndex, setBinIndex] = useState({ loc: null, list: [], loaded: false });
+    const loadBinIndex = async () => {
+        const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location;
+        if (!loc || (binIndex.loaded && binIndex.loc === loc)) return binIndex.list;
+        try {
+            const r = await nsProxyFetch({
+                targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+                method: 'POST', payload: { q: `SELECT binnumber FROM bin WHERE location = ${loc}` },
+            });
+            const body = await r.json().catch(() => ({}));
+            const list = (body.items || []).map(x => String(x.binnumber || '').toUpperCase()).filter(Boolean);
+            setBinIndex({ loc, list, loaded: true });
+            return list;
+        } catch (e) {
+            // Unreachable NetSuite must not block a put-away — warn instead of inventing certainty.
+            console.warn('Bin list unavailable:', e);
+            setBinIndex({ loc, list: [], loaded: true });
+            return [];
+        }
+    };
+    // "E3L- N5- R2" and "m e3l-n5-r2" are the same keystrokes as "M E3L-N5-R2" once the scanner's
+    // stray spaces are taken out. Squeeze, don't guess: spaces AROUND hyphens go, the zone space stays.
+    const normalizeBin = (v) => String(v || '').toUpperCase().trim()
+        .replace(/\s*-\s*/g, '-')
+        .replace(/\s+/g, ' ');
+    // Closest known bins, so the message says what they probably meant.
+    const nearestBins = (want, list) => {
+        const w = normalizeBin(want).replace(/[^A-Z0-9]/g, '');
+        if (!w) return [];
+        return list
+            .map(b => ({ b, k: b.replace(/[^A-Z0-9]/g, '') }))
+            .filter(x => x.k.includes(w) || w.includes(x.k))
+            .map(x => x.b).slice(0, 6);
+    };
+
+    // ── REDO A PUT-AWAY THAT NETSUITE REFUSED (Eric 2026-08-24: "possible to move back to pack to
+    // correct?") ──────────────────────────────────────────────────────────────────────────────
+    // His adjustment failed on a mistyped bin, and the order was already Packed — so the pieces
+    // were physically away but NetSuite never received them, with no way back to fix it. This
+    // re-queues the SAME adjustment against a corrected bin, without re-opening the pack.
+    const redoPutaway = async (job) => {
+        if (!job) return;
+        if (job.jfpAdjPosted) return alert(`${packRef(job)} already posted its NetSuite adjustment${job.jfpAdjTran ? ` (${job.jfpAdjTran})` : ''}.\n\nNothing to redo — re-posting would double the stock.`);
+        const known = await loadBinIndex();
+        const entered = window.prompt(`↩ Re-post the put-away for ${packRef(job)}?\n\nThe last attempt used "${job.jfpAdjBin || job.putawayBin || '—'}" and NetSuite rejected it, so the pieces are physically away but NOT on the books.\n\nCorrect bin:`, job.putawayBin || '');
+        if (entered === null) return;
+        const bin = normalizeBin(entered);
+        if (!bin) return alert('A bin is needed.');
+        if (known.length && !known.includes(bin)) {
+            const near = nearestBins(bin, known);
+            return alert(`"${entered.trim()}" is not a bin at this location.\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}\n\nNothing was posted.`);
+        }
+        const qty = Number(job.jfpAdjQty) || Number(job.completedParts) || Number(job.totalParts) || 0;
+        if (!job.jfpItemId) return alert(`${packRef(job)} has no NetSuite item id recorded, so nothing can be adjusted automatically. Adjust ${job.jfpItemCode || 'the item'} into ${bin} by hand in NetSuite.`);
+        const nsCfg = BRAND_NETSUITE_MAP[activeBrand] || { subsidiary: '2', location: '17' };
+        try {
+            await enqueueNsWrite({
+                kind: 'inventoryadjustment',
+                label: `JFP RETRY +${qty} × ${job.jfpItemCode || ''} → ${bin} (${packRef(job)})`,
+                sourceApp: 'WMS', createdBy: operator?.name || '',
+                targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                method: 'POST',
+                payload: paintOnlyAdjustment({
+                    itemId: job.jfpItemId, qty, bin,
+                    subsidiary: nsCfg.subsidiary, location: nsCfg.location,
+                    ref: packRef(job), itemCode: job.jfpItemCode, by: operator?.name || '',
+                }),
+                writeBack: { collection: 'fin_workorders', docId: job.id, patch: { jfpAdjPosted: true }, idField: 'jfpAdjId', tranField: 'jfpAdjTran' },
+            });
+            await updateDoc(packDocOf(job), { putawayBin: bin, jfpAdjBin: bin, jfpAdjQueued: true, jfpAdjRetriedAt: Date.now(), jfpAdjRetriedBy: operator?.name || '' });
+            writeLog(`↩ JFP put-away re-posted for ${packRef(job)} → ${bin} (was "${job.jfpAdjBin || job.putawayBin || '—'}")`, 'wms');
+            alert(`↩ Re-queued: +${qty} × ${job.jfpItemCode} into ${bin}.\n\nWatch it land in HQ 11.1 → NetSuite Sync Queue.`);
+        } catch (e) { alert('Could not re-queue: ' + (e.message || e)); }
+    };
+
     const completePacking = async (job) => {
         if (packCompletingRef.current) return;
         if (job.packStatus === 'Packed') return alert('This order is already packed.');
@@ -1019,7 +1106,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
         const isStockPutaway = job.orderType === 'stock';
         if (!(job.packPhotos || []).length && !isStockPutaway) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
-        const bin = putawayBin.trim().toUpperCase();
+        const bin = normalizeBin(putawayBin);
         if (isStockPutaway) {
             if (!bin) return alert('Scan/enter the put-away bin — stocked goods go straight to the shelf.');
             // THAT IS THE ITEM LABEL, NOT A BIN (Stuart 2026-08-18). WO-JFP-HTFMRLG-04 was put away
@@ -1027,6 +1114,13 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // bin is posted to NetSuite as a binNumber refName, so a bin that does not exist takes
             // the whole inventory adjustment down with it: the app says PUT AWAY and NetSuite never
             // receives the pieces. A finish suffix is the tell — no bin here is named "CODE/FIN".
+            // IS IT A REAL BIN? (Eric 2026-08-24) Checked before posting, because NetSuite's answer
+            // to a bad bin is a failed adjustment nobody sees until the stock does not add up.
+            const known = await loadBinIndex();
+            if (known.length && !known.includes(bin)) {
+                const near = nearestBins(bin, known);
+                return alert(`"${putawayBin.trim()}" is not a bin at this location.${bin !== putawayBin.trim().toUpperCase() ? `\n\n(Read as "${bin}" after tidying the spacing.)` : ''}\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}\n\nNothing was posted — NetSuite rejects an unknown bin and the adjustment would have been lost.`);
+            }
             const itemCodes = [job.jfpItemCode, job.stockErpId, job.type].map(v => String(v || '').trim().toUpperCase()).filter(Boolean);
             if (itemCodes.includes(bin) || (bin.includes('/') && !/^[A-Z]{2,}-/.test(bin))) {
                 return alert(`"${bin}" looks like the ITEM code, not a bin.\n\nScan the BIN label (e.g. RTS-CUS, BB 2-2) — the bin is posted to NetSuite, and one that doesn't exist makes the whole inventory adjustment fail, leaving the pieces un-received there while this screen says they were put away.`);
@@ -3551,6 +3645,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 left the queue — the badge only ever rendered on the to-pack list
                                                 (Stuart 2026-08-18). */}
                                             {isPaintOnlyOrder(j) && <span title={`Paint run — the painted pieces are adjusted into the scanned bin as ${j.jfpItemCode || 'the item'}`} style={{ background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE}{j.jfpItemCode ? ` · ${j.jfpItemCode}` : ''}</span>}
+                                            {/* The adjustment was queued but never confirmed — the pieces are away and
+                                                NetSuite has not got them (Eric 2026-08-24). */}
+                                            {isPaintOnlyOrder(j) && j.jfpAdjQueued && !j.jfpAdjPosted && (
+                                                <button onClick={(e) => { e.stopPropagation(); redoPutaway(j); }} title="NetSuite has not confirmed this put-away — re-post it against a corrected bin."
+                                                    style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>↩ Re-post put-away</button>
+                                            )}
                                             <OrderStatusChips wo={j} showWho={false} />
                                             <span style={{ fontFamily: theme.mono, fontSize: '10px', color: j.nsIfTran ? '#3a7d44' : theme.inkSoft }}>
                                                 {j.nsIfTran ? `IF ${j.nsIfTran}${j.nsFulfillStatus ? ` · ${j.nsFulfillStatus}` : ''}` : (j.nsFulfillQueued ? 'IF queued…' : '')}
