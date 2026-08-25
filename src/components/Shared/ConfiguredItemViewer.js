@@ -104,6 +104,15 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
             position: (b.dist != null) ? `${b.dist}" from ${b.ref === 'END' ? 'end' : 'start'}` : '',
             note: b.note || ''
         }));
+    // A splice added by hand in the NEW engine has no Vision draft behind it, so its location
+    // exists ONLY as the breakdown row's customNote ("Default is CENTER — give the exact location
+    // only if different" — blank means center). Surface it beside the drill points; skip when a
+    // Vision draft already placed the splice (those arrive via hangerLocations/bracketNotes).
+    const spliceRe = /SPLICE|JOINER|JNR|SPLC/i;
+    const noteHangers = (hangers.some(h => spliceRe.test(h.anchor || '')) ? [] : breakdown
+        .filter(l => l.addedByHand && spliceRe.test(`${l.partId || ''} ${l.legacyErpId || ''} ${l.name || ''}`)))
+        .map((l, i) => ({ anchor: `Splice ${i + 1}`, position: '', note: l.customNote || 'Location: CENTER (default)' }));
+    const allHangers = [...hangers, ...noteHangers];
     const general = Array.isArray(item?.generalNotes) ? item.generalNotes : [];
     // HIDDEN / ACCESSORY items (bushings & co): flow steps carry them as includedParts — auto-added
     // to the BOM whenever the step is taken, never priced lines. Mirror the push's "taken" rule
@@ -252,17 +261,17 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
 
                             {/* Bracket locations + general notes — right after the model so the drill
                                 points aren't buried below the fold (brass border to stand out) */}
-                            {(hangers.length > 0 || general.length > 0) && (
+                            {(allHangers.length > 0 || general.length > 0) && (
                                 <div style={{ flex: '1 1 360px', minWidth: '300px', maxHeight: '440px', overflowY: 'auto', background: '#fff', border: '1px solid var(--brass)', borderRadius: '2px', padding: '14px 16px' }}>
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.07em', color: 'var(--ink)', display: 'block', marginBottom: '8px', borderBottom: '1px solid var(--line)', paddingBottom: '5px' }}>Bracket Locations &amp; Notes</span>
-                                    {hangers.map((h, i) => (
+                                    {allHangers.map((h, i) => (
                                         <div key={i} style={{ padding: '6px 0', borderBottom: '1px dashed var(--line)' }}>
                                             <div style={{ fontSize: '0.8rem', color: 'var(--ink)' }}><strong style={{ fontWeight: 500 }}>{h.anchor}</strong>{h.position ? <span style={{ color: 'var(--ink-soft)' }}> · {h.position}</span> : null}</div>
                                             {h.note && <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '2px' }}>“{h.note}”</div>}
                                         </div>
                                     ))}
                                     {general.length > 0 && (
-                                        <div style={{ marginTop: hangers.length ? '12px' : 0 }}>
+                                        <div style={{ marginTop: allHangers.length ? '12px' : 0 }}>
                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginBottom: '4px' }}>General Notes</div>
                                             {general.map((t, i) => <div key={i} style={{ fontSize: '0.8rem', color: 'var(--ink)', padding: '4px 0', borderBottom: '1px dashed var(--line)' }}>• {t}</div>)}
                                         </div>
@@ -291,6 +300,7 @@ const ConfiguredItemViewer = ({ quoteId, onClose, initialLine = 0 }) => {
                                                 {code && <div style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', fontWeight: 700, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{code}</div>}
                                                 <div style={{ color: code ? 'var(--ink-soft)' : 'var(--ink)', fontSize: '0.78rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</div>
                                                 {(l.partHandling || l.cutLength) && <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)', marginTop: '2px' }}>{l.partHandling ? `→ ${l.partHandling}` : ''}{l.cutLength ? ` · cut ${l.cutLength}"` : ''}</div>}
+                                                {l.customNote && <div style={{ fontSize: '0.74rem', color: 'var(--ink-soft)', fontStyle: 'italic', marginTop: '2px' }}>“{l.customNote}”</div>}
                                             </div>
                                             {(() => { const t = qtyText(perUnitQty(l, mult), mult); return (
                                                 <div style={{ fontSize: '0.78rem', whiteSpace: 'nowrap', textAlign: 'right' }}>

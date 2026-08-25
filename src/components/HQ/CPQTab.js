@@ -20,11 +20,12 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
 import { StudioRig, ensureFinishPbr, pbrForTexture } from '../Shared/studioScene';
 import { SIZE_STEP_TYPE, makeSizeSwap, sizeSelectionsOf, returnsAllowedFor, isReturnOption, speciesVariantOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, projAllowedAtDia, renderScaleOf, optionProjAllowed, taggedProjInchesAtDia, projOptionInches } from '../Shared/sizeMatrix';
-import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf } from '../Shared/priceLevels';
+import { PRICE_LEVELS, priceLevelShort, fabricutPriceOf, fabricutCodeOf, customerPriceLevel } from '../Shared/priceLevels';
+import { priceChoice } from '../Shared/hardwarePricing';
 import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal } from '../Shared/feeRules';
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
-import { customerKeys, clientPriceFor, findClientPriceRow } from '../Shared/clientPricing';
+import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
 
 const globalTextureCache = {};
 
@@ -861,8 +862,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // resolver the pricing engine uses (their clientPricing row, else our base price), so the picker
   // and the quote can never disagree. Fees a flow already bills are still billed by the flow; this
   // is for the ones nobody wants to model as a step.
-  const addOnCustKeys = useMemo(
-      () => customerKeys(jobData.customerId, combinedCustomers.find(c => c.id === jobData.customerId)),
+  const addOnCustomer = useMemo(
+      () => combinedCustomers.find(c => c.id === jobData.customerId) || null,
       [jobData.customerId, combinedCustomers]);
   // The checkout list is CURATED in 4.6 → Checkout Items (Stuart 2026-07-31: "we need better
   // control of what appears here … french return is a fee but it is decided in the cpq itself").
@@ -888,7 +889,20 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return set;
   }, [activeBomPins, libraryParts]);
   const addOnCatalog = useMemo(() => {
-      const priceFor = (p) => clientPriceFor(p.clientPricing, addOnCustKeys) ?? (parseFloat(p.manufacturingSpecs?.basePrice) || 0);
+      // ⚠ THE ONE CHAIN (tie-in phase). This picker used to price its own way — the customer's row,
+      // else base — which skipped the Fabricut tier entirely: a FAB_COST customer's checkout add-ons
+      // quoted at base price beside configured lines priced off their tier. It now asks the SAME
+      // resolver every other surface asks (hardwarePricing.priceChoice: chosen level / client row
+      // precedence, tier inheritance via findByCode, /P //EP identity), with the level resolved the
+      // way the configurator resolves it (customerPriceLevel — chosen wins, else the CRM default).
+      const lvl = customerPriceLevel(addOnCustomer, priceLevel);
+      const findByCode = (c) => {
+          const k = String(c || '').trim().toUpperCase();
+          if (!k) return null;
+          return (libraryParts || []).find(p => [p.id, p.itemId, p.legacyErpId].some(x => String(x || '').trim().toUpperCase() === k)) || null;
+      };
+      const ctx = { customerId: jobData.customerId, customer: addOnCustomer, priceLevel: lvl.level, levelIsDefault: lvl.isDefault, outsourceCodes: outsourceFinishes, findByCode };
+      const priceFor = (p) => priceChoice({ partId: p.id }, p, ctx).price || 0;
       const inScope = (p) => {
           const cols = p?.manufacturingSpecs?.collections || [];
           if (!cols.length || !flowCollections.size) return true;
@@ -905,7 +919,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(scopedParts, { priceFor });
       const seen = new Set(checkout.map(e => e.id));
       return [...checkout, ...fees.filter(e => !seen.has(e.id))];
-  }, [libraryParts, addOnCustKeys, flowCollections]);
+  }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections]);
 
   // TRADE DISCOUNT (customer's CRM discountCode, e.g. D20 = less 20%). Applies per cart item,
   // AFTER the full pricing chain, display-side only: STANDARD-level items only (Fabricut levels
@@ -3899,15 +3913,19 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const allParts = [...libraryParts, ...liveAssemblies];
       const byCode = (c) => allParts.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase()) || null;
       const custRec = combinedCustomers.find(c => c.id === jobData.customerId);
-      const keys = customerKeys(jobData.customerId, custRec);
+      // THE ONE CHAIN, here too: the new engine prices these same components through priceChoice
+      // (HardwareConfigurator.trvPriceOf); the old engine's modal answered clientRow→base, so the
+      // same carrier priced differently depending on which engine opened the modal.
+      const lvl = customerPriceLevel(custRec, priceLevel);
+      const trvCtx = { customerId: jobData.customerId, customer: custRec, priceLevel: lvl.level, levelIsDefault: lvl.isDefault, outsourceCodes: outsourceFinishes, findByCode: byCode };
       return {
           rules: trvRules,
           drive: trvSelection.drive || 'MANUAL',
           feet: Math.max(parseInt(lenStep ? stepQuantities[lenStep.id] : 4) || 4, 4),
           trackCount: trvSelection.setup === 'DOUBLE' && !ringChosen ? 2 : 1,
           kitLabel: activeFlow.name || 'traverse system',
-          itemInfo: (id) => { const it = byCode(id); const r = it && findClientPriceRow(it.clientPricing, keys); return it ? { name: it.itemName || id, sku: r?.clientSku || '' } : null; },
-          priceOf: (id) => { const it = byCode(id); if (!it) return 0; const v = clientPriceFor(it.clientPricing, keys); return v != null ? v : (parseFloat(it.manufacturingSpecs?.basePrice) || 0); },
+          itemInfo: (id) => { const it = byCode(id); if (!it) return null; const p = priceChoice({ partId: id }, it, trvCtx); return { name: it.itemName || id, sku: p.sku || p.aliasCode || '' }; },
+          priceOf: (id) => { const it = byCode(id); return it ? (priceChoice({ partId: id }, it, trvCtx).price || 0) : 0; },
       };
   })();
 

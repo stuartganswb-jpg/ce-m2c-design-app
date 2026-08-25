@@ -402,7 +402,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         return kw.some(k => hay.includes(k));
     });
     const cutItems = useMemo(() => feeItems(['CUT']), [allItems]);            // eslint-disable-line react-hooks/exhaustive-deps
-    const spliceItems = useMemo(() => feeItems(['SPLICE']), [allItems]);      // eslint-disable-line react-hooks/exhaustive-deps
+    const spliceItems = useMemo(() => feeItems(['SPLICE', 'JOINER', 'JNR', 'SPLC']), [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
     const rushItems = useMemo(() => feeItems(['RUSH', 'EXPEDITE']), [allItems]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ---- "WHY ISN'T THIS ITEM SHOWING?" -------------------------------------------------------
