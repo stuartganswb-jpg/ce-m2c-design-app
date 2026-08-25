@@ -35,7 +35,7 @@ const FS_LABEL_ROOM = 14;
 // does not shrink with the page scale, so on any reduced sheet neighbouring ids collide whatever
 // the geometric spread is. Alternate ids drop one line further (their leaders already bridge the
 // gap), which is his own fix, re-applied now that each id is centred under its own ring.
-const RING_LABEL_DROP = 26;
+const RING_LABEL_DROP = 34;
 // Three levels, not two (Stuart 2026-08-23b: "please stagger further as the text is
 // overlapping") — with two, alternate ids sat one thin line apart and long codes still touched.
 // On three levels a code's same-level neighbour is three ring pitches away.
@@ -311,7 +311,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // bends not the node name"). A pin's partName is sometimes the node it was built from — an
     // artefact of the .fbx that means nothing to anyone reading a sheet. The Legacy ERP ID field
     // is the item number, so it leads wherever it is filled; partName remains the fallback.
-    const named = (p) => ({ ...p, partName: p.legacyErpId || p.partName || choice.name || choice.partId });
+    const named = (p) => ({ ...p, partName: p.legacyErpId || p.feeItemNo || p.partName || choice.name || choice.partId });
     // ⚠ THE ROD IS THE ONE EXCEPTION. The sheet draws one hand, and a three-piece pole is pinned
     // per side — so whichever SEGMENT the engine happened to name must not decide which way the
     // rod runs on the page (Stuart: "for some reason these brackets the pole went off to the left
@@ -816,6 +816,28 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     // ⚠ A VIEW IS THREE VECTORS. renderHiddenLine reads view.viewDir for edge collection and the
     // depth raster; the camera direction is derived so the basis keeps makeViews' handedness
     // invariant (cross(right, up) = −viewDir), whatever the mirror decision did to `right`.
+    // ── THE BEND IS ONE PIECE OF POLE (Stuart 2026-08-24) ───────────────────────────────────
+    // "the fusion file shows a line between the returns and the pole, is there a way you can
+    //  suppress this as it is actually very misleading as we are bending or miter cutting the
+    //  pole to make these and they are not a separate part." The bend node and the rod segment
+    // are separate MESHES that butt exactly, so each draws its end-cap edge at the joint — a
+    // hairline across the pole that reads as a joint that does not exist on the real part. The
+    // seam is found where a bracket bbox edge meets a rod bbox edge in the view, and
+    // near-vertical segments at that station are dropped. The miter's own diagonal cut lines are
+    // nowhere near it and stay.
+    const scrubSeams = (view, basis) => {
+      if (!opts.isReturn || !view) return view;
+      const bB = viewBbox(bracket, basis), rB = viewBbox(poleDrawn, basis);
+      const seams = [];
+      for (const be of [bB.minU, bB.maxU]) {
+        for (const re of [rB.minU, rB.maxU]) {
+          if (isFinite(be) && isFinite(re) && Math.abs(be - re) < 0.006) seams.push((be + re) / 2);
+        }
+      }
+      if (!seams.length) return view;
+      const near = (u) => seams.some(s => Math.abs(u - s) < 0.004);
+      return { ...view, vis: view.vis.filter(([u0, , u1]) => !(near(u0) && near(u1))) };
+    };
     const topView = (() => {
       if (!opts.isReturn) return null;
       const away = [0, 0, 0];
@@ -909,12 +931,12 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const rowRings = parkRings(bracketHalfAlong);
       const ringMeshes = rowRings.flatMap(r => r.meshes);
       const meshes = [...bracket, ...poleDrawn, ...ringMeshes];
-      const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes));
+      const front0 = scrubSeams(mergeViews(withCarrier(renderHiddenLine([...bracket, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes)), views.front);
       // ⚠ NO RINGS IN THE PROFILE. Every ring is parked at its own station ALONG the rod, and the
       // profile looks down that axis — so they all land on the same spot and draw on top of each
       // other (Stuart 2026-08-23: "rendering over laps"). The reference's profile column is the
       // arm's section; each ring's own end view is on the bottom strip.
-      const profile = withSection(renderHiddenLine([...bracket, ...poleDrawn], topView || views.profile, 900), topView || views.profile);
+      const profile = scrubSeams(withSection(renderHiddenLine([...bracket, ...poleDrawn], topView || views.profile, 900), topView || views.profile), topView || views.profile);
       const bracketF = viewBbox(bracket, views.front);
       const ringBoxes = rowRings.map(r => viewBbox(r.meshes, views.front));
       const { view: front, hi: frontHi, poleFull: poleF } = clipFront(front0, [bracketF, ...ringBoxes], bracketF, Math.max(...ringBoxes.map(b => b.maxU), -Infinity));
@@ -1110,9 +1132,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const rowRings = parkRings(Math.max(plateHalfAlong, bracketHalfAlong));
       const ringMeshes = rowRings.flatMap(r => r.meshes);
       const meshes = [...bracket, ...plateAll, ...poleDrawn, ...ringMeshes];
-      const front0 = mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes));
+      const front0 = scrubSeams(mergeViews(withCarrier(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], views.front, 1600)), ringOverlay(ringMeshes)), views.front);
       // Rings excluded — see the note on the basic row: they stack in this view.
-      const profile = withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900), topView || views.profile);
+      const profile = scrubSeams(withSection(renderHiddenLine([...bracket, ...plateAll, ...poleDrawn], topView || views.profile, 900), topView || views.profile), topView || views.profile);
       const detail = wallPlate.length ? renderHiddenLine(wallPlate, views.front, 300) : null;
       // measures in view space
       const coverF = viewBbox(cover.length ? cover : plateAll, views.front);
@@ -1141,7 +1163,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
       // plate width BELOW the plate — above it the rod crosses the dim on short plates
       if (isRound) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.maxV - (coverF.maxV - coverF.minV) * 0.15, dir: -1, in: plateWIn });
-      else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateAnchorV, off: 16, in: plateWIn });
+      else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateAnchorV, off: 26, in: plateWIn });
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
       // ── THE CARRIER'S DROP (Stuart 2026-08-23b) ─────────────────────────────────────────
       // "the drop measurement shown for traverse should show the line from the bottom of the rod
@@ -1253,7 +1275,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       // uniformed some say 3 and others say ⌀3") — a round plate's height happens to be its
       // diameter, but the column reads as one measurement, so it is written as one.
       // (Not on the overhead return view — plate height is invisible looking straight down.)
-      if (!topView) dims.profile.push({
+      if (!topView && !opts.isCeiling) dims.profile.push({
         t: 'v',
         u: plateRight ? coverP.maxU : coverP.minU,
         v0: coverP.maxV, v1: coverP.minV,
