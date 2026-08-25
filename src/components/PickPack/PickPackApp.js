@@ -19,6 +19,7 @@ import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
 import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i18n';
 import { holdOrder, releaseHold } from '../Shared/orderHold';
+import { poleLengthOf, isPoleCategory } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
@@ -1286,6 +1287,50 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [packDiag, setPackDiag] = useState(null);       // what NetSuite says the BOM actually sources
     const [diagNames, setDiagNames] = useState({}); // NetSuite id -> { code, name } for unmapped components (BOTH diagnostics)
     const [cartDiag, setCartDiag] = useState(null);  // { lineId, res } — the same BOM check, for one conversion-cart line
+    // ── ISSUE A CUT FROM THE BENCH (Eric 2026-08-21: "would be good and simple to have this
+    // ability live … in the Rod Cut section of WMS. Perhaps an admin area to issue them there,
+    // already has the live stock pull there too.") ──────────────────────────────────────────────
+    // Until now a cut could only be raised from HQ's Stocked Sales Snapshot, which is the wrong
+    // room: the person who knows a rack is running short is standing at the rack. The live stock
+    // pull is already on this tab, which is exactly Eric's point.
+    const [issueCut, setIssueCut] = useState({ code: '', qty: '', target: '4FT', open: false });
+    const issueRodCut = async () => {
+        const src = String(issueCut.code || '').trim().toUpperCase();
+        const qn = parseInt(issueCut.qty) || 0;
+        if (!src) return alert('Which 8 ft rod is being cut?');
+        if (qn <= 0) return alert('How many 8 ft rods?');
+        const srcPart = hqParts.find(p => erpOf(p) === src);
+        if (!srcPart) return alert(`"${src}" is not in the Master Library.`);
+        if (!isPoleCategory(srcPart.manufacturingSpecs?.productType || srcPart.productType)) {
+            return alert(`${src} is not categorised as a POLE or ROD.\n\nOnly poles are cut — a bracket that happens to carry "8" in its code is still a bracket.`);
+        }
+        if (poleLengthOf(src) !== 8) return alert(`${src} does not read as an 8 ft rod, so there is nothing to cut it down from.`);
+        const is4 = issueCut.target === '4FT';
+        const tgt = src.replace(/([468])(10|15|35)/, is4 ? '4$2' : '6$2');
+        if (tgt === src) return alert(`Could not work out the ${is4 ? '4' : '6'} ft code for ${src}.`);
+        const tgtPart = hqParts.find(p => erpOf(p) === tgt);
+        if (!srcPart.netSuiteInternalId || !tgtPart?.netSuiteInternalId) {
+            return alert(`No NetSuite id for ${!srcPart.netSuiteInternalId ? src : tgt}.\n\nA cut moves real stock, so it is never raised against a guessed id — sync that item first (HQ 11.1).`);
+        }
+        const yieldQty = is4 ? qn * 2 : qn;
+        const scrapFt = is4 ? 0 : qn * 2;
+        if (!window.confirm(`✂ Issue a cut?\n\n${qn} × ${src} (8 ft)  →  ${yieldQty} × ${tgt}${scrapFt ? `  (+${scrapFt} ft scrap)` : ''}\n\nIt joins "Cuts for Sales Orders" below. NetSuite stock moves when the operator scans the bins and confirms the cut.`)) return;
+        try {
+            const id = `RC-WMS-${Date.now()}`;
+            await setDoc(doc(db, 'rod_cut_orders', id), {
+                id, brand: activeBrand, status: 'OPEN',
+                sourceItemId: src, sourceInternalId: String(srcPart.netSuiteInternalId),
+                targetItemId: tgt, targetInternalId: String(tgtPart.netSuiteInternalId),
+                qtySource: qn, qtyTarget: yieldQty, cutTo: issueCut.target, scrapFt,
+                sourceBin: null, destBin: null, nsAdjustmentId: null,
+                purpose: 'STOCK', createdVia: 'WMS_BENCH',
+                createdAt: Date.now(), createdBy: operator?.name || '', completedAt: null, completedBy: null,
+            });
+            writeLog(`✂ Issued rod cut ${id}: ${qn} × ${src} → ${yieldQty} × ${tgt}`, 'wms');
+            setIssueCut({ code: '', qty: '', target: '4FT', open: false });
+            alert(`✂ Cut issued: ${qn} × ${src} → ${yieldQty} × ${tgt}.\n\nIt is in "Cuts for Sales Orders" below.`);
+        } catch (e) { alert('Could not issue the cut: ' + (e.message || e)); }
+    };
     const [activeCut, setActiveCut] = useState(null);        // the rod_cut_orders doc being worked
     const [cutSrcScan, setCutSrcScan] = useState('');
     const [cutDestScan, setCutDestScan] = useState('');
@@ -2973,6 +3018,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const canSeeChipReport = ['admin', 'superadmin'].includes(safeUserRole) || (perms.chipReportRoles || []).includes(safeUserRole);
     // Admin-or-higher gate (normalize so SUPERADMIN / super_admin match) — used for restricted actions.
     const isPlatingAdmin = operator?.superAdmin === true || ['admin', 'superadmin'].includes(String(operator?.role || '').toLowerCase().replace(/[^a-z]/g, ''));
+    // ── WHO MAY ISSUE A ROD CUT (Stuart 2026-08-25: "make it manager level and up access on
+    // matrix") ────────────────────────────────────────────────────────────────────────────────
+    // Issuing a cut commits 8 ft stock to being sawn in half, so it is manager-and-up by default —
+    // but it reads the permissions matrix too, so the roles allowed to do it are a setting rather
+    // than a line of code someone has to come back and edit.
+    const ROD_CUT_ISSUE_CAP = 'ROD CUTS · ISSUE';
+    const canIssueRodCuts = operator?.superAdmin === true
+        || ['admin', 'superadmin', 'manager', 'executive'].includes(safeUserRole)
+        || (perms[safeUserRole] || []).includes(ROD_CUT_ISSUE_CAP);
 
     if (!operator) {
         return (
@@ -3663,6 +3717,14 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             {isPaintOnlyOrder(j) && <span title={`Paint run — the painted pieces are adjusted into the scanned bin as ${j.jfpItemCode || 'the item'}`} style={{ background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE}{j.jfpItemCode ? ` · ${j.jfpItemCode}` : ''}</span>}
                                             {/* The adjustment was queued but never confirmed — the pieces are away and
                                                 NetSuite has not got them (Eric 2026-08-24). */}
+                                            {/* LABELS AFTER THE FACT (Sandra 2026-08-12: "need to add item
+                                                print label for packed orders please"). The Item Labels button
+                                                only ever existed on the order currently OPEN at the bench, so
+                                                once a box was packed there was no way to reprint for it — which
+                                                is exactly when a label goes missing or tears. */}
+                                            <button onClick={(e) => { e.stopPropagation(); const ls = packLinesOf(j); if (!ls.length) return alert(`No packed lines recorded on ${packRef(j)}.`); printItemLabels(ls.map(l => ({ itemId: l.erp, itemName: l.name }))); writeLog(`🖨 Reprinted ${ls.length} item label(s) for ${packRef(j)}`, 'wms'); }}
+                                                title="Reprint one 2×4 item label per line on this packed order"
+                                                style={{ background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>🖨 {t('Item Labels')}</button>
                                             {isPaintOnlyOrder(j) && j.jfpAdjQueued && !j.jfpAdjPosted && (
                                                 <button onClick={(e) => { e.stopPropagation(); redoPutaway(j); }} title="NetSuite has not confirmed this put-away — re-post it against a corrected bin."
                                                     style={{ background: 'transparent', border: '1px solid #d9534f', color: '#d9534f', padding: '3px 9px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', cursor: 'pointer' }}>↩ Re-post put-away</button>
@@ -4536,6 +4598,48 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {isSyncing ? 'Syncing...' : 'Pull Live Stock'}
                                 </button>
                             </div>
+
+                            {/* ISSUE — manager and up. Eric asked for it here because the person who
+                                can see the rack is running short is standing at the rack. */}
+                            {canIssueRodCuts && (
+                                <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '16px 20px' }}>
+                                    <div onClick={() => setIssueCut(c => ({ ...c, open: !c.open }))} style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft }}>{issueCut.open ? '▾' : '▸'}</span>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 600, color: theme.ink }}>✂ Issue a rod cut</span>
+                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>cut 8 ft stock down without leaving the bench</span>
+                                    </div>
+                                    {issueCut.open && (
+                                        <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap', marginTop: '14px' }}>
+                                            <label style={{ display: 'block' }}>
+                                                <span style={{ display: 'block', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft, marginBottom: '5px' }}>8 ft rod</span>
+                                                <input list="wms-8ft-rods" value={issueCut.code} onChange={e => setIssueCut(c => ({ ...c, code: e.target.value }))} placeholder="e.g. HCUMP810"
+                                                    style={{ padding: '10px 12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '0.95rem', outline: 'none', width: '190px' }} />
+                                                <datalist id="wms-8ft-rods">
+                                                    {hqParts.filter(p => poleLengthOf(erpOf(p)) === 8 && isPoleCategory(p.manufacturingSpecs?.productType || p.productType))
+                                                        .slice(0, 300).map(p => <option key={p.id} value={erpOf(p)}>{p.itemName || ''}</option>)}
+                                                </datalist>
+                                            </label>
+                                            <label style={{ display: 'block' }}>
+                                                <span style={{ display: 'block', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: theme.inkSoft, marginBottom: '5px' }}>How many 8 ft rods</span>
+                                                <input type="number" min="1" value={issueCut.qty} onChange={e => setIssueCut(c => ({ ...c, qty: e.target.value }))}
+                                                    style={{ padding: '10px 12px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '0.95rem', outline: 'none', width: '120px' }} />
+                                            </label>
+                                            <div style={{ display: 'flex', gap: '6px' }}>
+                                                {['4FT', '6FT'].map(t => (
+                                                    <button key={t} onClick={() => setIssueCut(c => ({ ...c, target: t }))}
+                                                        style={{ padding: '10px 16px', background: issueCut.target === t ? theme.ink : '#fff', color: issueCut.target === t ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px' }}>{t}</button>
+                                                ))}
+                                            </div>
+                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, paddingBottom: '10px' }}>
+                                                {(parseInt(issueCut.qty) || 0) > 0
+                                                    ? `→ ${(parseInt(issueCut.qty) || 0) * (issueCut.target === '4FT' ? 2 : 1)} pieces${issueCut.target === '6FT' ? ` (+${(parseInt(issueCut.qty) || 0) * 2} ft scrap)` : ''}`
+                                                    : '4 ft = two per rod · 6 ft = one per rod + 2 ft scrap'}
+                                            </span>
+                                            <button onClick={issueRodCut} style={{ padding: '11px 20px', background: theme.ink, color: '#fff', border: 'none', cursor: 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>✂ Issue</button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             {/* CUTS FOR FINISHING — a work order is waiting on each of these. */}
                             {finishingCuts.length > 0 && (
