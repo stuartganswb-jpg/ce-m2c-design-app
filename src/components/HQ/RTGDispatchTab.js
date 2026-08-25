@@ -11,6 +11,7 @@ import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
 import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
+import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
@@ -1286,6 +1287,55 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // View / Config — so the pending work above it stays the thing you act on. Rows dispatched in
     // the last 7 days show by default; older ones sit behind the archive toggle at the foot of
     // the column, which is the weekly condense he asked for.
+    // ── RE-DERIVE THE PULL LINES FROM TODAY'S BOM (Stuart 2026-08-26) ─────────────────────────
+    // `partsList` is a PHOTOGRAPH taken when the work order was raised — it never re-reads the BOM.
+    // So an order raised before a BOM was corrected keeps the old components for life, which is why
+    // Sandra's WO11476 and WO11479 still ask for 21568 and 42551 long after the sync stopped
+    // producing them. Re-syncing cannot help: there is nothing stale to refresh, only an old copy.
+    //
+    // This re-explodes the assembly against the CURRENT pins and rewrites the lines. It refuses once
+    // picking has started, because replacing a list somebody is halfway through is how you lose
+    // count of what is already on the trolley.
+    const refreshBomLines = async (order, kind) => {
+        const code = woItemCodeOf(order);
+        if (!code) return alert(`${order.id} has no item code, so there is no assembly to explode.`);
+        let links;
+        try { links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, order, kind); }
+        catch (e) { return alert('Could not find the linked floor documents: ' + (e.message || e)); }
+        const finList = [...links.fin.entries()];
+        if (!finList.length) return alert(`No finishing job found for ${order.id} — nothing to rewrite yet. Re-derive it after it reaches the floor.`);
+        const started = finList.find(([, d]) => d.pickStatus && d.pickStatus !== 'Pending');
+        if (started) return alert(`Picking has already started on ${order.id} (${started[1].pickStatus}).\n\nThe pull list is not rewritten mid-pick — that is how you lose track of what is already on the trolley.\n\nSend it back to the pick queue in WMS first, then refresh.`);
+        try {
+            const partsSnap = await getDocs(collection(db, 'Approved_Designs'));
+            const inventory = partsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const part = inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === code);
+            if (!part) return alert(`"${code}" is not in the Master Library, so its BOM cannot be read.`);
+            if (!isAssemblyPart(part)) return alert(`${code} is not an assembly (${part.partClass || 'unclassified'}) — it has no BOM to explode. Its pull is the item itself.`);
+            const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
+            const pins = pinsSnap.docs.map(d => d.data());
+            if (!pins.length) return alert(`${code} has no BOM lines in the app. Sync it from HQ 11.1 first — rewriting to an empty list would leave the floor nothing to pick.`);
+            const qty = Number(order.totalParts || order.qty || finList[0][1].totalParts || 1);
+            const plan = planFinishedRun({ part, qty, pins, inventory });
+            if (!plan.lines.length) return alert(`Exploding ${code} produced no pull lines — nothing was changed.`);
+            const before = (finList[0][1].partsList || []).map(l => `${l.quantity}×${l.legacyErpId || l.partId}`);
+            const after = plan.lines.map(l => `${l.quantity}×${l.legacyErpId}`);
+            if (!window.confirm(`Re-derive the pull lines for ${code} (×${qty})?\n\nWAS:\n   ${before.length ? before.join('\n   ') : '(none)'}\n\nNOW:\n   ${after.join('\n   ')}\n\nThis rewrites what the warehouse is asked to pick. Picking has not started, so nothing in progress is disturbed.`)) return;
+            for (const [id] of finList) {
+                await updateDoc(doc(db, 'fin_workorders', id), { partsList: plan.lines, bomExploded: true, bomRefreshedAt: Date.now(), bomRefreshedBy: currentUser || '' });
+            }
+            // A parked order has not been released yet — its payload is what RTG will copy verbatim,
+            // so it has to be corrected too or the refresh is undone at dispatch.
+            if (order.finPayload && order.finPayload.id) {
+                await updateDoc(doc(db, kind === 'sales' ? 'hq_sales_orders' : 'hq_work_orders', order.id),
+                    { 'finPayload.partsList': plan.lines, 'finPayload.bomExploded': true }).catch(() => {});
+            }
+            addLog(`↻ ${code}: pull lines re-derived from today's BOM — ${before.length} line(s) → ${after.length} (${after.join(', ')}).`, 'success');
+            alert(`↻ ${code} now pulls:\n\n   ${after.join('\n   ')}\n\nThe warehouse sees this the moment it refreshes.`);
+            loadRTGOrders();
+        } catch (e) { alert('Could not re-derive: ' + (e.message || e)); }
+    };
+
     // ── CLOSE THE BALANCE (Eric 2026-08-18; decisions Stuart 2026-08-19) ────────────────────────
     // "Scrap items are not allowed and must be pushed back to finishing or setup as required."
     // His four scenarios are one mechanism: how many are GOOD, how many BAD physically exist, and
@@ -1526,6 +1576,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 <button title="Built fewer than ordered? Record what was good, say what happened to the rest, close the balance and re-issue the shortfall."
                     style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}
                     onClick={() => setBalanceModal({ order: o, kind, ordered: Number(o.totalParts || o.qty || 0), good: '', bad: '', salvage: true })}>⚖ Close Short</button>
+            )}
+            {kind !== 'sales' && (
+                <button title="Re-explode this assembly against today's BOM and rewrite the pull lines — for an order raised before a BOM was corrected. Refused once picking has started."
+                    style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => refreshBomLines(o, kind)}>↻ BOM</button>
             )}
             <button title="Close this order EVERYWHERE — RTG, finishing floor, shop floor, and the NetSuite work order if one exists. Docs kept for history."
                 style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }} onClick={() => closeOrderEverywhere(o, kind)}>✕ Close</button>
@@ -1837,6 +1891,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                     </div>
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(wo, 'stock')}>View</button>
+                                        <button style={{ ...btnStyle, flex: 1 }} title="Re-explode this assembly against today's BOM and rewrite the warehouse pull lines. Refused once picking has started." onClick={() => refreshBomLines(wo, 'stock')}>↻ BOM</button>
                                         <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>
                                             {wo.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
                                         </button>
