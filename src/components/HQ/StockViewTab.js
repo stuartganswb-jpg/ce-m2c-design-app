@@ -623,6 +623,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     // variantErpId/rootItem were already here; `type` said "Stock Build", which is
                     // what every screen ended up showing instead of the pattern number.
                     type: String(erpId || "Stock Build"),
+                    // NO PUSH-TO-SHOP ON A FINISHING JOB (Eric 2026-08-25: "there is also an
+                    // erroneous Push to Shop button"). RTG offers that button whenever routeTo is
+                    // not FINISHING, and this path never set it — so a finished item advertised a
+                    // route into the milling queue, which it has no business taking. An item with a
+                    // finish suffix is finishing work; a RAW one can still legitimately go to shop,
+                    // so the flag is set from the code rather than assumed.
+                    ...(finishCodeFromErp(erpId) ? { routeTo: 'FINISHING' } : {}),
                     itemName: part.itemName || '',
                     ...(part.netSuiteInternalId ? { stockInternalId: String(part.netSuiteInternalId) } : {}),
                     // The finish the floor batches on. Omitted here until 2026-08-17, which left

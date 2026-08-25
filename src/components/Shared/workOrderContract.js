@@ -97,7 +97,11 @@ const looksLikeItemCode = (v) => {
 };
 export const woItemCodeOf = (wo) => {
     if (!wo) return '';
-    const candidates = [wo.jfpItemCode, wo.stockErpId, wo.variantErpId, wo.partErpId, wo.rootItem, wo.type];
+    // `erpId` added 2026-08-25 (Eric: "orders from Stocked Sales do not show the item information
+    // previously requested/implemented"). The Sales Snapshot writes the code as `erpId` and puts
+    // the literal string "Stock" in `type` — so the resolver found nothing and the card went blank
+    // on exactly the orders it was built for. Seventh field, same order was created seven ways.
+    const candidates = [wo.jfpItemCode, wo.stockErpId, wo.variantErpId, wo.partErpId, wo.rootItem, wo.erpId, wo.type];
     for (const c of candidates) if (looksLikeItemCode(c)) return String(c).trim().toUpperCase();
     return '';
 };
