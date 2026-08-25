@@ -185,10 +185,13 @@ function HardwareConfiguratorInner({
     //  which is where we actually draw the splice location."
     // The splice among this flow's add-by-hand items is found the way tab 7 finds its splice
     // slot — by what the ITEM says it is (splice/joiner in its name, product type or fee type).
-    // The threshold is the flow's `spliceOverInches` (tab 11), defaulting to 96": rod stock is
-    // eight feet, so anything longer cannot ship in one piece. Over the threshold the splice is
-    // added automatically at the default — CENTER of the run — and the note carries the exact
-    // location only when it differs, which is precisely what Vision reads to draw it.
+    // ⚠ AVAILABLE AT ANY LENGTH, MANDATORY OVER THE LIMIT (Stuart 2026-08-24: "a lot of times
+    // customers order one before it is needed to save on shipping or for convenience. so it
+    // needs to be mandatory over 120\" but can be available at any length"). The extras list
+    // offers the splice at every length; over the flow's `spliceOverInches` (tab 11, blank =
+    // 120") it is REQUIRED — added automatically at the default, CENTER of the run, and re-added
+    // if removed, because a pole that long does not ship in one piece. The note carries the
+    // exact location only when it differs, which is precisely what Vision reads to draw it.
     const spliceCode = useMemo(() => {
         for (const it of (extraItems || [])) {
             const part = findPart(it.code);
@@ -197,15 +200,12 @@ function HardwareConfiguratorInner({
         }
         return null;
     }, [extraItems, findPart]);
-    const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 96;
+    const spliceOverIn = Number(flow?.spliceOverInches) > 0 ? Number(flow.spliceOverInches) : 120;
     const spliceNeeded = !!spliceCode && !!lengthInches && lengthInches > spliceOverIn;
-    const spliceAutoRef = useRef(false);
     useEffect(() => {
-        if (!spliceNeeded) { spliceAutoRef.current = false; return; }
-        if (spliceAutoRef.current) return;   // added once; an operator's removal is respected
-        setExtras(a => (a.some(x => x.code === spliceCode) ? a : [...a, { code: spliceCode, qty: '1', note: '' }]));
-        spliceAutoRef.current = true;
-    }, [spliceNeeded, spliceCode]);
+        if (!spliceNeeded) return;
+        setExtras(a => (a.some(x => x.code === spliceCode && Number(x.qty) > 0) ? a : [...a.filter(x => x.code !== spliceCode), { code: spliceCode, qty: '1', note: '' }]));
+    }, [spliceNeeded, spliceCode, extras]);
     // OUR PART NUMBER IS `legacyErpId` (Stuart 2026-08-17: "should be the field labelled legacy erp
     // id"). H1-138BE is the number the shop, the catalogue and the customer all use; CE-INV-61954 is
     // the app's own record id and means nothing off this screen. A pin can be tagged with either, so

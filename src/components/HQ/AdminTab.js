@@ -2636,12 +2636,12 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-faint)' }}>offered on the pole step — splices, extra rings</span>
                                                         {/* Splice necessity (Stuart 2026-08-24): over this length the pole cannot ship in
                                                             one piece, so the length step adds the splice itself, defaulted to CENTER.
-                                                            Blank = 96" (eight-foot rod stock). The splice among the items below is found
+                                                            Blank = 120" — the one-piece shipping limit. Splices stay orderable at ANY length (customers buy ahead to save shipping); over the limit the length step REQUIRES one. The splice among the items below is found
                                                             by what the item says it is (splice / joiner). */}
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-soft)', marginLeft: 'auto' }}>splice needed over</span>
-                                                        <input value={af.spliceOverInches ?? ''} placeholder="96" inputMode="numeric"
+                                                        <input value={af.spliceOverInches ?? ''} placeholder="120" inputMode="numeric"
                                                             onChange={e => save({ spliceOverInches: e.target.value === '' ? null : Number(e.target.value) || null })}
-                                                            title={'Finished length (inches) above which a splice is REQUIRED — the CPQ length step auto-adds this flow’s splice item at the CENTER default. Blank = 96" (8-ft rod stock).'}
+                                                            title={'Finished length (inches) above which a splice is REQUIRED — the CPQ length step REQUIRES this flow’s splice item (auto-added at the CENTER default, re-added if removed). Below it the splice stays optional. Blank = 120".'}
                                                             style={{ width: '52px', padding: '5px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center' }} />
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-soft)' }}>in</span>
                                                     </div>
