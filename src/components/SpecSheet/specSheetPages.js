@@ -257,7 +257,7 @@ export function specPages({ choices, answers = {} }) {
             // the leaf does not narrow. The configurator pairs the rear rod to the CHOSEN bracket
             // by its cut; backRodForArm applies that same rule here.
             const rods = U(leaf.setup) === 'DOUBLE'
-                ? [rod, backRodForArm(offered, subject, rod)].filter(Boolean)
+                ? [rod, backRodForArm(offered, subject, rod, { forReturn: kind === 'RETURN' })].filter(Boolean)
                 : (rod ? [rod] : []);
             const { plates: plates0, rings: rings0, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
             // ── A RETURN DRAWS THE RETURN PLATES (Stuart 2026-08-23b) ────────────────────────

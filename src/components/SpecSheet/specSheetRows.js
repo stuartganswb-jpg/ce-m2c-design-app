@@ -147,12 +147,23 @@ export function rodForArm(model, arm) {
  * projTiers match the chosen bracket's (hardwareModel's cutKey dedupe, and visibleNodes' sameCut).
  * Same rule here: tier BACK, cut for THIS arm, same rod family as the front where possible.
  */
-export function backRodForArm(model, arm, front) {
+export function backRodForArm(model, arm, front, { forReturn = false } = {}) {
     const rods = (model?.choices || []).filter(c => ROD_ROLES.includes(c.role) && !c.parked
         && c !== front && U(c.tier) !== U(front?.tier || ''));
     if (!rods.length) return null;
     const narrow = (pool, pred) => { const n = pool.filter(pred); return n.length ? n : pool; };
     let pool = narrow(rods, c => U(c.tier) === 'BACK');   // a tiered pin beats an untagged one
+    // ── THE RETURN'S REAR POLE IS ITS OWN PART (Stuart 2026-08-24) ──────────────────────────
+    // "this pole is slightly shorter so that it does not protrude the edges of the return …
+    //  add a tag to the pole line that it is rtn only — then this pole will have been tagged
+    //  double, back, rtn only and easy for the cpq and spec sheet generator to locate."
+    // A RETURN page prefers the rtn-only rear pole; every other page refuses it (falling back
+    // only if nothing else exists, because a drawn rod beats a blank page).
+    if (forReturn) pool = narrow(pool, c => c.returnOnly);
+    else {
+        const plain = pool.filter(c => !c.returnOnly);
+        if (plain.length) pool = plain;
+    }
     if (arm?.projTiers) {
         const cut = JSON.stringify(arm.projTiers);
         pool = narrow(pool, c => JSON.stringify(c.projTiers || null) === cut);

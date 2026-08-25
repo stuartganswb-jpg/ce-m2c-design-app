@@ -299,6 +299,11 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
         // the trap: an untiered acrylic back rod ("serves both"), pinned setup DOUBLE like prod's P0
         { id: 'P-RBA', partId: 'CE-INV-62618', name: 'H1-138AR', role: 'ROD', rodKind: 'SOLID', position: 'SHARED', setup: 'DOUBLE', noFinish: true, materials: 'CLEAR', nodes: ['rod-back-acr'] },
         { id: 'P-RB85W', partId: 'CE-INV-62611', name: 'H1-138WR', role: 'ROD', rodKind: 'SOLID', position: 'SHARED', tier: 'BACK', setup: 'DOUBLE', proj: 'FRONT:8.5, BACK:3.25', materials: 'WOOD', nodes: ['rod-back-wood'] },
+        // the special SHORT rear pole cut for the double returns — tagged double + back + rtn-only
+        // (Stuart 2026-08-24: "this pole is slightly shorter so that it does not protrude the
+        // edges of the return"). A return page must take THIS one; every other page must not.
+        { id: 'P-RB85RTN', partId: 'CE-INV-61954', name: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'SHARED', tier: 'BACK', setup: 'DOUBLE', returnOnly: true, proj: 'FRONT:8.5, BACK:3.25', nodes: ['rod-back-rtn'] },
+        { id: 'P-RTNDBL', partId: 'CE-FEE-77', name: 'H1-DBLFR', role: 'RETURN', position: 'LEFT', setup: 'DOUBLE', proj: 'FRONT:8.5, BACK:3.25', nodes: ['rtn-dbl'] },
         { id: 'P-DEC', partId: 'CE-INV-56737', name: 'H1-138D', role: 'BRACKET', position: 'LEFT', setup: 'DOUBLE', proj: 'FRONT:8.5, BACK:3.25', nodes: ['arm-dec'] },
         { id: 'P-BAS', partId: 'CE-INV-56738', name: 'H1-138BD', role: 'BRACKET', position: 'LEFT', setup: 'DOUBLE', isBasic: true, proj: 'FRONT:6.5, BACK:3.25', nodes: ['arm-bas'] },
         // prod pins carry trvSetup:"SINGLE" on single-world parts — without one the setup axis
@@ -333,6 +338,12 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
     eq('and each sheet says which it is', decs.map(p => p.part), ['1/2', '2/2']);
     eq('while a single arm keeps all four rows on one sheet',
         dp.find(p => p.subject?.partId === 'CE-INV-56746' && p.plateFamily === 'H1-138BP')?.plates.length, 4);
+    // ── THE RETURN'S REAR POLE IS RTN-ONLY (Stuart 2026-08-24) ───────────────────────────────
+    const rtnDbl = dp.find(p => p.subject?.partId === 'CE-FEE-77');
+    ok('the double return gets a page', !!rtnDbl);
+    eq('and its rear pole is the SHORT rtn-only one', rodIds(rtnDbl)[1], 'P-RB85RTN');
+    ok('which no ordinary double ever draws',
+        !dp.filter(p => p.subject?.partId !== 'CE-FEE-77').some(p => rodIds(p).includes('P-RB85RTN')));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

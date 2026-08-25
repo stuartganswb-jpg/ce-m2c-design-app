@@ -2795,8 +2795,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                             end-arm
                                                         </label>
                                                     )}
-                                                    {normalizeCategory(c.catOverride || r.category) === 'BACKPLATE' && (
-                                                        <label title="RETURN BACKPLATE: offered ONLY while this end is a french/miter return or an end-return arm — the regular plates hide then (and this one hides otherwise). Use for the plates that pair with the return/arm." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.returnOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                    {['BACKPLATE', 'POLE'].includes(normalizeCategory(c.catOverride || r.category)) && (
+                                                        <label title="RETURN-ONLY: offered/drawn ONLY with a french/miter return or an end-return arm — the regular copies hide then (and this one hides otherwise). On a BACKPLATE: the plates that pair with the return/arm. On a POLE: the special rear pole cut short for a double return, so it does not protrude past the return (tag it double + back + rtn-only)." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.returnOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                                             <input type="checkbox" checked={!!c.returnOnly} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { returnOnly: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
                                                             rtn-only
                                                         </label>
