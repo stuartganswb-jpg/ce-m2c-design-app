@@ -125,6 +125,24 @@ Before adding a field to a document, search for what already holds that fact. Be
 like `productType.includes(...)` or a regex over an item code, check whether `Shared/` already answers
 it. If you must add a synonym, teach the shared resolver about it in the same commit.
 
+### The H1 principle (Stuart, 2026-08-25)
+> The app and its processes were **built around the H1 items — all new, created clean, identity and
+> routing stamped correctly from birth.** That original setup is the reference model; respect its
+> concepts wherever possible. **Every problem in this section started when the system was opened up
+> to older legacy items** and workarounds accumulated to cope with their irregularities.
+>
+> What matters most: **control the flow for the new collections and keep it honest.** Throughout the
+> app we need to see the SAME data — one screen must reflect what is actually happening across the
+> whole ecosystem. A legacy accommodation must never bend the canonical path new items travel: it
+> lives at the edge (an adapter at import or read time), never in the core the new collections run on.
+
+*Applied 2026-08-25:* `itemCode` is now the canonical identity field — `withItemCode` in
+`Shared/workOrderContract.js` stamps it on every work-order writer (Stock View ×4, Sales Snapshot,
+RTG release/re-issue, Master Library, Setup Queue re-make, `stockRun`), `woItemCodeOf` reads it
+first (the seven legacy spellings remain as the safety net for old documents), and 11.1 →
+**🪪 Stamp Canonical Item Codes** backfills existing orders — dry run first, unresolvable orders
+reported and never guessed.
+
 ---
 
 ## 5. Two product models — get this right before touching BOM code
@@ -274,8 +292,9 @@ areas at once.
 **Structural, highest leverage:**
 1. **Extract `BRAND_NETSUITE_MAP`** into `Shared/`. Four copies of the subsidiary/location map is a
    silent-divergence bug waiting to happen; it costs an hour.
-2. **A canonical order-identity module.** Seven fields for one item code is the root of a whole family
-   of "the card is blank" reports. Write once, migrate writers, keep `woItemCodeOf` as the safety net.
+2. ~~**A canonical order-identity module.**~~ **SHIPPED 2026-08-25** — `withItemCode` stamps
+   `itemCode` at every writer, `woItemCodeOf` reads it first (legacy chain kept as safety net),
+   11.1 backfill button for existing orders. See §4, "The H1 principle".
 3. **Audit every `productType` / item-code regex** against `Shared/` equivalents. The pole bug proved
    there are more of these than anyone thinks.
 4. **A "repair open orders" pattern.** Every data fix needs one; today each is hand-rolled.
@@ -299,6 +318,8 @@ swept in.
 
 - **Ask what the item IS, not what its code looks like.**
 - **One rule, one module, imported everywhere.** A second implementation is a future bug with a date on it.
+- **The H1 setup is the reference model.** Legacy items adapt to it at the edge; they never bend the
+  canonical path the new collections run on. One screen reflects the whole ecosystem.
 - **Refuse on certainty; warn on doubt.** Never block someone who is right.
 - **Never manufacture data to make a write succeed** — a mistyped bin must be rejected, never created.
 - **An unrecorded write is worse than a refused one.** If a NetSuite id can't be resolved, skip that

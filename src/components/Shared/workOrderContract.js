@@ -97,13 +97,24 @@ const looksLikeItemCode = (v) => {
 };
 export const woItemCodeOf = (wo) => {
     if (!wo) return '';
-    // `erpId` added 2026-08-25 (Eric: "orders from Stocked Sales do not show the item information
-    // previously requested/implemented"). The Sales Snapshot writes the code as `erpId` and puts
-    // the literal string "Stock" in `type` — so the resolver found nothing and the card went blank
-    // on exactly the orders it was built for. Seventh field, same order was created seven ways.
-    const candidates = [wo.jfpItemCode, wo.stockErpId, wo.variantErpId, wo.partErpId, wo.rootItem, wo.erpId, wo.type];
+    // `itemCode` is CANONICAL (2026-08-25): every writer stamps it via withItemCode below, so on
+    // any order created after that date the first candidate answers and the rest is the safety net
+    // for the seven legacy spellings. `erpId` was the seventh (Eric: "orders from Stocked Sales do
+    // not show the item information") — the Sales Snapshot wrote it while the resolver knew only
+    // the other six, and the card went blank on exactly the orders it was built for.
+    const candidates = [wo.itemCode, wo.jfpItemCode, wo.stockErpId, wo.variantErpId, wo.partErpId, wo.rootItem, wo.erpId, wo.type];
     for (const c of candidates) if (looksLikeItemCode(c)) return String(c).trim().toUpperCase();
     return '';
+};
+// The canonical stamp. Wrap every payload that CREATES a work-order document (hq_work_orders,
+// fin_workorders, parked finPayloads) so the identity lands under ONE name and readers stop
+// needing the legacy chain. No-op when nothing on the payload resolves to a code — never
+// manufactures data, and never overwrites an itemCode a caller set deliberately.
+export const withItemCode = (payload) => {
+    if (!payload) return payload;
+    if (looksLikeItemCode(payload.itemCode)) return payload;
+    const code = woItemCodeOf(payload);
+    return code ? { ...payload, itemCode: code } : payload;
 };
 // The human name, when the order carries one. Never the item code — callers show both.
 export const woItemNameOf = (wo) => {

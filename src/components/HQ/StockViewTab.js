@@ -4,7 +4,7 @@ import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, upd
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { SOURCING, sourcingOf } from '../Shared/sourcing';
-import { makeFullTasks } from '../Shared/workOrderContract';
+import { makeFullTasks, withItemCode, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { poleCutPlan, poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
@@ -544,7 +544,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     const woId = `WO-${safeErp}-${stamp}-${i}`;
                     // Source numbers only (Stuart 2026-07-17): no invented short WO # — the app id
                     // shows until a NetSuite WO posts, then nsWoTran takes over on every screen.
-                    await setDoc(doc(db, "hq_work_orders", woId), {
+                    await setDoc(doc(db, "hq_work_orders", woId), withItemCode({
                         id: woId, woId, woDisplayId: `WO-${basePart.legacyErpId || basePart.itemId}-${stamp}`,
                         partErpId: basePart.legacyErpId || basePart.itemId,
                         brand: activeBrand, status: "Approved", customer: "Internal Stock",
@@ -552,7 +552,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
                         type: "Stock Build", routingType: basePart.routingType || 'Standard',
                         rootItem: pl.baseErp, forPlating: pl.erp, createdAt: Date.now()
-                    });
+                    }));
                     millingCount++;
                     addLog(`Milling WO ${basePart.legacyErpId || basePart.itemId} ×${shortfall} (raw short for ${pl.erp}).`, 'warn');
                 } else if (!basePart) {
@@ -651,7 +651,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const safeErp = String(erpId).replace(/[^A-Za-z0-9]+/g, '-');
                 const newWoId = `WO-${safeErp}-${stamp}`;
                 // Source numbers only (2026-07-17): app id until the NetSuite WO posts, then nsWoTran.
-                await setDoc(doc(db, "hq_work_orders", newWoId), {
+                await setDoc(doc(db, "hq_work_orders", newWoId), withItemCode({
                     id: newWoId,
                     woId: newWoId,
                     woDisplayId: `WO-${erpId}-${stamp}`,
@@ -696,7 +696,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     // off the doc entirely, and the floor keeps the exact behaviour it had.
                     ...(bomLines.length ? { partsList: bomLines, bomExploded: true } : {}),
                     createdAt: Date.now()
-                });
+                }));
             }
             
             addLog(`✅ Pushed ${lineItems.length} Work Orders to RTG Dispatch!`, "success");
@@ -1213,7 +1213,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // the Setup Queue operator sees it on the card and runs the actual conversion.
                 const sug = convSugMap[r.itemid];
                 const sugBase = r.itemid.includes('/') ? r.itemid.slice(0, r.itemid.lastIndexOf('/')) : r.itemid;
-                const finPayload = {
+                const finPayload = withItemCode({
                     id: woId, orderKey: woId,
                     ...(sug ? { convertSuggestion: { from: sug.from, to: sugBase, qty: sug.qty } } : {}),
                     quoteId: null, salesOrderId: null, estimateId: null,
@@ -1241,15 +1241,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     // lands on fin_workorders, which is what the Setup Queue actually reads.
                     ...(woUrgent ? { urgent: true, urgentAck: false, needBy: woNeedBy || reqDate, urgentBy: currentUser || '', urgentAt: Date.now() } : {}),
                     brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
-                };
-                await setDoc(doc(db, "hq_work_orders", woId), {
+                });
+                await setDoc(doc(db, "hq_work_orders", woId), withItemCode({
                     id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
                     source: 'SALES_SNAPSHOT', routeTo: 'FINISHING', finPayload,
                     ...(woUrgent ? { urgent: true, needBy: woNeedBy || reqDate } : {}),
                     erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, totalParts: qty, reqDate,
                     paintSize: info.size || null, customer: 'Internal Stock',
                     createdAt: Date.now(), createdBy: currentUser || ''
-                }, { merge: true });
+                }), { merge: true });
 
                 // ── POLES ARE STOCKED AT 8 FT — CUT BEFORE FINISH (Stuart 2026-08-19) ──────────
                 // A 4 ft order used to send the warehouse looking for raw 4 ft rods, which nobody
@@ -1621,7 +1621,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const stamp = Date.now().toString().slice(-6);
             const safeErp = String(r.itemid).replace(/[^A-Za-z0-9]+/g, '-');
             const woId = `WO-CORE-${safeErp}-${stamp}-${n}`;
-            await setDoc(doc(db, "hq_work_orders", woId), {
+            await setDoc(doc(db, "hq_work_orders", woId), withItemCode({
                 id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
                 source: 'RAW_CORES', routeTo: 'SHOP',
                 ...(woUrgent ? { urgent: true, needBy: woNeedBy || reqDate } : {}),
@@ -1633,7 +1633,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 rootItem: r.itemid,
                 note: `Raw core replenish · avail ${info.available} · threshold ${info.threshold ?? info.minOnHand ?? 0}`,
                 createdAt: Date.now(), createdBy: currentUser || ''
-            }, { merge: true });
+            }), { merge: true });
             n++;
         }
         return n;
@@ -2576,7 +2576,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         <div style={{ fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--ink)' }}>{woRowRef(row)}</div>
                                                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{(fin && fin.id) || (hq && hq.id)}</div>
                                                     </td>
-                                                    <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{(fin && (fin.stockErpId || fin.type)) || (hq && (hq.erpId || hq.type)) || '—'} ×{(fin && fin.totalParts) || (hq && (hq.totalParts || hq.qty)) || '?'}</td>
+                                                    <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{woItemCodeOf(fin) || woItemCodeOf(hq) || '—'} ×{(fin && fin.totalParts) || (hq && (hq.totalParts || hq.qty)) || '?'}</td>
                                                     <td style={{ padding: '9px 14px', fontSize: '0.8rem', color: 'var(--ink)' }}>{where}</td>
                                                     <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{fin ? mini : '—'}</td>
                                                     <td style={{ padding: '9px 14px', fontFamily: 'var(--mono)', fontSize: '10px', color: nsBits.length ? 'var(--ink)' : 'var(--line)' }}>{nsBits.join(' · ') || '—'}</td>

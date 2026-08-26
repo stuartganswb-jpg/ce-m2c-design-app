@@ -4,7 +4,7 @@ import { doc, updateDoc, setDoc, getDoc, getDocs, query, where, collection, onSn
 import { btnStyle, cardStyle } from './finishingStyles';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { nsProxyFetch } from '../Shared/nsProxy';
-import { makeFullTasks, woItemCodeOf, woItemNameOf, isPlaceholderDims } from '../Shared/workOrderContract';
+import { makeFullTasks, woItemCodeOf, woItemNameOf, isPlaceholderDims, withItemCode } from '../Shared/workOrderContract';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
 import { isPoleCategory, autoFinishStream } from '../Shared/poleCut';
@@ -419,7 +419,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           const woId = `WO-STK-${part.netSuiteInternalId || 'RM'}-${Date.now()}`;
           const reqDate = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
           const paintSizes = (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null;
-          const finPayload = {
+          const finPayload = withItemCode({
               id: woId, orderKey: woId, quoteId: null, salesOrderId: null, estimateId: null,
               orderType: 'stock', soId: null, soNum: null,
               customerId: null, customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
@@ -441,14 +441,14 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               sentToPickPack: false, pickStatus: 'Pending',
               shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
               brand: String(part.brandId || 'ce'), createdAt: Date.now(), updatedAt: Date.now(), createdBy: 'Setup Queue'
-          };
-          await setDoc(doc(db, 'hq_work_orders', woId), {
+          });
+          await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
               id: woId, woId, brand: String(part.brandId || 'ce'), type: 'Stock', status: 'Approved',
               source: 'SETUP_QUEUE_REMAKE', routeTo: 'FINISHING', finPayload, remake: true, remakeReason: rmNote || '',
               erpId: code, recipe, qty, totalParts: qty, reqDate,
               paintSize: size, customer: 'Internal Stock',
               createdAt: Date.now(), createdBy: 'Setup Queue'
-          }, { merge: true });
+          }), { merge: true });
           if (writeLog) writeLog(`⟲ Scrap re-make WO created: ${qty} × ${code} (${recipe}) — parked in RTG Dispatch`, 'setup');
           alert(`⟲ Re-make order created: ${qty} × ${code} (${recipe}).\n\nPARKED in RTG Dispatch (same control gate as snapshot builds) — Push to Finishing there releases it back to this queue and queues the real NetSuite work order.`);
           setRmCode(''); setRmQty(''); setRmNote('Scrap replacement');

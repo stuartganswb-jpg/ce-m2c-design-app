@@ -31,6 +31,8 @@ export function buildStockFinPayload({ woId, part, qty, finishLabel, brand, crea
         customerId: null,
         customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
         stockErpId: erp || null,
+        // Canonical identity (2026-08-25) — same field every writer stamps; see workOrderContract.
+        ...(erp ? { itemCode: erp } : {}),
         recipe: finishLabel || 'PENDING-RECIPE',
         reqDate: reqDate || '',
         type: (part && part.itemName) || erp || 'Stock Build',

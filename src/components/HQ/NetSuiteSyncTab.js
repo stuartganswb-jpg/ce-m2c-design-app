@@ -5,6 +5,7 @@ import { parseFabricutWorkbook, buildFabricutPlan, buildPremiumTierRepairPlan } 
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { buildNsItemBody } from "../Shared/nsItemFields";
 import { isPoleCategory, autoFinishStream, autoPartHandlingFor } from "../Shared/poleCut";
+import { woItemCodeOf } from "../Shared/workOrderContract";
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -505,6 +506,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     // bent returns) and a bulk fix that quietly reversed someone's decision would be a worse bug
     // than the one it is fixing.
     const [poleFixBusy, setPoleFixBusy] = useState(false);
+    const [stampBusy, setStampBusy] = useState(false);
     const handleForcePoleTags = async () => {
         const dry = !window.confirm('FORCE POLE TAGS\n\nEvery item categorised POLE or ROD gets:\n   • Finish Stream = POLES\n   • Part Handling = Small Parts (stocked poles only — unstocked stay Custom)\n\nOpen finishing work orders for those items are repaired too, so orders already on the floor pick up the pole recipe.\n\nAn item explicitly set to SMALL is left alone.\n\nOK = apply · Cancel = dry run (report only, changes nothing)');
         setPoleFixBusy(true);
@@ -569,6 +571,50 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             addLog(`❌ Pole tag fix failed: ${e.message}`, 'error');
         }
         setPoleFixBusy(false);
+    };
+
+    // ── CANONICAL ITEM CODE BACKFILL (2026-08-25) ────────────────────────────────────────────────
+    // Writers now stamp `itemCode` at creation (workOrderContract.withItemCode); this stamps the
+    // orders that already exist, so every screen resolves identity from ONE field instead of the
+    // seven legacy spellings. Resolves with the same woItemCodeOf every reader uses — an order it
+    // can't resolve is REPORTED and left untouched, never guessed.
+    const handleStampItemCodes = async () => {
+        const dry = !window.confirm('STAMP CANONICAL ITEM CODES\n\nEvery hq_work_orders and fin_workorders document gets `itemCode` = the item the shared resolver (woItemCodeOf) already reads off it — the one identity field every screen now uses.\n\nOrders whose identity cannot be resolved (e.g. multi-line sales orders) are reported and left untouched.\n\nOK = apply · Cancel = dry run (report only, changes nothing)');
+        setStampBusy(true);
+        addLog(dry ? '🔍 DRY RUN — reporting what would be stamped, writing nothing.' : '🪪 Stamping canonical item codes…', dry ? 'warn' : 'info');
+        try {
+            for (const coll of ['hq_work_orders', 'fin_workorders']) {
+                const snap = await getDocs(collection(db, coll));
+                let stamped = 0, already = 0, unresolved = 0;
+                const samples = [];
+                let batch = writeBatch(db), ops = 0;
+                for (const d of snap.docs) {
+                    const wo = d.data() || {};
+                    const code = woItemCodeOf(wo);
+                    if (!code) { unresolved++; if (samples.length < 8) samples.push(wo.woNum || wo.woId || d.id); continue; }
+                    const patch = {};
+                    if (wo.itemCode !== code) patch.itemCode = code;
+                    // A parked finPayload releases to the floor VERBATIM — stamp it in place too.
+                    if (wo.finPayload && typeof wo.finPayload === 'object') {
+                        const fpCode = woItemCodeOf(wo.finPayload);
+                        if (fpCode && wo.finPayload.itemCode !== fpCode) patch['finPayload.itemCode'] = fpCode;
+                    }
+                    if (!Object.keys(patch).length) { already++; continue; }
+                    stamped++;
+                    if (!dry) {
+                        batch.update(d.ref, { ...patch, itemCodeStampedAt: Date.now() });
+                        if (++ops >= 400) { await batch.commit(); batch = writeBatch(db); ops = 0; }
+                    }
+                }
+                if (!dry && ops) await batch.commit();
+                addLog(`${coll}: ${snap.docs.length} scanned · ${stamped} ${dry ? 'would be' : ''} stamped · ${already} already canonical · ${unresolved} unresolvable${samples.length ? ` (e.g. ${samples.join(', ')})` : ''}.`, 'success');
+            }
+            addLog(dry ? '🔍 Dry run complete — NOTHING was written. Re-run and press OK to apply.' : '✅ Item codes stamped. Every screen now reads the one canonical field.', 'success');
+        } catch (e) {
+            console.error(e);
+            addLog(`❌ Item-code stamp failed: ${e.message}`, 'error');
+        }
+        setStampBusy(false);
     };
 
     const handleSyncItems = async () => {
@@ -1559,6 +1605,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
                         <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
                         <SyncButton onClick={handleForcePoleTags} disabled={isSyncing || poleFixBusy} label="🪝 Force Pole / Rod Tags" sub="Every item categorised POLE or ROD gets Finish Stream = POLES and Part Handling = Small Parts (stocked). Repairs open finishing work orders too, so orders already on the floor run the pole recipe. Explicit SMALL is never overridden. Cancel at the prompt for a dry run." />
+                        <SyncButton onClick={handleStampItemCodes} disabled={isSyncing || stampBusy} label="🪪 Stamp Canonical Item Codes" sub="Backfills `itemCode` onto every existing work order (hq + finishing, parked payloads included) using the same resolver every screen reads. Orders whose identity can't be resolved are reported, never guessed. Cancel at the prompt for a dry run." />
                         <FieldFlags
                             title="NetSuite may overwrite…"
                             note="Ticked = NetSuite wins on items the app already has. Un-tick a field to freeze the app's value through this import. New items always take everything — there's nothing to overwrite on a first import. Item name, category and routing type are always app-master."

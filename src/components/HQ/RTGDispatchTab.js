@@ -4,7 +4,7 @@ import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines} from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
-import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
+import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed } from '../Shared/orderLifecycle';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -451,7 +451,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // record's own facts via the same stock summary instead of spinning.
             setActiveJobDetails({
                 snapshotStock: true,
-                fp: { stockErpId: order.partErpId || order.variantErpId || order.rootItem || '', type: order.type || 'Stock Build', woNum: order.woNo || order.woDisplayId || order.id, totalParts: order.totalParts || order.qty || 0, recipe: order.recipe || '', reqDate: order.reqDate || '', note: '' }
+                fp: { stockErpId: woItemCodeOf(order), type: order.type || 'Stock Build', woNum: order.woNo || order.woDisplayId || order.id, totalParts: order.totalParts || order.qty || 0, recipe: order.recipe || '', reqDate: order.reqDate || '', note: '' }
             });
         }
     };
@@ -979,11 +979,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // The urgent flag rides the release. It may have been set at Stock View's Generate
                 // press (already in the payload) or raised here while the order waited — the board's
                 // value wins, since it is the later statement of intent.
-                await setDoc(doc(db, "fin_workorders", fp.id), {
+                await setDoc(doc(db, "fin_workorders", fp.id), withItemCode({
                     ...fp,
                     ...(isUrgent(hqOrder) ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || fp.needBy || fp.reqDate || '', urgentBy: hqOrder.urgentBy || currentUser || '', urgentAt: hqOrder.urgentAt || Date.now() } : {}),
                     dispatchedAt: Date.now(), dispatchedBy: currentUser || ''
-                });
+                }));
                 await updateDoc(doc(db, "hq_work_orders", hqOrder.id), { pushedToFinishing: true, status: "Dispatched" });
                 // ROUTE A (2026-07-16): these stocked items are real NetSuite assemblies with BOMs,
                 // so releasing to the floor ALSO queues a real NetSuite work order (outbox — serial,
@@ -1019,7 +1019,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             
             // Unified contract (§3). No SO for stock builds -> orderKey falls back to the WO/quote id.
             const orderKey = (orderType === 'sales' ? hqOrder.soId : null) || hqOrder.hqJobId || hqOrder.id;
-            const finPayload = {
+            const finPayload = withItemCode({
                 id: finWorkOrderId,
                 displayId: finWorkOrderId,
                 woNum: finWorkOrderId,
@@ -1099,7 +1099,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
                 createdBy: currentUser
-            };
+            });
 
             await setDoc(doc(db, "fin_workorders", finWorkOrderId), {
                 ...finPayload,
@@ -1426,7 +1426,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 if (rq > 0) {
                     const stamp = Date.now().toString().slice(-6);
                     const newId = `WO-${String(itemCode).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}`;
-                    await setDoc(doc(db, 'hq_work_orders', newId), {
+                    await setDoc(doc(db, 'hq_work_orders', newId), withItemCode({
                         id: newId, woId: newId, brand: activeBrand, status: 'Approved',
                         customer: 'Internal Stock', type: String(itemCode), rootItem: String(itemCode).toUpperCase(),
                         partErpId: String(itemCode).toUpperCase(), itemName: m.order.itemName || '',
@@ -1437,7 +1437,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         replacesWo: m.order.id, replacesReason: `balance closed, ${plan.balance} short`,
                         ...(m.order.stockInternalId ? { stockInternalId: String(m.order.stockInternalId) } : {}),
                         createdAt: Date.now(), createdBy: currentUser || '', source: 'RTG_REISSUE',
-                    });
+                    }));
                     addLog(`↻ Re-issued ${rq} × ${itemCode} as ${newId} (replaces ${m.order.id}) — parked here for release.`, 'success');
                 }
             }

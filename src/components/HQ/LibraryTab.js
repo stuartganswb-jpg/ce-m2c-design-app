@@ -5,7 +5,7 @@ import { finishCodeFromErp } from '../Shared/finishingTime';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
 import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
-import { makeFullTasks } from '../Shared/workOrderContract';
+import { makeFullTasks, withItemCode } from '../Shared/workOrderContract';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
@@ -1040,7 +1040,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       // shop work rather than a finishing job.
       const recipe = finishCodeFromErp(part.legacyErpId);
       // Source numbers only (2026-07-17): app id until the NetSuite WO posts, then nsWoTran.
-      await setDoc(doc(db, "hq_work_orders", newWoId), {
+      await setDoc(doc(db, "hq_work_orders", newWoId), withItemCode({
           id: newWoId, woId: newWoId,
           woDisplayId: `WO-${part.legacyErpId}-${stamp}`, partErpId: part.legacyErpId,
           brand: activeBrand, status: "Approved", customer: "Internal Stock",
@@ -1060,7 +1060,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           ...(part.manufacturingSpecs?.productType ? { productType: String(part.manufacturingSpecs.productType).toUpperCase() } : {}),
           ...(part.manufacturingSpecs?.paintSize ? { paintSize: String(part.manufacturingSpecs.paintSize).toUpperCase() } : {}),
           createdAt: Date.now()
-      });
+      }));
       return newWoId;
   };
 
@@ -1079,7 +1079,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   const releaseRunToFloor = async ({ woId, part, qty, finishLabel, recipe, note, hqExtra = {}, finExtra = {} }) => {
       const now = Date.now();
       const reqDate = new Date(now + 6048e5).toISOString().split('T')[0];
-      await setDoc(doc(db, "hq_work_orders", woId), {
+      await setDoc(doc(db, "hq_work_orders", woId), withItemCode({
           id: woId, woId, woDisplayId: woId,
           partErpId: String(part.legacyErpId || part.itemId || '').toUpperCase(),
           rootItem: String(part.legacyErpId || part.itemId || '').toUpperCase(),
@@ -1095,7 +1095,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           // the poles) — the floor's recipe resolution reads it off the WO doc.
           ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
           ...hqExtra,
-      });
+      }));
       try {
           await setDoc(doc(db, "fin_workorders", woId), buildStockFinPayload({
               woId, part, qty, finishLabel: recipe || finishLabel, brand: activeBrand,
