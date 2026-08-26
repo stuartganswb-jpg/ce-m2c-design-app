@@ -363,9 +363,35 @@ function HardwareConfiguratorInner({
                 const pa = findPart(a), pb = findPart(b);
                 return !!(pa && pb && pa.id === pb.id);
             },
+            // The bridge settles in passes the way resolve() does (a return unlocks that end's
+            // rtn-only plate) — it borrows OUR resolver so the model it retries against is the
+            // same one the picks will actually produce.
+            resolveWith: ({ answers: a2, selectedIds }) =>
+                resolveHardware({ choices, answers: { ...effAnswers, ...a2 }, selectedIds, modelNodes }),
         });
         if (Object.keys(seed.answers).length) setAnswers(a => ({ ...a, ...seed.answers }));
         if (Object.keys(seed.picks).length) setPicks(p => ({ ...p, ...seed.picks }));
+        // ── THE DRAWN SPLICES ARRIVE AS THE EXTRA THEY BILL AS (Eric 2026-08-25) ─────────────
+        // Two splices drawn at 36" from each end must land on the order as the flow's joiner with
+        // their locations in the note — that note is the same contract the length step banner
+        // states ("Vision draws the splice where the note says"), read in the other direction.
+        if ((seed.splices || []).length) {
+            if (spliceCodes.length === 1) {
+                const code = spliceCodes[0];
+                const posTxt = seed.splices.map(sp => sp.note
+                    || (sp.distInches != null ? `${sp.distInches}" from ${sp.ref === 'END' ? 'right edge' : 'left edge'}` : 'center')).join(' · ');
+                setExtras(prev => (prev.some(x => x.code === code && Number(x.qty) > 0) ? prev
+                    : [...prev.filter(x => x.code !== code), { code, qty: String(seed.splices.length), note: posTxt }]));
+                seed.carried.push(`${seed.splices.length} splice${seed.splices.length > 1 ? 's' : ''} — ${posTxt}`);
+            } else {
+                seed.missed.push({
+                    what: `${seed.splices.length} drawn splice${seed.splices.length > 1 ? 's' : ''}`,
+                    why: spliceCodes.length
+                        ? 'several joiners fit this flow — add the right size below, with the drawn locations in the note'
+                        : 'no splice/joiner item is offered on this flow — curate one in tab 11 or tag the joiner item',
+                });
+            }
+        }
         if (seed.lengthInches) {
             const whole = Math.floor(seed.lengthInches);
             const frac = seed.lengthInches - whole;
@@ -374,7 +400,9 @@ function HardwareConfiguratorInner({
         }
         if (visionDraft.sidemark) setConfigMemo(visionDraft.sidemark);
         setVisionReport({ carried: seed.carried, missed: seed.missed, name: visionDraft.sidemark || 'the drawing' });
-    }, [visionDraft, model, flow, findPart]);
+        // seededRef guards re-entry; the extra deps only matter on the first fire for a draft.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [visionDraft, model, flow, findPart, choices, effAnswers, modelNodes, spliceCodes]);
 
     // ── STARTING FROM A KIT (Stuart 2026-08-22) ──────────────────────────────────────────────
     // "if a customer orders a standard kit in a standard finish we will use tab 7 … but if they
