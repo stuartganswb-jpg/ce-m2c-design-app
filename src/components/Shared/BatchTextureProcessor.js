@@ -207,9 +207,10 @@ const BatchTextureProcessor = ({ currentUser }) => {
     const imageRef = useRef(null);
     const canvasRef = useRef(null);
     const [imgDims, setImgDims] = useState({ w: 0, h: 0, natW: 0, natH: 0 });
-    const [cropScale, setCropScale] = useState(100); 
-    const [cropX, setCropX] = useState(50); 
-    const [cropY, setCropY] = useState(50); 
+    const [cropScale, setCropScale] = useState(100);
+    const [cropX, setCropX] = useState(50);
+    const [cropY, setCropY] = useState(50);
+    const [rotation, setRotation] = useState(0);   // 0 | 90 | 180 | 270 — baked into imageSrc
 
     // 1. Fetch Existing Finishes for Conflict Checking
     useEffect(() => {
@@ -235,22 +236,51 @@ const BatchTextureProcessor = ({ currentUser }) => {
     const allFinishes = [...(Array.isArray(globalFinishes) ? globalFinishes : []), ...(Array.isArray(outsourceFinishes) ? outsourceFinishes : [])];
 
     // 3. Load Current Image (preview + crop reset)
+    // ── ROTATE 90° AT A TIME (Stuart 2026-08-26: "my rendering designer exported this most
+    // recent batch with the wood grain going vertical instead of horizontal"). The rotation is
+    // BAKED INTO THE SOURCE — the file is redrawn onto an offscreen canvas at the chosen angle
+    // and that becomes imageSrc — so the crop overlay, the pan math and the 1024² extraction all
+    // keep working on what they see, and the uploaded texture is genuinely rotated.
     useEffect(() => {
-        if (queue.length > 0 && currentIndex < queue.length) {
-            const file = queue[currentIndex];
-            const objectUrl = URL.createObjectURL(file);
+        if (!(queue.length > 0 && currentIndex < queue.length)) { setImageSrc(null); return; }
+        const file = queue[currentIndex];
+        const objectUrl = URL.createObjectURL(file);
+        let rotatedUrl = null;
+        let alive = true;
+        if (!rotation) {
             setImageSrc(objectUrl);
-            setAiPrompt("");
-
-            // Reset Cropper state for the new image
-            setCropScale(100);
-            setCropX(50);
-            setCropY(50);
-
-            return () => URL.revokeObjectURL(objectUrl);
         } else {
-            setImageSrc(null);
+            const img = new Image();
+            img.onload = () => {
+                if (!alive) return;
+                const quarter = rotation === 90 || rotation === 270;
+                const c = document.createElement('canvas');
+                c.width = quarter ? img.naturalHeight : img.naturalWidth;
+                c.height = quarter ? img.naturalWidth : img.naturalHeight;
+                const ctx = c.getContext('2d');
+                ctx.translate(c.width / 2, c.height / 2);
+                ctx.rotate((rotation * Math.PI) / 180);
+                ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
+                c.toBlob(b => {
+                    if (!alive || !b) return;
+                    rotatedUrl = URL.createObjectURL(b);
+                    setImageSrc(rotatedUrl);
+                }, 'image/png');
+            };
+            img.src = objectUrl;
         }
+        return () => { alive = false; URL.revokeObjectURL(objectUrl); if (rotatedUrl) URL.revokeObjectURL(rotatedUrl); };
+    }, [currentIndex, queue, rotation]);
+
+    // A NEW image starts unrotated with a fresh crop; turning the current one keeps the crop
+    // sliders where they are (the geometry moved, but the operator is mid-adjustment).
+    useEffect(() => {
+        if (!(queue.length > 0 && currentIndex < queue.length)) return;
+        setAiPrompt("");
+        setRotation(0);
+        setCropScale(100);
+        setCropX(50);
+        setCropY(50);
     }, [currentIndex, queue]);
 
     // 3b. Auto-detect the finish code by aligning the filename to the MASTER finishes (not a fixed
@@ -424,8 +454,15 @@ const BatchTextureProcessor = ({ currentUser }) => {
                     
                     {/* Visual Cropper Area */}
                     <div style={{ flex: 2, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ padding: '15px', background: theme.paper2, borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em' }}>
-                            SOURCE IMAGE: {queue[currentIndex]?.name}
+                        <div style={{ padding: '10px 15px', background: theme.paper2, borderBottom: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>SOURCE IMAGE: {queue[currentIndex]?.name}</span>
+                            {/* Rotate the SOURCE 90° at a time — the grain direction is a fact about the
+                                texture, so it bakes into what uploads, not just what previews. */}
+                            <button onClick={() => setRotation(r => (r + 270) % 360)} title="Rotate 90° counter-clockwise"
+                                style={{ padding: '6px 12px', background: '#fff', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px' }}>↺ 90°</button>
+                            <button onClick={() => setRotation(r => (r + 90) % 360)} title="Rotate 90° clockwise"
+                                style={{ padding: '6px 12px', background: '#fff', color: theme.ink, border: `1px solid ${theme.line}`, cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px' }}>↻ 90°</button>
+                            {rotation !== 0 && <span style={{ color: theme.brass, whiteSpace: 'nowrap' }}>ROTATED {rotation}°</span>}
                         </div>
                         
                         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '20px' }}>
