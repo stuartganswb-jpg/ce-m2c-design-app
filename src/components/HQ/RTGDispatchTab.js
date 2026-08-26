@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
@@ -38,12 +39,8 @@ const cleanLineName = (name) => String(name || '').replace(/^\s*[-▶]\s*/, '').
 
 // Keep in sync with PickPackApp/NetSuiteSyncTab/ERPPushPullTab/AdminTab (CLAUDE.md map).
 // The missing `location` fields here were why Route A NetSuite work orders never queued.
-const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "20" },
-    'ce': { subsidiary: "2", location: "17" },
-    'leyla': { subsidiary: "5", location: "18" }
-};
+// ONE copy now — Shared/brandNetsuite.js (2026-08-25).
+
 
 const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // NETSUITE TRANSMIT LOG (Stuart 2026-07-17): live ns_outbox tail so THIS screen shows the
@@ -341,9 +338,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 }
 
                 const hqSalesOrderId = `SO-${row.so_num}`;
+                // APP-CREATED FIRST (2026-08-25): an order saved as a Sales Order in CPQ already
+                // has its board doc (SO-APP-…) with this NetSuite id written back onto it — the
+                // pull must not create a second card for the same transaction.
+                const appDup = await getDocs(query(collection(db, "hq_sales_orders"), where("nsInternalId", "==", String(row.ns_id))));
+                if (!appDup.empty) { addLog(`Skipped ${hqSalesOrderId} — already on the board as ${appDup.docs[0].id} (app-created).`, "info"); continue; }
                 const soRef = doc(db, "hq_sales_orders", hqSalesOrderId);
                 const soSnap = await getDoc(soRef);
-                
+
                 if (!soSnap.exists()) {
                     await setDoc(soRef, {
                         id: hqSalesOrderId,

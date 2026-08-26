@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
@@ -68,12 +69,8 @@ const CHIP_STEPS = [
 const CHIP_STATUS_NEXT = { pending: 'doing', doing: 'done', done: 'pending' };
 
 // NetSuite Mapping Dictionary
-const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "20" },
-    'ce': { subsidiary: "2", location: "17" },
-    'leyla': { subsidiary: "5", location: "18" }
-};
+// ONE copy now — Shared/brandNetsuite.js (2026-08-25).
+
 
 // --- LABEL PRINTING ----------------------------------------------------------------------------
 // Labels print through the browser's NORMAL print queue (Stuart 2026-07-28: "can you just use a

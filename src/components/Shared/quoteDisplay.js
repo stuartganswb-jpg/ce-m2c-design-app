@@ -14,6 +14,15 @@
 // raw doc id, and the doc id is the last resort so a screen is never blank.
 export const quoteDisplayNo = (job) => {
     if (!job) return '';
+    // The SALES ORDER number is the strongest identity of all — once it exists, that is the
+    // transaction everyone means. Tran numbers (EST123 / SO456, stamped by the outbox writeBack
+    // since 2026-08-25) beat raw internal ids.
+    const soNo = String(job.netsuiteSalesOrderNo || '').trim();
+    if (soNo) return soNo;
+    const soId = String(job.netsuiteSalesOrderId || '').trim();
+    if (soId && soId.toUpperCase() !== 'CREATED_CHECK_NETSUITE') return `NS SO ${soId}`;
+    const estNo = String(job.netsuiteEstimateNo || '').trim();
+    if (estNo) return estNo;
     const ns = String(job.netsuiteEstimateId || '').trim();
     // ERP Push/Pull stores this sentinel when NetSuite accepted the write but returned no id —
     // it is a status, not a number, so it must never be shown as one.

@@ -16,6 +16,7 @@ import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUo
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
 import { softDeleteOrder } from '../Shared/orderLifecycle';
+import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 
 const printStyles = `
   @media print {
@@ -826,6 +827,40 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
       }
   };
 
+  // APPROVE = CREATE THE SALES ORDER (Stuart 2026-08-25). One press: the job moves to the Sales
+  // Orders window, the RTG board gets its card immediately, and the NetSuite estimate is
+  // transformed into a real Sales Order through the staged sync — the step that used to be a
+  // human opening NetSuite and pressing Transform by hand. The SO # writes back onto both docs.
+  const approveToSalesOrder = async (job) => {
+      await updateJobStatus(job.id, 'APPROVED');
+      if (job.netsuiteSalesOrderId) return;                       // SO already exists in NetSuite
+      if (!job.netsuiteEstimateId) {
+          alert(`Approved. No NetSuite estimate is on this quote yet (the save-time push may still be queuing — watch RTG's Transmit Log).\n\nPress Approve again once the estimate # appears to create the Sales Order.`);
+          return;
+      }
+      if (!window.confirm(`Create the NetSuite Sales Order for ${quoteDisplayNo(job)} now?\n\nTransforms estimate ${job.netsuiteEstimateNo || job.netsuiteEstimateId} into a Sales Order (queued — posts in ~1 min, the SO # lands here and on the RTG board automatically).`)) return;
+      try {
+          const soDocId = `SO-APP-${String(job.quoteNo || job.jobId || job.id).replace(/[^A-Za-z0-9-]/g, '')}`;
+          await setDoc(doc(db, 'hq_sales_orders', soDocId), {
+              id: soDocId, soId: soDocId, appCreated: true, brand: activeBrand,
+              customer: job.customer?.name || activeCrmRecord?.name || '', status: 'Approved', type: 'Custom',
+              hqJobId: job.id, memo: job.sidemark || job.jobName || '',
+              recipe: 'PENDING-RECIPE', totalParts: 1, length: 0, width: 0, height: 0,
+              reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+              createdAt: Date.now(), createdBy: currentUser || ''
+          }, { merge: true });
+          const res = await queueEstimateToSalesOrder({
+              job, by: currentUser || '',
+              writeBacks: [jobsSalesOrderWriteBack(job.id), boardSalesOrderWriteBack(soDocId)],
+          });
+          if (!res.ok) return alert('Sales Order not queued: ' + (res.error?.message || res.error?.code));
+          alert(`⇄ Sales Order queued (outbox ${res.outboxId}).\n\nIt posts in ~1 minute — the SO # replaces the app id on the RTG board and lands on this order's card. Watch RTG's Transmit Log if it doesn't.`);
+      } catch (e) {
+          console.error(e);
+          alert('Sales Order queue failed: ' + (e.message || e));
+      }
+  };
+
   // --- DELETE & EDIT HANDLERS ---
   // SOFT delete + master ledger (Stuart 2026-08-25): the jobs doc is KEPT — stamped deleted, dated,
   // named — and indexed on the RTG Deletion Ledger. It leaves this screen; it never leaves the system.
@@ -1611,7 +1646,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           // QUOTES ON TOP, SALES ORDERS BELOW (Stuart 2026-08-09): a job crosses into the
                                           // order group at APPROVED — the same threshold the dashboard's "active" counter
                                           // uses. Archived states never reach here (getCrmActivePipeline excludes them).
-                                          const isOrder = (j) => ['APPROVED', 'IN_PRODUCTION'].includes(j.status);
+                                          const isOrder = (j) => ['APPROVED', 'IN_PRODUCTION', 'SO_CONFIRMED'].includes(j.status) || !!j.netsuiteSalesOrderId;
                                           const groupHead = (label, n) => (
                                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px dashed var(--line)', paddingBottom: '6px', marginTop: label === 'Sales Orders' ? '10px' : 0 }}>{label} ({n})</div>
                                           );
@@ -1681,7 +1716,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
                                                           <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>🔍 View Item</button>
                                                           {job.status === 'CONFIGURED' && (
-                                                              <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Approve</button>
+                                                              <button onClick={() => approveToSalesOrder(job)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Approve</button>
                                                           )}
                                                           <button onClick={() => window.location.href = `mailto:${activeCrmRecord.email || ''}?subject=Quote ${quoteDisplayNo(job)} from ${activeBrand.toUpperCase()}&body=Please find attached the latest documentation for your review...`} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Email</button>
                                                           <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
@@ -1862,7 +1897,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                               </td>
                                               <td style={{ padding: '16px 20px', textAlign: 'right' }}>
                                                   {job.status === 'CONFIGURED' && (
-                                                      <button onClick={() => updateJobStatus(job.id, 'APPROVED')} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Approve</button>
+                                                      <button onClick={() => approveToSalesOrder(job)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Approve</button>
                                                   )}
                                                   <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>🔍 View Item</button>
                                                   <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Docs</button>

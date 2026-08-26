@@ -14,7 +14,8 @@ import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/fi
 import { cutText } from '../Shared/configQty';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, where } from "firebase/firestore";
+import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
@@ -2693,7 +2694,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       setShowCartSuccessModal(true);
   };
 
-  const handleFinalizeQuote = async () => {
+  // saveAs: 'QUOTE' (stays a quote — NetSuite estimate queued) or 'SALES_ORDER' (approved on
+  // save — RTG board doc created, NetSuite Sales Order queued). One click, everything routed
+  // (Stuart 2026-08-25: CPQ→save→CRM→RTG→NetSuite with no relay of manual sends).
+  const handleFinalizeQuote = async (saveAs = 'QUOTE') => {
       if (!jobData.customerId) return alert("Please select a Customer.");
       if (cart.length === 0) return alert("Your cart is empty. Please add an assembly first.");
 
@@ -2811,7 +2815,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       }
 
       const payload = {
-          jobId: targetJobId, brandId: activeBrand, status: 'CONFIGURED',
+          jobId: targetJobId, brandId: activeBrand,
+          status: saveAs === 'SALES_ORDER' ? 'APPROVED' : 'CONFIGURED',
           ...(mintedQuoteNo ? { quoteNo: mintedQuoteNo } : {}),
           // WHO generated the quote — stamped once at creation, then left alone (merge preserves
           // it), so a portal-originated createdBy survives staff re-pricing. `author` below keeps
@@ -2867,6 +2872,49 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
       try {
           await setDoc(doc(db, "jobs", targetJobId), payload, { merge: true });
+
+          // ── AUTO-TRANSMIT (Stuart 2026-08-25) ────────────────────────────────────────────────
+          // Saving IS sending: CRM sees the jobs doc live; the NetSuite write rides ns_outbox
+          // (staged, retried, on RTG's Transmit Log) and the returned estimate/SO number lands
+          // back on this quote via writeBack. A Sales Order save also puts the order on the RTG
+          // board immediately — the real SO # replaces the app id when NetSuite posts.
+          let nsQueueNote = '';
+          try {
+              const ctx = { db, doc, getDoc };
+              const txData = { libraryParts, cpqFlows, outsourceFinishes, globalFinishes };
+              const jobForTx = { ...payload, id: targetJobId };
+              if (saveAs === 'SALES_ORDER') {
+                  const soDocId = `SO-APP-${String(mintedQuoteNo || payload.quoteNo || targetJobId).replace(/[^A-Za-z0-9-]/g, '')}`;
+                  await setDoc(doc(db, 'hq_sales_orders', soDocId), {
+                      id: soDocId, soId: soDocId, appCreated: true, brand: activeBrand,
+                      customer: customerName, status: 'Approved', type: 'Custom',
+                      hqJobId: targetJobId, memo: payload.sidemark || payload.jobName || '',
+                      recipe: 'PENDING-RECIPE', totalParts: 1, length: 0, width: 0, height: 0,
+                      reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                      createdAt: Date.now(), createdBy: currentUser || ''
+                  }, { merge: true });
+                  const res = await queueNsTransaction({
+                      job: jobForTx, asType: 'salesorder', brand: activeBrand, data: txData, ctx,
+                      by: currentUser || '', writeBacks: [jobsSalesOrderWriteBack(targetJobId), boardSalesOrderWriteBack(soDocId)],
+                  });
+                  nsQueueNote = res.ok
+                      ? `\n\n⇄ NetSuite Sales Order queued — posts in ~1 min; the SO # lands on this order and the RTG board automatically.${res.meta.finishFallbacks.length ? `\n⚠ Unmapped finished SKUs push as BASE items: ${res.meta.finishFallbacks.join(', ')}` : ''}`
+                      : `\n\n⚠ NetSuite Sales Order NOT queued (${res.error.code}): ${res.error.message}\nThe order is saved and on the RTG board — queue the NetSuite push from Tab 12 / RTG once fixed.`;
+                  if (res.ok) await updateDoc(doc(db, 'jobs', targetJobId), { nsTransmitQueuedAt: Date.now(), nsTransmitOutboxId: res.outboxId });
+              } else {
+                  const res = await queueNsTransaction({
+                      job: jobForTx, asType: 'estimate', brand: activeBrand, data: txData, ctx,
+                      by: currentUser || '', writeBacks: [jobsEstimateWriteBack(targetJobId)],
+                  });
+                  nsQueueNote = res.ok
+                      ? `\n\n⇄ NetSuite Quote/Estimate queued — posts in ~1 min; the estimate # lands on this quote automatically.${res.meta.finishFallbacks.length ? `\n⚠ Unmapped finished SKUs push as BASE items: ${res.meta.finishFallbacks.join(', ')}` : ''}`
+                      : `\n\n⚠ NetSuite estimate NOT queued (${res.error.code}): ${res.error.message}\nThe quote is saved in the pipeline — push it from Tab 12 once fixed.`;
+                  if (res.ok) await updateDoc(doc(db, 'jobs', targetJobId), { nsTransmitQueuedAt: Date.now(), nsTransmitOutboxId: res.outboxId });
+              }
+          } catch (e) {
+              console.warn('NetSuite auto-queue failed:', e);
+              nsQueueNote = `\n\n⚠ NetSuite queue failed: ${e.message || e} — the ${saveAs === 'SALES_ORDER' ? 'order' : 'quote'} is saved; push it from Tab 12.`;
+          }
           
           if (allDraftSvgs.length > 0) {
               const svgPromises = allDraftSvgs.map((draft, idx) => {
@@ -2892,10 +2940,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
           await generateOrderDocuments(payload, allDraftSvgs);
 
+          const savedNoun = saveAs === 'SALES_ORDER' ? 'Sales Order' : 'Quote';
           if (activeAssembly?.manufacturingSpecs?.isProjectManaged) {
-              alert(`✅ Quote Generated!\nRouted to Tab 10.5 (Project Management) for multi-order dissection.`);
+              alert(`✅ ${savedNoun} Saved!\nRouted to Tab 10.5 (Project Management) for multi-order dissection.${nsQueueNote}`);
           } else {
-              alert(`✅ Quote Generated!\nRouted to Tab 10 (External Coop) for standard approval.`);
+              alert(`✅ ${savedNoun} Saved!\nOn the customer's pipeline (Tab 10)${saveAs === 'SALES_ORDER' ? ' and the RTG board' : ''}.${nsQueueNote}`);
           }
           
           setCart([]);
@@ -5175,9 +5224,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                         note={`Percentages are worked out from the configured subtotal (${cart.length} item${cart.length === 1 ? '' : 's'}, before fees and shipping). Fees a flow already bills are untouched — this is for the ones that aren't steps.`}
                     />
 
-                    <button onClick={handleFinalizeQuote} style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', marginTop: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}>
-                        Submit Quote to Pipeline
-                    </button>
+                    {/* ONE CLICK EACH (Stuart 2026-08-25): save = routed to CRM + RTG + NetSuite.
+                        No more CRM-approve-then-tab-12-push relay. */}
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
+                        <button onClick={() => handleFinalizeQuote('QUOTE')} style={{ flex: 1, padding: '16px 12px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', lineHeight: 1.6 }}>
+                            💾 Save as Quote
+                            <span style={{ display: 'block', fontSize: '8px', opacity: 0.75, letterSpacing: '.08em' }}>CRM pipeline + NetSuite estimate</span>
+                        </button>
+                        <button onClick={() => handleFinalizeQuote('SALES_ORDER')} style={{ flex: 1, padding: '16px 12px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', lineHeight: 1.6 }}>
+                            🛒 Save as Sales Order
+                            <span style={{ display: 'block', fontSize: '8px', opacity: 0.75, letterSpacing: '.08em' }}>CRM + RTG board + NetSuite SO</span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

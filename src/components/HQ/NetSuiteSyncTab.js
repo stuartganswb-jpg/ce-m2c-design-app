@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { db } from '../../firebase';
 import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch, onSnapshot, updateDoc, query, where, orderBy, limit } from "firebase/firestore";
 import { parseFabricutWorkbook, buildFabricutPlan, buildPremiumTierRepairPlan } from '../Shared/fabricutImport';
@@ -7,12 +8,8 @@ import { buildNsItemBody } from "../Shared/nsItemFields";
 import { isPoleCategory, autoFinishStream, autoPartHandlingFor } from "../Shared/poleCut";
 import { woItemCodeOf } from "../Shared/workOrderContract";
 
-const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "20" },
-    'ce': { subsidiary: "2", location: "17" },
-    'leyla': { subsidiary: "5", location: "18" }
-};
+// ONE copy now — Shared/brandNetsuite.js (2026-08-25).
+
 
 // NetSuite errors arrive as an RFC-9110 envelope — surface o:errorDetails[].detail, not the boilerplate.
 const nsErrDetail = (raw) => {

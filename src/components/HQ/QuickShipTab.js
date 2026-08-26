@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -15,12 +16,8 @@ import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf a
 
 // Stocked / pre-finished items are sold flat — each line goes to NetSuite as its own sales-order
 // line (NO assembly/BOM rollup like the CPQ does). Quick Ship is the fast counter for that stock.
-const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "20" },
-    'ce': { subsidiary: "2", location: "17" },
-    'leyla': { subsidiary: "5", location: "18" }
-};
+// ONE copy now — Shared/brandNetsuite.js (2026-08-25).
+
 const KITS_DOC = { col: "system", id: "quick_ship_kits" };
 
 // Map a part's productType/name to one of our slot categories.

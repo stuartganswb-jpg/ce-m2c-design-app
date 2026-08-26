@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { isRider, isTrvAttach, traverseRoleOf, dedupeByPart, isTrvPoleChoice } from '../Shared/traverseTags';
 import { isStreamVariantCode } from '../Shared/finishingTime';
 import { isTraverseAssembly, buildTraverseFlow } from '../Shared/traverseFlow';
@@ -46,12 +47,8 @@ const OFFICE_ROLES = ['superadmin', 'admin', 'executive', 'design_team', 'sales_
 const PURGEABLE_OFFICE_ROLES = ['superadmin', 'executive', 'design_team', 'sales_rep', 'programmer'];
 
 // NetSuite plumbing (mirror of ERPPushPullTab) for creating a flow's rollup item.
-const BRAND_NETSUITE_MAP = {
-    'm2c': { subsidiary: "3", location: "19" },
-    'uniquity': { subsidiary: "6", location: "20" },
-    'ce': { subsidiary: "2", location: "17" },
-    'leyla': { subsidiary: "5", location: "18" }
-};
+// ONE copy now — Shared/brandNetsuite.js (2026-08-25).
+
 const NS_REST_BASE = "https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1";
 const NS_SUITEQL_URL = "https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql";
 // Income account every rollup (non-inventory sale) item posts to: 4001 SALES-HOUSE, acctid 249.
