@@ -952,6 +952,17 @@ function HardwareConfiguratorInner({
     const [stepIx, setStepIx] = useState(0);
     const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
     const step = steps[ix];
+    // MASTER CONTROL (Stuart 2026-08-26): tab 11's item list IS what CPQ presents, and each item
+    // names the STEP it belongs on (free-text match against the step label). Blank keeps the item
+    // on the pole-length step, where these have always lived — so existing flows are unchanged.
+    const extrasOnStep = (st) => (extraItems || []).filter(it => {
+        const m = String(it.step || '').trim().toUpperCase();
+        if (!m) return st?.kind === 'LENGTH';
+        if (st?.kind === 'LENGTH' && /LENGTH|POLE/.test(m)) return true;
+        const label = String(st?.label || '').toUpperCase();
+        return !!label && (label.includes(m) || m.includes(label));
+    });
+    const stepExtras = extrasOnStep(step);
     const stepHint = hintFor(step);
 
     // What the rail shows under each heading: the answer, once there is one.
@@ -1642,12 +1653,12 @@ function HardwareConfiguratorInner({
                             behind a click is a worse version of the list. Every item tab 11 offers is
                             on screen with its price; typing a quantity is what adds it. The note is
                             per line, and a splice's hint says what the shop assumes when it is blank. */}
-                        {step?.kind === 'LENGTH' && !!extraItems.length && (
+                        {!!stepExtras.length && (
                             <div>
                                 {/* THE SPLICE QUESTION, ASKED WHERE THE LENGTH IS (Stuart 2026-08-24) — over the
                                     one-piece limit the splice adds itself at the default, and the note is only
                                     for a location that differs. Vision draws the splice where the note says. */}
-                                {spliceNeeded && (
+                                {step?.kind === 'LENGTH' && spliceNeeded && (
                                     <div style={{ border: `1px solid ${spliceSatisfied ? 'var(--line)' : 'var(--brass)'}`, background: spliceSatisfied ? 'var(--paper)' : '#faf6ee', padding: '9px 11px', marginBottom: '8px', fontSize: '11.5px', color: 'var(--ink)', lineHeight: 1.45 }}>
                                         <b>{spliceSatisfied ? 'Splice included' : '⚠ Splice required'}</b> — {lengthInches}&Prime; exceeds the {spliceOverIn}&Prime; one-piece limit.
                                         {!spliceSatisfied && spliceCodes.length > 1 && <> Add the splice/joiner for this rod size below.</>}{' '}
@@ -1657,7 +1668,7 @@ function HardwareConfiguratorInner({
                                 )}
                                 <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '7px' }}>Add an item</div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
-                                    {extraItems.map(it => {
+                                    {stepExtras.map(it => {
                                         const row = extras.find(x => x.code === it.code);
                                         const qty = row?.qty ?? '';
                                         const set = (patch) => setExtras(a => {

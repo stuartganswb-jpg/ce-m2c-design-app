@@ -1014,34 +1014,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
 
   const activeFlow = cpqFlows.find(f => f.id === activeFlowId);
 
-  // ── EVERY FLOW OFFERS ITS OWN SPLICES (Stuart 2026-08-24b) ───────────────────────────────
-  // "i see the splice on fabricut H1-138 but it is not visible on Brimar or on fabricut H1-1?"
-  // The length step's add-by-hand list is the flow's tab-11 extras, and only H1-138's flow was
-  // curated. Rather than asking for per-flow data entry, a flow whose extras carry NO splice
-  // derives them from the library the same way checkout scopes its catalog: every un-retired
-  // splice/joiner whose collections intersect the flow's. Joiners are DIAMETER-SPECIFIC, so a
-  // multi-size flow gets several candidates and the operator adds the right one — curated
-  // tab-11 extras always win over the derived list.
+  // ── TAB 11 IS THE MASTER CONTROL (Stuart 2026-08-26) ─────────────────────────────────────
+  // "rather than make a complicated set of rules or variables … this screen becomes the master
+  // control of what is presented on the cpq flows." The flow's curated item list is EXACTLY what
+  // CPQ offers — each item on the step tab 11 assigns it to (blank = the pole-length step). The
+  // 2026-08-24b library auto-derivation is retired: it offered every diameter's joiner on every
+  // flow ("very random"), and each assembly now has its own flow, so curation is per-diameter by
+  // construction. Pricing and aliases keep coming from the Master Library rows — nothing there
+  // moves.
   const effectiveExtraItems = useMemo(() => {
-      const curated = Array.isArray(activeFlow?.extraItems) ? activeFlow.extraItems : [];
-      const isSplicey = (s) => /SPLICE|JOINER|JNR|SPLC/i.test(String(s || ''));
-      if (curated.some(x => isSplicey(x.code) || isSplicey(x.label))) return curated;
-      const derived = (libraryParts || [])
-          .filter(p => p?.manufacturingSpecs?.isRetired !== true)
-          .filter(p => isSplicey(p.legacyErpId || p.itemId) || isSplicey(p.itemName)
-              || isSplicey(p.manufacturingSpecs?.productType) || isSplicey(p.customData?.feeType))
-          // Only a flow with a derivable scope gets derived splices (a pillow/2D flow does not
-          // want every joiner in the library); an untagged splice counts as global within it.
-          .filter(p => {
-              if (!flowCollections.size) return false;
-              const cols = p?.manufacturingSpecs?.collections || [];
-              return !cols.length || cols.some(c => flowCollections.has(String(c).trim().toUpperCase()));
-          })
-          .map(p => ({ code: String(p.legacyErpId || p.itemId || ''), label: p.itemName || '', notePlaceholder: '' }))
-          .filter(x => x.code)
-          .sort((a, b) => a.code.localeCompare(b.code));
-      return [...curated, ...derived];
-  }, [activeFlow, libraryParts, flowCollections]);
+      return (Array.isArray(activeFlow?.extraItems) ? activeFlow.extraItems : []).filter(x => String(x?.code || '').trim());
+  }, [activeFlow]);
   // ── NOT EVERY FLOW IS A TAGGED ASSEMBLY ──────────────────────────────────────────────────
   // The tag engine reads an assembly's PINS. M2C's lighting flows are 2D tear sheets and the
   // pillow flow is a set of questions with no assembly behind either — there is nothing for it to

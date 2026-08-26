@@ -2638,7 +2638,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
 
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '12px 0 7px' }}>
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)' }}>Items added by hand</span>
-                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-faint)' }}>offered on the pole step — splices, extra rings</span>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-faint)' }}>THE MASTER CONTROL — exactly these appear on CPQ, each on its assigned step (blank = pole length)</span>
                                                         {/* Splice necessity (Stuart 2026-08-24): over this length the pole cannot ship in
                                                             one piece, so the length step adds the splice itself, defaulted to CENTER.
                                                             Blank = 120" — the one-piece shipping limit. Splices stay orderable at ANY length (customers buy ahead to save shipping); over the limit the length step REQUIRES one. The splice among the items below is found
@@ -2650,18 +2650,30 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                                             style={{ width: '52px', padding: '5px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center' }} />
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '8.5px', color: 'var(--ink-soft)' }}>in</span>
                                                     </div>
+                                                    {/* STEP ASSIGNMENT (Stuart 2026-08-26): each item names the step it is
+                                                        offered on — matched against the configurator's step label, so
+                                                        "Pole length", "Rings", "Center Bracket" all work. Blank keeps the
+                                                        item on the pole-length step. */}
+                                                    <datalist id={`extra-steps-${activeFlowId}`}>
+                                                        {[...new Set([...(af.steps || []).map(st => String(st.title || '').trim()).filter(Boolean),
+                                                            'Pole length', 'Rings', 'Left Bracket', 'Right Bracket', 'Center Bracket', 'End Treatment', 'Fascia', 'Track', 'Carriers'])].map(t => <option key={t} value={t} />)}
+                                                    </datalist>
                                                     {extras.map((x, i) => (
-                                                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr auto', gap: '5px', marginBottom: '5px' }}>
+                                                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 1fr 130px auto', gap: '5px', marginBottom: '5px' }}>
                                                             <input value={x.code || ''} placeholder="Item code" onChange={e => setExtras(extras.map((y, j) => j === i ? { ...y, code: e.target.value } : y))}
                                                                 style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }} />
                                                             <input value={x.label || ''} placeholder="What the operator sees" onChange={e => setExtras(extras.map((y, j) => j === i ? { ...y, label: e.target.value } : y))}
                                                                 style={{ padding: '6px', border: '1px solid var(--line)', fontSize: '11.5px' }} />
                                                             <input value={x.notePlaceholder || ''} placeholder="Note hint — e.g. Default is centre; give the exact location if different" onChange={e => setExtras(extras.map((y, j) => j === i ? { ...y, notePlaceholder: e.target.value } : y))}
                                                                 style={{ padding: '6px', border: '1px solid var(--line)', fontSize: '11.5px' }} />
+                                                            <input value={x.step || ''} list={`extra-steps-${activeFlowId}`} placeholder="Step (blank = pole length)"
+                                                                title="Which configurator step offers this item — matched against the step's label (e.g. Pole length, Rings, Center Bracket). Blank = the pole-length step."
+                                                                onChange={e => setExtras(extras.map((y, j) => j === i ? { ...y, step: e.target.value } : y))}
+                                                                style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '10.5px' }} />
                                                             <button onClick={() => setExtras(extras.filter((_, j) => j !== i))} style={{ ...chip(false), padding: '6px 9px' }}>×</button>
                                                         </div>
                                                     ))}
-                                                    <button onClick={() => setExtras([...extras, { code: '', label: '', notePlaceholder: '' }])} style={chip(false)}>+ Add item</button>
+                                                    <button onClick={() => setExtras([...extras, { code: '', label: '', notePlaceholder: '', step: '' }])} style={chip(false)}>+ Add item</button>
 
                                                     {/* ── STANDARD CHECKOUT ITEMS FOR THIS FLOW (Stuart 2026-08-25) ──────
                                                         "for standard always appearing on checkout items on the cpq
