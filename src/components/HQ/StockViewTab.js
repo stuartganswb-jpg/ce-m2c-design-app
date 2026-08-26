@@ -2133,8 +2133,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 <span style={{ marginLeft: '14px' }}>{salesHist.withOld || 0} of {(salesHist.rows || []).length} have an old version</span>
                             </div>
 
-                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
-                                <input value={salesHistSearch} onChange={e => setSalesHistSearch(e.target.value)} placeholder="Search item # (e.g. HAFICBR1)…" style={{ flex: 1, maxWidth: '300px', padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
+                            {/* flexWrap (2026-08-26): this row holds ~15 controls ending in the green
+                                Generate button — without wrapping, a laptop-width screen clipped the
+                                button clean off and operators had "no button to save". */}
+                            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+                                <input value={salesHistSearch} onChange={e => setSalesHistSearch(e.target.value)} placeholder="Search item # (e.g. HAFICBR1)…" style={{ flex: 1, minWidth: '170px', maxWidth: '300px', padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
                                 <select value={snapWatch} onChange={e => setSnapWatch(e.target.value)} title="Filter by the item's watchlist (from the Master Library)" style={{ padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem', background: snapWatch ? 'var(--paper-2)' : '#fff' }}>
                                     <option value="">All Watchlists</option>
                                     <option value="NONE">None / Unassigned</option>
@@ -2532,6 +2535,30 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     </table>
                                 )}
                             </div>
+
+                            {/* STICKY ACTION BAR (2026-08-26): the moment any Order qty is typed, the
+                                generate action appears HERE, pinned under the grid — the operator never
+                                has to find the toolbar button again (which also used to clip off narrow
+                                screens). Same handler, same rules as the toolbar button. */}
+                            {(() => {
+                                const staged = snapView === 'RAW'
+                                    ? Object.values(rawOrderQty).reduce((s, v) => s + (parseInt(v) || 0), 0)
+                                    : snapView === 'TIER'
+                                        ? Object.values(tierOrderQty).reduce((s, v) => s + (parseInt(v) || 0), 0)
+                                        : totOrder;
+                                if (!staged) return null;
+                                return (
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '14px', paddingTop: '12px' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>
+                                            {staged} pc{staged === 1 ? '' : 's'} staged in the Order column{woUrgent ? ' · ⚡ URGENT' : ''}{woNeedBy ? ` · need by ${woNeedBy}` : ''}
+                                        </span>
+                                        <button onClick={snapView === 'RAW' ? generateRawOrders : snapView === 'TIER' ? generateTierOrders : generateOrders} disabled={genBusy}
+                                            style={{ padding: '11px 20px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                            {genBusy ? 'Generating…' : (snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : snapView === 'TIER' ? '⚙ Generate Tier Orders' : '⚙ Generate Orders (PO + WO)')}
+                                        </button>
+                                    </div>
+                                );
+                            })()}
                         </div>
                     </div>
                 );
