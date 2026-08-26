@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
+import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
@@ -1012,7 +1013,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         }
         const lines = pricedCart.filter(l => l.nsId);
         if (!lines.length && !trvOrder.length) return alert('No lines have a NetSuite item ID. Sync these items to NetSuite first.');
-        if (!window.confirm(`Create a NetSuite ${asLabel} for ${selectedCustomer?.name || customerId} with ${lines.length} stock line(s)${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?`)) return;
+        if (!window.confirm(`Create a ${asLabel} for ${selectedCustomer?.name || customerId} with ${lines.length} stock line(s)${trvOrder.length ? ` + a traverse system (components consumed + $ holder)` : ''}?\n\nThe record is saved HERE first, and the NetSuite write rides the staged sync (posts in ~1 min — RTG Transmit Log / 11.1 Sync Queue show progress).`)) return;
 
         setPushing(true);
         try {
@@ -1133,26 +1134,49 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 }
             };
 
-            addLog(`Transmitting ${asLabel} (${lines.length + trvPushLines.length} lines) to NetSuite…`, 'info');
-            const response = await nsProxyFetch({ targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/${asType}`, method: 'POST', payload });
-            const result = await response.json();
-            if (!response.ok) throw new Error(`API Rejected [${response.status}]: ${JSON.stringify(result)}`);
-            const returnedId = result.id || result.recordId || `QS-${Date.now()}`;
-            addLog(`✅ ${asLabel} created (NS ID: ${returnedId})`, 'success');
+            // ── LOCAL-FIRST + STAGED SYNC (Stuart 2026-08-25: uniform with the CPQ save buttons) ──
+            // The record is created HERE first; the NetSuite write rides ns_outbox exactly like
+            // every other push — staged, serial, retried, on RTG's Transmit Log — and the
+            // writeBack stamps the returned NetSuite ids onto the local doc when it posts.
+            const stamp = Date.now();
+            if (asType === 'estimate') {
+                // A Quick Ship QUOTE now leaves a real record: a jobs doc on the customer's CRM
+                // pipeline. (It used to exist ONLY in NetSuite — zero local persistence.)
+                const qJobId = `QSQUOTE-${stamp}`;
+                await setDoc(doc(db, 'jobs', qJobId), {
+                    jobId: qJobId, brandId: activeBrand, status: 'CONFIGURED', source: 'QUICKSHIP',
+                    customer: { id: customerId, name: selectedCustomer?.name || customerId },
+                    jobName: jobName || '', sidemark: String(soExtras.sidemark || '').trim(),
+                    createdBy: { name: currentUser || '', via: 'QUICKSHIP' },
+                    cpqData: {
+                        totalPrice: lines.reduce((sum, l) => sum + l.rate * l.eachQty, 0) + trvPushLines.reduce((sum, t) => sum + ((t.rate || 0) * (t.quantity || 1)), 0),
+                        breakdown: lines.map(l => ({ name: `${l.aliasErp || l.erp} — ${l.name}`, qty: l.eachQty, price: l.rate, legacyErpId: l.erp })),
+                        cartItems: [],
+                    },
+                    dateSaved: new Date().toISOString().split('T')[0], author: currentUser || '', createdAt: serverTimestamp(),
+                });
+                const obId = await enqueueNsWrite({
+                    kind: 'estimate', label: `Quick Ship Quote · ${selectedCustomer?.name || customerId}`,
+                    targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`,
+                    method: 'POST', payload, sourceApp: 'QUICKSHIP', createdBy: currentUser || '',
+                    writeBack: [{ collection: 'jobs', docId: qJobId, idField: 'netsuiteEstimateId', tranField: 'netsuiteEstimateNo', patch: { dateTransmitted: new Date().toISOString() } }],
+                });
+                addLog(`✅ Quote saved (${qJobId}) and queued to NetSuite (outbox ${obId}).`, 'success');
+                alert(`✅ Quote saved on ${selectedCustomer?.name || customerId}'s pipeline (Tab 10) and queued to NetSuite — the estimate # lands on it in ~1 minute.`);
+                setCart([]); setJobName('');
+                setPushing(false); return;
+            }
 
-            // A QUOTE stops here — no pick/pack mirror (nothing to pull until it becomes an order).
-            if (asType === 'estimate') { alert(`✅ NetSuite quote created — internal id ${returnedId}.`); setPushing(false); return; }
-
-            // Mirror to hq_sales_orders, tagged QUICKSHIP so pick/pack shows it in its own STOCK tab
-            // (separate from custom orders, which arrive via fin_workorders).
-            const hqId = `QS-${returnedId}`;
+            const hqId = `QS-${stamp}`;
             await setDoc(doc(db, "hq_sales_orders", hqId), {
-                id: hqId, soId: returnedId, nsInternalId: returnedId,
+                id: hqId, soId: hqId, nsInternalId: null, nsQueuedAt: stamp,
                 orderClass: 'QUICKSHIP', type: 'Stock',
                 brand: activeBrand,
                 customer: selectedCustomer?.name || nsCustomerId, customerId,
                 jobName: jobName || '', memo: memoText,
-                status: 'Pending', pickStatus: 'Pending',
+                // NS_QUEUED until NetSuite accepts — the writeBack flips it to 'Pending' and the real
+                // SO number replaces the app id, and only then does WMS list it (uniform 2026-08-25).
+                status: 'NS_QUEUED', pickStatus: 'Pending',
                 totalParts: lines.reduce((s, l) => s + l.eachQty, 0),
                 // PICK/PACK reads lines[].qty — it must be the EACH count the warehouse pulls off
                 // the shelf (14 rings), never the pack count. packs/packUom ride alongside so the
@@ -1183,7 +1207,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 invoiceTotal: lines.reduce((s, l) => s + l.rate * l.eachQty, 0),
                 createdBy: currentUser || '', createdAt: Date.now(), createdDate: new Date().toISOString()
             });
-            addLog(`Recorded ${hqId} for pick/pack (Stock tab).`, 'success');
+            const obId = await enqueueNsWrite({
+                kind: 'salesorder', label: `Quick Ship SO · ${selectedCustomer?.name || customerId} · ${lines.length} line(s)`,
+                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder`,
+                method: 'POST', payload, sourceApp: 'QUICKSHIP', createdBy: currentUser || '',
+                writeBack: [{ collection: 'hq_sales_orders', docId: hqId, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }],
+            });
+            addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.`, 'success');
 
             setCart([]); setJobName('');
         } catch (e) {

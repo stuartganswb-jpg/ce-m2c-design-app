@@ -84,6 +84,21 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             () => { /* collection may not exist yet */ });
         return () => unsub();
     }, []);
+    // MASTER TRANSMIT REVIEW (Stuart 2026-08-25: RTG is "the master review and control of the in
+    // and out of netsuite"). Brand-scoped jobs feed the ⇄ Quotes & Sales Orders panel: what is
+    // queued, what NetSuite has accepted, and what number it came back as.
+    const [txJobs, setTxJobs] = useState([]);
+    useEffect(() => {
+        if (!activeBrand) return;
+        const unsub = onSnapshot(query(collection(db, 'jobs'), where('brandId', '==', activeBrand)),
+            snap => setTxJobs(snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(j => !j.deleted && (j.nsTransmitQueuedAt || j.netsuiteEstimateId || j.netsuiteSalesOrderId))
+                .sort((a, b) => (b.nsTransmitQueuedAt || b.createdAt?.seconds * 1000 || 0) - (a.nsTransmitQueuedAt || a.createdAt?.seconds * 1000 || 0))
+                .slice(0, 40)),
+            () => {});
+        return () => unsub();
+    }, [activeBrand]);
+
     // The master DELETION LEDGER (Stuart 2026-08-25): every delete anywhere in the app — soft
     // tombstone or hard destroy — lands here, append-only, and THIS board is where it is reviewed.
     const [deletionLog, setDeletionLog] = useState([]);
@@ -2114,6 +2129,32 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     </>
                 );
             })()}
+
+            {/* ============ ⇄ QUOTES & SALES ORDERS — master in/out review (2026-08-25) ============ */}
+            <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', marginBottom: '24px' }}>
+                <div style={{ padding: '16px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Saved in CPQ / Quick Ship → queued → NetSuite → # written back to CRM · the queue itself is the Transmit Log below</span>
+                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>⇄ Quotes & Sales Orders — NetSuite In/Out</span>
+                </div>
+                <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
+                    {txJobs.length === 0 && <div style={{ padding: '18px 24px', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>Nothing transmitted yet — quotes and orders appear here the moment a CPQ or Quick Ship save queues them.</div>}
+                    {txJobs.map(j => {
+                        const queued = j.nsTransmitQueuedAt && !j.netsuiteEstimateId && !j.netsuiteSalesOrderId;
+                        const stateTone = j.netsuiteSalesOrderId ? '#3a7d44' : (j.netsuiteEstimateId ? '#3f7fc4' : 'var(--brass)');
+                        const stateLabel = j.netsuiteSalesOrderId ? `SO ${j.netsuiteSalesOrderNo || j.netsuiteSalesOrderId}` : (j.netsuiteEstimateId ? `EST ${j.netsuiteEstimateNo || j.netsuiteEstimateId}` : 'QUEUED — posting…');
+                        return (
+                            <div key={j.id} style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap', padding: '10px 24px', borderBottom: '1px solid var(--paper-2)', fontSize: '0.85rem' }}>
+                                <b style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{j.quoteNo || j.jobId || j.id}</b>
+                                <span style={{ color: 'var(--ink-soft)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{j.customer?.name || ''}{j.sidemark ? ` · ${j.sidemark}` : ''}</span>
+                                {j.cpqData?.totalPrice ? <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>${Number(j.cpqData.totalPrice).toFixed(2)}</span> : null}
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: stateTone, whiteSpace: 'nowrap' }}>{stateLabel}</span>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-faint, var(--ink-soft))', whiteSpace: 'nowrap' }}>{String(j.status || '').replace(/_/g, ' ')}</span>
+                                {queued && <span title="Waiting on the staged sync (~1 min). If it sits here, check the Transmit Log below / 11.1 Sync Queue." style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)' }}>⏳</span>}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
 
             {/* ============ MASTER DELETION LEDGER (append-only, every screen's deletes) ============ */}
             <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', marginBottom: '24px' }}>

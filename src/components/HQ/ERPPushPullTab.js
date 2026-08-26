@@ -137,6 +137,13 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
         </div>
       </div>
 
+      {/* UNIFIED WITH RTG (Stuart 2026-08-25) — saving in CPQ / Quick Ship now queues the NetSuite
+          write automatically and the numbers write back to CRM on their own. This tab remains the
+          PRE-FLIGHT REVIEW and the manual push for exceptions (stale quotes, unmapped items). */}
+      <div style={{ border: '1px solid var(--brass)', background: 'var(--paper-2)', padding: '12px 18px', marginBottom: '18px', fontSize: '0.85rem', color: 'var(--ink)' }}>
+          <b>⇄ Unified with 13. RTG Dispatch.</b> Quotes and sales orders now transmit <em>automatically</em> when saved in CPQ or Quick Ship — the staged sync posts them and writes the NetSuite numbers back to the CRM cards. Master review lives on RTG (“Quotes &amp; Sales Orders — NetSuite In/Out”, the Transmit Log, and the Deletion Ledger). Use this tab for pre-flight payload review and manual pushes on exceptions only.
+      </div>
+
       <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start', flex: 1 }}>
         
         {/* LEFT COLUMN: JOB QUEUES */}

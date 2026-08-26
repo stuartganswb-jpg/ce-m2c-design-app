@@ -278,7 +278,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
 
         // Quick Ship stock orders for this brand (own pick/pack tab).
         const unsubQS = onSnapshot(query(collection(db, "hq_sales_orders"), where("orderClass", "==", "QUICKSHIP")), (snap) => {
-            const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand);
+            // NS_QUEUED = saved locally, NetSuite not yet accepted (staged sync) — not floor work yet.
+            const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand && o.status !== 'NS_QUEUED');
             rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
             setQuickShipOrders(rows);
         }, e => console.warn('quick ship orders listen failed', e));
