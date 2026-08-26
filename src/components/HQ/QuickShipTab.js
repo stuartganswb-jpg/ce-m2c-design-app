@@ -4,6 +4,7 @@ import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { withItemCode, makeFullTasks } from '../Shared/workOrderContract';
 import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
+import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
@@ -1174,6 +1175,17 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 setPushing(false); return;
             }
 
+            // IN-HOUSE vs OUTSOURCED — the routing authority is the outsource-finishes tab
+            // (hq_outsource_finishes feeds finishList's `outsourced` flag), backed by the canonical
+            // code vocabulary. 'P' is excluded by rule: phosphate is the CONVERT stage, never a
+            // finish, and a stray record coded P must not send an in-house item to the plater.
+            const isOutFinish = (code) => {
+                const c = String(code || '').trim().toUpperCase();
+                if (!c || c === 'P') return false;
+                const entry = finishList.find(f => f.code === c);
+                return entry ? entry.outsourced === true : isOutsourcedFinishCode(c);
+            };
+
             const hqId = `QS-${stamp}`;
             await setDoc(doc(db, "hq_sales_orders", hqId), {
                 id: hqId, soId: hqId, nsInternalId: null, nsQueuedAt: stamp,
@@ -1192,7 +1204,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // alongside so the floor can see, in small print, what the customer ordered it as.
                 // toBeFinished/finishCode ride the stored line (they were dropped here until
                 // 2026-08-27, which left the WMS reading a made-to-order line as a shelf pull).
-                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) })),
+                // finishOutsourced routes the WMS label: FROM PLATING vs FROM FINISHING.
+                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })),
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1256,10 +1269,58 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     else pre.results.forEach(res => preByKey.set(res.key, res));
                 } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
 
+                let pldSeq = 0;
                 for (const x of rows) {
                     const { l, rawPart } = x;
                     const pre = preByKey.get(x.key) || null;
                     const finishedErp = `${l.erp}/${l.finishCode}`;
+
+                    // ── OUTSOURCED FINISH → THE PLATER, never the finishing floor (Stuart
+                    // 2026-08-27: "needs to check tab of in house vs outsource finishing so it can
+                    // route correctly"). The plater receives MILL cores — per core, the Library
+                    // rule verbatim: in stock → a plating demand on the WMS Plating tab; short →
+                    // a component shop WO to mill it first (plate after). No finishing WO exists
+                    // for these lines at all.
+                    if (isOutFinish(l.finishCode)) {
+                        const coreLines = (pre && pre.plan.lines.length)
+                            ? pre.plan.lines.map(pl => ({ ...pl, legacyErpId: millBaseOf(String(pl.legacyErpId || '').toUpperCase()) }))
+                            : [{ legacyErpId: String(l.erp).toUpperCase(), quantity: l.eachQty, sourceComponent: l.erp }];
+                        for (const cl of coreLines) {
+                            const core = String(cl.legacyErpId).toUpperCase();
+                            // The availability the pre-check read — matched on the milled code
+                            // (singles pull the mill directly, so this normally lines up).
+                            const row = pre && pre.check ? pre.check.rows.find(r => r.code === core || millBaseOf(r.code) === core) : null;
+                            if (row && row.known && row.have < cl.quantity) {
+                                try {
+                                    const exec = await executeMakeupActions({
+                                        actions: [{ kind: 'SHOP', code: core, qty: cl.quantity, reason: `mill core short for plating (${finishedErp})` }],
+                                        brandId: activeBrand, finWoId: null, finWoErpId: finishedErp,
+                                        createdBy: currentUser || '', inventory: allItems, source: 'orderentry-plating', reqDate: '',
+                                    });
+                                    tbfMade.push(`${core} ×${cl.quantity} SHORT for plating → ${exec.shopWoIds[0] || 'shop WO'} (plate after)`);
+                                    addLog(`🏭 ${core} short for ${finishedErp} — shop WO raised to mill it first; plate after.`, 'warn');
+                                } catch (e) { addLog(`⚠ ${core}: mill WO for plating failed (${e.message || e}) — order it manually.`, 'error'); }
+                            } else {
+                                const basePart = allItems.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === core) || null;
+                                const demandId = `PLD-${activeBrand.toUpperCase()}-${stamp}-${++pldSeq}`;
+                                const target = String(cl.sourceComponent || '').includes('/') && isOutsourcedFinishCode(String(cl.sourceComponent).split('/').pop()) ? String(cl.sourceComponent).toUpperCase() : `${core}/${l.finishCode}`;
+                                await setDoc(doc(db, 'plating_demand', demandId), {
+                                    id: demandId, brandId: activeBrand, status: 'open',
+                                    woNum: `PLW-${activeBrand.toUpperCase()}-${(stamp + pldSeq).toString().slice(-6)}`,
+                                    baseItemId: basePart?.id || null, baseErpId: core, targetErpId: target,
+                                    finishCode: l.finishCode, finishName: (finishList.find(f => f.code === l.finishCode) || {}).name || l.finishCode,
+                                    qty: cl.quantity, source: 'orderentry',
+                                    soAppId: hqId, customerId, customerName: selectedCustomer?.name || customerId,
+                                    note: `Order Entry ${hqId} · ${selectedCustomer?.name || customerId} · ${l.erp} in ${l.finishCode}${row && !row.known ? ' · ⚠ core stock unverified' : ''}`,
+                                    createdBy: currentUser || '', createdAt: Date.now(),
+                                });
+                                tbfMade.push(`${cl.quantity} × ${core} → ${target} (WMS Plating tab)`);
+                            }
+                        }
+                        addLog(`⚡ ${finishedErp} ×${l.eachQty} is an OUTSOURCED finish — routed to plating, not the finishing floor.`, 'info');
+                        continue;
+                    }
+
                     const woId = `WO-OE-${String(l.erp).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}-${x.key}`;
                     // The floor's pull lines from the plan — a self-pull (no /P record exists for
                     // the mill base) falls back to the RAW part, which is what the shelf holds.
@@ -1320,7 +1381,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     woWriteBacks.push({ collection: 'hq_work_orders', docId: woId, patch: { awaitingSoAccept: false, soAccepted: true } });
                     tbfMade.push(`${finishedErp} ×${l.eachQty} → ${woId}`);
                 }
-                if (tbfMade.length) addLog(`🎨 ${tbfMade.length} finishing work order(s) parked in RTG for this order:\n${tbfMade.map(m => `• ${m}`).join('\n')}`, 'success');
+                if (tbfMade.length) addLog(`🎨 To-be-finished routing for this order:\n${tbfMade.map(m => `• ${m}`).join('\n')}`, 'success');
             }
 
             const obId = await enqueueNsWrite({
@@ -1329,7 +1390,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 method: 'POST', payload, sourceApp: 'QUICKSHIP', createdBy: currentUser || '',
                 writeBack: [{ collection: 'hq_sales_orders', docId: hqId, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }, ...woWriteBacks],
             });
-            addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.${tbfMade.length ? ` ${tbfMade.length} to-be-finished line(s) parked as RTG work orders (released once NetSuite accepts the SO).` : ''}`, 'success');
+            addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.${tbfMade.length ? ` To-be-finished lines routed: in-house → RTG work orders (released once NetSuite accepts the SO); outsourced → WMS Plating.` : ''}`, 'success');
 
             setCart([]); setJobName('');
         } catch (e) {
