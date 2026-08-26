@@ -116,6 +116,7 @@ function HardwareConfiguratorInner({
     // Quick Ship kits this assembly could be started from. Empty on every flow that has none, and
     // the picker does not render — so a collection with no kits is untouched by all of this.
     kits = [],
+    kitsUnaligned = 0,
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -1256,6 +1257,13 @@ function HardwareConfiguratorInner({
 
             {/* START FROM A KIT — the same kits tab 7 sells, as an opening position. Renders only
                 where kits exist, so every collection without them is exactly as it was. */}
+            {/* Kits exist for this family but lost their alignment — say so instead of vanishing
+                (2026-08-26). The 4.6 kit-sheet import is what writes the alignment back. */}
+            {!kits.length && kitsUnaligned > 0 && (
+                <div style={{ background: '#fdf8ef', border: '1px solid var(--brass)', padding: '8px 14px', ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink)' }}>
+                    ⚠ {kitsUnaligned} kit{kitsUnaligned === 1 ? '' : 's'} exist for this flow but {kitsUnaligned === 1 ? 'is' : 'are'} missing kit alignment — the "Start from a kit" picker needs it. Re-run the kit sheet import in 4.6 → Kit Builder to restore it.
+                </div>
+            )}
             {!!kits.length && (
                 <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                     <span style={{ ...mono, fontSize: '8.5px', color: 'var(--ink-soft)' }}>Start from a kit</span>

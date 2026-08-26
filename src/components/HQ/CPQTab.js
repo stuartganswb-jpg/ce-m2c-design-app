@@ -704,10 +704,23 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       if (!a) return [];
       const base = String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase();
       if (!base) return [];
-      return kitsForSeeding(kitLibrary).filter(k => {
+      const matches = (k) => {
           const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
           return code === base || code.startsWith(base + '-');
-      });
+      };
+      return kitsForSeeding(kitLibrary).filter(matches);
+  }, [activeAssembly, kitLibrary]);
+  // Kits that MATCH this flow's family but are missing their alignment — the named reason the
+  // picker would otherwise silently not render.
+  const unalignedKitCount = useMemo(() => {
+      const a = activeAssembly;
+      if (!a) return 0;
+      const base = String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase();
+      if (!base) return 0;
+      return kitLibrary.filter(k => !k.manufacturingSpecs?.kitAlign).filter(k => {
+          const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
+          return code === base || code.startsWith(base + '-');
+      }).length;
   }, [activeAssembly, kitLibrary]);
   
   const [activeMasterQuoteId, setActiveMasterQuoteId] = useState(null);
@@ -829,7 +842,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // `parts` — the index the configurator prices, resolves and looks parts up in. A kit is
           // not a part, and the cheap edit would have reached every flow through the pricing path.
           // Its own state reaches only the kit picker.
-          setKitLibrary(docs.filter(d => d.partClass === "Kit" && d.manufacturingSpecs?.kitAlign));
+          // ALL Kit-class records — kitsForSeeding applies the kitAlign gate itself, and keeping
+          // the unaligned ones lets the picker SAY "kits exist but lost their alignment" instead
+          // of silently vanishing (Stuart 2026-08-26, the disappearing H1-2TRV strip).
+          setKitLibrary(docs.filter(d => d.partClass === "Kit"));
       });
 
       const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => { if (docSnap.exists()) setGlobalLists(docSnap.data()); });
@@ -4697,6 +4713,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   finishes={[...globalFinishes, ...outsourceFinishes]}
                                   parts={[...libraryParts, ...liveAssemblies]}
                                   kits={seedableKits}
+                                  kitsUnaligned={unalignedKitCount}
                                   /* THE JOB'S CUSTOMER WINS; the flow's own account is the fallback,
                                      so opening a collection to check its alias and pricing shows
                                      them without inventing a job first (tab 11 → Customer). */
