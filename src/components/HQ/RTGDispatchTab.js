@@ -232,8 +232,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // above (which only shows orders still AWAITING dispatch), this shows every job, wherever it sits.
     useEffect(() => {
         if (!activeBrand) return;
+        // Tombstones stay in the collection by design (soft delete, 2026-08-25) — the LIVE
+        // feeds must not resurrect them into the Daily Job Log / held / orphan panels.
         const mk = (coll, setter) => onSnapshot(query(collection(db, coll), where("brand", "==", activeBrand)),
-            s => setter(s.docs.map(d => ({ id: d.id, ...d.data() }))),
+            s => setter(s.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !d.deleted)),
             err => console.warn(`job-log ${coll} listen failed`, err));
         const subs = [
             mk("hq_sales_orders", setLiveSO), mk("hq_work_orders", setLiveWO),
@@ -738,13 +740,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     ? Object.keys(paintSizes).sort((a, b) => paintSizes[b] - paintSizes[a]).find(k => paintSizes[k] > 0)
                     : null;
 
-                await setDoc(doc(db, "fin_workorders", finId), {
+                await setDoc(doc(db, "fin_workorders", finId), withItemCode({
                     id: finId, woNum: finId, displayId: finId,
                     orderKey, quoteId: so.hqJobId, salesOrderId: so.soId || null,
                     estimateId: job.netsuiteEstimateId || null,
                     brand: activeBrand,
                     customerId, customerName, clientName: customerName,
                     orderType: 'sales',
+                    // Canonical identity when the order IS one item (audit #1, 2026-08-25): a
+                    // single-line sales order identifies on the floor card; multi-line stays
+                    // legitimately un-coded ("Mixed").
+                    ...(partsList.length === 1 && partsList[0].legacyErpId ? { itemCode: String(partsList[0].legacyErpId).toUpperCase() } : {}),
                     type: job.cpqData?.cartItems?.[0]?.assemblyName || "Mixed",
                     recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (so.recipe || "PENDING-RECIPE"),
                     totalParts,
@@ -766,7 +772,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     shopSiblingId: hasCustom ? shopId : null, hasCustomSibling: hasCustom,
                     customFabStatus: 'Pending',
                     createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser
-                });
+                }));
                 addLog(`Created Finishing WO ${finId} (${partsList.length} small lines).`, "success");
             }
 
@@ -1268,7 +1274,25 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 collection: collectionName, docId: id, record: order,
                 kind: collectionName, by: currentUser || '', from: 'RTG_DISPATCH', reason: reason || '',
             });
-            addLog(`🗑 ${id} deleted (record kept${res.ledger ? ', ledger indexed' : ' — LEDGER WRITE FAILED, tombstone only'}).`, "warn");
+            // A tombstoned board record must not leave its floor documents alive in the Setup
+            // Queue / WMS pick queue (2026-08-25 audit #9) — close every linked doc, the same
+            // stamps closeOrderEverywhere uses.
+            let floorClosed = 0;
+            if (collectionName === 'hq_sales_orders' || collectionName === 'hq_work_orders') {
+                try {
+                    const links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, order, collectionName === 'hq_sales_orders' ? 'sales' : 'stock');
+                    const stamp = { closedAt: Date.now(), closedBy: currentUser || '', closedFrom: 'RTG_DELETE', closeReason: reason || 'board record deleted' };
+                    for (const [fid] of links.fin) {
+                        await updateDoc(doc(db, 'fin_workorders', fid), { currentPhase: 'Closed', stepStatus: 'Closed', status: 'Closed', sentToPickPack: false, pickStatus: 'Closed', ...stamp }).catch(() => {});
+                        floorClosed++;
+                    }
+                    for (const [sid] of links.shop) {
+                        await updateDoc(doc(db, 'shop_custom_orders', sid), { status: 'Completed', closed: true, ...stamp }).catch(() => {});
+                        floorClosed++;
+                    }
+                } catch (e) { console.warn('floor-doc close after delete failed:', e); }
+            }
+            addLog(`🗑 ${id} deleted (record kept${res.ledger ? ', ledger indexed' : ' — LEDGER WRITE FAILED, tombstone only'}${floorClosed ? `, ${floorClosed} floor doc(s) closed` : ''}).`, "warn");
             loadRTGOrders();
         } catch (e) {
             console.error(e);

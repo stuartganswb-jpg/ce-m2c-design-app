@@ -27,7 +27,10 @@ export const identityKeysOf = (o) => [...new Set([
 // Is this document finished as far as the business is concerned?
 export const isClosedState = (d) => !!d && (
     d.currentPhase === 'Closed' || d.status === 'Closed' || d.closed === true ||
-    d.stepStatus === 'Closed'
+    d.stepStatus === 'Closed' ||
+    // Soft-deleted (2026-08-25) is terminal too — without this a tombstoned parent silences the
+    // orphan audit instead of tripping it.
+    d.deleted === true || d.status === 'Deleted' || d.status === 'CANCELLED'
 );
 export const isDoneState = (d) => !!d && (
     isClosedState(d) || d.currentPhase === 'Complete' || d.packStatus === 'Packed' ||

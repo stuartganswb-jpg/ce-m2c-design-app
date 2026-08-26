@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { db } from '../../firebase';
 import { doc, setDoc, deleteDoc, collection, getDocs, writeBatch } from "firebase/firestore";
+import { recordDeletion } from "../Shared/orderLifecycle";
 import { btnStyle, inputStyle, labelStyle } from './finishingStyles';
 
 const ROLES = ['setup', 'setup_manager', 'painter', 'hand_painter', 'paint_manager', 'packaging', 'floor_manager', 'office', 'admin'];
@@ -72,12 +73,22 @@ const Management = ({ sysConfig, users, logs, writeLog, user, perms, setPerms })
     };
 
     const handleWipeWorkOrders = async () => {
-        if(!window.confirm("Permanently delete ALL active work orders? This cannot be undone.")) return;
+        if(!window.confirm("Permanently delete ALL active work orders?\n\nA bulk entry (count + ids) is kept on the master Deletion Ledger (RTG Dispatch). If that entry cannot be written, the wipe is refused.")) return;
         const snapshot = await getDocs(collection(db, "fin_workorders"));
+        if (!snapshot.docs.length) return;
+        // NO order-like document leaves the system unrecorded (orderLifecycle, 2026-08-25) — the
+        // ledger entry must commit BEFORE the destroy.
+        try {
+            await recordDeletion({ db, doc, setDoc }, {
+                collection: 'fin_workorders', docId: `BULK-${snapshot.docs.length}`, kind: 'BULK_WIPE', mode: 'HARD',
+                by: user?.name || 'Finishing Management', from: 'FIN_MANAGEMENT', reason: 'wipe all work orders',
+                record: { count: snapshot.docs.length, ids: snapshot.docs.slice(0, 100).map(d => d.id) },
+            });
+        } catch (e) { return alert('Wipe refused — the Deletion Ledger entry could not be written: ' + (e.message || e)); }
         const batch = writeBatch(db);
         snapshot.docs.forEach(d => batch.delete(d.ref));
         await batch.commit();
-        writeLog("WIPED ALL WORK ORDERS", "admin");
+        writeLog("WIPED ALL WORK ORDERS (ledgered)", "admin");
     };
 
     const handleInjectDemoData = async () => {

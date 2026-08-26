@@ -15,7 +15,7 @@ const ProjectManagementTab = ({ currentUser, activeBrand }) => {
             where("isProjectManaged", "==", true)
         );
         const unsub = onSnapshot(q, (snap) => {
-            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const docs = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(j => !j.deleted);
             docs.sort((a, b) => {
                 const timeA = a.createdAt?.seconds || 0;
                 const timeB = b.createdAt?.seconds || 0;

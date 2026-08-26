@@ -646,7 +646,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   // (customer pays the KIT price; NetSuite carries the per-item accounting lines).
   useEffect(() => {
     const unsub = onSnapshot(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', 'QUICKSHIP')), snap => {
-      setQsOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand));
+      // NS_QUEUED = saved locally, NetSuite not yet accepted; deleted = tombstone. Neither is a real order on a customer card.
+      setQsOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(o => o.brand === activeBrand && o.status !== 'NS_QUEUED' && !o.deleted));
     }, () => { /* none yet */ });
     return () => unsub();
   }, [activeBrand]);
@@ -783,7 +784,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
       // Plating shipments sent to vendors (from the Pick Pack plating tool) — surfaced on the vendor profile.
       const unsubPlating = onSnapshot(query(collection(db, "hq_purchase_orders"), where("kind", "==", "plating")), (snap) => {
-          setPlatingPOs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+          setPlatingPOs(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(po => !po.deleted && po.status !== 'Deleted'));
       });
 
       return () => { unsubLists(); unsubDiscounts(); unsubAssemblies(); unsubCrm(); unsubForms(); unsubLogos(); unsubDrawings(); unsubPlating(); };

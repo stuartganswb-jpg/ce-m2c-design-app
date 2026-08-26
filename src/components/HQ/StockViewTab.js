@@ -1325,7 +1325,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const rows = [];
             hqSnap.docs.forEach(d => {
                 const hq = { id: d.id, ...d.data() };
-                if (['Closed', 'Cancelled', 'Done'].includes(hq.status)) return;
+                if (hq.deleted || ['Closed', 'Cancelled', 'Done', 'Deleted'].includes(hq.status)) return;
                 const fin = finById[(hq.finPayload && hq.finPayload.id) || hq.id] || null;
                 if (fin) seenFin.add(fin.id);
                 if (fin && fin.currentPhase === 'Closed') return;
@@ -1334,7 +1334,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             });
             finSnap.docs.forEach(d => {
                 const fin = { id: d.id, ...d.data() };
-                if (seenFin.has(fin.id) || fin.currentPhase === 'Closed' || fin.packStatus === 'Packed') return;
+                if (seenFin.has(fin.id) || fin.deleted || fin.currentPhase === 'Closed' || fin.packStatus === 'Packed') return;
                 rows.push({ hq: null, fin });
             });
             rows.sort((a, b) => (((b.fin && b.fin.createdAt) || (b.hq && b.hq.createdAt) || 0) - (((a.fin && a.fin.createdAt) || (a.hq && a.hq.createdAt) || 0))));
