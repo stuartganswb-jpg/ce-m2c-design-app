@@ -1047,6 +1047,9 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     }
     const qsSnap = await db.collection('hq_sales_orders').where('customerId', '==', customerId).get();
     qsSnap.forEach((d) => { if (!soDocs.some((x) => x.id === d.id)) soDocs.push({ id: d.id, ...d.data() }); });
+    // HQ soft-delete tombstones stay in the collection by design (2026-08-25 ledger model) —
+    // they must never resurface in the customer's own list.
+    for (let i = soDocs.length - 1; i >= 0; i--) { if (soDocs[i].deleted) soDocs.splice(i, 1); }
 
     // Floor docs for the stage rollup, joined by the same keys RTG Dispatch uses.
     const joinKeys = [...new Set(soDocs.flatMap((so) => [so.soId, so.id, so.hqJobId]).filter(Boolean).map(String))];
@@ -1063,8 +1066,9 @@ exports.portalMyOrders = onCall({ cors: true }, async (request) => {
     const orderedJobIds = new Set(soDocs.map((so) => String(so.hqJobId || '')).filter(Boolean));
 
     // A quote the CUSTOMER deleted is gone from their list but kept in HQ, flagged, so the team
-    // can see what happened rather than having a record vanish.
-    const liveJobs = jobs.filter((j) => !j.portalDeleted);
+    // can see what happened rather than having a record vanish. An HQ soft-delete tombstone
+    // (deleted:true, 2026-08-25 ledger model) is equally dead — it must not resurface here.
+    const liveJobs = jobs.filter((j) => !j.portalDeleted && !j.deleted);
 
     // THEIR part #s for every code on every line we are about to return — one batched lookup for
     // the whole page rather than a read per line.
