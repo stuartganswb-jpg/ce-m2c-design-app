@@ -3587,8 +3587,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {l.erp || '—'}
                                                 {l.aliasErp && <div style={{ fontSize: '9px', color: theme.inkSoft, letterSpacing: '.04em' }}>alias {l.aliasErp}</div>}
                                             </td>
-                                            <td style={{ padding: '9px 18px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.name}{l.note ? ` · ${l.note}` : ''}{(() => { const pk = packOf(l); return pk ? <span style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px' }}> → pull {(Number(l.qty) || 0) * pk.size} × {pk.singleErp}</span> : null; })()}</td>
-                                            <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.bin ? theme.ink : theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.bin || 'UNASSIGNED'}</td>
+                                            <td style={{ padding: '9px 18px', color: theme.inkSoft, borderBottom: `1px solid ${theme.paper2}` }}>{l.name}{l.note ? ` · ${l.note}` : ''}{(() => { const pk = packOf(l); return pk ? <span style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px' }}> → pull {(Number(l.qty) || 0) * pk.size} × {pk.singleErp}</span> : null; })()}
+                                                {/* A made-to-order line: the pieces ARRIVE from the finishing floor — do NOT
+                                                    pull the raw off the shelf for it (its WO carries the pull lines). */}
+                                                {l.toBeFinished && <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🎨 TO BE FINISHED · {l.finishCode || ''} — arrives from the finishing floor, do not pull raw</div>}
+                                            </td>
+                                            <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.toBeFinished ? theme.brass : (l.bin ? theme.ink : theme.inkSoft), borderBottom: `1px solid ${theme.paper2}` }}>{l.toBeFinished ? 'FROM FINISHING' : (l.bin || 'UNASSIGNED')}</td>
                                             <td style={{ padding: '9px 18px', textAlign: 'center', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.qty}</td>
                                         </tr>
                                     ))}

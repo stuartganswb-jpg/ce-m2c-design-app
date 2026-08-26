@@ -329,7 +329,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // An app-created SO (CPQ save) waits for NetSuite to accept it (nsInternalId via
         // writeBack) before splitting to the floors, so a rejected order never becomes work.
         const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
-        const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && !o.awaitingRodCut && !o.awaitingConvert && !o.pushedToFinishing
+        const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && !o.awaitingRodCut && !o.awaitingConvert && !o.awaitingSoAccept && !o.pushedToFinishing
             && (o.finPayload || o.routeTo === 'FINISHING' || o.routeTo === 'SHOP'));
         const target = so || wo;
         if (!target) return;
@@ -1053,6 +1053,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // Extracted here so BOTH release paths queue it from the same code. Sales orders are excluded by
     // the caller — their NetSuite side is an estimate, not a stock-build work order.
     const queueNsStockWorkOrder = async (hqOrder, fp) => {
+        // A SALES-typed payload (Order Entry to-be-finished lines) never queues an app-created
+        // NetSuite work order: the SALES ORDER is its NetSuite record, exactly like CPQ customs —
+        // and the finished-variant code (RAW/FIN) may not even exist as a NetSuite item.
+        if (fp && fp.orderType === 'sales') return '';
         try {
             const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
             // Resolve the assembly's NetSuite internal id from FOUR sources — the payload field →
@@ -1124,6 +1128,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (opts.auto) {
             if (hqOrder.awaitingRodCut) { addLog(`⚡ auto: ${hqOrder.id} waiting on its rod cut — left parked.`, 'warn'); return; }
             if (hqOrder.awaitingConvert) { addLog(`⚡ auto: ${hqOrder.id} waiting on its phosphate convert — left parked.`, 'warn'); return; }
+            if (hqOrder.awaitingSoAccept) { addLog(`⚡ auto: ${hqOrder.id} waiting for NetSuite to accept its sales order — left parked.`, 'warn'); return; }
             if (hqOrder.pushedToFinishing) { addLog(`⚡ auto: ${hqOrder.id} already dispatched — skipped.`, 'info'); return; }
         }
         // THE POLES DO NOT EXIST YET (Stuart 2026-08-19). A 4 ft order is cut from stocked 8 ft rods,
@@ -1134,6 +1139,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // the pre-check found the phosphated cores short and raised a convert to-do; until the WMS
         // Convert tab posts it, the components do not exist to pick.
         if (!opts.auto && hqOrder.awaitingConvert && !window.confirm(`⏳ ${hqOrder.id} is waiting on a phosphate CONVERT.\n\n${hqOrder.convertGateNote || 'Component /P cores are short — a convert to-do is open on the WMS Convert tab.'}\n\nUntil the convert posts, the ${woItemCodeOf(hqOrder) || ''} components do not exist to pick. The gate clears itself when the WMS completes the convert.\n\nRelease it to the floor anyway?`)) return;
+        // ORDER-ENTRY WOs wait for their SALES ORDER (the CPQ rule: a rejected order never becomes
+        // work). The outbox writeBack lifts this the moment NetSuite accepts the SO.
+        if (!opts.auto && hqOrder.awaitingSoAccept && !window.confirm(`⏳ ${hqOrder.id} belongs to sales order ${hqOrder.soAppId || ''}, which NetSuite has not accepted yet.\n\nThe gate clears itself when the SO posts (watch the Transmit Log). If NetSuite REJECTED the order, fix and re-send it rather than releasing this work.\n\nRelease it to the floor anyway?`)) return;
         if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
         // STOP MECHANISM (Stuart 2026-07-21): a second tap must never quietly duplicate the
         // floor card — an already-dispatched order needs an explicit, scary re-confirm.
@@ -2102,6 +2110,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                             {wo.awaitingConvert && (
                                                 <div title={`WMS → Convert tab ("Needs Phosphating"). ${wo.convertGateNote || ''} The gate clears itself when the convert posts.`} style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>
                                                     ⇄ AWAITING CONVERT{wo.convertGateNote ? <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}> · {wo.convertGateNote}</span> : ''}
+                                                </div>
+                                            )}
+                                            {wo.awaitingSoAccept && (
+                                                <div title="This work order belongs to an Order Entry sales order NetSuite has not accepted yet — the gate clears itself when the SO posts (Transmit Log shows progress)." style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>
+                                                    ⏳ AWAITING SO ACCEPT{wo.soAppId ? <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}> · {wo.soAppId}</span> : ''}
                                                 </div>
                                             )}
                                             {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}

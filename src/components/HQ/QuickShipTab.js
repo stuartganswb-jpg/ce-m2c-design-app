@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { db } from '../../firebase';
-import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
+import { withItemCode, makeFullTasks } from '../Shared/workOrderContract';
+import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
@@ -1155,7 +1157,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     createdBy: { name: currentUser || '', via: 'QUICKSHIP' },
                     cpqData: {
                         totalPrice: lines.reduce((sum, l) => sum + l.rate * l.eachQty, 0) + trvPushLines.reduce((sum, t) => sum + ((t.rate || 0) * (t.quantity || 1)), 0),
-                        breakdown: lines.map(l => ({ name: `${l.aliasErp || l.erp} — ${l.name}`, qty: l.eachQty, price: l.rate, legacyErpId: l.erp })),
+                        breakdown: lines.map(l => ({ name: `${l.aliasErp || l.erp} — ${l.name}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}`, qty: l.eachQty, price: l.rate, legacyErpId: l.erp, ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) })),
                         cartItems: [],
                     },
                     dateSaved: new Date().toISOString().split('T')[0], author: currentUser || '', createdAt: serverTimestamp(),
@@ -1188,7 +1190,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // packing station knows to bundle them 7 to a bag.
                 // erp stays the REAL stocked code — pick/pack scans and barcodes it. aliasErp rides
                 // alongside so the floor can see, in small print, what the customer ordered it as.
-                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '' })),
+                // toBeFinished/finishCode ride the stored line (they were dropped here until
+                // 2026-08-27, which left the WMS reading a made-to-order line as a shelf pull).
+                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) })),
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1212,13 +1216,120 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 invoiceTotal: lines.reduce((s, l) => s + l.rate * l.eachQty, 0),
                 createdBy: currentUser || '', createdAt: Date.now(), createdDate: new Date().toISOString()
             });
+
+            // ── TO-BE-FINISHED LINES FIRE THE FLOOR (Stuart 2026-08-27, from QS-1787697627832) ──
+            // An Order Entry sales order is a CPQ-grade demand statement: a line entered as raw
+            // part + finish + qty becomes a finishing WORK ORDER the moment the order exists —
+            // parked in RTG like every other WO, gated on the SO's NetSuite acceptance (a rejected
+            // order never becomes work — the CPQ rule; the outbox writeBack lifts the gate when the
+            // SO posts), recipe = the chosen finish, pulls = the /P of each component via the same
+            // planner and component pre-check as every other screen (/P short → convert to-do +
+            // gate; raw behind it short → component shop WO). Stock View / the snapshot can never
+            // stand in for this: they see BOM-item demand, never the finish.
+            const woWriteBacks = [];
+            const tbfMade = [];
+            const tbfLines = lines.filter(l => l.toBeFinished && l.finishCode);
+            if (tbfLines.length) {
+                const rows = [];
+                for (let ti = 0; ti < tbfLines.length; ti++) {
+                    const l = tbfLines[ti];
+                    const rawPart = itemById(l.itemId) || null;
+                    let pins = [];
+                    if (rawPart && ['Master Assembly', 'Assembly'].includes(String(rawPart.partClass || ''))) {
+                        try {
+                            const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', rawPart.itemId)));
+                            pins = pinsSnap.docs.map(d => d.data());
+                            if (!pins.length) addLog(`⚠ ${l.erp} is an assembly with NO BOM pins in the app — the pre-check cannot see its components.`, 'warn');
+                        } catch (e) { console.warn('pins load failed for', l.erp, e); }
+                    }
+                    rows.push({ key: ti, l, rawPart, pins });
+                }
+                const preByKey = new Map();
+                try {
+                    const pre = await runBatchPrecheck({
+                        // The FINISHED identity (RAW/FIN) is the part the planner routes: mill base →
+                        // /P substitution for singles; assemblies explode their pins literally.
+                        rows: rows.map(x => ({ key: x.key, part: { ...(x.rawPart || {}), legacyErpId: `${x.l.erp}/${x.l.finishCode}` }, qty: x.l.eachQty, pins: x.pins })),
+                        inventory: allItems, locationId: brandMapping.location,
+                    });
+                    if (pre.nsError) addLog(`⚠ Component pre-check skipped — NetSuite unreachable (${String(pre.nsError).slice(0, 120)}). WOs created un-gated.`, 'warn');
+                    else pre.results.forEach(res => preByKey.set(res.key, res));
+                } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
+
+                for (const x of rows) {
+                    const { l, rawPart } = x;
+                    const pre = preByKey.get(x.key) || null;
+                    const finishedErp = `${l.erp}/${l.finishCode}`;
+                    const woId = `WO-OE-${String(l.erp).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}-${x.key}`;
+                    // The floor's pull lines from the plan — a self-pull (no /P record exists for
+                    // the mill base) falls back to the RAW part, which is what the shelf holds.
+                    const planLines = pre ? pre.plan.lines.map(pl => String(pl.legacyErpId || '').toUpperCase() === finishedErp.toUpperCase()
+                        ? { ...pl, legacyErpId: l.erp, partId: l.erp, partName: `${rawPart?.itemName || l.erp} — raw pull (no /P record)` } : pl) : [];
+                    let gate = {};
+                    if (pre && pre.actions.length) {
+                        try {
+                            const exec = await executeMakeupActions({
+                                actions: pre.actions, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp,
+                                createdBy: currentUser || '', inventory: allItems, source: 'orderentry-precheck', reqDate: '',
+                            });
+                            gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
+                            addLog(`🧩 ${finishedErp} pre-check: ${exec.made.join(' · ')}${exec.gateFields.awaitingConvert ? ' — WO gated until the convert posts.' : ''}`, 'warn');
+                        } catch (e) {
+                            const perm = /permission|insufficient/i.test(String(e.message || e));
+                            addLog(`⚠ ${finishedErp}: component make-up orders FAILED (${e.message || e})${perm ? ' — publish the convert_demand firestore rule.' : ''} WO created un-gated.`, 'error');
+                        }
+                    }
+                    const ptype = String(rawPart?.manufacturingSpecs?.productType || '').toUpperCase();
+                    const isPole = /POLE|ROD/.test(ptype);
+                    const size = String(rawPart?.manufacturingSpecs?.paintSize || '').toUpperCase();
+                    const finPayload = withItemCode({
+                        id: woId, orderKey: hqId, quoteId: null, salesOrderId: hqId, estimateId: null,
+                        // A SALES job: it files under the customer on every floor screen, and the
+                        // NetSuite side is the SALES ORDER itself — never an app-queued work order.
+                        orderType: 'sales', soId: hqId, soNum: hqId,
+                        customerId, customerName: selectedCustomer?.name || customerId, customer: selectedCustomer?.name || customerId, clientName: selectedCustomer?.name || customerId,
+                        recipe: l.finishCode, reqDate: '', type: finishedErp, totalParts: l.eachQty,
+                        stockErpId: finishedErp, stockInternalId: null,
+                        paintSize: isPole ? null : (size || null), productType: ptype || null,
+                        paintSizes: (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: l.eachQty } : null,
+                        ...(isPole ? { poles: { qty: l.eachQty, type: ptype || 'POLE' }, totalPoles: l.eachQty } : {}),
+                        ...(rawPart?.manufacturingSpecs?.finishStream ? { finishStream: String(rawPart.manufacturingSpecs.finishStream).toUpperCase() } : {}),
+                        note: `Order Entry ${hqId} · ${selectedCustomer?.name || customerId} · ${l.erp} in ${l.finishCode}${l.note ? ` · ${l.note}` : ''}`,
+                        cpqSpecs: {}, imageUrl: rawPart?.finalImageUrl || null,
+                        dimensions: { length: 0, width: 0, height: 0 },
+                        partsList: planLines, ...(pre && pre.plan.exploded ? { bomExploded: true } : {}),
+                        currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
+                        tasks: makeFullTasks(),
+                        machineAssigned: null, redlineAlert: false, sentToPickPack: false, pickStatus: 'Pending',
+                        shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
+                        brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
+                    });
+                    await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
+                        id: woId, woId, brand: activeBrand, type: finishedErp, status: 'Approved',
+                        source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload,
+                        orderClass: 'ORDER_ENTRY', soAppId: hqId, customerId,
+                        customer: selectedCustomer?.name || customerId,
+                        recipe: l.finishCode, erpId: finishedErp, partErpId: finishedErp, rootItem: l.erp,
+                        qty: l.eachQty, totalParts: l.eachQty, reqDate: '',
+                        // A rejected order never becomes work (the CPQ rule): the WO waits until
+                        // NetSuite accepts the SO — the outbox writeBack lifts this on post.
+                        awaitingSoAccept: true,
+                        ...gate,
+                        createdAt: Date.now(), createdBy: currentUser || ''
+                    }), { merge: true });
+                    woWriteBacks.push({ collection: 'hq_work_orders', docId: woId, patch: { awaitingSoAccept: false, soAccepted: true } });
+                    tbfMade.push(`${finishedErp} ×${l.eachQty} → ${woId}`);
+                }
+                if (tbfMade.length) addLog(`🎨 ${tbfMade.length} finishing work order(s) parked in RTG for this order:\n${tbfMade.map(m => `• ${m}`).join('\n')}`, 'success');
+            }
+
             const obId = await enqueueNsWrite({
                 kind: 'salesorder', label: `Quick Ship SO · ${selectedCustomer?.name || customerId} · ${lines.length} line(s)`,
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/salesorder`,
                 method: 'POST', payload, sourceApp: 'QUICKSHIP', createdBy: currentUser || '',
-                writeBack: [{ collection: 'hq_sales_orders', docId: hqId, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }],
+                writeBack: [{ collection: 'hq_sales_orders', docId: hqId, idField: 'nsInternalId', tranField: 'soId', patch: { status: 'Pending' } }, ...woWriteBacks],
             });
-            addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.`, 'success');
+            addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.${tbfMade.length ? ` ${tbfMade.length} to-be-finished line(s) parked as RTG work orders (released once NetSuite accepts the SO).` : ''}`, 'success');
 
             setCart([]); setJobName('');
         } catch (e) {

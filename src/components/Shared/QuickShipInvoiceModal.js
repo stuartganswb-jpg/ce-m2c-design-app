@@ -18,6 +18,11 @@ const BRAND_NAMES = { ce: 'Classical Elements', m2c: 'M2C Studio', uniquity: 'Un
 const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
     const [invNo, setInvNo] = useState(order.nsInvoiceNo || '');
     const [busy, setBusy] = useState(false);
+    // INVOICES ISSUE AT FULFILLMENT (Stuart 2026-08-27): until the order is packed/shipped or a
+    // NetSuite invoice is matched, this document IS the sales-order confirmation — an Order Entry
+    // record is a quote or a sales order, never an "invoice" that nothing has been billed for.
+    const fulfilled = order.packStatus === 'Packed' || order.status === 'Shipped' || !!invNo;
+    const docLabel = fulfilled ? 'INVOICE' : 'SALES ORDER';
 
     // Priced structure captured at TRANSACTION time; legacy orders (pushed before this
     // feature) fall back to an unpriced item list.
@@ -61,8 +66,8 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '9px', letterSpacing: '.18em', textTransform: 'uppercase', color: '#8a857c', marginTop: '4px' }}>Quick Ship · Stocked Program</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px', letterSpacing: '.08em' }}>INVOICE</div>
-                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '11px', marginTop: '4px' }}>{invNo ? `# ${invNo}` : 'DRAFT — NetSuite # not matched'}</div>
+                    <div style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px', letterSpacing: '.08em' }}>{docLabel}</div>
+                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '11px', marginTop: '4px' }}>{invNo ? `# ${invNo}` : (fulfilled ? 'DRAFT — NetSuite # not matched' : 'Order confirmation — invoice issues at fulfillment')}</div>
                     <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#8a857c', marginTop: '2px' }}>{new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
                 </div>
             </div>
@@ -120,7 +125,7 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     <span style={{ fontFamily: 'var(--serif, Georgia)', fontSize: '22px' }}>${total.toFixed(2)}</span>
                 </div>
             </div>
-            <div style={{ marginTop: '18px', fontFamily: 'var(--mono, monospace)', fontSize: '9px', color: '#8a857c' }}>Thank you — please reference invoice #{invNo || order.soId} with payment.</div>
+            <div style={{ marginTop: '18px', fontFamily: 'var(--mono, monospace)', fontSize: '9px', color: '#8a857c' }}>{fulfilled ? `Thank you — please reference invoice #${invNo || order.soId} with payment.` : `Thank you — this confirms sales order ${order.soId}. Your invoice follows at shipment.`}</div>
         </div>
     );
 
@@ -128,13 +133,13 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
         <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 12000, padding: '16px' }}>
             <div onClick={e => e.stopPropagation()} style={{ background: 'var(--paper, #f7f4ee)', width: 'min(900px, 96vw)', maxHeight: '94vh', display: 'flex', flexDirection: 'column', borderRadius: '4px', boxShadow: '0 16px 60px rgba(0,0,0,0.3)', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '14px 20px', borderBottom: '1px solid var(--line, #ddd)', background: '#fff', flexWrap: 'wrap' }}>
-                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Invoice — {order.soId}{invNo ? ` · #${invNo}` : ''}</div>
+                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>{fulfilled ? 'Invoice' : 'Sales Order'} — {order.soId}{invNo ? ` · #${invNo}` : ''}</div>
                     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                         <button onClick={matchInvoice} disabled={busy} title="Find the NetSuite invoice billed from this SO and import its number onto this document" style={{ padding: '9px 14px', background: invNo ? 'transparent' : 'var(--brass)', color: invNo ? 'var(--ink)' : '#fff', border: invNo ? '1px solid var(--line)' : 'none', cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
                             {busy ? 'Matching…' : (invNo ? '↻ Re-match NS Invoice #' : '⤓ Match NetSuite Invoice #')}
                         </button>
                         <button onClick={() => printForm(<InvoiceDoc />, `Invoice ${invNo || order.soId}`)} style={{ padding: '9px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>🖨 Print / PDF</button>
-                        <button onClick={() => { window.location.href = `mailto:${customer?.email || ''}?subject=${encodeURIComponent(`Invoice ${invNo || order.soId} — ${BRAND_NAMES[brand] || ''}`)}&body=${encodeURIComponent('Please find your invoice attached.\n\nThank you!')}`; }} style={{ padding: '9px 14px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>✉ Email</button>
+                        <button onClick={() => { window.location.href = `mailto:${customer?.email || ''}?subject=${encodeURIComponent(`${fulfilled ? 'Invoice' : 'Sales Order'} ${invNo || order.soId} — ${BRAND_NAMES[brand] || ''}`)}&body=${encodeURIComponent(fulfilled ? 'Please find your invoice attached.\n\nThank you!' : 'Please find your sales order confirmation attached.\n\nThank you!')}`; }} style={{ padding: '9px 14px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>✉ Email</button>
                         <button onClick={onClose} style={{ padding: '9px 14px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Close</button>
                     </div>
                 </div>

@@ -1784,19 +1784,27 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           return (
                                               <div style={{ marginBottom: '16px' }}>
                                                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '12px' }}>
-                                                      <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Quick Ship Invoices</h4>
-                                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{custQs.length} order(s)</span>
+                                                      <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Order Entry — Sales Orders</h4>
+                                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{custQs.length} order(s) · invoices issue at fulfillment</span>
                                                   </div>
-                                                  {custQs.slice(0, 12).map(o => (
+                                                  {custQs.slice(0, 12).map(o => {
+                                                      // An Order Entry record is a SALES ORDER until it fulfills — only then is
+                                                      // there an invoice to show (Stuart 2026-08-27: "invoices are only
+                                                      // generated at fulfillment").
+                                                      const fulfilled = o.packStatus === 'Packed' || o.status === 'Shipped' || !!o.nsInvoiceNo;
+                                                      const state = o.status === 'NS_QUEUED' ? 'AWAITING NETSUITE' : (o.status || 'Pending');
+                                                      return (
                                                       <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid var(--line)', background: 'var(--paper)', padding: '10px 14px', marginBottom: '8px' }}>
                                                           <div style={{ flex: 1, minWidth: 0 }}>
                                                               <span style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', fontWeight: 600, color: 'var(--ink)' }}>SO {o.soId}</span>
                                                               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px' }}>{o.createdAt ? new Date(o.createdAt).toLocaleDateString() : ''}{o.jobName ? ` · ${o.jobName}` : ''} · ${Number(o.invoiceTotal || 0).toFixed(2)}</span>
                                                           </div>
-                                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid', borderColor: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', color: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', whiteSpace: 'nowrap' }}>{o.nsInvoiceNo ? `INV ${o.nsInvoiceNo}` : 'NO NS INV #'}</span>
-                                                          <button onClick={() => setQsInvoice(o)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>🧾 Invoice</button>
+                                                          <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid var(--line)', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{state}</span>
+                                                          {fulfilled && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid', borderColor: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', color: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', whiteSpace: 'nowrap' }}>{o.nsInvoiceNo ? `INV ${o.nsInvoiceNo}` : 'NO NS INV #'}</span>}
+                                                          <button onClick={() => setQsInvoice(o)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>{fulfilled ? '🧾 Invoice' : '📄 Order'}</button>
                                                       </div>
-                                                  ))}
+                                                      );
+                                                  })}
                                               </div>
                                           );
                                       })()}
