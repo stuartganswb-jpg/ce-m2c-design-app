@@ -6,7 +6,7 @@ import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/
 import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { makeFullTasks, withItemCode } from '../Shared/workOrderContract';
-import { matchesCustomerCode } from '../Shared/aliasSearch';
+import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
@@ -1586,6 +1586,13 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
                 <div style={{ padding: '20px', flex: 1, display: 'flex', flexDirection: 'column' }}>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: classColor, marginBottom: '8px' }}>{displayId} <span style={{opacity: 0.6}}>({part.partClass})</span></div>
+                  {/* THE CUSTOMER'S NUMBERS, right under ours (Stuart 2026-08-26) — their POs
+                      arrive in these codes, so the card answers to them at a glance. */}
+                  {(() => {
+                      const codes = [...new Set(customerCodesOf(part))];
+                      if (!codes.length) return null;
+                      return <div title={`Customer part #s (4.6 Their SKU + Fabricut pattern #s): ${codes.join(', ')}`} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', marginBottom: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>⤿ {codes.slice(0, 3).join(' · ')}{codes.length > 3 ? ` +${codes.length - 3}` : ''}</div>;
+                  })()}
                   {specs.aliasOf && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', marginBottom: '6px' }}>🔗 alias → {specs.aliasOf}</div>}
                   
                   {part.clientPricing && part.clientPricing.length > 0 && (

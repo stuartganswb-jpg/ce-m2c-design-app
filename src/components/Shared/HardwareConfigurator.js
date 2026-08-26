@@ -1616,12 +1616,12 @@ function HardwareConfiguratorInner({
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto 1fr', gap: '7px', alignItems: 'end' }}>
                                     <label style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                                         <span style={{ ...mono, fontSize: '8px' }}>Inches</span>
-                                        <input value={poleIn} onChange={e => setPoleIn(e.target.value)} placeholder="96" inputMode="decimal"
+                                        <input value={poleIn} onChange={e => setPoleIn(e.target.value)} placeholder="—" inputMode="decimal"
                                             style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: '#fff', color: 'var(--ink)' }} />
                                     </label>
                                     <label style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                                         <span style={{ ...mono, fontSize: '8px' }}>Fraction</span>
-                                        <input value={poleFrac} onChange={e => setPoleFrac(e.target.value)} placeholder="1/2"
+                                        <input value={poleFrac} onChange={e => setPoleFrac(e.target.value)} placeholder="—"
                                             style={{ padding: '8px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '14px', width: '100%', background: '#fff', color: 'var(--ink)' }} />
                                     </label>
                                     <span style={{ color: 'var(--brass)', fontFamily: 'var(--mono)', paddingBottom: '9px' }}>→</span>

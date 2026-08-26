@@ -6,6 +6,7 @@
 // collection (Calico ↔ Simple Elegance). Re-uploading a sheet to change one number is not
 // maintenance. This page is the maintenance surface: pick a customer and a collection, see every
 // part, edit in place, add the ones that were missed, and import a control file when a new one
+import { matchesCustomerCode } from '../Shared/aliasSearch';
 // arrives — as a reviewable diff, never a blind overwrite.
 //
 // WHERE THE DATA GOES — nothing new is invented, because the plumbing already exists:
@@ -370,7 +371,7 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     dirty: !!edits[p.id],
                 };
             })
-            .filter(r => !term || r.code.includes(term) || upper(r.name).includes(term) || r.aliasCodes.some(c => c.includes(term)))
+            .filter(r => !term || r.code.includes(term) || upper(r.name).includes(term) || r.aliasCodes.some(c => c.includes(term)) || matchesCustomerCode(r.p, term))
             .filter(r => onlyPriced === 'ALL' || (onlyPriced === 'PRICED' ? money(r.price) !== '' : money(r.price) === ''));
     }, [members, edits, search, onlyPriced, custKeys, custId, suggestions, outsourceFinishes, aliasLinks]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -4,6 +4,7 @@ import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
+import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { customerKeys, clientPriceFor, findClientPriceRow } from "../Shared/clientPricing";
 import { resolveKitCode, describeKitAlign } from '../Shared/kitCode';
 import { explodeTraverse, singleProjections, projLabel } from '../Shared/traverseExplode';
@@ -72,7 +73,7 @@ const ItemSelect = ({ value, onChange, items, placeholder }) => {
     }, [value, items]);
     const q = search.toLowerCase();
     const filtered = items
-        .filter(it => !value || open ? (erpOf(it).toLowerCase().includes(q) || String(it.itemName || '').toLowerCase().includes(q)) : true)
+        .filter(it => !value || open ? (erpOf(it).toLowerCase().includes(q) || String(it.itemName || '').toLowerCase().includes(q) || matchesCustomerCode(it, q)) : true)
         .sort((a, b) => erpOf(a).localeCompare(erpOf(b), undefined, { numeric: true, sensitivity: 'base' }))
         .slice(0, 60);
     return (
@@ -415,7 +416,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         if (!q) return null;
         const hit = allItems.find(it => erpOf(it) === q)
             || allItems.find(it => bareCode(it.itemId) === bareCode(q) || String(it.itemId || '').toUpperCase() === q)
-            || allItems.find(it => erpOf(it).startsWith(q));
+            // The CUSTOMER'S number resolves too — their SKU (4.6) or Fabricut pattern # — since
+            // that is what arrives on their POs (2026-08-26).
+            || allItems.find(it => customerCodesOf(it).some(c => c.toUpperCase() === q))
+            || allItems.find(it => erpOf(it).startsWith(q))
+            || allItems.find(it => matchesCustomerCode(it, q));
         if (!hit) return { ok: false, step: 'Not found', detail: `No item in this brand matches "${q}". Check the brand selector and the spelling — Quick Ship only loads ${activeBrand}'s parts.` };
 
         const code = erpOf(hit);
