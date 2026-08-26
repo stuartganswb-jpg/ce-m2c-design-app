@@ -16,12 +16,21 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AppImprovementTab from '../Shared/AppImprovementTab';
-import { mirrorCustomStatusToSibling, releaseSiblingToPickPack } from '../Shared/workOrderContract';
+import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf } from '../Shared/workOrderContract';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
+
+// Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
+// salesOrderId/orderKey but no soNum ("SO: undefined" on cards AND printed labels), and no
+// canonical itemCode field woItemCodeOf knows. Resolve instead of trusting one field — the
+// partNum / single-line cutList fallbacks reuse woItemCodeOf's own code validation.
+const soNumOf = (o) => o?.soNum || o?.salesOrderId || o?.orderKey || 'N/A';
+const shopItemCodeOf = (o) => woItemCodeOf(o)
+    || woItemCodeOf({ itemCode: o?.partNum })
+    || woItemCodeOf({ itemCode: (o?.cutList || []).length === 1 ? o.cutList[0].legacyErpId : null });
 
 const TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'app imp', 'admin'];
 const ENG_TABS = ['routings', 'programs', 'tooling', 'admin'];
@@ -289,21 +298,34 @@ const ShopFloor = () => {
             });
         }
 
-        // 1. Move into the machine backlog queue
-        await addDoc(shopDb.collection("milling"), { 
-            ...millForm, 
-            qty: parseFloat(millForm.qty), 
-            mach: firstMachine, 
-            estHrs: parseFloat(totalEstHrs.toFixed(2)), 
-            priority: millForm.reqDate ? new Date(millForm.reqDate).getTime() : 9999999999999, 
-            phosphate: millForm.phosphate === 'Yes', 
+        // The source shop_custom_orders doc is the order's SPINE — its orderKey/finSiblingId/
+        // quoteId are what closeOrderEverywhere, the orphan audit and RTG's job log walk. It is
+        // STAMPED into milling, never deleted (deleting it here severed all three for good).
+        const src = millForm._sourceCustomOrderId ? customOrdersRaw.find(o => o.id === millForm._sourceCustomOrderId) : null;
+
+        // 1. Move into the machine backlog queue (linkage rides along so labels/close can walk back)
+        const millRef = await addDoc(shopDb.collection("milling"), {
+            ...millForm,
+            qty: parseFloat(millForm.qty),
+            mach: firstMachine,
+            estHrs: parseFloat(totalEstHrs.toFixed(2)),
+            priority: millForm.reqDate ? new Date(millForm.reqDate).getTime() : 9999999999999,
+            phosphate: millForm.phosphate === 'Yes',
             status: 'Backlog',
-            t: serverTimestamp() 
+            ...(src ? {
+                orderKey: src.orderKey || null, quoteId: src.quoteId || null,
+                salesOrderId: src.salesOrderId || null, finSiblingId: src.finSiblingId || null,
+                brand: src.brand || src.brandId || null, itemCode: woItemCodeOf(src) || null,
+                sourceCustomOrderId: src.id,
+            } : {}),
+            t: serverTimestamp()
         });
-        
-        // 2. Remove it from the HQ holding queue
+
+        // 2. Stamp the spine doc out of the intake queue — it stays findable by id/orderKey
         if (millForm._sourceCustomOrderId) {
-            await deleteDoc(doc(db, "shop_custom_orders", millForm._sourceCustomOrderId));
+            await updateDoc(doc(db, "shop_custom_orders", millForm._sourceCustomOrderId), {
+                status: 'In Milling', millingId: millRef.id, updatedAt: serverTimestamp()
+            });
         }
 
         writeLog(`Accepted HQ Order ${millForm.woNum} into backlog`, 'production');
@@ -320,7 +342,7 @@ const ShopFloor = () => {
         const firstOp = routing && routing.ops?.length > 0 ? routing.ops[0] : { machine: 'Unassigned', progId: 'Manual' };
 
         // 1. Create the Schedule Document (Status: Pending)
-        await addDoc(shopDb.collection("schedule"), { 
+        const schedRef = await addDoc(shopDb.collection("schedule"), {
             routingId: m.partNum, 
             currentOpIndex: 0, 
             op: '', // AI or Operator will assign
@@ -333,18 +355,22 @@ const ShopFloor = () => {
             reqDate: m.reqDate || null, 
             estHrs: parseFloat(m.estHrs) || null, 
             notes: `SO: ${m.soNum||'N/A'} | Desc: ${m.item||'None'}`, 
-            customFileUrl: m.fileUrl || null, 
-            phosphate: m.phosphate || false, 
-            status: "Pending", 
-            totalPausedMs: 0, 
-            partialGoodQty: 0, 
-            t: serverTimestamp() 
+            customFileUrl: m.fileUrl || null,
+            phosphate: m.phosphate || false,
+            // Linkage rides op-to-op so the last op can complete the order's spine doc.
+            orderKey: m.orderKey || null,
+            sourceCustomOrderId: m.sourceCustomOrderId || null,
+            itemCode: m.itemCode || null,
+            status: "Pending",
+            totalPausedMs: 0,
+            partialGoodQty: 0,
+            t: serverTimestamp()
         });
-        
-        // 2. Remove from Tracker Holding Queue
-        await deleteDoc(doc(shopDb.collection("milling"), m.id));
-        
-        writeLog(`Dispatched WO ${m.woNum} to AI Unscheduled Queue`, 'scheduler');
+
+        // 2. Stamp it out of the Tracker Holding Queue — kept, not deleted (order history)
+        await updateDoc(doc(shopDb.collection("milling"), m.id), { status: 'Dispatched', scheduleId: schedRef.id, dispatchedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+
+        writeLog(`Dispatched WO ${m.woNum} to the schedule queue`, 'scheduler');
     };
 
     // ==========================================
@@ -476,8 +502,14 @@ const ShopFloor = () => {
             if (hasNextOp && grandTotalGood > 0) {
                 const nextIndex = task.currentOpIndex + 1;
                 const nextOp = routing.ops[nextIndex];
-                await addDoc(shopDb.collection("schedule"), { routingId: task.routingId, currentOpIndex: nextIndex, op: '', mach: nextOp.machine, prog: nextOp.progId, woNum: task.woNum, targetQty: grandTotalGood, reqDate: task.reqDate, notes: task.notes, customFileUrl: task.customFileUrl, phosphate: task.phosphate, status: "Pending", totalPausedMs: 0, partialGoodQty: 0, t: serverTimestamp() });
+                await addDoc(shopDb.collection("schedule"), { routingId: task.routingId, currentOpIndex: nextIndex, op: '', mach: nextOp.machine, prog: nextOp.progId, woNum: task.woNum, targetQty: grandTotalGood, reqDate: task.reqDate, notes: task.notes, customFileUrl: task.customFileUrl, phosphate: task.phosphate, orderKey: task.orderKey || null, sourceCustomOrderId: task.sourceCustomOrderId || null, itemCode: task.itemCode || null, status: "Pending", totalPausedMs: 0, partialGoodQty: 0, t: serverTimestamp() });
                 writeLog(`Spawned OP ${nextIndex + 1} for ${task.woNum}`, 'production');
+            } else if (!hasNextOp && task.sourceCustomOrderId) {
+                // Last op done → the order's spine doc (shop_custom_orders) completes. Before the
+                // intake stamped instead of deleting, there was no spine left to tell.
+                await updateDoc(doc(db, "shop_custom_orders", task.sourceCustomOrderId), {
+                    status: 'Completed', completedAt: serverTimestamp(), completedBy: user.name, updatedAt: serverTimestamp()
+                }).catch(e => console.warn('spine completion stamp failed:', e));
             }
         }
         writeLog(`Run finalized: OP ${task.currentOpIndex + 1} of ${task.routingId}`, 'production'); setActiveModal(null);
@@ -728,7 +760,9 @@ const ShopFloor = () => {
         const grouped = { 'Uncategorized': [] }; 
         categories.forEach(c => grouped[c.name] = []); 
         
-        milling.filter(m => m.status !== 'Tracker').forEach(m => { 
+        // Backlog only — 'Tracker' rows sit on the scheduler, 'Dispatched' rows are history
+        // (kept for linkage since 2026-08-26, no longer deleted). No-status rows are legacy.
+        milling.filter(m => m.status === 'Backlog' || !m.status).forEach(m => {
             const cat = machineCategoryMap[m.mach] || 'Uncategorized'; 
             if(!grouped[cat]) grouped[cat] = []; 
             grouped[cat].push(m); 
@@ -750,7 +784,7 @@ const ShopFloor = () => {
                                     ...millForm,
                                     partNum: matchedRouting ? matchedRouting.partId : (order.partNum || ''),
                                     woNum: order.woNum, 
-                                    soNum: order.soNum, 
+                                    soNum: order.soNum || order.salesOrderId || '',
                                     qty: order.qty, 
                                     reqDate: order.reqDate || '', 
                                     item: order.note || '',
@@ -759,8 +793,11 @@ const ShopFloor = () => {
                             }
                         }} style={{ padding: '16px', width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '1rem', outline: 'none', background: '#fff' }}>
                             <option value="">-- Select Pending Order from RTG Dispatch --</option>
-                            {customOrders.filter(o => o.status === 'Pending').map(o => (
-                                <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty}){(o.routeTo === 'MILLING' || o.isStock) ? ' [STOCK → MILLING]' : ''}</option>
+                            {/* MILLING-ROUTED orders only. Custom-fab orders live on the Custom
+                                tab — accepting one here used to swallow it into milling and (worse,
+                                pre-2026-08-26) delete its spine doc outright. */}
+                            {customOrders.filter(o => o.status === 'Pending' && (o.routeTo === 'MILLING' || o.isStock === true)).map(o => (
+                                <option key={o.id} value={o.id}>{o.woNum} - {o.item} (Qty: {o.qty}) [STOCK → MILLING]</option>
                             ))}
                         </select>
                         <button onClick={handleAcceptHQOrder} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', width: '100%', marginTop: '16px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Accept HQ Order to Machine Backlog</button>
@@ -929,8 +966,11 @@ const ShopFloor = () => {
     );
 
     const renderCustomTab = () => {
-        // Keeping logic for Custom Fab orders from RTG
-        const activeOrders = customOrders.filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating').sort((a,b) => a.priority - b.priority);
+        // Custom Fab orders ONLY — milling-routed stock docs (routeTo/isStock, or already
+        // accepted → 'In Milling') belong to the Milling tab's pipeline, and showing them here
+        // let the same order be started from two tabs at once.
+        const isMillingRouted = (o) => o.routeTo === 'MILLING' || o.isStock === true || o.status === 'In Milling';
+        const activeOrders = customOrders.filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating' && !isMillingRouted(o)).sort((a,b) => a.priority - b.priority);
         // STAGED → ACTIVE flow (Stuart 2026-07-16): new orders wait on the LEFT as a compact
         // staged queue; ▶ Start moves ONE across to the RIGHT as the full working card. The
         // shared signal is status 'In Process', so every tablet sees the same active job.
@@ -948,7 +988,7 @@ const ShopFloor = () => {
                 await releaseSiblingToPickPack(order);
                 await addDoc(collection(db, "global_messages"), {
                     sender: 'System', sourceApp: 'SHOP', target: 'FINISHING',
-                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true
+                    msg: `Custom Fab Started for SO: ${soNumOf(order)}.`, t: serverTimestamp(), isSystem: true
                 });
             } catch (e) { alert('Failed to start: ' + (e.message || e)); }
         };
@@ -961,7 +1001,7 @@ const ShopFloor = () => {
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', border: '1px solid var(--line)', padding: '3px 7px', whiteSpace: 'nowrap', color: 'var(--ink-soft)' }}>WO {order.woNum}</span>
                 </div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '10px' }}>
-                    SO {order.soNum} · Qty {order.qty}{order.cutLength ? ` · Cut ${order.cutLength}"` : ''}{order.clientName ? ` · ${order.clientName}` : ''}{order.isOutsourced ? ' · PLATED (outsourced)' : ''}
+                    {(c => c ? `${c} · ` : '')(shopItemCodeOf(order))}SO {soNumOf(order)} · Qty {order.qty}{order.cutLength ? ` · Cut ${order.cutLength}"` : ''}{order.clientName ? ` · ${order.clientName}` : ''}{order.isOutsourced ? ' · PLATED (outsourced)' : ''}
                 </div>
                 {finSibs[order.finSiblingId] && <div style={{ marginBottom: '10px' }}><OrderStatusChips wo={finSibs[order.finSiblingId]} showWho={false} /></div>}
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -982,6 +1022,7 @@ const ShopFloor = () => {
         // into production AND tells the finishing/staging side the customs are NOT complete
         // (the staging handshake re-blocks until it's completed again).
         const recentDone = customOrders
+            .filter(o => !isMillingRouted(o))
             .filter(o => (o.status === 'Completed' || o.status === 'Sent to Plating') && (o.completedAt?.toMillis ? o.completedAt.toMillis() : o.completedAt || 0))
             .sort((a, b) => (b.completedAt?.toMillis ? b.completedAt.toMillis() : b.completedAt || 0) - (a.completedAt?.toMillis ? a.completedAt.toMillis() : a.completedAt || 0))
             .slice(0, 10);
@@ -1001,18 +1042,18 @@ const ShopFloor = () => {
             const zpl = `
                 ^XA
                 ^FO50,50^A0N,40,40^FDWO: ${order.woNum}^FS
-                ^FO50,100^A0N,30,30^FDSO: ${order.soNum}^FS
+                ^FO50,100^A0N,30,30^FDSO: ${soNumOf(order)}^FS
                 ${order.isOutsourced ? `^FO50,150^A0N,30,30^FDFinish: ${order.finishRecipe}^FS` : ''}
                 ${order.isOutsourced ? `^FO50,200^A0N,30,30^FDService/Ea: $${order.outsourcePrice}^FS` : ''}
                 ^FO50,${order.isOutsourced ? '250' : '150'}^A0N,25,25^FDCustomer: ${order.clientName}^FS
-                ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${order.item || order.partNum}^FS
+                ^FO50,${order.isOutsourced ? '300' : '200'}^A0N,25,25^FDItem: ${shopItemCodeOf(order) || order.item || order.partNum}^FS
                 ^FO50,${order.isOutsourced ? '350' : '250'}^A0N,25,25^FDQty: ${order.qty}  ${order.cutLength ? `Cut: ${order.cutLength}"` : ''}^FS
                 ^FO50,${order.isOutsourced ? '400' : '300'}^BY3,2,70^BCN,70,Y,N,N^FD${order.orderKey || order.woNum}^FS
                 ^XZ
             `;
             emitLabel(zpl, () => printShopCompletionLabel({
-                woNum: order.woNum, soNum: order.soNum, orderKey: order.orderKey,
-                item: order.item || order.partNum, qty: order.qty, cutLength: order.cutLength,
+                woNum: order.woNum, soNum: soNumOf(order), orderKey: order.orderKey,
+                item: shopItemCodeOf(order) || order.item || order.partNum, qty: order.qty, cutLength: order.cutLength,
                 finishRecipe: order.finishRecipe, isOutsourced: order.isOutsourced,
                 outsourcePrice: order.outsourcePrice, clientName: order.clientName
             }));
@@ -1039,7 +1080,7 @@ const ShopFloor = () => {
                 await releaseSiblingToPickPack(order);
                 await addDoc(collection(db, "global_messages"), {
                     sender: 'System', sourceApp: 'SHOP', target: 'FINISHING',
-                    msg: `Custom Fab Started for SO: ${order.soNum}.`, t: serverTimestamp(), isSystem: true
+                    msg: `Custom Fab Started for SO: ${soNumOf(order)}.`, t: serverTimestamp(), isSystem: true
                 });
             };
 
@@ -1076,7 +1117,7 @@ const ShopFloor = () => {
                             baseItemId: null, baseErpId: baseErp, targetErpId: `${baseErp}/${finishCode}`,
                             finishCode, finishName: finText || finishCode, qty: Number(order.qty) || 1,
                             custom: true, source: 'custom-shop',
-                            note: `Custom fab complete — OUTGOING bin${order.cutLength ? ` · cut ${order.cutLength}"` : ''} · SO ${order.soNum || ''}`,
+                            note: `Custom fab complete — OUTGOING bin${order.cutLength ? ` · cut ${order.cutLength}"` : ''} · SO ${soNumOf(order)}`,
                             createdBy: user?.name || 'Shop', createdAt: Date.now()
                         }, { merge: true });
                         await updateDoc(doc(db, "shop_custom_orders", order.id), { platingDemandCreated: true, platingDemandId: demandId });
@@ -1100,7 +1141,7 @@ const ShopFloor = () => {
                             </span>
                         </div>
                     </div>
-                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '16px' }}>SO: {order.soNum}</div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '16px' }}>SO: {soNumOf(order)}{(c => c ? ` · ${c}` : '')(shopItemCodeOf(order))}</div>
                     <div style={{ display: 'flex', gap: '24px', marginBottom: '20px', background: 'var(--paper)', padding: '16px', border: '1px solid var(--line)' }}>
                         <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
