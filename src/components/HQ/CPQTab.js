@@ -714,12 +714,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const flowDoc = cpqFlows.find(f => f.id === activeFlowId);
       const famFlow = String(flowDoc?.kitFamily || '').trim().toUpperCase();
       if (!base && !famFlow) return [];
+      // A generator-suffixed display name ("H1-2TRV — GENERATED") still finds its family: the
+      // segment before the em-dash is the code the kits are named for (live diagnosis 2026-08-26).
+      const baseFam = base.includes(' — ') ? base.split(' — ')[0].trim() : (base.includes(' - ') ? base.split(' - ')[0].trim() : '');
       const matches = (k) => {
           const kf = String(k.manufacturingSpecs?.kitFamily || '').trim().toUpperCase();
           if (famFlow && kf === famFlow) return true;                       // the tag system
           if (kf && base && kf === base) return true;                       // kit tagged with the assembly code
+          if (kf && baseFam && kf === baseFam) return true;
           const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
-          return !!base && (code === base || code.startsWith(base + '-'));  // legacy prefix fallback
+          if (base && (code === base || code.startsWith(base + '-'))) return true;   // legacy prefix
+          return !!baseFam && (code === baseFam || code.startsWith(baseFam + '-'));  // suffixed-name family
       };
       return kitsForSeeding(kitLibrary).filter(matches);
   }, [activeAssembly, cpqFlows, activeFlowId, kitLibrary]);
@@ -732,12 +737,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const base = a ? String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase() : '';
       const flowDoc = cpqFlows.find(f => f.id === activeFlowId);
       const famFlow = String(flowDoc?.kitFamily || '').trim().toUpperCase();
+      const baseFam = base.includes(' — ') ? base.split(' — ')[0].trim() : (base.includes(' - ') ? base.split(' - ')[0].trim() : '');
       const match = (k) => {
           const kf = String(k.manufacturingSpecs?.kitFamily || '').trim().toUpperCase();
           if (famFlow && kf === famFlow) return true;
           if (kf && base && kf === base) return true;
+          if (kf && baseFam && kf === baseFam) return true;
           const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
-          return base && (code === base || code.startsWith(base + '-'));
+          if (base && (code === base || code.startsWith(base + '-'))) return true;
+          return !!baseFam && (code === baseFam || code.startsWith(baseFam + '-'));
       };
       return {
           base,

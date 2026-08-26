@@ -2327,7 +2327,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     </select>
                                 </div>
 
-                                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '15px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: '15px' }}>
                                     <div>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>CPQ Flow Name</label>
                                         <input value={flowSettings.name} onChange={e => setFlowSettings({...flowSettings, name: e.target.value})} style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
@@ -2335,6 +2335,10 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                     <div>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>ERP Item ID</label>
                                         <input value={flowSettings.legacyErpId} onChange={e => setFlowSettings({...flowSettings, legacyErpId: e.target.value})} placeholder="e.g. ASM-1234" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                                    </div>
+                                    <div>
+                                        <label title="The kit family this flow seeds from — CPQ's 'Start from a kit' picker matches kits whose 4.6 kitFamily equals this tag. The generator stamps it automatically; set it here to override or fix an older flow (e.g. H1-2TRV)." style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Kit Family 🏷</label>
+                                        <input value={flowSettings.kitFamily || ''} onChange={e => setFlowSettings({...flowSettings, kitFamily: e.target.value.toUpperCase()})} placeholder="e.g. H1-2TRV" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
                                     <div>
                                         <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Base Price ($)</label>
