@@ -930,6 +930,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 await setDoc(doc(db, "shop_custom_orders", shopId), {
                     id: shopId, woNum: shopId,
                     orderKey, quoteId: so.hqJobId, salesOrderId: so.soId || null,
+                    // soNum: what the shop cards/labels print — "SO: undefined" was the shop-side
+                    // fallback chain's last resort before this (shop session spec, 2026-08-27).
+                    soNum: so.soId || orderKey,
+                    // A single-line custom order carries its item identity canonically.
+                    ...(customLines.length === 1 && (customLines[0].legacyErpId || customLines[0].partId) ? { itemCode: String(customLines[0].legacyErpId || customLines[0].partId).toUpperCase() } : {}),
                     finSiblingId: hasSmall ? finId : null, hasSmallSibling: hasSmall,
                     status: 'Pending',
                     item: cleanLineName(customLines[0]?.name) || job.cpqData?.cartItems?.[0]?.assemblyName || 'Custom App Order',
@@ -1386,11 +1391,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 createdBy: currentUser
             };
 
-            await setDoc(doc(db, "shop_custom_orders", shopJobId), {
+            await setDoc(doc(db, "shop_custom_orders", shopJobId), withItemCode({
                 ...shopPayload,
                 // Same flag, same field names as the finishing side — the shop list sorts on it.
                 ...(isUrgent(hqOrder) ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || hqOrder.reqDate || '', urgentBy: hqOrder.urgentBy || currentUser || '', urgentAt: hqOrder.urgentAt || Date.now() } : {}),
-            });
+            }));
 
             // Change status to Dispatched so it leaves the RTG board
             const collectionName = orderType === 'sales' ? "hq_sales_orders" : "hq_work_orders";
