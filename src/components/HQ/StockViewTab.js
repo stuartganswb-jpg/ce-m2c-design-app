@@ -6,7 +6,7 @@ import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '
 import { SOURCING, sourcingOf } from '../Shared/sourcing';
 import { makeFullTasks, withItemCode, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
-import { closeOrderEverywhere } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { poleCutPlan, poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -1003,7 +1003,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const urgentTotalFor = (list) => (list || []).reduce((s, u) => s + (Number(u.shortfall) || 0), 0);
     const clearUrgentCore = async (u) => {
         if (!window.confirm(`Clear the urgent flag on ${u.coreErpId}?\n\nDo this once the work order is raised — it only removes the red flag, it changes no stock.`)) return;
-        try { await deleteDoc(doc(db, 'core_urgent_demand', u.id)); addLog(`Cleared urgent core flag ${u.coreErpId} (${u.ref || ''}).`, 'info'); }
+        try {
+            await hardDeleteWithLedger({ db, doc, setDoc, deleteDoc }, {
+                collection: 'core_urgent_demand', docId: u.id, record: u, kind: 'core_urgent_demand',
+                by: currentUser || '', from: 'STOCK_VIEW', reason: 'urgent flag cleared — WO raised',
+            });
+            addLog(`Cleared urgent core flag ${u.coreErpId} (${u.ref || ''}).`, 'info');
+        }
         catch (e) { addLog(`Couldn't clear the urgent flag: ${e.message}`, 'error'); }
     };
 

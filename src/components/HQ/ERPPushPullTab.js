@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, setDoc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { softDeleteOrder } from "../Shared/orderLifecycle";
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
 import { SIZE_STEP_TYPE, makeSizeSwap, speciesVariantOf } from '../Shared/sizeMatrix';
 import { reopenQuoteInCpq } from '../Shared/reopenQuote';
@@ -56,8 +57,8 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
 
     const unsubJobs = onSnapshot(collection(db, "jobs"), (snapshot) => {
         const allJobs = snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter(j => j.brandId === activeBrand);
-        setApprovedJobs(allJobs.filter(j => j.status === 'APPROVED' || j.status === 'READY_FOR_ERP'));
-        setSyncedJobs(allJobs.filter(j => j.status === 'TRANSMITTED_TO_ERP'));
+        setApprovedJobs(allJobs.filter(j => !j.deleted && (j.status === 'APPROVED' || j.status === 'READY_FOR_ERP')));
+        setSyncedJobs(allJobs.filter(j => !j.deleted && j.status === 'TRANSMITTED_TO_ERP'));
     });
 
     const unsubParts = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
@@ -748,16 +749,17 @@ const ERPPushPullTab = ({ currentUser, activeBrand }) => {
           alert(`${jid} is already in NetSuite (estimate ${job.netsuiteEstimateId || 'created'}).\n\nVoid it in NetSuite first — deleting only the app copy would leave a live estimate with no app record.`);
           return;
       }
-      if (!window.confirm(`Delete quote ${jid} (${job.customer?.name || 'no customer'} · $${job.cpqData?.totalPrice?.toFixed(2) || '0.00'})?\n\nThis permanently removes the job, its staging drafts, and its Vision drawings from the app. It never reached NetSuite, so nothing exists there.`)) return;
+      // SOFT delete + master ledger (Stuart 2026-08-25): the record is KEPT and stamped — drafts
+      // and Vision drawings stay with it, since the job doc they belong to still exists.
+      const reason = window.prompt(`Delete quote ${jid} (${job.customer?.name || 'no customer'} · $${job.cpqData?.totalPrice?.toFixed(2) || '0.00'})?\n\nThe record is KEPT — stamped deleted, dated, with your name — on the master Deletion Ledger (RTG Dispatch). It never reached NetSuite, so nothing exists there.\n\nReason (optional):`);
+      if (reason === null) return;
       try {
-          let extras = 0;
-          const draftsQ = await getDocs(query(collection(db, 'cpq_drafts'), where('masterQuoteId', '==', jid)));
-          for (const d of draftsQ.docs) { await deleteDoc(d.ref); extras++; }
-          const filesQ = await getDocs(query(collection(db, 'crm_files'), where('jobId', '==', jid)));
-          for (const f of filesQ.docs) { await deleteDoc(f.ref); extras++; }
-          await deleteDoc(doc(db, 'jobs', job.id));
+          await softDeleteOrder({ db, doc, updateDoc, setDoc }, {
+              collection: 'jobs', docId: job.id, record: job, kind: 'jobs',
+              by: currentUser || '', from: 'ERP_PUSH_PULL', reason: reason || '',
+          });
           if (activeJob?.id === job.id) setActiveJob(null);
-          addLog(`🗑 Deleted quote ${jid}${extras ? ` (+${extras} draft/drawing doc(s))` : ''}.`, 'success');
+          addLog(`🗑 Deleted quote ${jid} — record kept on the Deletion Ledger.`, 'success');
       } catch (err) {
           console.error(err);
           alert('Delete failed: ' + (err?.message || err));

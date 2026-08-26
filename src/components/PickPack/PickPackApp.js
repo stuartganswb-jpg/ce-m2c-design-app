@@ -14,6 +14,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf } from '../Shared/workOrderContract';
+import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
@@ -330,8 +331,14 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const advanceChipStep = (order, stepKey) =>
         patchChipStep(order, stepKey, { status: CHIP_STATUS_NEXT[order.steps?.[stepKey]?.status || 'pending'] });
     const deleteChipOrder = async (id) => {
-        if (!window.confirm('Remove this sample-chip order?')) return;
-        await deleteDoc(doc(db, "sample_chip_orders", id));
+        if (!window.confirm('Remove this sample-chip order?\n\nA copy is kept on the master Deletion Ledger (RTG Dispatch).')) return;
+        try {
+            const snap = await getDoc(doc(db, "sample_chip_orders", id));
+            await hardDeleteWithLedger({ db, doc, setDoc, deleteDoc }, {
+                collection: 'sample_chip_orders', docId: id, record: snap.exists() ? snap.data() : { id },
+                kind: 'sample_chip_orders', by: operator?.name || '', from: 'WMS', reason: '',
+            });
+        } catch (e) { alert('Delete refused — the Deletion Ledger entry could not be written: ' + (e.message || e)); }
     };
 
     // ---- Big multi-finish chip RUN (HDSC) ----
@@ -2308,7 +2315,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 status: 'staged', shipmentId: null, nsPoId: null, platingRate: null, shippedAt: null
             }).catch(() => {})));
             const poSnap = await getDocs(query(collection(db, "hq_purchase_orders"), where("poId", "==", shipmentId)));
-            await Promise.all(poSnap.docs.map(d => deleteDoc(d.ref).catch(() => {})));
+            await Promise.all(poSnap.docs.map(d => hardDeleteWithLedger({ db, doc, setDoc, deleteDoc }, {
+                collection: 'hq_purchase_orders', docId: d.id, record: d.data(), kind: 'hq_purchase_orders',
+                by: operator?.name || '', from: 'WMS', reason: `plating shipment ${shipmentId} reset`,
+            }).catch(() => {})));
             alert(`✅ Shipment ${shipmentId} reset — its line(s) are back in "staged". Re-run Ship Pallet to test the PO.`);
             writeLog(`Plating shipment ${shipmentId} reset to staged.`, 'wms');
         } catch (e) {
@@ -2356,7 +2366,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             if (line.netSuiteInternalId && line.platingBin && line.fromBin && qty > 0) {
                 await reversePlatingWip(line, nsConfig, `Cancel plating pull ${line.erpId} — return to Good`);
             }
-            await deleteDoc(doc(db, "plating_shipments", line.id));
+            await hardDeleteWithLedger({ db, doc, setDoc, deleteDoc }, {
+                collection: 'plating_shipments', docId: line.id, record: line, kind: 'plating_shipments',
+                by: operator?.name || '', from: 'WMS', reason: 'plating pull canceled — returned to Good',
+            });
             alert(`✅ Pull canceled — ${qty} × ${line.erpId} returned to Good and the staged line removed. Re-pull it with a finish.`);
             writeLog(`Plating pull canceled: ${qty} ${line.erpId} (WIP-Plating → Good, staged line deleted).`, 'wms');
             pullNetSuiteStock();

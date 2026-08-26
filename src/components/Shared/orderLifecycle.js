@@ -199,6 +199,100 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [] }) {
     return out;
 }
 
+// ── THE DELETION LEDGER (Stuart 2026-08-25: "when a delete is processed … it needs to be recorded
+// … even though the deleted items can be removed from their screen, the master record stays and is
+// stamped deleted, date deleted and by whom") ────────────────────────────────────────────────────
+//
+// Two modes, one rule — NO order-like document leaves this system without a permanent record:
+//
+//   SOFT — the document STAYS in its collection, stamped {deleted, deletedAt, deletedBy,
+//          deletedFrom, deleteReason, statusBeforeDelete} and moved to a terminal status so every
+//          status-filtered screen drops it naturally. The tombstone is the master record; the
+//          ledger entry is the index. A failed ledger write therefore warns but never blocks.
+//   HARD — the document is destroyed (test cleanup, shop schedule rows). The ledger entry carries
+//          a full trimmed copy of the record and MUST commit BEFORE the delete — if the ledger
+//          write fails, the delete does not happen. An unrecorded delete is worse than a refused one.
+//
+// The ledger collection is append-only (firestore.rules: create yes, update/delete never).
+export const DELETION_LEDGER = 'hq_deletion_log';
+
+// Ledger entries must always fit a Firestore doc — drop the fields that can be huge (render
+// configs, SVG data URIs, engineering HTML). The identity summary survives regardless.
+const trimmedCopyOf = (record) => {
+    try {
+        const r = JSON.parse(JSON.stringify(record || {}));
+        if (r.cpqData) { delete r.cpqData.configuration; delete r.cpqData.quantities; delete r.cpqData.dimensions; }
+        delete r.engineeringNotes; delete r.imageUrl; delete r.finPayload;
+        const s = JSON.stringify(r);
+        if (s.length > 300000) return { _truncated: true, _bytes: s.length, id: r.id, status: r.status };
+        return r;
+    } catch (e) { return { _unserializable: true }; }
+};
+
+const deletionIdentityOf = (record) => {
+    const r = record || {};
+    return {
+        itemCode: r.itemCode || r.jfpItemCode || r.stockErpId || r.variantErpId || r.partErpId || r.rootItem || r.erpId || null,
+        quoteNo: r.quoteNo || null,
+        soId: r.soId || r.soNum || r.salesOrderId || null,
+        woNum: r.nsWoTran || r.woNum || r.woId || r.woDisplayId || null,
+        customer: (r.customer && r.customer.name) || r.customerName || (typeof r.customer === 'string' ? r.customer : null) || r.clientName || null,
+        status: r.status || r.currentPhase || null,
+        totalPrice: (r.cpqData && r.cpqData.totalPrice) || r.invoiceTotal || r.totalPrice || null,
+        totalParts: r.totalParts || r.qty || null,
+        brand: r.brand || r.brandId || null,
+    };
+};
+
+/** Append one entry to the master deletion ledger. Returns the ledger doc id. */
+export async function recordDeletion(ctx, { collection: coll, docId, record, kind, mode, by, from, reason }) {
+    const { db, doc, setDoc } = ctx;
+    const id = `DEL-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await setDoc(doc(db, DELETION_LEDGER, id), {
+        id, at: Date.now(), mode: mode || 'SOFT',
+        by: by || '', from: from || 'APP', reason: reason || '',
+        kind: kind || '', collection: coll, docId: String(docId),
+        identity: deletionIdentityOf(record),
+        ...(mode === 'HARD' ? { record: trimmedCopyOf(record) } : {}),
+    });
+    return id;
+}
+
+/**
+ * SOFT delete — the standard for every order-like document (jobs, hq_sales_orders,
+ * hq_work_orders, hq_purchase_orders, hq_inventory_tasks). The doc is stamped and statused out of
+ * every screen; the ledger indexes it. `terminalStatus` defaults to the collection's own
+ * vocabulary: jobs speak SCREAMING_CASE ('CANCELLED'), RTG records speak title case ('Deleted').
+ */
+export async function softDeleteOrder(ctx, { collection: coll, docId, record, kind, by, from, reason, terminalStatus }) {
+    const { db, doc, updateDoc } = ctx;
+    const status = terminalStatus || (coll === 'jobs' ? 'CANCELLED' : 'Deleted');
+    await updateDoc(doc(db, coll, docId), {
+        deleted: true, deletedAt: Date.now(), deletedBy: by || '', deletedFrom: from || 'APP',
+        ...(reason ? { deleteReason: reason } : {}),
+        statusBeforeDelete: (record && (record.status || record.currentPhase)) || '',
+        status,
+    });
+    try {
+        await recordDeletion(ctx, { collection: coll, docId, record, kind, mode: 'SOFT', by, from, reason });
+    } catch (e) {
+        // The tombstone above IS the record — a ledger index miss is reported, never fatal.
+        console.warn('Deletion ledger write failed (tombstone kept):', e);
+        return { ledger: false };
+    }
+    return { ledger: true };
+}
+
+/**
+ * HARD delete with the ledger as a precondition. The caller passes its own `deleteDoc` (this
+ * module never imports Firestore). Throws — and does NOT delete — if the ledger write fails.
+ */
+export async function hardDeleteWithLedger(ctx, { collection: coll, docId, record, kind, by, from, reason }) {
+    const { db, doc, deleteDoc } = ctx;
+    await recordDeletion(ctx, { collection: coll, docId, record, kind, mode: 'HARD', by, from, reason });
+    await deleteDoc(doc(db, coll, docId));
+}
+
 /**
  * Someone closed the balance on the NetSuite transaction — record that it is done.
  *

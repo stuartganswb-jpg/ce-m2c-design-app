@@ -15,6 +15,7 @@ import { reopenQuoteInCpq, reopenQuoteInVision } from '../Shared/reopenQuote';
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
+import { softDeleteOrder } from '../Shared/orderLifecycle';
 
 const printStyles = `
   @media print {
@@ -826,14 +827,23 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   };
 
   // --- DELETE & EDIT HANDLERS ---
-  const handleDeleteJob = async (jobId) => {
-      if (window.confirm("WARNING: Are you sure you want to permanently delete this quote/job? This action cannot be undone.")) {
-          try {
-              await deleteDoc(doc(db, "jobs", jobId));
-          } catch (err) {
-              console.error("Error deleting job:", err);
-              alert("Failed to delete job from the pipeline.");
-          }
+  // SOFT delete + master ledger (Stuart 2026-08-25): the jobs doc is KEPT — stamped deleted, dated,
+  // named — and indexed on the RTG Deletion Ledger. It leaves this screen; it never leaves the system.
+  const handleDeleteJob = async (job) => {
+      const jid = job.jobId || job.id;
+      if (job.netsuiteEstimateId || job.netsuiteSalesOrderId) {
+          if (!window.confirm(`⚠ ${jid} is already in NetSuite (${job.netsuiteEstimateId ? `estimate ${job.netsuiteEstimateId}` : `SO ${job.netsuiteSalesOrderId}`}).\n\nDeleting here removes only the app's view — the NetSuite record must be voided there separately.\n\nContinue?`)) return;
+      }
+      const reason = window.prompt(`Delete quote/job ${jid}?\n\nThe record is KEPT — stamped deleted, dated, with your name — and stays on the master Deletion Ledger (RTG Dispatch). It disappears from this screen and the portal.\n\nReason (optional):`);
+      if (reason === null) return;
+      try {
+          await softDeleteOrder({ db, doc, updateDoc, setDoc }, {
+              collection: 'jobs', docId: job.id, record: job, kind: 'jobs',
+              by: currentUser || '', from: 'CRM', reason: reason || '',
+          });
+      } catch (err) {
+          console.error("Error deleting job:", err);
+          alert("Failed to delete job from the pipeline.");
       }
   };
 
@@ -973,14 +983,14 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
 
   const getCrmActivePipeline = (crmId) => {
       return allBrandJobs.filter(j => 
-          (j.customer?.id === crmId || j.vendorId === crmId) && 
+          !j.deleted && (j.customer?.id === crmId || j.vendorId === crmId) && 
           !['COMPLETED', 'SHIPPED', 'CANCELLED', 'TRANSMITTED_TO_ERP'].includes(j.status)
       ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
 
   const getCrmArchivedPipeline = (crmId) => {
       return allBrandJobs.filter(j =>
-          (j.customer?.id === crmId || j.vendorId === crmId) &&
+          !j.deleted && (j.customer?.id === crmId || j.vendorId === crmId) &&
           ['COMPLETED', 'SHIPPED', 'CANCELLED', 'TRANSMITTED_TO_ERP'].includes(j.status)
       ).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
   };
@@ -1678,7 +1688,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                           <button onClick={() => openEditJobModal(job)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
                                                           <button onClick={() => reopenQuoteInCpq(job)} title="Reopen this quote's configuration in the CPQ Configurator" style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', cursor: 'pointer' }}>Reopen CPQ</button>
                                                           <button onClick={() => reopenQuoteInVision(job)} title="Reopen this quote's session on the Vision Hardware board — dimensions, bracket/splice placement, and shop notes live there (Engineering view → Load saved line)" style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--ink)', color: 'var(--ink)', cursor: 'pointer' }}>Reopen Vision</button>
-                                                          <button onClick={() => handleDeleteJob(job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
+                                                          <button onClick={() => handleDeleteJob(job)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
                                                   </div>
                                           );
@@ -1778,7 +1788,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
                                                           <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Docs</button>
                                                           <button onClick={() => openEditJobModal(job)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Modify</button>
-                                                          <button onClick={() => handleDeleteJob(job.id)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
+                                                          <button onClick={() => handleDeleteJob(job)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer' }}>Delete</button>
                                                       </div>
                                                   </div>
                                               ))}
@@ -1857,7 +1867,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                   <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ padding: '8px 16px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>🔍 View Item</button>
                                                   <button onClick={() => { setActiveDocJob(job); setActiveDocType('FULL_PACKET'); }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Docs</button>
                                                   <button onClick={() => openEditJobModal(job)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginRight: '8px', marginBottom: '8px' }}>Modify</button>
-                                                  <button onClick={() => handleDeleteJob(job.id)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Delete</button>
+                                                  <button onClick={() => handleDeleteJob(job)} style={{ padding: '8px 16px', background: '#fff', border: '1px solid #d9534f', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>Delete</button>
                                               </td>
                                           </tr>
                                       ))

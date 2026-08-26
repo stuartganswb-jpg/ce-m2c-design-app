@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions, storage, getOuterIdToken } from '../../firebase';
 import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, increment } from "firebase/firestore";
+import { hardDeleteWithLedger, recordDeletion } from '../Shared/orderLifecycle';
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
@@ -170,12 +171,37 @@ const ShopFloor = () => {
     const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
     // A tool's pool = its machine's category (interchangeable machines share one tool inventory).
     const poolOf = (machineName) => machineCategoryMap[machineName] || machineName;
-    const handleDelete = async (col, id) => { if(window.confirm("Delete record?")) { await deleteDoc(doc(shopDb.collection(col), id)); writeLog(`Deleted from ${col}`, 'admin'); } };
+    // HARD delete through the master ledger (Stuart 2026-08-25): the ledger entry carries a full
+    // copy of the record and MUST commit before the delete — an unrecorded delete is refused.
+    const handleDelete = async (col, id) => {
+        if (!window.confirm("Delete record?\n\nA full copy is kept on the master Deletion Ledger (RTG Dispatch), stamped with your name.")) return;
+        const realCol = col.startsWith('shop_') ? col : `shop_${col}`;
+        try {
+            const snap = await getDoc(doc(shopDb.collection(col), id));
+            await hardDeleteWithLedger({ db, doc, setDoc, deleteDoc: (ref) => deleteDoc(ref) }, {
+                collection: realCol, docId: id, record: snap.exists() ? snap.data() : { id },
+                kind: realCol, by: user?.name || 'Unknown', from: 'SHOP_FLOOR', reason: '',
+            });
+            writeLog(`Deleted ${realCol}/${id} — copy on the Deletion Ledger`, 'admin');
+        } catch (e) {
+            console.error('Delete refused:', e);
+            alert('Delete refused — the Deletion Ledger entry could not be written, so the record was NOT deleted. ' + (e?.message || e));
+        }
+    };
 
     // Full wipe of every doc in a shop_ collection (chunked under the 500-op batch limit).
+    // A bulk wipe is still a delete — ONE ledger entry per collection records the count and ids
+    // BEFORE anything is destroyed; if that entry cannot be written the wipe is refused.
     const clearShopCollection = async (name) => {
         const snap = await getDocs(shopDb.collection(name));
         const docs = snap.docs;
+        if (!docs.length) return 0;
+        const realCol = name.startsWith('shop_') ? name : `shop_${name}`;
+        await recordDeletion({ db, doc, setDoc }, {
+            collection: realCol, docId: `BULK-${docs.length}`, kind: 'BULK_NUKE', mode: 'HARD',
+            by: user?.name || 'Unknown', from: 'SHOP_FLOOR', reason: 'nuke test jobs',
+            record: { count: docs.length, ids: docs.slice(0, 100).map(d => d.id) },
+        });
         for (let i = 0; i < docs.length; i += 450) {
             const batch = writeBatch(db);
             docs.slice(i, i + 450).forEach(d => batch.delete(d.ref));

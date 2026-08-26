@@ -5,7 +5,7 @@ import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, dele
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines} from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
-import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, DELETION_LEDGER } from '../Shared/orderLifecycle';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
@@ -85,6 +85,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const unsub = onSnapshot(query(collection(db, 'ns_outbox'), orderBy('createdAt', 'desc'), limit(12)),
             snap => setNsOutboxTail(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
             () => { /* collection may not exist yet */ });
+        return () => unsub();
+    }, []);
+    // The master DELETION LEDGER (Stuart 2026-08-25): every delete anywhere in the app — soft
+    // tombstone or hard destroy — lands here, append-only, and THIS board is where it is reviewed.
+    const [deletionLog, setDeletionLog] = useState([]);
+    const [showDeletionLog, setShowDeletionLog] = useState(false);
+    useEffect(() => {
+        const unsub = onSnapshot(query(collection(db, DELETION_LEDGER), orderBy('at', 'desc'), limit(100)),
+            snap => setDeletionLog(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+            () => { /* ledger not deployed yet — rules must be published first */ });
         return () => unsub();
     }, []);
     const [salesOrders, setSalesOrders] = useState([]);
@@ -1229,11 +1239,19 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         }
     };
 
-    const deleteOrder = async (collectionName, id) => {
-        if (!window.confirm(`Permanently remove ${id} from the dispatch board?`)) return;
+    // SOFT delete + ledger (Stuart 2026-08-25) — the record STAYS, stamped deleted/when/who, and
+    // the master Deletion Ledger below indexes it. Status 'Deleted' drops it from every
+    // status-filtered screen; nothing is destroyed.
+    const deleteOrder = async (collectionName, order) => {
+        const id = order.id;
+        const reason = window.prompt(`Remove ${id} from the dispatch board?\n\nThe record is KEPT — stamped deleted, dated, with your name — and stays on the master Deletion Ledger.\n\nReason (optional):`);
+        if (reason === null) return;
         try {
-            await deleteDoc(doc(db, collectionName, id));
-            addLog(`Deleted document: ${id}`, "warn");
+            const res = await softDeleteOrder({ db, doc, updateDoc, setDoc }, {
+                collection: collectionName, docId: id, record: order,
+                kind: collectionName, by: currentUser || '', from: 'RTG_DISPATCH', reason: reason || '',
+            });
+            addLog(`🗑 ${id} deleted (record kept${res.ledger ? ', ledger indexed' : ' — LEDGER WRITE FAILED, tombstone only'}).`, "warn");
             loadRTGOrders();
         } catch (e) {
             console.error(e);
@@ -1770,7 +1788,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         setIsSyncing(true);
         try {
             const results = await Promise.all(testSeedDocs().map(async ([c, id]) => {
-                try { const s = await getDoc(doc(db, c, id)); if (!s.exists()) return false; await deleteDoc(doc(db, c, id)); return true; }
+                try {
+                    const s = await getDoc(doc(db, c, id)); if (!s.exists()) return false;
+                    // Even test cleanup goes through the ledger — a HARD delete carries the record copy.
+                    await hardDeleteWithLedger({ db, doc, setDoc, deleteDoc }, {
+                        collection: c, docId: id, record: s.data(), kind: 'TEST_SEED',
+                        by: currentUser || '', from: 'RTG_DISPATCH', reason: 'Brimar test-order removal',
+                    });
+                    return true;
+                }
                 catch (e) { console.warn(`remove ${c}/${id} failed`, e); return false; }
             }));
             const n = results.filter(Boolean).length;
@@ -1828,7 +1854,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || 'N/A'}</div>
                                             {urgentControls(so, 'hq_sales_orders')}
                                         </div>
-                                        <button onClick={() => deleteOrder('hq_sales_orders', so.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
+                                        <button onClick={() => deleteOrder('hq_sales_orders', so)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
                                     {so.memo && (
                                         <div style={{ fontSize: '0.85rem', color: 'var(--ink)', marginBottom: '16px', fontStyle: 'italic', borderLeft: '2px solid var(--line)', paddingLeft: '8px' }}>
@@ -1893,7 +1919,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                             {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
                                             {urgentControls(wo, 'hq_work_orders')}
                                         </div>
-                                        <button onClick={() => deleteOrder('hq_work_orders', wo.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
+                                        <button onClick={() => deleteOrder('hq_work_orders', wo)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(wo, 'stock')}>View</button>
@@ -1945,7 +1971,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Vendor: {po.vendor || 'N/A'}{po.nsVendorId ? <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)' }}> · NS {po.nsVendorId}</span> : <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}> · no NS vendor id</span>}</div>
                                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '2px' }}>{(po.items || []).length} line(s){po.source === 'SALES_SNAPSHOT' ? ' · Sales Snapshot' : ''}</div>
                                         </div>
-                                        <button onClick={() => deleteOrder('hq_purchase_orders', po.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
+                                        <button onClick={() => deleteOrder('hq_purchase_orders', po)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
                                     <button style={{ ...btnStyle, width: '100%', background: po.nsVendorId ? 'var(--brass)' : 'var(--paper-2)', color: po.nsVendorId ? '#fff' : 'var(--ink-soft)', border: 'none', marginBottom: '8px', cursor: po.nsVendorId ? 'pointer' : 'not-allowed' }} onClick={() => pushPoToNetSuite(po)}>⬆ Push PO → NetSuite</button>
                                     <button style={{ ...btnStyle, width: '100%', background: 'var(--ink)', color: '#fff', border: 'none' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
@@ -1970,7 +1996,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                             <div style={{ fontWeight: 500, fontSize: '1.1rem', color: 'var(--ink)' }}>Task: {inv.taskId || inv.id}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Type: {inv.type || 'Count'}</div>
                                         </div>
-                                        <button onClick={() => deleteOrder('hq_inventory_tasks', inv.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
+                                        <button onClick={() => deleteOrder('hq_inventory_tasks', inv)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => alert('Cycle Count Dispatched')}>Dispatch Count</button>
@@ -2086,6 +2112,39 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     </>
                 );
             })()}
+
+            {/* ============ MASTER DELETION LEDGER (append-only, every screen's deletes) ============ */}
+            <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', marginBottom: '24px' }}>
+                <div onClick={() => setShowDeletionLog(v => !v)} style={{ padding: '16px 24px', background: 'var(--paper-2)', borderBottom: showDeletionLog ? '1px solid var(--line)' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}>
+                    <div>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Append-only · every delete, every screen · the record never leaves the system</span>
+                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>📜 Deletion Ledger</span>
+                    </div>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{deletionLog.length ? `${deletionLog.length} entr${deletionLog.length === 1 ? 'y' : 'ies'} · ` : ''}{showDeletionLog ? '▼ HIDE' : '▶ SHOW'}</span>
+                </div>
+                {showDeletionLog && (
+                    <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
+                        {deletionLog.length === 0 && <div style={{ padding: '20px 24px', color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--serif)' }}>No deletions recorded. (If deletes are happening but nothing appears here, the hq_deletion_log firestore rule has not been deployed yet.)</div>}
+                        {deletionLog.map(e => (
+                            <div key={e.id} style={{ padding: '12px 24px', borderBottom: '1px solid var(--paper-2)', fontSize: '0.85rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{e.at ? new Date(e.at).toLocaleString() : '—'}</span>
+                                    <b style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{e.collection}/{e.docId}</b>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', padding: '2px 7px', border: '1px solid', borderColor: e.mode === 'HARD' ? '#d9534f' : 'var(--brass)', color: e.mode === 'HARD' ? '#d9534f' : 'var(--brass)' }}>{e.mode === 'HARD' ? 'DESTROYED (copy kept)' : 'DELETED (record kept)'}</span>
+                                    <span style={{ color: 'var(--ink-soft)' }}>by <b style={{ color: 'var(--ink)' }}>{e.by || '?'}</b> from {String(e.from || '').replace(/_/g, ' ')}</span>
+                                </div>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '5px', letterSpacing: '.02em' }}>
+                                    {[e.identity?.itemCode, e.identity?.quoteNo, e.identity?.soId, e.identity?.woNum, e.identity?.customer,
+                                      e.identity?.status ? `was ${e.identity.status}` : null,
+                                      e.identity?.totalPrice ? `$${Number(e.identity.totalPrice).toFixed(2)}` : null,
+                                      e.identity?.totalParts ? `×${e.identity.totalParts}` : null].filter(Boolean).join(' · ') || '—'}
+                                    {e.reason ? <span style={{ color: 'var(--ink)', fontStyle: 'italic' }}> — “{e.reason}”</span> : null}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
 
             {/* ============ DAILY JOB LOG (live, full-width, bottom of page) ============ */}
             <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>

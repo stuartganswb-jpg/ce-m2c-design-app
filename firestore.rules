@@ -33,6 +33,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // 📜 The deletion ledger — APPEND-ONLY at the database layer. Every delete of an order-like
+    // document (soft tombstone or hard destroy) writes one entry here; nothing may ever edit or
+    // erase one, including the client that performed the delete. (Stuart 2026-08-25.)
+    match /hq_deletion_log/{document=**} {
+      allow read, create: if isAuth();
+      allow update, delete: if false;
+    }
+
     // ---- Configuration & system ----
     match /system/{document=**}                 { allow read, write: if isAuth(); }
     match /hq_config/{document=**}              { allow read, write: if isAuth(); }
