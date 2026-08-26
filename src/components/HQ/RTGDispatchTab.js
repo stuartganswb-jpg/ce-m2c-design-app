@@ -1222,6 +1222,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 paintSizes: (hqOrder.paintSize && ['S', 'M', 'L'].includes((hqOrder.paintSize || '').toUpperCase()))
                     ? { S: 0, M: 0, L: 0, [(hqOrder.paintSize).toUpperCase()]: Number(hqOrder.totalParts) || 0 }
                     : null,
+                // Finish-stream exception (e.g. the elbow: small part, pole recipe). The finPayload
+                // branch has always carried it; this branch dropped it, so Stock View grid WOs lost
+                // the flag at release and ran the small-parts recipe.
+                ...(hqOrder.finishStream ? { finishStream: String(hqOrder.finishStream).toUpperCase() } : {}),
                 note: hqOrder.memo || originalJob?.sidemark || "",
                 cpqSpecs: cpqSpecs,
                 imageUrl: svgUri || originalJob?.finalImageUrl || null,

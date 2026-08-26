@@ -8,6 +8,7 @@ import { makeFullTasks, woItemCodeOf, woItemNameOf, isPlaceholderDims, withItemC
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
 import { isPoleCategory, autoFinishStream } from '../Shared/poleCut';
+import { finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -409,8 +410,11 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           const part = snap.docs.map(d => ({ id: d.id, ...d.data() }))[0] || null;
           if (!part) { alert(`"${code}" is not in the Master Library — check the item #.`); setRmBusy(false); return; }
           const specs = part.manufacturingSpecs || {};
-          const cut = code.lastIndexOf('/');
-          const recipe = cut > 0 ? code.slice(cut + 1).split('-')[0] : 'PENDING-RECIPE';
+          // finishCodeFromErp, not a hand-rolled suffix read: /P is a phosphated CORE, not a
+          // finish — the old derivation minted spray recipe 'P' for it. A scrapped /P core is
+          // re-made by CONVERTING raw stock, so send the manager to the tool that does that.
+          if (/\/P$/.test(code)) { alert(`${code} is a phosphated core, not a finished item — re-making it is a raw → /P CONVERT, not a spray job.\n\nRaise it on WMS → Convert ("Needs Phosphating") or order it from Stock View's 3-Tier view.`); setRmBusy(false); return; }
+          const recipe = finishCodeFromErp(code) || 'PENDING-RECIPE';
           // A 4 FT ROD IS A POLE (Grace 2026-08-25, WO11485/11486). `.includes('POLE')` said no to
           // every item tagged ROD, so the re-make carried no pole count and the floor ran the
           // small-parts recipe on poles. One shared category test now, the same one rod cuts use.

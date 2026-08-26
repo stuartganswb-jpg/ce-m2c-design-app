@@ -1195,7 +1195,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         {
             const reqDate = woNeedBy || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
             for (const { r, info, qty } of toMake) {
-                const finish = finishOf(r.itemid);
+                // finishCodeFromErp, NOT the local suffix read: /P is a phosphated CORE, not a
+                // finish — the local reader minted recipe 'P' and batched cores under a spray
+                // recipe nobody wrote. Raw and /P codes come back '' here.
+                const finish = finishCodeFromErp(r.itemid);
                 const woId = `WO-STK-${r.internalId}-${Date.now()}`;
                 // FINISHED-GOODS awareness (Stuart 2026-08-10, same planner as the Master Library
                 // tool): an ASSEMBLY row's own code never holds pullable stock — explode its BOM
@@ -1221,13 +1224,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // the Setup Queue operator sees it on the card and runs the actual conversion.
                 const sug = convSugMap[r.itemid];
                 const sugBase = r.itemid.includes('/') ? r.itemid.slice(0, r.itemid.lastIndexOf('/')) : r.itemid;
-                const finPayload = withItemCode({
+                // Only an item with a real finish code gets the pre-built finishing doc. A raw
+                // code must not park one: ⚡ auto-release reads a parked finPayload as
+                // "finishing-bound" and would release the core to the spray floor.
+                const finPayload = !finish ? null : withItemCode({
                     id: woId, orderKey: woId,
                     ...(sug ? { convertSuggestion: { from: sug.from, to: sugBase, qty: sug.qty } } : {}),
                     quoteId: null, salesOrderId: null, estimateId: null,
                     orderType: 'stock', soId: null, soNum: null,
                     customerId: null, customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
-                    recipe: finish || 'PENDING-RECIPE',
+                    recipe: finish,
                     reqDate, type: r.itemid, totalParts: qty,
                     stockErpId: r.itemid, stockInternalId: r.internalId,
                     paintSize: info.isPole ? null : (info.size || null), productType: info.ptype || null, paintSizes,
@@ -1252,9 +1258,25 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 });
                 await setDoc(doc(db, "hq_work_orders", woId), withItemCode({
                     id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
-                    source: 'SALES_SNAPSHOT', routeTo: 'FINISHING', finPayload,
+                    source: 'SALES_SNAPSHOT',
+                    // MIRROR THE GRID PUSH (Eric 2026-08-25 rule): an item with a finish code is
+                    // finishing work; a raw/no-suffix code must not advertise a route it has no
+                    // business taking. It parks ROUTE-OPEN — RTG offers both Push buttons and
+                    // ⚡ auto-release leaves it for a human (auto releases stated routes only).
+                    // The route-open doc carries what BOTH release paths read at enrich time:
+                    // partErpId/rootItem for the item code, hqJobId for the library lookup, and
+                    // the exploded BOM so the floor still picks components, not the assembly code.
+                    ...(finish ? { routeTo: 'FINISHING', finPayload, recipe: finish } : {
+                        partErpId: r.itemid, rootItem: r.itemid,
+                        hqJobId: info.part?.id || null,
+                        routingType: info.part?.routingType || 'Standard',
+                        productType: info.ptype || null,
+                        ...(r.internalId ? { nsItemId: String(r.internalId), stockInternalId: String(r.internalId) } : {}),
+                        ...(bomLines.length ? { partsList: bomLines, bomExploded: true } : {}),
+                        ...(info.part?.manufacturingSpecs?.finishStream ? { finishStream: String(info.part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
+                    }),
                     ...(woUrgent ? { urgent: true, needBy: woNeedBy || reqDate } : {}),
-                    erpId: r.itemid, recipe: finish || 'PENDING-RECIPE', qty, totalParts: qty, reqDate,
+                    erpId: r.itemid, qty, totalParts: qty, reqDate,
                     paintSize: info.size || null, customer: 'Internal Stock',
                     createdAt: Date.now(), createdBy: currentUser || ''
                 }), { merge: true });
@@ -1838,22 +1860,44 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     };
 
     const executeOrders = async (buy, make) => {
+        // /P IS NEVER A FINISHING JOB (the Stuart-confirmed rule): phosphating raw → /P is a
+        // BULK convert on the WMS Convert tab. A /P row ordered here becomes the same
+        // convert_demand the 3-TIER view writes — never a work order with an invented 'P'
+        // spray recipe, which is what this view used to create.
+        const conv = [], woMake = [];
+        make.forEach(x => {
+            const id = String(x.r.itemid).toUpperCase();
+            const cut = id.lastIndexOf('/');
+            if (cut > 0 && id.slice(cut + 1) === 'P') {
+                const baseErp = id.slice(0, cut);
+                const basePart = partByKey['erp:' + baseErp] || null;
+                conv.push({ ...x, baseErp, baseInfo: { part: basePart, iid: basePart?.netSuiteInternalId ? String(basePart.netSuiteInternalId) : null, available: null } });
+            } else woMake.push(x);
+        });
         const pieces = [];
         if (buy.length) pieces.push(`${new Set(buy.map(x => String(x.info.part?.manufacturingSpecs?.vendorName || '').trim())).size} vendor PO(s) covering ${buy.length} item(s)`);
-        if (make.length) pieces.push(`${make.length} stock work order(s)`);
+        if (woMake.length) pieces.push(`${woMake.length} stock work order(s)`);
+        if (conv.length) pieces.push(`${conv.length} /P item(s) → WMS Convert to-do (phosphate)`);
         if (!pieces.length) return alert('Nothing to generate.');
-        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}\n\nBOTH land in RTG Dispatch for review: POs (one per vendor) push to NetSuite from there; work orders release to the Finishing Floor from there. Nothing reaches NetSuite or the floor until dispatched.`)) return;
+        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}\n\nPOs and work orders land in RTG Dispatch for review: POs (one per vendor) push to NetSuite from there; work orders release to the floor from there. Convert to-dos appear on the WMS Convert tab. Nothing reaches NetSuite or the floor until dispatched or the operator posts the move.`)) return;
         setGenBusy(true);
         try {
             const poResult = buy.length ? await createStockPOs(buy) : { made: [], unmatched: [] };
-            const wos = make.length ? await createStockFinWOs(make) : 0;
+            const wos = woMake.length ? await createStockFinWOs(woMake) : 0;
+            const convN = conv.length ? await createConvertDemands(conv) : 0;
             setOrderQty({});
             const lines = [
                 ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
-                ...(wos ? [`• ${wos} stock work order(s) → RTG Dispatch (release to Finishing there)`] : []),
+                ...(wos ? [`• ${wos} stock work order(s) → RTG Dispatch (release to the floor there)`] : []),
+                ...(convN ? [`• ${convN} convert to-do(s) → WMS · Convert tab ("Needs Phosphating")`] : []),
             ];
             if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
-        } catch (e) { addLog(`Generate orders failed: ${e.message}`, 'error'); alert('Failed to generate orders:\n\n' + (e.message || e)); }
+        } catch (e) {
+            addLog(`Generate orders failed: ${e.message}`, 'error');
+            // Same failure mode as the tier view: convert_demand is gated by its firestore rule.
+            const perm = /permission|insufficient/i.test(String(e.message || e));
+            alert('Failed to generate orders:\n\n' + (e.message || e) + (perm ? '\n\n→ If this happened on a /P row, publish the `convert_demand` firestore rule (Cloud Shell: firebase deploy --only firestore:rules).' : ''));
+        }
         setGenBusy(false);
     };
     // ---- RAW CORES ORDERING (Stuart 2026-07-28) ----------------------------------------------
