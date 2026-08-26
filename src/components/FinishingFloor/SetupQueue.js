@@ -9,6 +9,8 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
 import { isPoleCategory, autoFinishStream } from '../Shared/poleCut';
 import { finishCodeFromErp } from '../Shared/finishingTime';
+import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
+import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -16,7 +18,6 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
 // Finishing converts only ever run for the shop brands.
-const BRAND_NETSUITE_MAP = { 'ce': { subsidiary: "2", location: "17" }, 'm2c': { subsidiary: "3", location: "19" } };
 
 const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, currentUser = '' }) => {
   // Active Floor load is INFORMATIONAL ONLY (Stuart 2026-07-21: the old §A4 200-pc daily cap
@@ -422,6 +423,42 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           const size = String(specs.paintSize || '').toUpperCase() || null;
           const woId = `WO-STK-${part.netSuiteInternalId || 'RM'}-${Date.now()}`;
           const reqDate = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+          // THE COMPONENT PRE-CHECK (Stuart 2026-08-27) — same policy as Stock View: a re-make
+          // consumes components again, so check the /P pulls live; short → convert to-do + the
+          // WO gates in RTG until it posts; raw behind it short → component shop WO.
+          let gate = {}, madeUp = [];
+          try {
+              let pins = [];
+              if (['Master Assembly', 'Assembly'].includes(String(part.partClass || ''))) {
+                  const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
+                  pins = pinsSnap.docs.map(d => d.data());
+              }
+              // Targeted library lookups (not the whole collection): the pin codes, their mill
+              // bases and /P variants, and the item's own — everything the planner and the
+              // make-up executor might need to resolve.
+              const baseOf = (c) => { const s = String(c || '').toUpperCase(); const j = s.lastIndexOf('/'); return j > 0 ? s.slice(0, j) : s; };
+              const wanted = new Set();
+              [code, ...pins.map(p => String(p.legacyErpId || p.partId || '').toUpperCase())].filter(Boolean).forEach(c => {
+                  wanted.add(c); wanted.add(baseOf(c)); wanted.add(`${baseOf(c)}/P`);
+              });
+              const inv = [];
+              const codesArr = [...wanted].filter(Boolean);
+              for (let ci = 0; ci < codesArr.length; ci += 10) {
+                  const s = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', 'in', codesArr.slice(ci, ci + 10))));
+                  s.docs.forEach(d => inv.push({ id: d.id, ...d.data() }));
+              }
+              const pre = await runBatchPrecheck({ rows: [{ key: 0, part, qty, pins }], inventory: inv, locationId: (BRAND_NETSUITE_MAP[String(part.brandId || 'ce')] || {}).location || '17' });
+              const res = pre.results[0];
+              if (pre.nsError) console.warn('Re-make pre-check skipped — NetSuite unreachable:', pre.nsError);
+              else if (res && res.actions.length) {
+                  const exec = await executeMakeupActions({
+                      actions: res.actions, brandId: String(part.brandId || 'ce'), finWoId: woId, finWoErpId: code,
+                      createdBy: 'Setup Queue', inventory: inv, source: 'remake-precheck', reqDate,
+                  });
+                  gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
+                  madeUp = exec.made;
+              }
+          } catch (e) { console.warn('Re-make pre-check failed (WO created un-gated):', e); }
           const paintSizes = (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null;
           const finPayload = withItemCode({
               id: woId, orderKey: woId, quoteId: null, salesOrderId: null, estimateId: null,
@@ -449,12 +486,14 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
               id: woId, woId, brand: String(part.brandId || 'ce'), type: 'Stock', status: 'Approved',
               source: 'SETUP_QUEUE_REMAKE', routeTo: 'FINISHING', finPayload, remake: true, remakeReason: rmNote || '',
+              // Component pre-check gate — RTG's release and ⚡ auto-release respect it.
+              ...gate,
               erpId: code, recipe, qty, totalParts: qty, reqDate,
               paintSize: size, customer: 'Internal Stock',
               createdAt: Date.now(), createdBy: 'Setup Queue'
           }), { merge: true });
-          if (writeLog) writeLog(`⟲ Scrap re-make WO created: ${qty} × ${code} (${recipe}) — parked in RTG Dispatch`, 'setup');
-          alert(`⟲ Re-make order created: ${qty} × ${code} (${recipe}).\n\nPARKED in RTG Dispatch (same control gate as snapshot builds) — Push to Finishing there releases it back to this queue and queues the real NetSuite work order.`);
+          if (writeLog) writeLog(`⟲ Scrap re-make WO created: ${qty} × ${code} (${recipe}) — parked in RTG Dispatch${gate.awaitingConvert ? ' (gated: awaiting phosphate convert)' : ''}`, 'setup');
+          alert(`⟲ Re-make order created: ${qty} × ${code} (${recipe}).\n\nPARKED in RTG Dispatch (same control gate as snapshot builds) — Push to Finishing there releases it back to this queue and queues the real NetSuite work order.${madeUp.length ? `\n\nComponent pre-check raised:\n${madeUp.map(m => `• ${m}`).join('\n')}${gate.awaitingConvert ? '\n\nThe WO waits in RTG until the convert posts on the WMS Convert tab.' : ''}` : ''}`);
           setRmCode(''); setRmQty(''); setRmNote('Scrap replacement');
       } catch (e) { alert('Re-make failed: ' + (e.message || e)); }
       finally { setRmBusy(false); }

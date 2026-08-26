@@ -13,6 +13,7 @@ import { poleCutPlan, poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
+import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -616,35 +617,60 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (lineItems.length === 0) return alert("No items have quantities entered greater than 0.");
 
         try {
+            // EXPLODE THE BOM HERE TOO (Eric 2026-08-25, 9:20: "Using HWOWR35/W32 as an
+            // example. This BOM calls for HWMWR35 … When a work order is issued from Stock
+            // View, the BOM calls for the incorrect HWOWR35 to be picked.") — this path never
+            // read the BOM at all; same planner as the Sales Snapshot, so both screens answer
+            // identically: an assembly with pins pulls the components its BOM names (Model A,
+            // literal), a part without pulls its own phosphated core (Model B, custom routing).
+            const prepped = [];
             for (const { partId, qty } of lineItems) {
                 const part = hqParts.find(p => p.id === partId);
                 const erpId = part.legacyErpId || part.itemId || '';
-                
-                const isPhosphate = erpId.toUpperCase().endsWith('/P');
-                const isPlating = /EP[1-6]$/i.test(erpId.toUpperCase());
-                
-                const rootErpId = erpId.replace(/\/(P|EP[1-6])$/i, '');
-                const rootPart = hqParts.find(p => (p.legacyErpId || p.itemId || '').toUpperCase() === rootErpId) || part;
-
-                // EXPLODE THE BOM HERE TOO (Eric 2026-08-25, 9:20: "Using HWOWR35/W32 as an
-                // example. This BOM calls for HWMWR35 … When a work order is issued from Stock
-                // View, the BOM calls for the incorrect HWOWR35 to be picked. When marked Stocked
-                // and issued from the Stocked Sales screen, the BOM returns the correct HWMWR35").
-                //
-                // He was right and it is not a sync problem — "checked and synced multiple times"
-                // could never have fixed it, because this path never read the BOM at all. It wrote
-                // no partsList, so the floor synthesized one pull by stripping the finish off the
-                // ITEM (HWOWR35/W32 → HWOWR35) — the assembly, not its component. Same planner the
-                // Sales Snapshot uses, so both screens now answer the question identically:
-                // an assembly with pins pulls the components its BOM names (Model A, literal), a
-                // part without pulls its own phosphated core (Model B, the custom routing).
-                let bomLines = [];
+                let pins = [];
                 if (isAssemblyPart(part)) {
                     try {
                         const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
-                        const pins = pinsSnap.docs.map(d => d.data());
-                        if (pins.length) bomLines = planFinishedRun({ part, qty: Number(qty), pins, inventory: hqParts }).lines;
-                    } catch (e) { console.warn('BOM explode failed for', erpId, e); }
+                        pins = pinsSnap.docs.map(d => d.data());
+                        if (!pins.length) addLog(`⚠ ${erpId} is an assembly with NO BOM pins in the app — the pre-check cannot see its components.`, 'warn');
+                    } catch (e) { console.warn('BOM pin load failed for', erpId, e); }
+                }
+                prepped.push({ part, erpId, qty, pins });
+            }
+            // THE COMPONENT PRE-CHECK (Stuart 2026-08-27) — same policy as the Sales Snapshot:
+            // one live NetSuite read for the batch; /P component short → convert to-do + the WO
+            // gates (awaitingConvert); raw behind it short → component shop WO. /P lines are the
+            // convert TARGETS themselves and are skipped. NetSuite unreachable → WOs unchanged.
+            const preByKey = new Map();
+            const gridCheckRows = prepped
+                .map((x, i) => ({ ...x, key: i }))
+                .filter(x => !x.erpId.toUpperCase().endsWith('/P') && (isAssemblyPart(x.part) || finishCodeFromErp(x.erpId)));
+            if (gridCheckRows.length) {
+                try {
+                    const pre = await runBatchPrecheck({
+                        rows: gridCheckRows.map(x => ({ key: x.key, part: x.part, qty: Number(x.qty), pins: x.pins })),
+                        inventory: hqParts,
+                        locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17',
+                    });
+                    if (pre.nsError) addLog(`⚠ Component pre-check skipped — NetSuite unreachable (${String(pre.nsError).slice(0, 120)}). Verify component stock manually.`, 'warn');
+                    else pre.results.forEach(res => preByKey.set(res.key, res));
+                } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
+            }
+            const madeUp = [];
+            for (let key = 0; key < prepped.length; key++) {
+                const { part, erpId, qty, pins } = prepped[key];
+                const pre = preByKey.get(key) || null;
+
+                const isPhosphate = erpId.toUpperCase().endsWith('/P');
+                const isPlating = /EP[1-6]$/i.test(erpId.toUpperCase());
+
+                const rootErpId = erpId.replace(/\/(P|EP[1-6])$/i, '');
+                const rootPart = hqParts.find(p => (p.legacyErpId || p.itemId || '').toUpperCase() === rootErpId) || part;
+
+                let bomLines = [];
+                if (isAssemblyPart(part) && pins.length) {
+                    bomLines = (pre && pre.plan.exploded) ? pre.plan.lines
+                        : planFinishedRun({ part, qty: Number(qty), pins, inventory: hqParts }).lines;
                 }
 
                 // Firestore doc ids can't contain "/" — finished variants carry it (e.g. H1-138BF/EP1). Sanitize
@@ -652,6 +678,24 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const stamp = Date.now().toString().slice(-6);
                 const safeErp = String(erpId).replace(/[^A-Za-z0-9]+/g, '-');
                 const newWoId = `WO-${safeErp}-${stamp}`;
+                // Make-up orders BEFORE the WO write, so the WO carries its gate from birth and
+                // the demands carry this WO's id (the WMS clears the gate through that link).
+                let gate = {};
+                if (pre && pre.actions.length) {
+                    try {
+                        const exec = await executeMakeupActions({
+                            actions: pre.actions, brandId: activeBrand, finWoId: newWoId, finWoErpId: erpId,
+                            createdBy: currentUser || '', inventory: hqParts, source: 'stockview-precheck',
+                            reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                        });
+                        gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
+                        exec.made.forEach(m => madeUp.push(`${erpId}: ${m}`));
+                        addLog(`🧩 ${erpId} component pre-check: ${exec.made.join(' · ')}${exec.gateFields.awaitingConvert ? ' — WO gated until the convert posts.' : ''}`, 'warn');
+                    } catch (e) {
+                        const perm = /permission|insufficient/i.test(String(e.message || e));
+                        addLog(`⚠ ${erpId}: component make-up orders FAILED (${e.message || e})${perm ? ' — publish the convert_demand firestore rule (Cloud Shell: firebase deploy --only firestore:rules).' : ''} WO created un-gated.`, 'error');
+                    }
+                }
                 // Source numbers only (2026-07-17): app id until the NetSuite WO posts, then nsWoTran.
                 await setDoc(doc(db, "hq_work_orders", newWoId), withItemCode({
                     id: newWoId,
@@ -660,6 +704,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     brand: activeBrand,
                     status: "Approved",
                     customer: "Internal Stock",
+                    // Component pre-check gate — RTG's release and ⚡ auto-release respect it the
+                    // same way they respect awaitingRodCut.
+                    ...gate,
                     hqJobId: rootPart.id,
                     originalVariantId: part.id,
                     variantErpId: erpId,
@@ -702,8 +749,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             }
             
             addLog(`✅ Pushed ${lineItems.length} Work Orders to RTG Dispatch!`, "success");
-            alert("✅ Work Orders successfully pushed to RTG Dispatch!");
-            setOrderDrafts({}); 
+            alert(`✅ Work Orders successfully pushed to RTG Dispatch!${madeUp.length ? `\n\nComponent pre-check raised:\n${madeUp.map(m => `• ${m}`).join('\n')}\n\nGated WOs wait in RTG until their convert posts on the WMS Convert tab.` : ''}`);
+            setOrderDrafts({});
         } catch(e) {
             console.error("WO Push Error", e);
             alert("Failed to push Work Orders.");
@@ -1191,26 +1238,73 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // the POs — nothing reaches the floor un-reviewed); in-house items that ALSO carry a vendor
     // prompt per item — PO to the vendor or WO to the floor.
     const createStockFinWOs = async (toMake) => {
+        const reqDate = woNeedBy || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+        const made = [];
+        // ── PHASE 1: resolve each row's BOM pins — the pre-check and the pull lines read the
+        // same plan (Stuart 2026-08-10: an ASSEMBLY row's own code never holds pullable stock).
+        const prepped = [];
+        for (const { r, info, qty } of toMake) {
+            let pins = [];
+            if (isAssemblyPart(info.part)) {
+                try {
+                    const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', info.part.itemId)));
+                    pins = pinsSnap.docs.map(d => d.data());
+                    if (!pins.length) addLog(`⚠ ${r.itemid} is an assembly with NO BOM pins in the app — the pre-check cannot see its components. Build its BOM in the library, or the floor will synthesize a pull.`, 'warn');
+                } catch (e) { console.warn('BOM pin load failed for', r.itemid, e); }
+            }
+            prepped.push({ r, info, qty, pins });
+        }
+        // ── PHASE 2: THE COMPONENT PRE-CHECK (Stuart 2026-08-27, from WO11494) — one live
+        // NetSuite read for the whole batch, same policy on every WO-creating screen:
+        // /P component short → convert to-do + the WO gates (awaitingConvert) until it posts;
+        // raw behind it short too → component shop WO parked in RTG for the milling scheduler.
+        // NetSuite unreachable → WOs are created exactly as before, and the log says so.
+        const preByKey = new Map();
+        const checkRows = prepped
+            .map((x, i) => ({ ...x, key: i }))
+            .filter(x => isAssemblyPart(x.info.part) || finishCodeFromErp(x.r.itemid));
+        if (checkRows.length) {
+            try {
+                const pre = await runBatchPrecheck({
+                    rows: checkRows.map(x => ({ key: x.key, part: x.info.part || { legacyErpId: x.r.itemid }, qty: x.qty, pins: x.pins })),
+                    inventory: hqParts,
+                    locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17',
+                });
+                if (pre.nsError) addLog(`⚠ Component pre-check skipped — NetSuite unreachable (${String(pre.nsError).slice(0, 120)}). Verify component stock manually.`, 'warn');
+                else pre.results.forEach(res => preByKey.set(res.key, res));
+            } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
+        }
         let n = 0;
-        {
-            const reqDate = woNeedBy || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-            for (const { r, info, qty } of toMake) {
+            for (let key = 0; key < prepped.length; key++) {
+                const { r, info, qty, pins } = prepped[key];
+                const pre = preByKey.get(key) || null;
                 // finishCodeFromErp, NOT the local suffix read: /P is a phosphated CORE, not a
                 // finish — the local reader minted recipe 'P' and batched cores under a spray
                 // recipe nobody wrote. Raw and /P codes come back '' here.
                 const finish = finishCodeFromErp(r.itemid);
                 const woId = `WO-STK-${r.internalId}-${Date.now()}`;
-                // FINISHED-GOODS awareness (Stuart 2026-08-10, same planner as the Master Library
-                // tool): an ASSEMBLY row's own code never holds pullable stock — explode its BOM
-                // into the real component pull lines so the WMS picks those, not a synthesized
-                // raw pull of the assembly code. Single parts keep the exact behavior they had.
+                // Single parts keep the exact behavior they had — partsList only for exploded BOMs.
                 let bomLines = [];
-                if (isAssemblyPart(info.part)) {
+                if (isAssemblyPart(info.part) && pins.length) {
+                    bomLines = (pre && pre.plan.exploded) ? pre.plan.lines
+                        : planFinishedRun({ part: info.part, qty, pins, inventory: hqParts }).lines;
+                }
+                // Make-up orders BEFORE the WO write, so the WO carries its gate from birth and the
+                // demands carry this WO's id (the WMS clears the gate through that link).
+                let gate = {};
+                if (pre && pre.actions.length) {
                     try {
-                        const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', info.part.itemId)));
-                        const pins = pinsSnap.docs.map(d => d.data());
-                        if (pins.length) bomLines = planFinishedRun({ part: info.part, qty, pins, inventory: hqParts }).lines;
-                    } catch (e) { console.warn('BOM explode failed for', r.itemid, e); }
+                        const exec = await executeMakeupActions({
+                            actions: pre.actions, brandId: activeBrand, finWoId: woId, finWoErpId: r.itemid,
+                            createdBy: currentUser || '', inventory: hqParts, source: 'snapshot-precheck', reqDate,
+                        });
+                        gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
+                        exec.made.forEach(m => made.push(`${r.itemid}: ${m}`));
+                        addLog(`🧩 ${r.itemid} component pre-check: ${exec.made.join(' · ')}${exec.gateFields.awaitingConvert ? ' — WO gated until the convert posts.' : ''}`, 'warn');
+                    } catch (e) {
+                        const perm = /permission|insufficient/i.test(String(e.message || e));
+                        addLog(`⚠ ${r.itemid}: component make-up orders FAILED (${e.message || e})${perm ? ' — publish the convert_demand firestore rule (Cloud Shell: firebase deploy --only firestore:rules).' : ''} WO created un-gated.`, 'error');
+                    }
                 }
                 // Source numbers only (Stuart 2026-07-17): no invented short WO # — screens show the
                 // app id until the real NetSuite WO posts (~1 min after RTG release), then nsWoTran.
@@ -1276,6 +1370,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         ...(info.part?.manufacturingSpecs?.finishStream ? { finishStream: String(info.part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
                     }),
                     ...(woUrgent ? { urgent: true, needBy: woNeedBy || reqDate } : {}),
+                    // Component pre-check gate: awaitingConvert (+ demand/WO links). RTG's release
+                    // and ⚡ auto-release respect it the same way they respect awaitingRodCut.
+                    ...gate,
                     erpId: r.itemid, qty, totalParts: qty, reqDate,
                     paintSize: info.size || null, customer: 'Internal Stock',
                     createdAt: Date.now(), createdBy: currentUser || ''
@@ -1328,8 +1425,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 }
                 n++;
             }
-        }
-        return n;
+        return { n, made };
     };
     // ===== 📋 OPEN WORK ORDERS — cleanup panel (Stuart 2026-07-21) =====
     // One place to see every WO that isn't closed — RTG-parked + on the floor — with its floor
@@ -1781,14 +1877,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const shopWos = shop.length ? await createStockShopWOs(shop) : 0;
             const convN = conv.length ? await createConvertDemands(conv) : 0;
             const plateN = plate.length ? await createPlatingDemands(plate) : 0;
-            const finWos = fin.length ? await createStockFinWOs(fin) : 0;
+            const finRes = fin.length ? await createStockFinWOs(fin) : { n: 0, made: [] };
             setTierOrderQty({});
             const lines = [
                 ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
                 ...(shopWos ? [`• ${shopWos} raw core work order(s) → RTG Dispatch (Push to Shop there)`] : []),
                 ...(convN ? [`• ${convN} convert to-do(s) → WMS · Convert tab ("Needs Phosphating")`] : []),
                 ...(plateN ? [`• ${plateN} plating to-do(s) → WMS · Plating tab ("Needs Plating")`] : []),
-                ...(finWos ? [`• ${finWos} finishing work order(s) → RTG Dispatch (release to Finishing there)`] : []),
+                ...(finRes.n ? [`• ${finRes.n} finishing work order(s) → RTG Dispatch (release to Finishing there)`] : []),
+                ...(finRes.made.length ? [`• Component pre-check raised:`, ...finRes.made.map(m => `   ${m}`)] : []),
             ];
             if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
         } catch (e) {
@@ -1883,13 +1980,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         setGenBusy(true);
         try {
             const poResult = buy.length ? await createStockPOs(buy) : { made: [], unmatched: [] };
-            const wos = woMake.length ? await createStockFinWOs(woMake) : 0;
+            const woRes = woMake.length ? await createStockFinWOs(woMake) : { n: 0, made: [] };
             const convN = conv.length ? await createConvertDemands(conv) : 0;
             setOrderQty({});
             const lines = [
                 ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
-                ...(wos ? [`• ${wos} stock work order(s) → RTG Dispatch (release to the floor there)`] : []),
+                ...(woRes.n ? [`• ${woRes.n} stock work order(s) → RTG Dispatch (release to the floor there)`] : []),
                 ...(convN ? [`• ${convN} convert to-do(s) → WMS · Convert tab ("Needs Phosphating")`] : []),
+                ...(woRes.made.length ? [`• Component pre-check raised:`, ...woRes.made.map(m => `   ${m}`)] : []),
             ];
             if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
         } catch (e) {

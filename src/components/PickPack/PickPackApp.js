@@ -16,6 +16,7 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf } from '../Shared/workOrderContract';
 import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
+import { clearConvertGate } from '../Shared/finishedRunPrecheck';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { PICK_TABS, pickTabLabel } from '../Shared/pickTabs';
@@ -1704,7 +1705,16 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}, received into ${receiveBin}).`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
             // Converted straight through (no cart hop) — the HQ to-do that opened this is satisfied.
-            if (convertDemandId) await deleteDoc(doc(db, "convert_demand", convertDemandId)).catch(() => {});
+            if (convertDemandId) {
+                const dm = convertDemands.find(d => d.id === convertDemandId) || null;
+                await deleteDoc(doc(db, "convert_demand", convertDemandId)).catch(() => {});
+                if (dm && dm.finWoId) {
+                    try {
+                        const cleared = await clearConvertGate(dm, operator?.name || '');
+                        if (cleared) writeLog(`Convert done — WO ${dm.finWoId} released from its convert gate (RTG can dispatch it).`, 'wms');
+                    } catch (e) { console.warn('convert gate clear failed for', dm.finWoId, e); }
+                }
+            }
             setConvertBase(null); setConvertTargetId(""); setConvertTargetSearch(""); setConvertQty(""); setConvertSrcScan(""); setConvertDestScan(""); setConvertMemo(""); setConvertLot(""); setConvertDemandId(null);
             pullNetSuiteStock();
         } catch (e) {
@@ -1933,7 +1943,18 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
             // The HQ to-do is satisfied only now, once the /P actually exists in NetSuite.
-            if (line.demandId) await deleteDoc(doc(db, "convert_demand", line.demandId)).catch(() => {});
+            if (line.demandId) {
+                // A demand raised by a work-order pre-check carries the WO's id — completing the
+                // convert is what opens that WO's gate (same release the rod cut performs).
+                const dm = convertDemands.find(d => d.id === line.demandId) || null;
+                await deleteDoc(doc(db, "convert_demand", line.demandId)).catch(() => {});
+                if (dm && dm.finWoId) {
+                    try {
+                        const cleared = await clearConvertGate(dm, operator?.name || '');
+                        if (cleared) writeLog(`Convert done — WO ${dm.finWoId} released from its convert gate (RTG can dispatch it).`, 'wms');
+                    } catch (e) { console.warn('convert gate clear failed for', dm.finWoId, e); }
+                }
+            }
             writeLog(`Phosphate convert: +${line.qty} ${line.targetErpId} / −${line.qty} ${line.rawErpId} (cart ${convBatch.cartBin || ''} → ${newBin || 'finished'}).`, 'wms');
             pullNetSuiteStock();
         } catch (e) { console.error('convert line failed', e); alert("❌ NetSuite rejected the build:\n\n" + (e.message || e) + "\n\nIf it still mentions the component list / inventory detail, the raw isn't in the cart bin in NetSuite yet (stage it first), or the field name differs (componentInventoryDetail) — paste the error and I'll correct it."); }
