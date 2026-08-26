@@ -17,6 +17,7 @@ import { handoffItem, customerLines } from './hardwareHandoff';
 import { finishLabelOf } from './finishLabel';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
+import { captureTransparentPng, saveGuideCapture } from './guideCapture';
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // THE MASTER TEMPLATE (Stuart 2026-08-17)
@@ -348,6 +349,29 @@ function HardwareConfiguratorInner({
     // fires on the draft ID changing and never again.
     const [visionReport, setVisionReport] = useState(null);
     const seededRef = useRef('');
+    // ── SEND TO GUIDE (Stuart 2026-08-25) ────────────────────────────────────────────────────
+    // The r3f state, captured at Canvas creation so the button can re-render the scene at a
+    // boosted pixel ratio with a transparent background (Shared/guideCapture).
+    const glStateRef = useRef(null);
+    const [guideCapBusy, setGuideCapBusy] = useState(false);
+    const handleSendToGuide = async () => {
+        if (guideCapBusy) return;
+        const dataUrl = captureTransparentPng(glStateRef.current, { scale: 3 });
+        if (!dataUrl) return alert('The 3D view is not ready to capture yet.');
+        setGuideCapBusy(true);
+        try {
+            const label = finishLabelOf(chosenFinishObjects);
+            const name = `${assembly?.itemName || flow?.name || 'CPQ CAPTURE'}${label ? ` — ${label}` : ''}`;
+            const saved = await saveGuideCapture({
+                dataUrl, name,
+                code: assembly?.legacyErpId && assembly.legacyErpId !== 'PENDING' ? assembly.legacyErpId : (assembly?.itemId || flow?.id || ''),
+                // No operator identity reaches this component — the gallery shows 'Unknown'.
+                brandId: flow?.brandId || '', collection: '', user: '',
+            });
+            alert(`📸 Saved to the Asset Gallery as "${saved.id.slice(0, 40)}…"\n\nOpen tab 1 → Guide Books → Images to place it on a page.`);
+        } catch (e) { console.error('guide capture failed', e); alert('Capture failed: ' + (e.message || e)); }
+        setGuideCapBusy(false);
+    };
     useEffect(() => {
         const id = visionDraft?.id || '';
         if (!id || seededRef.current === id) return;
@@ -1691,8 +1715,20 @@ function HardwareConfiguratorInner({
                                 <span style={{ color: '#b00020' }}> · nothing tagged to draw — the chosen parts own no geometry</span>
                             )}
                         </div>
+                        {/* ── SEND TO GUIDE (Stuart 2026-08-25): "on the cpq i will select the parts
+                            that i want to add to the guide, arrange them in the orientation that
+                            makes sense, then capture" — a hi-res TRANSPARENT png of exactly this
+                            view, filed in the Asset Gallery for the tab-1 Guide Builder. */}
+                        {cadUrl && (
+                            <button onClick={handleSendToGuide} disabled={guideCapBusy || !Object.keys(visibleOverrides).length}
+                                title={Object.keys(visibleOverrides).length ? 'Capture this exact view as a hi-res transparent PNG and file it in the Asset Gallery for the Guide Builder (tab 1 → Guide Books)' : 'Nothing on screen to capture — choose parts first'}
+                                style={{ ...mono, position: 'absolute', right: '12px', top: '9px', zIndex: 3, padding: '7px 12px', background: guideCapBusy ? 'var(--paper-2)' : '#fff', color: 'var(--ink)', border: '1px solid var(--brass)', cursor: guideCapBusy ? 'wait' : 'pointer', opacity: Object.keys(visibleOverrides).length ? 1 : .45 }}>
+                                {guideCapBusy ? 'Capturing…' : '📸 Send to Guide'}
+                            </button>
+                        )}
                         {cadUrl ? (
-                            <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}>
+                            <Canvas camera={{ position: [5, 5, 5], fov: 50 }} dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }} style={{ width: '100%', height: '100%' }}
+                                onCreated={(st) => { glStateRef.current = st; }}>
                                 <StudioRig />
                                 <OrbitControls makeDefault />
                                 <Bounds fit clip margin={1.2}>

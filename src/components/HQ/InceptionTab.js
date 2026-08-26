@@ -3,6 +3,7 @@ import { db, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, query, where, updateDoc, getDocs } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { removeImageBackground } from '../Shared/removeBg';
+import GuideBuilder from '../Shared/GuideBuilder';
 import { UncontrolledReactSVGPanZoom, TOOL_PAN, TOOL_ZOOM_IN, TOOL_ZOOM_OUT, TOOL_NONE } from 'react-svg-pan-zoom';
 
 import * as THREE from 'three';
@@ -89,6 +90,7 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
   const [reactSvgPanZoomRef, setReactSvgPanZoomRef] = useState(null);
   
   const [isCanvasMaximized, setIsCanvasMaximized] = useState(false);
+  const [guideBuilderOpen, setGuideBuilderOpen] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false); 
 
   const viewerContainerRef = useRef(null);
@@ -795,9 +797,16 @@ const InceptionTab = ({ currentUser, activeBrand }) => {
               <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>{assemblies.length} Assemblies in Portfolio</span>
               <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Product &amp; Project Inception Hub</h2>
             </div>
-            <button onClick={() => openEditor()} style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ Initiate New Product</button>
+            <div style={{ display: 'flex', gap: '10px' }}>
+                {/* GUIDE BOOKS (Stuart 2026-08-25): the visual guide/page builder — same drop-pin
+                    notation as this tab's canvas, on an 8.5×11 sheet, images from the Asset
+                    Gallery (CPQ "Send to Guide" captures land there). */}
+                <button onClick={() => setGuideBuilderOpen(true)} style={{ padding: '12px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>📖 Guide Books</button>
+                <button onClick={() => openEditor()} style={{ padding: '12px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ Initiate New Product</button>
+            </div>
           </div>
       )}
+      {guideBuilderOpen && <GuideBuilder onClose={() => setGuideBuilderOpen(false)} currentUser={currentUser} activeBrand={activeBrand} />}
 
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch', flex: 1 }}>
         
