@@ -3138,7 +3138,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                             ${job.cpqData?.breakdown?.filter(item => !item.isDiscount && !item.isNetLine).map(item => `
                                 <div class="row" style="${item.isHeader ? 'font-weight: bold; background: #f4f0e6; padding: 8px;' : ''}">
                                     <span style="flex: 3; font-weight: 500;">${item.name}${item.cutLength ? `<span style="color:#7a736a;font-weight:400;font-size:10px;"> &nbsp;·&nbsp; ${cutText(item.cutLength)}</span>` : ''}</span>
-                                    <span style="flex: 1; text-align: right; font-size: 14px; font-weight: 500;">${item.isHeader ? '' : item.qty}</span>
+                                    <span style="flex: 1; text-align: right; font-size: 14px; font-weight: 500;">${item.isHeader ? '' : (() => { const ft = Number(item.feet) || (item.cutLength ? Math.ceil(Number(item.cutLength) / 12) : 0); return ft > 0 ? `${item.qty} (${ft} ft)` : item.qty; })()}</span>
                                 </div>
                             `).join('')}
                         </div>

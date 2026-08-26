@@ -1279,8 +1279,10 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                   {activeDocJob.cpqData?.breakdown ? (
                                       activeDocJob.cpqData.breakdown.filter(item => !item.isDiscount && !item.isNetLine).map((item, i) => (
                                           <div key={i} style={{ display: 'flex', padding: '12px 0', borderBottom: '1px solid rgba(28,26,22,.08)', fontSize: '13px' }}>
-                                              <span style={{ flex: 3, fontWeight: 500 }}>{item.name}</span>
-                                              <span style={{ flex: 1, textAlign: 'right', fontSize: '14px', fontWeight: 500 }}>{item.qty}</span>
+                                              <span style={{ flex: 3, fontWeight: 500 }}>{item.name}{item.cutLength ? <span style={{ color: 'var(--ink-soft)', fontWeight: 400, fontSize: '10px' }}> · cut {item.cutLength}"</span> : null}</span>
+                                              {/* One pole, N feet of material (Stuart 2026-08-26): the qty is the PIECE
+                                                  count; the feet it consumes print beside it so the shop reads both. */}
+                                              <span style={{ flex: 1, textAlign: 'right', fontSize: '14px', fontWeight: 500 }}>{(() => { const ft = Number(item.feet) || (item.cutLength ? Math.ceil(Number(item.cutLength) / 12) : 0); return ft > 0 ? `${item.qty} (${ft} ft)` : item.qty; })()}</span>
                                           </div>
                                       ))
                                   ) : (

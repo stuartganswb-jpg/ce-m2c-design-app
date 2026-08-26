@@ -133,6 +133,49 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
     // The master DELETION LEDGER (Stuart 2026-08-25): every delete anywhere in the app — soft
     // tombstone or hard destroy — lands here, append-only, and THIS board is where it is reviewed.
+    // ── ✎ PO EDITOR (Stuart 2026-08-26): a parked PO is editable until NetSuite has it — add or
+    // remove lines, fix quantities/rates. Once queued or posted it locks; changes then belong in
+    // NetSuite so the two can never disagree. New lines resolve from the Master Library by our
+    // code (or the customer's) — an item without a NetSuite id is refused, never guessed.
+    const [poEdit, setPoEdit] = useState(null);   // { po, items: [...], add: {code, qty, rate}, busy }
+    const poLocked = (po) => !!(po.nsPoId || po.nsPoTran || po.status === 'Pushed to NetSuite');
+    const openPoEdit = (po) => setPoEdit({ po, items: (po.items || []).map(x => ({ ...x })), add: { code: '', qty: '', rate: '' }, busy: false });
+    const poEditAddLine = async () => {
+        const e = poEdit; if (!e) return;
+        const code = String(e.add.code || '').trim().toUpperCase();
+        const qty = parseInt(e.add.qty) || 0;
+        if (!code || qty <= 0) return alert('Give the new line an item code and a quantity.');
+        try {
+            let snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', code)));
+            if (snap.empty) snap = await getDocs(query(collection(db, 'Approved_Designs'), where('itemId', '==', code)));
+            const part = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+            if (!part) return alert(`"${code}" is not in the Master Library — sync or create it first. Nothing was added.`);
+            if (!part.netSuiteInternalId) return alert(`${code} has no NetSuite internal id yet (11.1 sync) — the PO line would be refused on push. Nothing was added.`);
+            const rate = parseFloat(e.add.rate);
+            const line = {
+                itemId: part.legacyErpId || part.itemId, nsItemId: String(part.netSuiteInternalId),
+                vendorPart: part.manufacturingSpecs?.vendorId || 'N/A', quantity: qty,
+                rate: Number.isFinite(rate) ? rate : (parseFloat(part.manufacturingSpecs?.vendorPurchasePrice || part.manufacturingSpecs?.purchasePrice || part.manufacturingSpecs?.averageCost) || 0),
+                description: part.manufacturingSpecs?.purchaseDescription || part.itemName || code,
+            };
+            setPoEdit(prev => prev ? { ...prev, items: [...prev.items, line], add: { code: '', qty: '', rate: '' } } : prev);
+        } catch (err) { alert('Lookup failed: ' + (err.message || err)); }
+    };
+    const savePoEdit = async () => {
+        const e = poEdit; if (!e) return;
+        const items = e.items.filter(x => (parseInt(x.quantity) || 0) > 0)
+            .map(x => ({ ...x, quantity: parseInt(x.quantity) || 0, rate: parseFloat(x.rate) || 0 }));
+        if (!items.length) return alert('A PO needs at least one line — use ✕ on the card to delete the whole PO instead.');
+        setPoEdit(prev => ({ ...prev, busy: true }));
+        try {
+            await updateDoc(doc(db, 'hq_purchase_orders', e.po.id), {
+                items, editedAt: Date.now(), editedBy: currentUser || '',
+            });
+            addLog(`✎ PO ${e.po.poId || e.po.id} edited — now ${items.length} line(s).`, 'success');
+            setPoEdit(null); loadRTGOrders();
+        } catch (err) { alert('Save failed: ' + (err.message || err)); setPoEdit(prev => prev ? { ...prev, busy: false } : prev); }
+    };
+
     const [deletionLog, setDeletionLog] = useState([]);
     const [showDeletionLog, setShowDeletionLog] = useState(false);
     useEffect(() => {
@@ -2096,6 +2139,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                         </div>
                                         <button onClick={() => deleteOrder('hq_purchase_orders', po)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
+                                    {!poLocked(po) && (
+                                        <button style={{ ...btnStyle, width: '100%', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', marginBottom: '8px' }} onClick={() => openPoEdit(po)} title="Add or remove lines, fix quantities and rates — editable until the PO is queued to NetSuite.">✎ Edit PO</button>
+                                    )}
                                     <button style={{ ...btnStyle, width: '100%', background: po.nsVendorId ? 'var(--brass)' : 'var(--paper-2)', color: po.nsVendorId ? '#fff' : 'var(--ink-soft)', border: 'none', marginBottom: '8px', cursor: po.nsVendorId ? 'pointer' : 'not-allowed' }} onClick={() => pushPoToNetSuite(po)}>⬆ Push PO → NetSuite</button>
                                     <button style={{ ...btnStyle, width: '100%', background: 'var(--ink)', color: '#fff', border: 'none' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
                                 </div>
@@ -2235,6 +2281,51 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     </>
                 );
             })()}
+
+            {/* ✎ PO EDITOR MODAL (2026-08-26) */}
+            {poEdit && (
+                <div onClick={() => !poEdit.busy && setPoEdit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 240, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '860px', maxWidth: '96vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
+                        <div style={{ padding: '18px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <div>
+                                <span style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', fontWeight: 500 }}>✎ Edit PO {poEdit.po.poId || poEdit.po.id}</span>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '12px' }}>{poEdit.po.vendor || ''} · editable until pushed to NetSuite</span>
+                            </div>
+                            <button onClick={() => setPoEdit(null)} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                        </div>
+                        <div style={{ padding: '18px 24px', overflowY: 'auto' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr 70px 90px 34px', gap: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', marginBottom: '6px' }}>
+                                <span>Item</span><span>Description</span><span>Qty</span><span>Rate $</span><span></span>
+                            </div>
+                            {poEdit.items.map((ln, i) => (
+                                <div key={i} style={{ display: 'grid', gridTemplateColumns: '130px 1fr 70px 90px 34px', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{ln.itemId}</span>
+                                    <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={ln.description}>{ln.description}</span>
+                                    <input value={ln.quantity} inputMode="numeric" onChange={e => setPoEdit(prev => ({ ...prev, items: prev.items.map((y, j) => j === i ? { ...y, quantity: e.target.value } : y) }))}
+                                        style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center' }} />
+                                    <input value={ln.rate} inputMode="decimal" onChange={e => setPoEdit(prev => ({ ...prev, items: prev.items.map((y, j) => j === i ? { ...y, rate: e.target.value } : y) }))}
+                                        style={{ padding: '6px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'right' }} />
+                                    <button onClick={() => setPoEdit(prev => ({ ...prev, items: prev.items.filter((_, j) => j !== i) }))} title="Remove this line" style={{ background: 'none', border: '1px solid var(--line)', color: '#d9534f', cursor: 'pointer', padding: '4px 0' }}>×</button>
+                                </div>
+                            ))}
+                            <div style={{ display: 'grid', gridTemplateColumns: '200px 90px 100px auto', gap: '8px', alignItems: 'center', marginTop: '14px', paddingTop: '12px', borderTop: '1px dashed var(--line)' }}>
+                                <input value={poEdit.add.code} placeholder="Add item — our code or customer #" onChange={e => setPoEdit(prev => ({ ...prev, add: { ...prev.add, code: e.target.value } }))}
+                                    style={{ padding: '7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px' }} />
+                                <input value={poEdit.add.qty} placeholder="Qty" inputMode="numeric" onChange={e => setPoEdit(prev => ({ ...prev, add: { ...prev.add, qty: e.target.value } }))}
+                                    style={{ padding: '7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center' }} />
+                                <input value={poEdit.add.rate} placeholder="Rate (auto)" inputMode="decimal" onChange={e => setPoEdit(prev => ({ ...prev, add: { ...prev.add, rate: e.target.value } }))}
+                                    style={{ padding: '7px', border: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'right' }} />
+                                <button onClick={poEditAddLine} style={{ ...btnStyle, background: 'var(--ink)', color: '#fff', border: 'none' }}>+ Add line</button>
+                            </div>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '8px' }}>Blank rate = the item's vendor purchase price. A line set to qty 0 is removed on save.</div>
+                        </div>
+                        <div style={{ padding: '14px 24px', borderTop: '1px solid var(--line)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                            <button onClick={() => setPoEdit(null)} disabled={poEdit.busy} style={{ ...btnStyle }}>Cancel</button>
+                            <button onClick={savePoEdit} disabled={poEdit.busy} style={{ ...btnStyle, background: '#3a7d44', color: '#fff', border: 'none' }}>{poEdit.busy ? 'Saving…' : `💾 Save ${poEdit.items.length} line(s)`}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ============ ⇄ QUOTES & SALES ORDERS — master in/out review (2026-08-25) ============ */}
             <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', marginBottom: '24px' }}>
