@@ -13,6 +13,8 @@ import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq, reopenQuoteInVision } from '../Shared/reopenQuote';
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
+import OrderStatusChips from '../Shared/OrderStatusChips';
+import { orderStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
 
 const printStyles = `
   @media print {
@@ -696,7 +698,44 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
   const [brandLogos, setBrandLogos] = useState({});
   const [draftDrawings, setDraftDrawings] = useState([]); 
 
-  const [expandedSections, setExpandedSections] = useState({ active: true, archive: false });
+  const [expandedSections, setExpandedSections] = useState({ active: true, archive: false, maintenance: false });
+  // ── FLOOR STATUS FOR THE PIPELINE (Stuart 2026-08-25: "this information needs to come from the
+  // floor … all currently stamp to one place") ──────────────────────────────────────────────────
+  // Confirmed: they do. Finishing (currentPhase/tasks/coats), WMS (pickStatus/packStatus) and the
+  // shop (customFabStatus, mirrored by workOrderContract.mirrorCustomStatusToSibling) all write the
+  // ONE fin_workorders doc, and Shared/orderStatus.orderStatusOf derives the same answer the
+  // "Where is it?" search shows. This tab subscribes to the selected customer's fin docs only —
+  // no whole-collection listener on a CRM screen.
+  const [custFinWos, setCustFinWos] = useState([]);
+  const [finRecipes, setFinRecipes] = useState({});
+  const [soLinesOpen, setSoLinesOpen] = useState({});   // per-job "Lines & Floor Status" expanders
+  useEffect(() => {
+      const id = activeCrmRecord?.id;
+      setCustFinWos([]);
+      if (!id || activeSubTab !== 'CUSTOMERS') return;
+      const unsub = onSnapshot(query(collection(db, 'fin_workorders'), where('customerId', '==', id)),
+          snap => setCustFinWos(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+          err => console.warn('fin_workorders pipeline listener:', err));
+      return () => unsub();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCrmRecord?.id, activeSubTab]);
+  useEffect(() => {
+      const unsub = onSnapshot(collection(db, 'fin_recipes'),
+          snap => { const r = {}; snap.docs.forEach(d => { r[d.id] = d.data(); }); setFinRecipes(r); },
+          () => {});
+      return () => unsub();
+  }, []);
+  const recipeLenOf = (wo) => (((finRecipes[wo.recipe] || finRecipes[String(wo.recipe || '').toUpperCase()] || {}).steps) || []).length;
+  // A sales order's floor docs: RTG stamps quoteId with the CPQ job's id and carries the SO number.
+  const finWosForJob = (job) => {
+      const jobIds = [job.id, job.jobId].filter(Boolean).map(String);
+      const soIds = [job.soNum, job.soId, job.netsuiteSalesOrderId].filter(Boolean).map(String);
+      return custFinWos.filter(w =>
+          jobIds.includes(String(w.quoteId || '')) || jobIds.includes(String(w.orderKey || '')) ||
+          (soIds.length && [w.soNum, w.soId, w.salesOrderId].some(v => v && soIds.includes(String(v)))));
+  };
+  const createdDateOf = (job) => job.createdAt?.seconds ? new Date(job.createdAt.seconds * 1000).toLocaleDateString()
+      : (typeof job.createdAt === 'number' ? new Date(job.createdAt).toLocaleDateString() : (job.dateSaved || '—'));
   const [platingPOs, setPlatingPOs] = useState([]);          // plating shipments (hq_purchase_orders, kind=plating)
   const [activePlatingPO, setActivePlatingPO] = useState(null); // shipment detail modal
   const [recordingReceipt, setRecordingReceipt] = useState(false);
@@ -1324,11 +1363,29 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                   Select a {activeSubTab === 'CUSTOMERS' ? 'customer' : 'vendor'} to view profile
                               </div>
                           ) : (
-                              <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                                  
-                                  {/* Left Panel: Profile & Financials */}
-                                  <div style={{ flex: '1.5 1 460px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                                      
+                              /* CUSTOMERS: single column — the pipeline is the screen, maintenance folds away at the
+                                 bottom (Stuart 2026-08-25: "give way more importance to the Active Pipeline … customer
+                                 maintenance can be at the bottom, collapsed, opened when needed"). Vendors keep the
+                                 original two-column layout. */
+                              <div style={activeSubTab === 'CUSTOMERS'
+                                  ? { display: 'flex', gap: '30px', flexDirection: 'column', alignItems: 'stretch' }
+                                  : { display: 'flex', gap: '30px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+
+                                  {/* Profile & Financials — customer maintenance. Collapsed at the bottom for customers. */}
+                                  <div style={activeSubTab === 'CUSTOMERS'
+                                      ? { order: 2, width: '100%', display: 'flex', flexDirection: 'column', gap: '24px' }
+                                      : { flex: '1.5 1 460px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                                      {activeSubTab === 'CUSTOMERS' && (
+                                          <div
+                                              onClick={() => setExpandedSections(prev => ({ ...prev, maintenance: !prev.maintenance }))}
+                                              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid var(--line)', background: 'var(--paper-2)', padding: '14px 20px', cursor: 'pointer' }}
+                                          >
+                                              <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Customer Maintenance <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginLeft: '10px', letterSpacing: '.05em' }}>profile · financials · contacts · addresses · portal · notes</span></h4>
+                                              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{expandedSections.maintenance ? '▼ HIDE' : '▶ SHOW'}</span>
+                                          </div>
+                                      )}
+                                      {(activeSubTab !== 'CUSTOMERS' || expandedSections.maintenance) && (<>
+
                                       <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', borderRadius: '2px' }}>
                                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '16px', marginBottom: '24px' }}>
                                               <div>
@@ -1480,10 +1537,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                               placeholder="Add strategic notes, preferences, or warnings here..."
                                           />
                                       </div>
+                                      </>)}
                                   </div>
 
-                                  {/* Right Panel: Active & Archived Pipeline with Collapsibles */}
-                                  <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', flex: '1 1 360px', minWidth: 0 }}>
+                                  {/* Pipeline Panel: Active & Archived — the main event for customers (order 1, full width) */}
+                                  <div style={activeSubTab === 'CUSTOMERS'
+                                      ? { order: 1, width: '100%', background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', minWidth: 0 }
+                                      : { background: '#fff', border: '1px solid var(--line)', padding: '24px', display: 'flex', flexDirection: 'column', flex: '1 1 360px', minWidth: 0 }}>
 
                                       {/* --- PLATING SHIPMENTS (vendors only) --- */}
                                       {activeSubTab === 'VENDORS' && (() => {
@@ -1545,12 +1605,13 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           const groupHead = (label, n) => (
                                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.15em', textTransform: 'uppercase', color: 'var(--ink-soft)', borderBottom: '1px dashed var(--line)', paddingBottom: '6px', marginTop: label === 'Sales Orders' ? '10px' : 0 }}>{label} ({n})</div>
                                           );
-                                          const pipelineCard = (job) => (
+                                          const pipelineCard = (job, isOrderCard = false) => (
                                                   <div key={job.id} style={{ border: `1px solid ${job.portalDeleted ? '#e2b8b8' : 'var(--line)'}`, borderLeft: job.portalDeleted ? '4px solid #d9534f' : undefined, padding: '16px', background: job.portalDeleted ? '#fdf3f3' : 'var(--paper)' }}>
                                                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                           <span title={job.jobId || job.id} style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', textDecoration: job.portalDeleted ? 'line-through' : 'none', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{quoteDisplayNo(job)}</span>
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: `1px solid ${job.portalDeleted ? '#d9534f' : 'var(--line)'}`, background: job.portalDeleted ? '#d9534f' : '#fff', color: job.portalDeleted ? '#fff' : 'var(--ink)' }}>{job.portalDeleted ? '🗑 Deleted by client' : job.status.replace(/_/g, ' ')}</span>
                                                       </div>
+                                                      <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.03em' }}>Created {createdDateOf(job)}</div>
                                                       {/* The customer withdrew this from their portal. The record is KEPT — this is the
                                                           alert, so nobody chases a quote the client has already dropped. */}
                                                       {job.portalDeleted && (
@@ -1562,7 +1623,51 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                       <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>{job.sidemark || job.note || 'No description'}</div>
                                                       {quoteAuthorLine(job) && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '6px', letterSpacing: '.03em' }}>{quoteAuthorLine(job)}</div>}
                                                       {job.cpqData?.totalPrice && <div style={{ fontSize: '0.9rem', fontWeight: 500, marginTop: '8px', color: 'var(--ink)' }}>Est: ${job.cpqData.totalPrice.toFixed(2)}</div>}
-                                                      
+
+                                                      {/* LINES & FLOOR STATUS (Stuart 2026-08-25): the order's quote lines plus its live
+                                                          work orders — the same fin_workorders docs shop/finishing/WMS stamp, read with
+                                                          the same orderStatusOf the Where-is-it search uses. */}
+                                                      {isOrderCard && (() => {
+                                                          const wos = finWosForJob(job);
+                                                          const open = !!soLinesOpen[job.id];
+                                                          const lines = (job.cpqData?.breakdown || []).filter(it => !it.isDiscount && !it.isNetLine);
+                                                          const woForLine = (name) => wos.find(w => { const c = String(w.itemCode || w.stockErpId || '').toUpperCase(); return c && String(name || '').toUpperCase().includes(c); });
+                                                          return (
+                                                              <div style={{ marginTop: '12px', borderTop: '1px dashed var(--line)', paddingTop: '10px' }}>
+                                                                  <button onClick={() => setSoLinesOpen(p => ({ ...p, [job.id]: !p[job.id] }))} style={{ width: '100%', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: open ? 'var(--ink)' : '#fff', color: open ? '#fff' : 'var(--ink)', border: '1px solid var(--ink)', cursor: 'pointer' }}>
+                                                                      {open ? '▼' : '▶'} Lines & Floor Status{wos.length ? ` · ${wos.length} WO${wos.length === 1 ? '' : 's'} on the floor` : ''}
+                                                                  </button>
+                                                                  {open && (
+                                                                      <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                                          {lines.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.85rem' }}>No line items on this configuration.</div>}
+                                                                          {lines.map((it, i) => {
+                                                                              const w = woForLine(it.name);
+                                                                              const st = w ? orderStatusOf(w, { recipeLen: recipeLenOf(w) }) : null;
+                                                                              return (
+                                                                                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', borderBottom: '1px solid var(--paper-2)', paddingBottom: '5px' }}>
+                                                                                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.name}>{it.name}</span>
+                                                                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>×{it.qty}</span>
+                                                                                      {st && <span title="Live floor status — matched by item code" style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: stageTone(st.slowest), whiteSpace: 'nowrap' }}>{stageLabel(st.slowest)}</span>}
+                                                                                  </div>
+                                                                              );
+                                                                          })}
+                                                                          <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)', marginTop: '4px' }}>Floor work orders — live from shop · finishing · WMS</div>
+                                                                          {wos.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.85rem' }}>Nothing on the floor yet — work orders appear here the moment RTG releases them, then track through shop, finishing and the warehouse.</div>}
+                                                                          {wos.map(w => (
+                                                                              <div key={w.id} style={{ border: '1px solid var(--line)', background: '#fff', padding: '10px 12px' }}>
+                                                                                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                                                                                      <b style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{w.nsWoTran || w.woNum || w.displayId || w.id}</b>
+                                                                                      <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{w.itemCode || w.stockErpId || w.type || ''} ×{w.totalParts || '?'}</span>
+                                                                                  </div>
+                                                                                  <OrderStatusChips wo={w} recipeLen={recipeLenOf(w)} />
+                                                                              </div>
+                                                                          ))}
+                                                                      </div>
+                                                                  )}
+                                                              </div>
+                                                          );
+                                                      })()}
+
                                                       <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>
                                                           <button onClick={() => setCfgQuote(job.jobId || job.id)} style={{ flex: '1 1 92px', padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>🔍 View Item</button>
                                                           {job.status === 'CONFIGURED' && (
@@ -1579,15 +1684,44 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                           );
                                           const qJobs = act.filter(j => !isOrder(j));
                                           const oJobs = act.filter(isOrder);
+                                          // CUSTOMERS: two windows side by side — Quotes | Sales Orders — each with created
+                                          // dates and (orders) live floor status. Vendors keep the original stacked list.
+                                          if (activeSubTab === 'CUSTOMERS') {
+                                              const windowStyle = { border: '1px solid var(--line)', background: 'var(--paper)', display: 'flex', flexDirection: 'column', minWidth: 0 };
+                                              const windowHead = (label, n) => (
+                                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '12px 16px', borderBottom: '1px solid var(--line)', background: 'var(--paper-2)' }}>
+                                                      <span style={{ fontFamily: 'var(--serif)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{label}</span>
+                                                      <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{n} open</span>
+                                                  </div>
+                                              );
+                                              return (
+                                                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '20px', marginBottom: '24px' }}>
+                                                      <div style={windowStyle}>
+                                                          {windowHead('Quotes', qJobs.length)}
+                                                          <div style={{ maxHeight: '64vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', padding: '14px' }}>
+                                                              {qJobs.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No open quotes.</div>}
+                                                              {qJobs.map(j => pipelineCard(j))}
+                                                          </div>
+                                                      </div>
+                                                      <div style={windowStyle}>
+                                                          {windowHead('Sales Orders', oJobs.length)}
+                                                          <div style={{ maxHeight: '64vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', padding: '14px' }}>
+                                                              {oJobs.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No approved orders yet.</div>}
+                                                              {oJobs.map(j => pipelineCard(j, true))}
+                                                          </div>
+                                                      </div>
+                                                  </div>
+                                              );
+                                          }
                                           return (
                                               <div style={{ maxHeight: '400px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
                                                   {act.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No active configurations pending.</div>}
                                                   {act.length > 0 && groupHead('Quotes', qJobs.length)}
                                                   {act.length > 0 && qJobs.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.85rem', padding: '4px 10px' }}>No open quotes.</div>}
-                                                  {qJobs.map(pipelineCard)}
+                                                  {qJobs.map(j => pipelineCard(j))}
                                                   {act.length > 0 && groupHead('Sales Orders', oJobs.length)}
                                                   {act.length > 0 && oJobs.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.85rem', padding: '4px 10px' }}>No approved orders yet.</div>}
-                                                  {oJobs.map(pipelineCard)}
+                                                  {oJobs.map(j => pipelineCard(j))}
                                               </div>
                                           );
                                       })()}
