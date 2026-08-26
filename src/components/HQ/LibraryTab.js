@@ -6,6 +6,7 @@ import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/
 import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { makeFullTasks, withItemCode } from '../Shared/workOrderContract';
+import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
 import { useRetiredSet } from '../Shared/retiredItems';
 import { db, storage } from '../../firebase';
@@ -419,6 +420,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
     const matchesSearch = part.itemName?.toLowerCase().includes(term) || 
                           (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || 
                           (part.itemId && part.itemId.toLowerCase().includes(term)) ||
+                          matchesCustomerCode(part, term) ||
                           (specs.binLocation && specs.binLocation.toLowerCase().includes(term)) || 
                           (part.clientPricing && part.clientPricing.some(cp => 
                               (cp.clientSku && cp.clientSku.toLowerCase().includes(term)) || 
@@ -1511,7 +1513,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               </select>
           )}
 
-          <input placeholder="Search Name, ERP, Bin..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
+          <input placeholder="Search Name, ERP, Bin, Customer #…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} style={{ width: '200px', padding: '10px 12px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.9rem', outline: 'none' }} />
           <button onClick={() => setAppOnlyFilter(v => !v)} title="Show only app-created parts with no NetSuite item # (legacyErpId PENDING + no internal id) — for finding residual items to clean up" style={{ padding: '10px 14px', border: `1px solid ${appOnlyFilter ? 'var(--brass)' : 'var(--line)'}`, background: appOnlyFilter ? 'var(--brass)' : '#fff', color: appOnlyFilter ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{appOnlyFilter ? '✓ App-only (no NS#)' : 'App-only (no NS#)'}</button>
           <button onClick={() => setPartClassFilter(v => v === 'FEES' ? 'ALL' : 'FEES')} title="Show ONLY fee items — matched by product type FEE, class Fee, or the CE-FEE-… code convention, so NetSuite-synced fees show too (they no longer surface under App-only)" style={{ padding: '10px 14px', border: `1px solid ${partClassFilter === 'FEES' ? 'var(--brass)' : 'var(--line)'}`, background: partClassFilter === 'FEES' ? 'var(--brass)' : '#fff', color: partClassFilter === 'FEES' ? '#fff' : 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', whiteSpace: 'nowrap' }}>{partClassFilter === 'FEES' ? '✓ 💲 Fees only' : '💲 Fees only'}</button>
           <button onClick={fixEncoding} disabled={mojiBusy} title="Repair garbled imported text (e.g. 1â€³ → 1″): UTF-8 that was mis-read as Windows-1252 during an import. Sweeps item names/descriptions AND the option labels baked into CPQ flows; only provably-garbled strings are changed — clean text can't be touched." style={{ padding: '10px 14px', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: mojiBusy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>{mojiBusy ? '⟳ Fixing…' : '🔤 Fix garbled text'}</button>

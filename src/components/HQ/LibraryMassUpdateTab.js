@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { db, storage } from '../../firebase';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
@@ -626,7 +627,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             part.itemName?.toLowerCase().includes(term) ||
             (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) ||
             (part.itemId && part.itemId.toLowerCase().includes(term)) ||
-            (specs.binLocation && specs.binLocation.toLowerCase().includes(term));
+            (specs.binLocation && specs.binLocation.toLowerCase().includes(term)) ||
+            matchesCustomerCode(part, term);
 
         const matchesRouting = routingFilter === "ALL" ||
             (routingFilter === "UNASSIGNED" ? (!part.routingType || part.routingType === "UNASSIGNED") : ((part.routingType || "").toUpperCase() === routingFilter.toUpperCase()));
@@ -1141,7 +1143,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 <div style={{ flex: 1, background: '#fff', border: `1px solid ${theme.line}`, display: 'flex', flexDirection: 'column', height: '70vh', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <div style={{ padding: '20px', background: theme.paper2, borderBottom: `1px solid ${theme.line}` }}>
                         <input
-                            placeholder="Search Name, ERP, Bin..."
+                            placeholder="Search Name, ERP, Bin, Customer #…"
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                             style={{ ...fieldStyle, fontSize: '1rem', padding: '12px' }}

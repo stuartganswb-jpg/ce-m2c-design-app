@@ -7,6 +7,7 @@ import { SOURCING, sourcingOf } from '../Shared/sourcing';
 import { makeFullTasks, withItemCode, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifecycle';
+import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { poleCutPlan, poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -1511,7 +1512,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     };
     const snapRowOk = (r) => {
         const term = salesHistSearch.trim().toUpperCase();
-        if (term && !String(r.itemid).toUpperCase().includes(term)) return false;
+        // The snapshot row is a NetSuite report line — resolve its library part so a search by
+        // the CUSTOMER'S number (their SKU / Fabricut pattern #) finds it too (2026-08-26).
+        if (term && !String(r.itemid).toUpperCase().includes(term) && !matchesCustomerCode(snapPartOf(r), term)) return false;
         if (snapWatch && snapWatchOf(r) !== snapWatch.toUpperCase()) return false;
         if (!snapCat && !snapColl) return true;
         const part = snapPartOf(r);
@@ -1974,7 +1977,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const term = searchQuery.toLowerCase();
         const specs = part.manufacturingSpecs || {};
 
-        const matchesSearch = part.itemName?.toLowerCase().includes(term) || (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term));
+        const matchesSearch = part.itemName?.toLowerCase().includes(term) || (part.legacyErpId && part.legacyErpId.toLowerCase().includes(term)) || matchesCustomerCode(part, term);
         
         let matchesType = typeFilter === "" || (specs.productType || "").toUpperCase() === typeFilter.toUpperCase() || (part.productType || "").toUpperCase() === typeFilter.toUpperCase();
         
@@ -2137,7 +2140,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 Generate button — without wrapping, a laptop-width screen clipped the
                                 button clean off and operators had "no button to save". */}
                             <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
-                                <input value={salesHistSearch} onChange={e => setSalesHistSearch(e.target.value)} placeholder="Search item # (e.g. HAFICBR1)…" style={{ flex: 1, minWidth: '170px', maxWidth: '300px', padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
+                                <input value={salesHistSearch} onChange={e => setSalesHistSearch(e.target.value)} placeholder="Search item # or customer #…" style={{ flex: 1, minWidth: '170px', maxWidth: '300px', padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }} />
                                 <select value={snapWatch} onChange={e => setSnapWatch(e.target.value)} title="Filter by the item's watchlist (from the Master Library)" style={{ padding: '10px 12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem', background: snapWatch ? 'var(--paper-2)' : '#fff' }}>
                                     <option value="">All Watchlists</option>
                                     <option value="NONE">None / Unassigned</option>
@@ -3009,7 +3012,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     </select>
 
                     <input 
-                        placeholder="Search Global Inventory..." 
+                        placeholder="Search Global Inventory or Customer #…" 
                         value={searchQuery} 
                         onChange={(e) => setSearchQuery(e.target.value)} 
                         disabled={activeBuilder === 'PO' && !!activeVendor}
