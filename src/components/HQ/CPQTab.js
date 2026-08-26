@@ -711,16 +711,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       return kitsForSeeding(kitLibrary).filter(matches);
   }, [activeAssembly, kitLibrary]);
   // Kits that MATCH this flow's family but are missing their alignment — the named reason the
-  // picker would otherwise silently not render.
-  const unalignedKitCount = useMemo(() => {
+  // picker would otherwise silently not render — plus the full diagnostic (super-admin): what
+  // code the picker matched against and what kit codes actually exist, so a prefix or brand
+  // mismatch reads off the screen instead of needing a code dive (Stuart 2026-08-26).
+  const kitSeedDiag = useMemo(() => {
       const a = activeAssembly;
-      if (!a) return 0;
-      const base = String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase();
-      if (!base) return 0;
-      return kitLibrary.filter(k => !k.manufacturingSpecs?.kitAlign).filter(k => {
+      const base = a ? String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase() : '';
+      const match = (k) => {
           const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
-          return code === base || code.startsWith(base + '-');
-      }).length;
+          return base && (code === base || code.startsWith(base + '-'));
+      };
+      return {
+          base,
+          totalKitClass: kitLibrary.length,
+          unaligned: base ? kitLibrary.filter(k => !k.manufacturingSpecs?.kitAlign).filter(match).length : 0,
+          sampleCodes: kitLibrary.slice(0, 4).map(k => String(k.legacyErpId || k.itemName || k.id)),
+      };
   }, [activeAssembly, kitLibrary]);
   
   const [activeMasterQuoteId, setActiveMasterQuoteId] = useState(null);
@@ -4713,7 +4719,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   finishes={[...globalFinishes, ...outsourceFinishes]}
                                   parts={[...libraryParts, ...liveAssemblies]}
                                   kits={seedableKits}
-                                  kitsUnaligned={unalignedKitCount}
+                                  kitsUnaligned={kitSeedDiag.unaligned}
+                                  kitSeedDiag={kitSeedDiag}
                                   /* THE JOB'S CUSTOMER WINS; the flow's own account is the fallback,
                                      so opening a collection to check its alias and pricing shows
                                      them without inventing a job first (tab 11 → Customer). */

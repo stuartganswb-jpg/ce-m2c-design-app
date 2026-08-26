@@ -117,6 +117,7 @@ function HardwareConfiguratorInner({
     // the picker does not render — so a collection with no kits is untouched by all of this.
     kits = [],
     kitsUnaligned = 0,
+    kitSeedDiag = null,
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -1259,6 +1260,19 @@ function HardwareConfiguratorInner({
                 where kits exist, so every collection without them is exactly as it was. */}
             {/* Kits exist for this family but lost their alignment — say so instead of vanishing
                 (2026-08-26). The 4.6 kit-sheet import is what writes the alignment back. */}
+            {/* SUPER-ADMIN DIAGNOSTIC (2026-08-26): when the kit picker has nothing to show, say
+                exactly what it matched against and what the library holds — a prefix or brand
+                mismatch then reads straight off the screen. Staff never see this line. */}
+            {isSuperAdmin && !kits.length && !kitsUnaligned && kitSeedDiag && kitSeedDiag.totalKitClass > 0 && (
+                <div style={{ background: '#fff', border: '1px dashed var(--line)', padding: '7px 14px', ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-soft)' }}>
+                    🧰 kit picker: no kit code starts with “{kitSeedDiag.base || '(no assembly code)'}-”. {kitSeedDiag.totalKitClass} kit record(s) on this brand — e.g. {kitSeedDiag.sampleCodes.join(', ')}. Either the flow’s linked assembly code ≠ the kit family, or the kits carry a different brand.
+                </div>
+            )}
+            {isSuperAdmin && !kits.length && kitSeedDiag && kitSeedDiag.totalKitClass === 0 && (
+                <div style={{ background: '#fff', border: '1px dashed var(--line)', padding: '7px 14px', ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-soft)' }}>
+                    🧰 kit picker: ZERO Kit-class records reached this brand’s library — the kits are either missing this brand’s brandId or not partClass “Kit”. Check 4.6 → Kit Builder.
+                </div>
+            )}
             {!kits.length && kitsUnaligned > 0 && (
                 <div style={{ background: '#fdf8ef', border: '1px solid var(--brass)', padding: '8px 14px', ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink)' }}>
                     ⚠ {kitsUnaligned} kit{kitsUnaligned === 1 ? '' : 's'} exist for this flow but {kitsUnaligned === 1 ? 'is' : 'are'} missing kit alignment — the "Start from a kit" picker needs it. Re-run the kit sheet import in 4.6 → Kit Builder to restore it.
