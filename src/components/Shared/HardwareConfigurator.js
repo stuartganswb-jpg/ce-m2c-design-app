@@ -1013,6 +1013,15 @@ function HardwareConfiguratorInner({
     // A room is a configuration; a job is several. Each is finished, memo'd and added, and the
     // strip is where you see what is already in and what it came to.
     const [configMemo, setConfigMemo] = useState('');
+    // ⚠ HOW MANY OF THIS EXACT CONFIGURATION (Stuart 2026-08-26: "if customer wants 2 of the exact
+    // config the last step is ask/enter this"). This is a MULTIPLIER on the whole build — 2 means
+    // two complete identical sets of every part below, never a dimension. It rides the cart item as
+    // `qty`, which every consumer already multiplies by (Shared/configQty: the floors print
+    // "×7 each · 14 total", the NetSuite resolver pushes line qty × this, per-foot lines push
+    // feet × this while the cut length stays per-piece — so 2 × an 8ft pole is two 8ft poles,
+    // never a 2ft pole).
+    const [cfgQty, setCfgQty] = useState('1');
+    const cfgQtyN = Math.max(1, parseInt(cfgQty, 10) || 1);
     // NOTES BELONG TO THE STEP THE OPERATOR IS ON (Stuart 2026-08-17). A note typed while deciding
     // the right bracket is about the right bracket; filing them all into one box loses which
     // decision they were about, which is the only thing that makes them useful downstream.
@@ -1025,7 +1034,7 @@ function HardwareConfiguratorInner({
         // knowing which engine produced the order. onAdd is what puts it in the cart; without one
         // the strip still works, so the configurator is usable before the cart is wired.
         const item = handoffItem(resolved, {
-            ...priceCtx, assembly, flow, findPart, qty: 1,
+            ...priceCtx, assembly, flow, findPart, qty: cfgQtyN,
             sidemark: configMemo, memo: configMemo,
             finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
             priceLevel: effectiveLevel, lengthInches, lengthFeet,
@@ -1062,8 +1071,8 @@ function HardwareConfiguratorInner({
             } : null,
         });
         if (typeof onAdd === 'function') onAdd(item);
-        setSaved(s => [...s, { memo: configMemo || `Configuration ${s.length + 1}`, total: grandTotal, lines: customerLines(priced.lines).length }]);
-        setConfigMemo(''); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
+        setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
+        setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
         setStepNotes({}); setExtras([]); setPartFinish({}); setTrvSel(null); setStepIx(0);
     };
 
@@ -1377,7 +1386,9 @@ function HardwareConfiguratorInner({
                     </span>
                 ))}
                 <span style={{ ...mono, fontSize: '9px', padding: '6px 10px', border: '1px solid var(--ink)', background: 'var(--ink)', color: '#fff' }}>
-                    {configMemo || 'This configuration'} <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '5px' }}>${grandTotal.toFixed(2)}</b>
+                    {configMemo || 'This configuration'} <b style={{ fontWeight: 400, color: 'var(--brass)', marginLeft: '5px' }}>
+                        {cfgQtyN > 1 ? `$${grandTotal.toFixed(2)} × ${cfgQtyN} = $${(grandTotal * cfgQtyN).toFixed(2)}` : `$${grandTotal.toFixed(2)}`}
+                    </b>
                 </span>
                 {/* WHO IS BEING PRICED, stated plainly. Every alias and every negotiated price on
                     this screen hangs off this one name, and "no customer" and "this customer has no
@@ -1391,9 +1402,22 @@ function HardwareConfiguratorInner({
                         </b>
                     )}
                 </span>
+                {/* THE MULTIPLIER, ASKED OUT LOUD. "2" here is two complete identical builds —
+                    every part, every pole, every bracket × 2 — never a length. The tooltip says it
+                    because the one confusion this field can cause on the floor is "2" being read
+                    as 2 ft (Stuart 2026-08-26: "so that they do not make a 2ft pole but rather 2
+                    of the same"). */}
+                <label style={{ ...mono, marginLeft: 'auto', fontSize: '9px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    title="How many of THIS exact configuration. 2 = two complete identical sets — every part below × 2. Never a dimension.">
+                    Qty of this config
+                    <input type="number" min="1" step="1" value={cfgQty}
+                        onChange={e => setCfgQty(e.target.value)}
+                        onBlur={() => setCfgQty(String(cfgQtyN))}
+                        style={{ width: '52px', padding: '6px 6px', border: `1px solid ${cfgQtyN > 1 ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '11px', textAlign: 'center', background: '#fff', color: 'var(--ink)', fontWeight: cfgQtyN > 1 ? 700 : 400 }} />
+                </label>
                 <button onClick={addConfiguration} disabled={!priced.lines.length}
-                    style={{ ...mono, marginLeft: 'auto', padding: '7px 12px', cursor: priced.lines.length ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
-                    + Add configuration
+                    style={{ ...mono, padding: '7px 12px', cursor: priced.lines.length ? 'pointer' : 'not-allowed', border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)', opacity: priced.lines.length ? 1 : .4 }}>
+                    + Add configuration{cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}
                 </button>
                 {/* CHECKOUT IS A JOB-LEVEL ACT, so it sits with the configurations rather than at
                     the end of a walk: adding a configuration returns the operator to step 1 for the
@@ -1729,14 +1753,35 @@ function HardwareConfiguratorInner({
                             but it is not an ending — so the last step's button becomes the ending it
                             already was, and adds the configuration to the quote. The strip above
                             keeps the same action for anyone who finished early and wants out. */}
+                        {/* THE LAST QUESTION OF THE WALK (Stuart 2026-08-26): how many of this
+                            exact configuration. Asked here — where the walk ends — so it cannot be
+                            skipped, and phrased so 2 reads as TWO COMPLETE BUILDS, not two feet. */}
+                        {ix >= steps.length - 1 && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', border: `1px solid ${cfgQtyN > 1 ? 'var(--brass)' : 'var(--line)'}`, background: cfgQtyN > 1 ? '#fdf8ef' : 'var(--paper-2)' }}>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ ...mono, fontSize: '8.5px' }}>Quantity of this configuration</div>
+                                    <div style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)', marginTop: '2px' }}>
+                                        {cfgQtyN > 1
+                                            ? <b style={{ color: 'var(--brass)', fontWeight: 600 }}>{cfgQtyN} complete identical builds — every part below × {cfgQtyN}. Not a length.</b>
+                                            : 'How many complete, identical sets of this exact configuration.'}
+                                    </div>
+                                </div>
+                                <input type="number" min="1" step="1" value={cfgQty}
+                                    onChange={e => setCfgQty(e.target.value)}
+                                    onBlur={() => setCfgQty(String(cfgQtyN))}
+                                    style={{ width: '64px', padding: '8px 6px', border: `1px solid ${cfgQtyN > 1 ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '14px', textAlign: 'center', background: '#fff', color: 'var(--ink)', fontWeight: cfgQtyN > 1 ? 700 : 400 }} />
+                            </div>
+                        )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', paddingTop: '3px' }}>
                             <button onClick={() => setStepIx(Math.max(0, ix - 1))} disabled={ix === 0}
                                 style={{ ...chip(false), opacity: ix === 0 ? .35 : 1, cursor: ix === 0 ? 'not-allowed' : 'pointer' }}>Back</button>
                             {ix >= steps.length - 1 ? (
                                 <button onClick={addConfiguration} disabled={!priced.lines.length}
-                                    title={priced.lines.length ? 'Adds this configuration to the quote and starts the next one' : 'Nothing priced yet — this configuration has no lines'}
+                                    title={priced.lines.length ? `Adds this configuration to the quote${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''} and starts the next one` : 'Nothing priced yet — this configuration has no lines'}
                                     style={{ ...chip(true), background: 'var(--brass)', border: '1px solid var(--brass)', color: '#fff', opacity: priced.lines.length ? 1 : .35, cursor: priced.lines.length ? 'pointer' : 'not-allowed' }}>
-                                    Add to quote · ${grandTotal.toFixed(2)}
+                                    {cfgQtyN > 1
+                                        ? `Add to quote · $${grandTotal.toFixed(2)} × ${cfgQtyN} = $${(grandTotal * cfgQtyN).toFixed(2)}`
+                                        : `Add to quote · $${grandTotal.toFixed(2)}`}
                                 </button>
                             ) : (
                                 <button onClick={() => setStepIx(Math.min(steps.length - 1, ix + 1))}

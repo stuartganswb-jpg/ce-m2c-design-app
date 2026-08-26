@@ -699,7 +699,18 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                                 ? <div style={{ marginBottom: '4px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '11px' }}>⚠ No item # on this order — it cannot be identified on the floor.</div>
                                 : null);
                     })()}
-                    <span style={{color:'var(--ink-soft)'}}>Type:</span> {(wo.type || wo.itemName || 'Custom').toUpperCase()} | <span style={{color:'var(--ink-soft)'}}>Total Parts:</span> {wo.totalParts || wo.qty || 1} <br/>
+                    <span style={{color:'var(--ink-soft)'}}>Type:</span> {(wo.type || wo.itemName || 'Custom').toUpperCase()} | <span style={{color:'var(--ink-soft)'}}>Total Parts:</span> {wo.totalParts || wo.qty || 1}
+                    {/* Whole-order multiplier (Stuart 2026-08-26): when every CPQ line on the WO
+                        carries the same configQty > 1 the order is N identical builds — say it
+                        here so the doubled part count reads as intent, not a typo. Totals above
+                        are ALREADY multiplied; nothing else on this card changes. */}
+                    {(() => {
+                        const ls = (wo.partsList || []).filter(l => l.configQty != null);
+                        if (!ls.length) return null;
+                        const m = Number(ls[0].configQty) || 1;
+                        if (m <= 1 || !ls.every(l => Number(l.configQty) === m)) return null;
+                        return <b style={{ color: 'var(--brass)', marginLeft: '8px' }}>· BUILD × {m} identical configs (totals already multiplied)</b>;
+                    })()} <br/>
                     {wo.type === 'sales' && (
                         <span style={{color: 'var(--ink-soft)'}}>
                             (Poles: {wo.poles?.qty || 0}, Fin: {wo.smallParts?.fin || 0}, Rng: {wo.smallParts?.rng || 0}, Brk: {wo.smallParts?.brk || 0})

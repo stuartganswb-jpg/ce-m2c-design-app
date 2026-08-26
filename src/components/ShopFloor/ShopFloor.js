@@ -18,7 +18,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack } from '../Shared/workOrderContract';
 import OrderStatusChips from '../Shared/OrderStatusChips';
-import { qtyText } from '../Shared/configQty';
+import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 
 const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
@@ -1105,6 +1105,28 @@ const ShopFloor = () => {
                         <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
                     </div>
+
+                    {/* BUILD × N, SAID AT THE TOP OF THE CARD (Stuart 2026-08-26: "clearly ... so
+                        that they do not make a 2ft pole but rather 2 of the same"). When every CPQ
+                        line on this order carries the same config multiplier > 1, the order is N
+                        complete identical builds: N poles at the SAME cut length, N of every part.
+                        The counts on this card are already multiplied; the cut length never is. */}
+                    {(() => {
+                        const ls = (order.cutList || []).filter(l => l.configQty != null);
+                        if (!ls.length) return null;
+                        const m = Number(ls[0].configQty) || 1;
+                        if (m <= 1 || !ls.every(l => Number(l.configQty) === m)) return null;
+                        const note = multiplierNote(m, 'build');
+                        return (
+                            <div style={{ marginBottom: '20px', padding: '12px 16px', background: '#fdf8ef', border: '1px solid var(--brass)' }}>
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 700, color: 'var(--brass)' }}>⚠ {note.headline} — {m} identical complete builds</div>
+                                <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)', marginTop: '4px' }}>
+                                    {m} of the exact same configuration. Counts below are the multiplied totals ("2 × 7 = 14").
+                                    {order.cutLength ? <> Each pole cuts to <b>{order.cutLength}"</b> — make {m} of them, never one combined length.</> : null}
+                                </div>
+                            </div>
+                        );
+                    })()}
 
                     {/* Per-configuration completion checklist — one box per cart line/sidemark */}
                     {(() => {

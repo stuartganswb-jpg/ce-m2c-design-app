@@ -4750,7 +4750,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                       setCart(prev => [...prev, {
                                           ...item,
                                           masterQuoteId: activeMasterQuoteId,
-                                          qty: assemblyQty,
+                                          // ⚠ THE ENGINE'S OWN QTY WINS (Stuart 2026-08-26): the
+                                          // TAGS walk asks "quantity of this configuration" at its
+                                          // last step and stamps it on the item. `assemblyQty` is
+                                          // the OLD engine's state and would silently overwrite it.
+                                          qty: parseInt(item.qty, 10) || assemblyQty || 1,
                                           ...visionFieldsOf(draft, activeDraftSvg),
                                           capturedViews: capturedViews || null,
                                       }]);

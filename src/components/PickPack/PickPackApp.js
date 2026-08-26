@@ -3177,7 +3177,17 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </div>
 
                         <div style={{ flex: 1, background: '#fff', padding: '40px', border: `1px solid ${theme.brass}`, boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
-                            <h2 style={{ margin: '0 0 30px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink, fontWeight: 500 }}>Target Qty: {lineQty(line)}</h2>
+                            {/* "14 = 2 configs × 7" (Stuart 2026-08-26): the target is already the
+                                multiplied total — say WHY it is doubled so the picker pulls it all
+                                instead of second-guessing the count against the per-config viewer. */}
+                            <h2 style={{ margin: '0 0 30px 0', fontFamily: theme.serif, fontSize: '2rem', color: theme.ink, fontWeight: 500 }}>
+                                Target Qty: {lineQty(line)}
+                                {Number(line.configQty) > 1 && (
+                                    <span style={{ display: 'block', fontFamily: theme.mono, fontSize: '0.85rem', color: theme.brass, marginTop: '6px', letterSpacing: '.04em' }}>
+                                        = {line.configQty} identical configs × {line.qtyEach != null ? line.qtyEach : Math.round(lineQty(line) / Number(line.configQty))} each — pull the full {lineQty(line)}
+                                    </span>
+                                )}
+                            </h2>
                             <form onSubmit={handlePickValidation} style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
                                 <div>
                                     <label style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', color: theme.inkSoft, display: 'block', marginBottom: '10px', textTransform: 'uppercase' }}>1. SCAN BIN BARCODE</label>

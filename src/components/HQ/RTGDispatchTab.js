@@ -661,6 +661,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             name: cleanLineName(line.name),
             clientSku: cp?.clientSku || '',
             qty: Number(line.qty) || 1,
+            // Per-configuration count + multiplier (Stuart 2026-08-26): `qty` above is already the
+            // TOTAL to pull (per-config × configs) so the pick amounts are right regardless — these
+            // two let the pick screen say "14 = 2 × 7" so a doubled order reads as two identical
+            // builds, not a miscount.
+            qtyEach: line.qtyEach != null ? Number(line.qtyEach) : null,
+            configQty: line.configQty != null ? Number(line.configQty) : null,
             binLocation: part?.manufacturingSpecs?.binLocation || 'UNASSIGNED',
             // Scheduler keys (recipe lives on the WO; size + type live per part). The finishing
             // time matrix resolves minutes-per-part from (recipe × paintSize × productType).
@@ -980,6 +986,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     partName: cleanLineName(l.name),
                     legacyErpId: l.legacyErpId || part?.legacyErpId || null,
                     qty: Number(l.qty) || 1,
+                    // qty is the multiplied total; these say "2 × 7" on the packing bench too.
+                    qtyEach: l.qtyEach != null ? Number(l.qtyEach) : null,
+                    configQty: l.configQty != null ? Number(l.configQty) : null,
                     division: isPolePart ? 'pole' : 'small',
                     partHandling: l.partHandling || (classifyLine(l, part) === DIVISION_CUSTOM ? 'Custom' : 'Small Parts'),
                     cutLength: l.cutLength || null,
