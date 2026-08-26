@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import BufferedInput from '../Shared/BufferedInput';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, updateDoc, deleteDoc, deleteField, addDoc, serverTimestamp } from "firebase/firestore";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
@@ -2284,8 +2285,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         const monthCount = salesHist.months.length;
                                                         const qtyCell = (erp, enabled, hint) => (
                                                             <td style={{ ...numTd, borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>
-                                                                <input type="number" min="0" value={tierOrderQty[erp] ?? ''} placeholder="0" disabled={!enabled} title={enabled ? hint : 'No Master Library part — link it before ordering'}
-                                                                    onChange={e => setTierOrderQty(prev => ({ ...prev, [erp]: e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0) }))}
+                                                                <BufferedInput type="number" min="0" delay={250} value={tierOrderQty[erp] ?? ''} placeholder="0" disabled={!enabled} title={enabled ? hint : 'No Master Library part — link it before ordering'}
+                                                                    onCommit={v => setTierOrderQty(prev => ({ ...prev, [erp]: v === '' ? '' : Math.max(0, parseInt(v) || 0) }))}
                                                                     style={{ width: '62px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: (parseInt(tierOrderQty[erp]) > 0) ? '2px solid #3a7d44' : '1px solid var(--line)', outline: 'none', background: enabled ? '#fff' : 'var(--paper-2)' }} />
                                                             </td>
                                                         );
@@ -2406,12 +2407,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                             <td style={{ ...numTd, color: ri.available <= ri.threshold ? '#d9534f' : 'var(--ink)', borderLeft: '2px solid var(--ink)' }}>{ri.iid ? ri.available : '—'}</td>
                                                             <td style={{ ...numTd }}>{ri.onOrd > 0 ? <button onClick={() => setOnOrdModal({ itemid: g.base, onOrd: ri.onOrd, onOrdLines: ri.onOrdLines })} style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', color: '#3f7fc4', textDecoration: 'underline', fontWeight: 600 }}>{ri.onOrd}</button> : <span style={{ color: 'var(--line)' }}>·</span>}</td>
                                                             <td style={{ ...numTd, color: ri.rop && ri.rop > ri.minCalc ? 'var(--brass)' : 'var(--ink-soft)' }} title={ri.rop && ri.rop > ri.minCalc ? `Re-order point ${ri.rop} — above the demand rule (${ri.minCalc}), so it holds the floor until demand grows past it` : '6 months of combined variant demand'}>{ri.minOnHand || '·'}</td>
-                                                            <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[g.base] ?? (ri.rop ?? '')} placeholder="—" disabled={!ri.part} title={ri.part ? 'Core re-order point — ⬆ Save pushes to the Master Library' : 'No matching Master Library part'} onChange={e => setRopEdits(prev => ({ ...prev, [g.base]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[g.base] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: ri.part ? '#fff' : 'var(--paper-2)' }} /></td>
+                                                            <td style={{ ...numTd }}><BufferedInput type="number" min="0" delay={250} value={ropEdits[g.base] ?? (ri.rop ?? '')} placeholder="—" disabled={!ri.part} title={ri.part ? 'Core re-order point — ⬆ Save pushes to the Master Library' : 'No matching Master Library part'} onCommit={v => setRopEdits(prev => ({ ...prev, [g.base]: v }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[g.base] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: ri.part ? '#fff' : 'var(--paper-2)' }} /></td>
                                                             <td style={{ ...numTd, fontWeight: 600, color: ri.shortfall > 0 ? '#d9534f' : 'var(--line)' }}>{ri.shortfall || '·'}</td>
                                                             <td style={{ ...numTd, borderLeft: '1px solid var(--line)', background: 'var(--paper)' }}>
-                                                                <input type="number" min="0" value={rawOrderQty[g.base] ?? ''} placeholder="0" disabled={!ri.part}
+                                                                <BufferedInput type="number" min="0" delay={250} value={rawOrderQty[g.base] ?? ''} placeholder="0" disabled={!ri.part}
                                                                     title={!ri.part ? 'No Master Library part — link it before ordering' : (ri.part.manufacturingSpecs?.isInHouse === false || ri.vendored ? 'Bought core → vendor confirmation, then one PO per vendor' : 'In-house core → shop-floor work order')}
-                                                                    onChange={e => setRawOrderQty(prev => ({ ...prev, [g.base]: e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value) || 0) }))}
+                                                                    onCommit={v => setRawOrderQty(prev => ({ ...prev, [g.base]: v === '' ? '' : Math.max(0, parseInt(v) || 0) }))}
                                                                     style={{ width: '62px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: (parseInt(rawOrderQty[g.base]) > 0) ? '2px solid #3a7d44' : '1px solid var(--line)', outline: 'none', background: ri.part ? '#fff' : 'var(--paper-2)' }} />
                                                             </td>
                                                         </tr>
@@ -2474,7 +2475,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <td style={{ ...numTd, color: info.rop && info.rop > info.minCalc ? 'var(--brass)' : 'var(--ink-soft)' }} title={info.minRule}>{info.minOnHand || '·'}</td>
                                                     <td style={{ ...numTd }}><input type="number" min="0" value={ropEdits[String(r.itemid).toUpperCase()] ?? (info.rop ?? '')} placeholder={info.isPack ? '·' : '—'} disabled={!info.part || info.isPack} title={info.isPack ? `Pack assembly — set the ROP on ${info.packSingle}` : (info.part ? 'Re-order point — ⬆ Save pushes to the Master Library; overrides Min OH' : 'No matching Master Library part — sync the item first')} onChange={e => setRopEdits(prev => ({ ...prev, [String(r.itemid).toUpperCase()]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: ropEdits[String(r.itemid).toUpperCase()] !== undefined ? '2px solid var(--brass)' : '1px solid var(--line)', outline: 'none', background: (info.part && !info.isPack) ? '#fff' : 'var(--paper-2)' }} /></td>
                                                     <td style={{ ...numTd, fontWeight: 600, color: info.recommended > 0 ? '#3a7d44' : 'var(--line)' }}>{info.isPack ? <span title={`Packs build from singles at pick — order ${info.packSingle}`} style={{ color: 'var(--ink-soft)', fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 400 }}>→ EA</span> : (info.recommended || '·')}</td>
-                                                    <td style={{ ...numTd }}><input type="number" min="0" value={ov} placeholder={info.isPack ? '·' : '0'} disabled={!!info.isPack} title={info.isPack ? `Packs are built from ${info.packSingle} at pick — order the single row` : undefined} onChange={e => setOrderQty(prev => ({ ...prev, [r.internalId]: e.target.value }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none', background: info.isPack ? 'var(--paper-2)' : '#fff' }} /></td>
+                                                    <td style={{ ...numTd }}><BufferedInput type="number" min="0" delay={250} value={ov} placeholder={info.isPack ? '·' : '0'} disabled={!!info.isPack} title={info.isPack ? `Packs are built from ${info.packSingle} at pick — order the single row` : undefined} onCommit={v => setOrderQty(prev => ({ ...prev, [r.internalId]: v }))} style={{ width: '58px', padding: '5px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '11px', border: '1px solid var(--line)', outline: 'none', background: info.isPack ? 'var(--paper-2)' : '#fff' }} /></td>
                                                     <td style={{ ...numTd }}>{/* THE CODE SAYS IT IS AN 8 FT ROD — the CLASSIFICATION does not have to (Eric 2026-08-21:
                                                         "rod cut option not available for raw rods in Stock View"). This also required
                                                         productType to say POLE/ROD, which finished rods carry and RAW ones often do not,
@@ -3233,11 +3234,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 </div>
                                                 <div style={{ flex: 1.5 }}>
                                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Required {activeBuilder === 'PO' ? 'Order' : 'Build'} Qty</label>
-                                                    <input 
+                                                    <BufferedInput 
                                                         type="number" 
                                                         placeholder="0"
+                                                        delay={250}
                                                         value={currentDraft} 
-                                                        onChange={(e) => handleOrderQtyChange(item.id, e.target.value)}
+                                                        onCommit={(v) => handleOrderQtyChange(item.id, v)}
                                                         style={{ width: '100%', padding: '12px', fontSize: '1.1rem', fontFamily: 'var(--sans)', border: currentDraft > 0 ? '1px solid var(--ink)' : '1px solid var(--line)', boxSizing: 'border-box', outline: 'none' }}
                                                     />
                                                 </div>
