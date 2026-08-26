@@ -32,6 +32,7 @@ const AssemblyBuilderTab = lazy(() => import('./AssemblyBuilderTab'));
 
 const AssetGalleryTab = lazy(() => import('../Shared/AssetGalleryTab'));
 const AppImprovementTab = lazy(() => import('../Shared/AppImprovementTab'));
+const UserGuideTab = lazy(() => import('./UserGuideTab'));
 const BatchImageProcessor = lazy(() => import('../Shared/BatchImageProcessor'));
 const BatchTextureProcessor = lazy(() => import('../Shared/BatchTextureProcessor'));
 const SharedMessaging = lazy(() => import('../Shared/SharedMessaging'));
@@ -58,7 +59,7 @@ const TABS = [
   '1. Inception & Validation', '1.5 Node Grouping', '1.6 Assembly Builder', '2. Visual Assembly', '3. BOM Engine', '4. Master Library', '4.5 Mass Update', '4.6 Customer Collections',
   '5. Marketing', '6. Instructions', '6.5 Tools, Specs & FAQs', '7. Quick Ship', '8. CPQ Configurator',
   '9. Client Vision', '9.5 UPS Shipping', '10. External Co-Op', '10.5 Project Mgmt', '10.7 OS Comms', '11. System Admin', '11.1 NetSuite Sync', '11.2 ERP Mapping Audit', '12. ERP Push / Pull', '12.5 Stock View', '13. RTG Dispatch',
-  '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', '15. Packaging', 'App Imp.', 'ERP_WRITE_BACK'
+  '14. Asset Gallery', '14.5 Batch Processor', '14.6 Texture Processor', '15. Packaging', 'App Imp.', 'User Guide', 'ERP_WRITE_BACK'
 ];
 
 const theme = {
@@ -373,7 +374,7 @@ function HQ() {
       <nav style={{ display: 'flex', backgroundColor: theme.paper, borderBottom: `1px solid ${theme.line}`, overflowX: 'auto', padding: '0 20px' }}>
         {/* 'App Imp.' is force-included: feedback must be reachable by EVERY role, so it never
             depends on a permission-matrix row. */}
-        {TABS.filter(t => (myTabs.includes(t) || t === 'App Imp.') && t !== 'ERP_WRITE_BACK').map((tab) => {
+        {TABS.filter(t => (myTabs.includes(t) || t === 'App Imp.' || t === 'User Guide') && t !== 'ERP_WRITE_BACK').map((tab) => {
           const isActive = activeTab === tab;
           return (
             <button
@@ -459,6 +460,7 @@ function HQ() {
             {activeTab === '14.5 Batch Processor' && <BatchImageProcessor currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '14.6 Texture Processor' && <BatchTextureProcessor currentUser={user.name} />}
             {activeTab === 'App Imp.' && <AppImprovementTab currentUser={user.name} currentApp="HQ" canManage={['admin', 'superadmin'].includes(safeUserRole)} />}
+            {activeTab === 'User Guide' && <UserGuideTab />}
           </Suspense>
 
         </div>

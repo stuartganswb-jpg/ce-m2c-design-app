@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
@@ -84,6 +84,38 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             () => { /* collection may not exist yet */ });
         return () => unsub();
     }, []);
+    // ── ⚡ AUTO-RELEASE (Stuart 2026-08-26: "auto send all the orders to the floors … queue them
+    // to push in and avoid concurrency issues … remove the step to have to push, now that it is
+    // keeping them all as a log") ────────────────────────────────────────────────────────────────
+    // When ON, parked orders release themselves to the floors ONE AT A TIME, in arrival order —
+    // serial on the app side, and the NetSuite legs already serialize through ns_outbox. Only
+    // orders that STATE their route go automatically (finPayload / routeTo FINISHING → finishing;
+    // routeTo SHOP → shop; sales orders → auto-split); anything ambiguous, rod-cut-gated, or
+    // stopped stays parked for a human, with a log line saying why. Only orders created AFTER the
+    // toggle was switched on are picked up — the pre-existing backlog stays manual so flipping the
+    // switch can never flood the floor. Board + Daily Job Log remain the record of every release.
+    const [autoRelease, setAutoRelease] = useState(null);   // null = loading; {enabled, sinceAt, by}
+    const autoBusyRef = useRef(false);
+    const autoTriedRef = useRef(new Set());                  // one attempt per order per session
+    useEffect(() => {
+        if (!activeBrand) return;
+        const unsub = onSnapshot(doc(db, 'hq_config', 'rtg_auto_release'),
+            snap => setAutoRelease((snap.exists() && snap.data()[activeBrand]) || { enabled: false }),
+            () => setAutoRelease({ enabled: false }));
+        return () => unsub();
+    }, [activeBrand]);
+    const toggleAutoRelease = async () => {
+        const next = !(autoRelease && autoRelease.enabled);
+        if (next && !window.confirm(`⚡ Turn AUTO-RELEASE on for ${activeBrand.toUpperCase()}?\n\nFrom now, newly created orders release themselves to the floors one at a time (sales orders auto-split; stock WOs follow their stated route). Orders already parked stay manual. Rod-cut-gated, stopped, or route-ambiguous orders always wait for a human.\n\nEvery auto release is logged on this board.`)) return;
+        await setDoc(doc(db, 'hq_config', 'rtg_auto_release'), {
+            [activeBrand]: { enabled: next, sinceAt: next ? Date.now() : (autoRelease?.sinceAt || Date.now()), by: currentUser || '' }
+        }, { merge: true });
+        addLog(next ? '⚡ Auto-release ON — new orders will dispatch themselves (one at a time).' : '⚡ Auto-release OFF — back to manual push.', next ? 'success' : 'warn');
+    };
+// (the auto-release ENGINE effect lives below the live-mirror subscriptions — its dependency
+    // array reads liveSO/liveWO, which are declared there)
+
+
     // MASTER TRANSMIT REVIEW (Stuart 2026-08-25: RTG is "the master review and control of the in
     // and out of netsuite"). Brand-scoped jobs feed the ⇄ Quotes & Sales Orders panel: what is
     // queued, what NetSuite has accepted, and what number it came back as.
@@ -244,6 +276,46 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         return () => subs.forEach(u => u && u());
     }, [activeBrand]);
 
+    // ⚡ AUTO-RELEASE ENGINE — one order at a time off the live mirrors (state + toggle above).
+    useEffect(() => {
+        const cfg = autoRelease;
+        if (!cfg || !cfg.enabled || autoBusyRef.current || isSyncing) return;
+        const since = cfg.sinceAt || 0;
+        const fresh = (o) => (o.createdAt || 0) >= since && !o.stopped && !autoTriedRef.current.has(o.id);
+        // Live mirrors, not the manual board load — a new order triggers its own release.
+        // An app-created SO (CPQ save) waits for NetSuite to accept it (nsInternalId via
+        // writeBack) before splitting to the floors, so a rejected order never becomes work.
+        const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
+        const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && !o.awaitingRodCut && !o.pushedToFinishing
+            && (o.finPayload || o.routeTo === 'FINISHING' || o.routeTo === 'SHOP'));
+        const target = so || wo;
+        if (!target) return;
+        autoBusyRef.current = true;
+        autoTriedRef.current.add(target.id);
+        (async () => {
+            try {
+                if (so) {
+                    addLog(`⚡ Auto-release: importing & splitting SO ${so.soId || so.id}…`, 'info');
+                    await autoSplitSalesOrder(so, { skipConfirm: true });
+                } else if (wo.routeTo === 'SHOP') {
+                    addLog(`⚡ Auto-release: ${wo.id} → shop floor…`, 'info');
+                    await pushToShop(wo, 'stock', { auto: true });
+                } else {
+                    addLog(`⚡ Auto-release: ${wo.id} → finishing floor…`, 'info');
+                    await pushToFinishing(wo, 'stock', { auto: true });
+                }
+            } catch (e) {
+                console.error('auto-release failed', e);
+                addLog(`⚡ Auto-release FAILED for ${target.id}: ${e.message} — left parked for a human.`, 'error');
+            } finally {
+                autoBusyRef.current = false;
+                setTimeout(() => loadRTGOrders(), 900);
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [autoRelease, liveSO, liveWO]);
+
+
     // Form branding (shared with Admin > Form Templates) so printed docs use the configured
     // header/footer/terms + brand logo.
     useEffect(() => {
@@ -377,7 +449,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         length: 0, width: 0, height: 0,
                         reqDate: row.trandate || new Date().toISOString().split('T')[0],
                         hqJobId: hqJobId,
-                        memo: row.memo || ''
+                        memo: row.memo || '',
+                        createdAt: Date.now()
                     });
                     newOrders++;
                     addLog(`Imported App-Generated SO: ${hqSalesOrderId} (Linked to ${hqJobId})`, "success");
@@ -993,15 +1066,21 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         }
     };
 
-    const pushToFinishing = async (hqOrder, orderType) => {
+    const pushToFinishing = async (hqOrder, orderType, opts = {}) => {
+        // ⚡ AUTO mode (Stuart 2026-08-26): no dialogs — gated or already-dispatched orders are
+        // SKIPPED with a log line, never forced. A human pressing the button keeps every confirm.
+        if (opts.auto) {
+            if (hqOrder.awaitingRodCut) { addLog(`⚡ auto: ${hqOrder.id} waiting on its rod cut — left parked.`, 'warn'); return; }
+            if (hqOrder.pushedToFinishing) { addLog(`⚡ auto: ${hqOrder.id} already dispatched — skipped.`, 'info'); return; }
+        }
         // THE POLES DO NOT EXIST YET (Stuart 2026-08-19). A 4 ft order is cut from stocked 8 ft rods,
         // and until WMS → ROD CUTS → Cuts for Finishing has done it there is nothing to pick or
         // spray. Releasing early sends the floor after rods nobody has made.
-        if (hqOrder.awaitingRodCut && !window.confirm(`⏳ ${hqOrder.id} is waiting on a rod cut.\n\n${hqOrder.rodCutNote || 'The 8 ft rods have not been cut yet.'}\n\nUntil WMS → ROD CUTS → "Cuts for Finishing" completes it, the ${woItemCodeOf(hqOrder) || 'cut'} poles do not exist to pick or finish — and that cut prints this order's label when it's done.\n\nRelease it to the floor anyway?`)) return;
-        if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
+        if (!opts.auto && hqOrder.awaitingRodCut && !window.confirm(`⏳ ${hqOrder.id} is waiting on a rod cut.\n\n${hqOrder.rodCutNote || 'The 8 ft rods have not been cut yet.'}\n\nUntil WMS → ROD CUTS → "Cuts for Finishing" completes it, the ${woItemCodeOf(hqOrder) || 'cut'} poles do not exist to pick or finish — and that cut prints this order's label when it's done.\n\nRelease it to the floor anyway?`)) return;
+        if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
         // STOP MECHANISM (Stuart 2026-07-21): a second tap must never quietly duplicate the
         // floor card — an already-dispatched order needs an explicit, scary re-confirm.
-        if (hqOrder.pushedToFinishing && !window.confirm(`⚠ ${hqOrder.woNo || hqOrder.id} was ALREADY dispatched to finishing.\n\nRelease it AGAIN anyway? Normally NO — this re-copies the floor card.`)) return;
+        if (!opts.auto && hqOrder.pushedToFinishing && !window.confirm(`⚠ ${hqOrder.woNo || hqOrder.id} was ALREADY dispatched to finishing.\n\nRelease it AGAIN anyway? Normally NO — this re-copies the floor card.`)) return;
 
         // SALES-SNAPSHOT stock WOs (2026-07-16): the snapshot pre-builds the COMPLETE finishing
         // doc (pole rack info, paint sizes, stock ids) and parks the WO here for review —
@@ -1172,8 +1251,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         }
     };
 
-    const pushToShop = async (hqOrder, orderType) => {
-        if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
+    const pushToShop = async (hqOrder, orderType, opts = {}) => {
+        if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Shop Floor Custom Fabrication Queue?`)) return;
 
         try {
             const { originalJob, svgUri, finishRecipe } = await fetchEnrichedJobData(hqOrder.hqJobId, orderType);
@@ -1858,6 +1937,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Ready to Go (RTG) Dispatch</h2>
                 </div>
                 <div style={{ display: 'flex', gap: '12px' }}>
+                    <button onClick={toggleAutoRelease} title={autoRelease?.enabled ? `Auto-release is ON (since ${autoRelease.sinceAt ? new Date(autoRelease.sinceAt).toLocaleString() : '—'}${autoRelease.by ? `, by ${autoRelease.by}` : ''}). New orders dispatch themselves one at a time; gated or ambiguous ones wait for a human. Click to turn OFF.` : 'Turn on auto-release: newly created orders push themselves to the floors, one at a time, fully logged. The parked backlog stays manual.'} style={{ ...btnStyle, background: autoRelease?.enabled ? 'var(--brass)' : '#fff', color: autoRelease?.enabled ? '#fff' : 'var(--brass)', border: '1px solid var(--brass)' }}>
+                        {autoRelease?.enabled ? '⚡ Auto-Release ON' : '⚡ Auto-Release OFF'}
+                    </button>
                     <button onClick={pullNSSalesOrders} disabled={isSyncing} style={{ ...btnStyle, background: isSyncing ? 'var(--paper)' : 'var(--ink)', color: isSyncing ? 'var(--ink-soft)' : '#fff', border: 'none' }}>
                         {isSyncing ? 'Syncing...' : 'Pull ERP Sales Orders'}
                     </button>
