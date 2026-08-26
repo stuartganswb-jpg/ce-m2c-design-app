@@ -709,7 +709,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const a = activeAssembly;
       if (!a) return [];
       const base = String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase();
-      const famFlow = String(activeFlow?.kitFamily || '').trim().toUpperCase();
+      // Resolve the flow HERE — the `activeFlow` const lives further down the component and
+      // referencing it from this memo was a temporal-dead-zone crash (white screen, 2026-08-26).
+      const flowDoc = cpqFlows.find(f => f.id === activeFlowId);
+      const famFlow = String(flowDoc?.kitFamily || '').trim().toUpperCase();
       if (!base && !famFlow) return [];
       const matches = (k) => {
           const kf = String(k.manufacturingSpecs?.kitFamily || '').trim().toUpperCase();
@@ -719,7 +722,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           return !!base && (code === base || code.startsWith(base + '-'));  // legacy prefix fallback
       };
       return kitsForSeeding(kitLibrary).filter(matches);
-  }, [activeAssembly, activeFlow, kitLibrary]);
+  }, [activeAssembly, cpqFlows, activeFlowId, kitLibrary]);
   // Kits that MATCH this flow's family but are missing their alignment — the named reason the
   // picker would otherwise silently not render — plus the full diagnostic (super-admin): what
   // code the picker matched against and what kit codes actually exist, so a prefix or brand
@@ -727,7 +730,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const kitSeedDiag = useMemo(() => {
       const a = activeAssembly;
       const base = a ? String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase() : '';
-      const famFlow = String(activeFlow?.kitFamily || '').trim().toUpperCase();
+      const flowDoc = cpqFlows.find(f => f.id === activeFlowId);
+      const famFlow = String(flowDoc?.kitFamily || '').trim().toUpperCase();
       const match = (k) => {
           const kf = String(k.manufacturingSpecs?.kitFamily || '').trim().toUpperCase();
           if (famFlow && kf === famFlow) return true;
@@ -742,7 +746,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           unaligned: base ? kitLibrary.filter(k => !k.manufacturingSpecs?.kitAlign).filter(match).length : 0,
           sampleCodes: kitLibrary.slice(0, 4).map(k => String(k.legacyErpId || k.itemName || k.id)),
       };
-  }, [activeAssembly, activeFlow, kitLibrary]);
+  }, [activeAssembly, cpqFlows, activeFlowId, kitLibrary]);
   
   const [activeMasterQuoteId, setActiveMasterQuoteId] = useState(null);
   const [activeDraftId, setActiveDraftId] = useState(null);
