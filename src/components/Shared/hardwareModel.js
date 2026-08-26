@@ -885,6 +885,15 @@ export function slots(choices, answers = {}, selectedIds = []) {
         .filter(c => ROD_ROLES.includes(c.role) && c.tier && admits(c, ctx).ok)
         .map(c => c.tier))]
         .sort((a, b) => TIER_POSITIONS.indexOf(a) - TIER_POSITIONS.indexOf(b));
+    // ── A SINGLE ORDER HAS ONE ROD (Stuart 2026-08-26, live on H1-75) ───────────────────────
+    // Tier questions — "Back Left End Treatment", "Back Rod" — exist only on a double. On a
+    // single: with BOTH tiers admissible (drifted tags — a back rod missing its `setup: double`
+    // gate), FRONT is the order's rod and BACK is dropped; with only BACK existing (H1-75's rods
+    // are pinned BACK), that one rod IS the order's rod. Either way the slot keeps its tier
+    // internally — geometry and projection pairing still resolve — but the operator is never
+    // asked to dress a rear rod on a single, and the label drops the tier word (tierSolo).
+    const isSingle = String(ctx.setup || '').toUpperCase() === 'SINGLE';
+    const orderTiers = (isSingle && allTiers.length > 1) ? [allTiers[0]] : allTiers;
     // THE DEPTH AT EACH ROD, from the bracket that was actually chosen. Before a bracket is
     // picked this is empty and nothing is filtered by projection — the same restraint the return
     // and ring rules use, because guessing hides legitimate choices.
@@ -939,11 +948,13 @@ export function slots(choices, answers = {}, selectedIds = []) {
         // An UNTAGGED part is offered in every tier — one finial style used front and back is the
         // common case, and it must appear in both questions rather than inventing a third.
         const tiers = TIERED_ROLES.includes(c.role)
-            ? (c.tier ? [c.tier] : (allTiers.length ? allTiers : ['']))
+            ? (c.tier
+                ? ((isSingle && orderTiers.length && !orderTiers.includes(c.tier)) ? [] : [c.tier])
+                : (orderTiers.length ? orderTiers : ['']))
             : [''];
         tiers.forEach(tier => {
             const key = `${kind}|${tier}|${pos}`;
-            if (!bucket.has(key)) bucket.set(key, { key, kind, tier, position: pos, all: [], options: [], rejected: [] });
+            if (!bucket.has(key)) bucket.set(key, { key, kind, tier, position: pos, tierSolo: isSingle, all: [], options: [], rejected: [] });
             const slot = bucket.get(key);
             slot.all.push(c);
             // Each tier is judged at ITS OWN depth. One bracket choice, two projections, and a

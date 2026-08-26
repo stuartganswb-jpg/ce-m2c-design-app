@@ -1805,7 +1805,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               return next;
           });
           try {
-              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig, kitFamily: oldFlow.kitFamily || String(asm.legacyErpId && asm.legacyErpId !== 'PENDING' ? asm.legacyErpId : (asm.itemId || '')).toUpperCase() || undefined, sizeFamily: singleMode ? null : (sizeFamily || oldFlow.sizeFamily || null), ...(singleMode ? { singleAssembly: true, ...groupFields } : {}), ...(reviewExclusions ? { reviewExclusions } : {}) }));
+              await updateDoc(doc(db, "cpq_flows", inPlaceFlowId), stripUndefined({ steps: mergedSteps, hiddenClusters: newHidden, hiddenNodes, bayConfig: bayConfigKey || oldFlow.bayConfig || genBayConfig, kitFamily: oldFlow.kitFamily || (asm.legacyErpId && asm.legacyErpId !== 'PENDING' && !/^CE-ASM|^ASM-/i.test(asm.legacyErpId) ? String(asm.legacyErpId).toUpperCase() : undefined), sizeFamily: singleMode ? null : (sizeFamily || oldFlow.sizeFamily || null), ...(singleMode ? { singleAssembly: true, ...groupFields } : {}), ...(reviewExclusions ? { reviewExclusions } : {}) }));
               alert(`✅ Regenerated "${oldFlow.name}" in place — ${mergedSteps.length} steps rebuilt from current tags + latest generator logic.\n\nCarried over your per-option settings (price, projection, layer, hides-bracket, finishes) where the option still exists (${Object.keys(oldOptByKey).length} option(s) matched). Flow settings (name, IDs, fab shape/projection, rollup) left untouched. Review any new/changed steps, set prices on anything new, then test.${reviewExclusions ? `\n\n🔍 Review applied — ${reviewExclusions.optionKeys.length} option(s) excluded, projection matrix baked into the SIZE steps. Saved on the flow: the next regenerate pre-checks from this review.` : ''}\n\n[diagnostic — why choices may be lumped]\n• ${pinDiag}`);
           } catch (err) { console.error("Regenerate failed:", err); alert("Regenerate failed: " + (err?.message || err)); }
           return;
@@ -1818,7 +1818,7 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
               // KIT-FAMILY TAG (2026-08-26): the flow declares which kit family seeds it, so the
               // CPQ "Start from a kit" picker matches by TAG — regeneration and assembly renames
               // can no longer silently break the alignment.
-              kitFamily: String(asm.legacyErpId && asm.legacyErpId !== 'PENDING' ? asm.legacyErpId : (asm.itemId || '')).toUpperCase() || undefined,
+              kitFamily: (asm.legacyErpId && asm.legacyErpId !== 'PENDING' && !/^CE-ASM|^ASM-/i.test(asm.legacyErpId) ? String(asm.legacyErpId).toUpperCase() : undefined),
               ...(singleMode ? { singleAssembly: true, ...groupFields } : {}),
               legacyErpId: 'PENDING', basePrice: '0', linkedAssemblyId: asm.id, bayConfig: bayConfigKey || genBayConfig,
               fabShape: bay.fabShape, fabEndStyle: bay.endStyle, fabProjection: '', defaultFinishOptions: [],

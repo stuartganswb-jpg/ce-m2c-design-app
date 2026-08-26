@@ -56,6 +56,39 @@ const belongs = (mesh, wanted) => {
 
 const FASTENER_RX = /screw|bolt|washer|fastener|rivet|\bnut\b/i;
 
+// ── ONE RENDERER, ONE QUEUE (2026-08-26, the Context-Lost storm) ─────────────────────────────
+// The caller's effect used to re-fire while a batch was still running, and every invocation built
+// its own WebGLRenderer: contexts exhausted, the browser started evicting them ("THREE.WebGL-
+// Renderer: Context Lost" thirty times in seconds), the MAIN viewer went blank, and a thumbnail
+// photographed on a dead context cached a blank image for the whole session — the "sometimes they
+// render, sometimes they don't" bug. Now:
+//   · batches run STRICTLY ONE AT A TIME through a module queue — concurrent calls append, never
+//     race;
+//   · ONE renderer is kept and reused across batches, released only after 5s idle — creation and
+//     forced context loss stop being a per-batch event;
+//   · a photograph is cached ONLY if the context is alive when it is taken — a lost context skips
+//     the cache so the thumbnail is retried later instead of being blank forever.
+let _renderer = null;
+let _idleTimer = null;
+const getRenderer = () => {
+    if (_idleTimer) { clearTimeout(_idleTimer); _idleTimer = null; }
+    if (!_renderer) {
+        const canvas = document.createElement('canvas');
+        _renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+        _renderer.setSize(W, H, false);
+        _renderer.setPixelRatio(1);                // a thumbnail gains nothing from a retina buffer
+    }
+    return _renderer;
+};
+const releaseRendererSoon = () => {
+    if (_idleTimer) clearTimeout(_idleTimer);
+    _idleTimer = setTimeout(() => {
+        if (_renderer) { _renderer.dispose(); _renderer.forceContextLoss?.(); _renderer = null; }
+        _idleTimer = null;
+    }, 5000);
+};
+let _queue = Promise.resolve();
+
 /**
  * Photograph each group of nodes against a transparent background.
  *
@@ -63,22 +96,27 @@ const FASTENER_RX = /screw|bolt|washer|fastener|rivet|\bnut\b/i;
  * @param groups  [{ key, nodes: [name…] }]
  * @param onEach  (key, dataUrl) — called as each finishes, so the UI can fill in progressively
  */
-export async function renderThumbnails(url, groups, onEach) {
-    const todo = groups.filter(g => g.nodes?.length && !CACHE.has(keyOf(url, g.nodes)));
+export function renderThumbnails(url, groups, onEach) {
     // Anything already photographed is handed back immediately; only the rest costs anything.
     groups.forEach(g => {
         const k = keyOf(url, g.nodes || []);
         if (CACHE.has(k) && typeof onEach === 'function') onEach(g.key, CACHE.get(k));
     });
-    if (!url || !todo.length) return;
+    const pending = groups.filter(g => g.nodes?.length && !CACHE.has(keyOf(url, g.nodes)));
+    if (!url || !pending.length) return _queue;
+    _queue = _queue
+        .then(() => runBatch(url, pending, onEach))
+        .catch(e => console.warn('Thumbnail batch failed:', e));
+    return _queue;
+}
 
-    let renderer;
+async function runBatch(url, groups, onEach) {
+    // A batch queued behind another may find its work already done — re-check before paying.
+    const todo = groups.filter(g => !CACHE.has(keyOf(url, g.nodes)));
+    if (!todo.length) return;
     try {
         const scene = await loadScene(url);
-        const canvas = document.createElement('canvas');
-        renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
-        renderer.setSize(W, H, false);
-        renderer.setPixelRatio(1);                 // a thumbnail gains nothing from a retina buffer
+        let renderer = getRenderer();
 
         const stage = new THREE.Scene();
         stage.add(new THREE.AmbientLight(0xffffff, 2.1));
@@ -100,6 +138,7 @@ export async function renderThumbnails(url, groups, onEach) {
                 if (on) shown++;
             });
             let data = null;
+            let contextDied = false;
             if (shown) {
                 scene.updateMatrixWorld(true);
                 const box = new THREE.Box3();
@@ -114,12 +153,20 @@ export async function renderThumbnails(url, groups, onEach) {
                     cam.position.set(centre.x + dist * 0.55, centre.y + dist * 0.42, centre.z + dist * 0.72);
                     cam.lookAt(centre);
                     cam.updateProjectionMatrix();
+                    // A dead context photographs BLANK — recreate once, and if it is still dead,
+                    // leave this one uncached so a later visit retries it.
+                    if (renderer.getContext().isContextLost()) {
+                        renderer.dispose(); _renderer = null; renderer = getRenderer();
+                    }
                     renderer.render(stage, cam);
-                    data = canvas.toDataURL('image/png');
+                    if (renderer.getContext().isContextLost()) contextDied = true;
+                    else data = renderer.domElement.toDataURL('image/png');
                 }
             }
-            CACHE.set(keyOf(url, g.nodes), data);
-            if (typeof onEach === 'function') onEach(g.key, data);
+            if (!contextDied) {
+                CACHE.set(keyOf(url, g.nodes), data);
+                if (typeof onEach === 'function') onEach(g.key, data);
+            }
             // Give the browser the thread back between frames. Twenty options in a slot must never
             // read as the tab having hung.
             await new Promise(r => setTimeout(r, 0));
@@ -131,7 +178,7 @@ export async function renderThumbnails(url, groups, onEach) {
         // A thumbnail is a convenience. Losing one must never cost the configurator.
         console.warn('Thumbnail render failed:', e);
     } finally {
-        if (renderer) { renderer.dispose(); renderer.forceContextLoss?.(); }
+        releaseRendererSoon();
     }
 }
 

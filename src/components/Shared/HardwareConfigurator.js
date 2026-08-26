@@ -69,7 +69,9 @@ const slotLabel = (s) => {
     // On a double every rod asks its own questions, so the rail must say WHICH ROD — "Front Rod",
     // "Back Left End Treatment". Without it a double shows two identical headings and the operator
     // is answering one of them blind.
-    const parts = [s.tier ? cap(s.tier) : '', s.position ? cap(s.position) : '', kind].filter(Boolean);
+    // A single has ONE rod - saying Front/Back on it is noise (and on H1-75, whose only rod
+    // is pinned BACK, it read as a rear-rod question on a single order). Doubles keep the word.
+    const parts = [(s.tier && !s.tierSolo) ? cap(s.tier) : '', s.position ? cap(s.position) : '', kind].filter(Boolean);
     return parts.join(' ');
 };
 
@@ -816,16 +818,27 @@ function HardwareConfiguratorInner({
         }));
         return out;
     }, [model]);
+    // Re-fire on CONTENT change, not array identity - `onScreen` is rebuilt every render, and
+    // keying the effect on it re-launched the photo batch dozens of times while the first was
+    // still running. Each launch made its own WebGL renderer: contexts exhausted, the main
+    // canvas lost its context (the blank viewer), and thumbnails photographed on a dead context
+    // cached as blanks (the sometimes-they-render bug). The queue in hardwareThumbs is the
+    // other half of this fix.
+    const onScreenKey = useMemo(() => onScreen.map(g => g.key).join('|'), [onScreen]);
+    const onScreenRef = useRef(onScreen);
+    onScreenRef.current = onScreen;
     useEffect(() => {
-        if (!cadUrl || !onScreen.length) return;
+        const groups = onScreenRef.current;
+        if (!cadUrl || !groups.length) return;
         let live = true;
         // Anything already cached paints on the first pass; the rest arrive one frame at a time.
         const seed = {};
-        onScreen.forEach(g => { const c = cachedThumb(cadUrl, g.nodes); if (c !== undefined) seed[g.key] = c; });
+        groups.forEach(g => { const c = cachedThumb(cadUrl, g.nodes); if (c !== undefined) seed[g.key] = c; });
         if (Object.keys(seed).length) setThumbs(t => ({ ...seed, ...t }));
-        renderThumbnails(cadUrl, onScreen, (k, data) => { if (live) setThumbs(t => (t[k] === data ? t : { ...t, [k]: data })); });
+        renderThumbnails(cadUrl, groups, (k, data) => { if (live) setThumbs(t => (t[k] === data ? t : { ...t, [k]: data })); });
         return () => { live = false; };
-    }, [cadUrl, onScreen]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cadUrl, onScreenKey]);
 
     const chip = (active, disabled) => ({
         ...mono, padding: '8px 12px', cursor: disabled ? 'not-allowed' : 'pointer',
