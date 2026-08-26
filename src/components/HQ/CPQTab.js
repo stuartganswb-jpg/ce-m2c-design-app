@@ -699,17 +699,27 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // H1-2TRV-4DC/EP and so on, so the assembly's own code is the family. A collection with no kits
   // gets an empty list and the picker never renders — which is what keeps this invisible to every
   // flow that was already tested.
+  // THE KIT-FAMILY TAG SYSTEM (Stuart 2026-08-26: "build a tag system on the cpq flow and on the
+  // kit builder 4.6 to always align — as we add new ones, it's automatic"). A kit carries
+  // manufacturingSpecs.kitFamily (the 4.6 import stamps it; hand-made kits derive it from their
+  // code); a generated flow carries flow.kitFamily (stamped at generate). TAG MATCH FIRST —
+  // immune to assembly renames and flow regeneration — with the old code-prefix match kept as
+  // the fallback for anything not yet tagged.
   const seedableKits = useMemo(() => {
       const a = activeAssembly;
       if (!a) return [];
       const base = String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase();
-      if (!base) return [];
+      const famFlow = String(activeFlow?.kitFamily || '').trim().toUpperCase();
+      if (!base && !famFlow) return [];
       const matches = (k) => {
+          const kf = String(k.manufacturingSpecs?.kitFamily || '').trim().toUpperCase();
+          if (famFlow && kf === famFlow) return true;                       // the tag system
+          if (kf && base && kf === base) return true;                       // kit tagged with the assembly code
           const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
-          return code === base || code.startsWith(base + '-');
+          return !!base && (code === base || code.startsWith(base + '-'));  // legacy prefix fallback
       };
       return kitsForSeeding(kitLibrary).filter(matches);
-  }, [activeAssembly, kitLibrary]);
+  }, [activeAssembly, activeFlow, kitLibrary]);
   // Kits that MATCH this flow's family but are missing their alignment — the named reason the
   // picker would otherwise silently not render — plus the full diagnostic (super-admin): what
   // code the picker matched against and what kit codes actually exist, so a prefix or brand
@@ -717,17 +727,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const kitSeedDiag = useMemo(() => {
       const a = activeAssembly;
       const base = a ? String((a.legacyErpId && a.legacyErpId !== 'PENDING' ? a.legacyErpId : '') || a.itemName || a.itemId || '').trim().toUpperCase() : '';
+      const famFlow = String(activeFlow?.kitFamily || '').trim().toUpperCase();
       const match = (k) => {
+          const kf = String(k.manufacturingSpecs?.kitFamily || '').trim().toUpperCase();
+          if (famFlow && kf === famFlow) return true;
+          if (kf && base && kf === base) return true;
           const code = String(k.legacyErpId || k.itemName || '').trim().toUpperCase();
           return base && (code === base || code.startsWith(base + '-'));
       };
       return {
           base,
+          famFlow,
           totalKitClass: kitLibrary.length,
           unaligned: base ? kitLibrary.filter(k => !k.manufacturingSpecs?.kitAlign).filter(match).length : 0,
           sampleCodes: kitLibrary.slice(0, 4).map(k => String(k.legacyErpId || k.itemName || k.id)),
       };
-  }, [activeAssembly, kitLibrary]);
+  }, [activeAssembly, activeFlow, kitLibrary]);
   
   const [activeMasterQuoteId, setActiveMasterQuoteId] = useState(null);
   const [activeDraftId, setActiveDraftId] = useState(null);

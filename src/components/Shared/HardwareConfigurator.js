@@ -1265,7 +1265,7 @@ function HardwareConfiguratorInner({
                 mismatch then reads straight off the screen. Staff never see this line. */}
             {isSuperAdmin && !kits.length && !kitsUnaligned && kitSeedDiag && kitSeedDiag.totalKitClass > 0 && (
                 <div style={{ background: '#fff', border: '1px dashed var(--line)', padding: '7px 14px', ...mono, fontSize: '8.5px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-soft)' }}>
-                    🧰 kit picker: no kit code starts with “{kitSeedDiag.base || '(no assembly code)'}-”. {kitSeedDiag.totalKitClass} kit record(s) on this brand — e.g. {kitSeedDiag.sampleCodes.join(', ')}. Either the flow’s linked assembly code ≠ the kit family, or the kits carry a different brand.
+                    🧰 kit picker: no kit matched — flow kitFamily “{kitSeedDiag.famFlow || '(none)'}”, assembly code “{kitSeedDiag.base || '(none)'}”. {kitSeedDiag.totalKitClass} kit record(s) on this brand — e.g. {kitSeedDiag.sampleCodes.join(', ')}. Tag the flow (regenerate stamps it) or the kits (4.6) with the same kitFamily.
                 </div>
             )}
             {isSuperAdmin && !kits.length && kitSeedDiag && kitSeedDiag.totalKitClass === 0 && (

@@ -722,6 +722,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 clientPricing: row,
                 manufacturingSpecs: {
                     basePrice: money(f.basePrice),
+                    // KIT-FAMILY TAG (2026-08-26): derived from the code (H1-2TRV-4/EP → H1-2TRV)
+                    // so the CPQ "Start from a kit" picker matches by tag automatically.
+                    ...(code.includes('-') ? { kitFamily: code.split('-').slice(0, -1).join('-') } : {}),
                     kitComponents: comps.map(r => ({ partId: r.partId, qty: parseInt(r.qty) || 1 })),
                     ...(coll ? { collections: [upper(coll)] } : {}),
                     status: 'APP_ONLY', createdAt: Date.now(), createdBy: String(currentUser || ''),
@@ -836,6 +839,9 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     const p = inventory.find(x => x.id === k.docId);
                     batch.update(doc(db, 'Approved_Designs', k.docId), {
                         partClass: 'Kit', itemName: k.name,
+                        // Backfill the brand stamp — an older kit record without brandId never
+                        // reaches CPQ's brand-filtered library, which hides the kit picker.
+                        brandId: p?.brandId || activeBrand,
                         clientPricing: [...otherRows(p), row],
                         'manufacturingSpecs.kitFamily': parsed.family,
                         'manufacturingSpecs.kitAlign': k.align,
