@@ -102,20 +102,27 @@ service cloud.firestore {
     match /hq_inventory_tasks/{document=**}     { allow read, write: if isAuth(); }
 
     // ---- Shop Floor ----
+    // Master data (routings/programs/machines/tooling/materials…) can only be DELETED by the
+    // engineering roles — the role claim is minted by authenticatePin at login. Job collections
+    // stay open to all staff (operators complete/undo/nuke-test flows run through them).
+    function isShopEngineer() {
+      return request.auth != null &&
+        (request.auth.token.role == 'admin' || request.auth.token.role == 'superadmin' ||
+         request.auth.token.role == 'programmer');
+    }
     match /shop_logs/{document=**}              { allow read, write: if isAuth(); }
     match /shop_custom_orders/{document=**}     { allow read, write: if isAuth(); }
-    match /shop_routings/{document=**}          { allow read, write: if isAuth(); }
-    match /shop_programs/{document=**}          { allow read, write: if isAuth(); }
-    match /shop_machines/{document=**}          { allow read, write: if isAuth(); }
-    match /shop_machine_categories/{document=**}{ allow read, write: if isAuth(); }
-    match /shop_setup_codes/{document=**}       { allow read, write: if isAuth(); }
+    match /shop_routings/{document=**}          { allow read, create, update: if isAuth(); allow delete: if isShopEngineer(); }
+    match /shop_programs/{document=**}          { allow read, create, update: if isAuth(); allow delete: if isShopEngineer(); }
+    match /shop_machines/{document=**}          { allow read, create, update: if isAuth(); allow delete: if isShopEngineer(); }
+    match /shop_machine_categories/{document=**}{ allow read, create, update: if isAuth(); allow delete: if isShopEngineer(); }
+    match /shop_setup_codes/{document=**}       { allow read, create, update: if isAuth(); allow delete: if isShopEngineer(); }
     match /shop_schedule/{document=**}          { allow read, write: if isAuth(); }
     match /shop_milling/{document=**}           { allow read, write: if isAuth(); }
-    match /shop_tooling/{document=**}           { allow read, write: if isAuth(); }
-    match /shop_materials/{document=**}         { allow read, write: if isAuth(); }
+    match /shop_tooling/{document=**}           { allow read, create, update: if isAuth(); allow delete: if isShopEngineer(); }
+    match /shop_materials/{document=**}         { allow read, create, update: if isAuth(); allow delete: if isShopEngineer(); }
     match /shop_material_history/{document=**}  { allow read, write: if isAuth(); }
     match /shop_failures/{document=**}          { allow read, write: if isAuth(); }
-    match /shop_finishing_alerts/{document=**}  { allow read, write: if isAuth(); }
     match /shop_livio/{document=**}             { allow read, write: if isAuth(); }
 
     // ---- Finishing Floor ----

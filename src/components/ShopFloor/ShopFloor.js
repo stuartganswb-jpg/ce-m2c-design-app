@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions, storage, getOuterIdToken } from '../../firebase';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, limit, onSnapshot, writeBatch, serverTimestamp, increment } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, onSnapshot, writeBatch, serverTimestamp, increment } from "firebase/firestore";
 import { hardDeleteWithLedger, recordDeletion } from '../Shared/orderLifecycle';
-import { signInWithCustomToken } from 'firebase/auth';
+import { signInWithCustomToken, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { emitLabel, printShopBinLabel, printShopCompletionLabel } from '../Shared/labelPrint';
@@ -22,8 +22,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
-
-const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
+import { shopDb, cleanId, SHOP_TABS } from './shopShared';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
 // salesOrderId/orderKey but no soNum ("SO: undefined" on cards AND printed labels), and no
@@ -64,7 +63,7 @@ const UrgentBanner = ({ order, onAck }) => !order?.urgent ? null : (
     </div>
 );
 
-const TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'app imp', 'admin'];
+const TABS = SHOP_TABS;
 const ENG_TABS = ['routings', 'programs', 'tooling', 'admin'];
 
 const ShopFloor = () => {
@@ -109,10 +108,8 @@ const ShopFloor = () => {
     // (configChecks.cfg<i> = {done, by, at, label}).
     const [orderConfigs, setOrderConfigs] = useState({}); // quoteId -> [{key,label,qty}]
     const [orderDrawings, setOrderDrawings] = useState({}); // quoteId -> [{url,name}] static shop-drawing PDFs (from the order's mainline assemblies)
-    const [matHistory, setMatHistory] = useState([]);
     const [failures, setFailures] = useState([]);
     const [livio, setLivio] = useState([]);
-    const [logs, setLogs] = useState([]);
 
     const [machineCategoryMap, setMachineCategoryMap] = useState({});
     const [categoryTypeMap, setCategoryTypeMap] = useState({});
@@ -170,9 +167,6 @@ const ShopFloor = () => {
     useEffect(() => {
         if (!user) return;
         const unsubs = [
-            onSnapshot(collection(db, "fin_workorders"), s => {
-                const m = {}; s.docs.forEach(d => { m[d.id] = { id: d.id, ...d.data() }; }); setFinSibs(m);
-            }),
             onSnapshot(collection(db, "Approved_Designs"), s => {
                 // Shop scope = Classical Elements + M2C only (Stuart 2026-07-17): Uniquity and
                 // Leyla Gans have no relation to the shop floor — dropped at the source so every
@@ -193,7 +187,6 @@ const ShopFloor = () => {
             onSnapshot(shopDb.collection("tooling"), s => setTooling(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("materials"), s => setMaterials(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("custom_orders"), s => setCustomOrders(s.docs.map(d=>({id: d.id, ...d.data()})))),
-            onSnapshot(query(shopDb.collection("material_history"), orderBy("t", "desc"), limit(50)), s => setMatHistory(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(query(shopDb.collection("shop_failures"), orderBy("timestamp", "desc")), s => setFailures(s.docs.map(d=>({id: d.id, ...d.data()})))),
             onSnapshot(shopDb.collection("livio"), s => setLivio(s.docs.map(d=>({id: d.id, ...d.data()})))),
             subscribeProgramPrints(db, setPrintMap)
@@ -201,15 +194,29 @@ const ShopFloor = () => {
         return () => unsubs.forEach(u => u());
     }, [user]);
 
-    const writeLog = async (msg, cat) => { 
+    // SCOPED SIBLING LISTENER (2026-08-26): the shop tablet used to subscribe to the ENTIRE
+    // finishing collection to render one chip per card. One per-doc listener per open custom
+    // order's sibling instead — keyed on the joined id set so status churn doesn't resubscribe.
+    const sibKey = [...new Set(customOrdersRaw.map(o => o.finSiblingId).filter(Boolean))].sort().join('|');
+    useEffect(() => {
+        if (!user || !sibKey) { setFinSibs({}); return; }
+        const ids = sibKey.split('|');
+        setFinSibs(prev => Object.fromEntries(Object.entries(prev).filter(([k]) => ids.includes(k))));
+        const unsubs = ids.map(id => onSnapshot(doc(db, 'fin_workorders', id), s => {
+            setFinSibs(prev => s.exists() ? { ...prev, [id]: { id: s.id, ...s.data() } } : prev);
+        }));
+        return () => unsubs.forEach(u => u());
+    }, [user, sibKey]);
+
+    const writeLog = async (msg, cat) => {
         try {
-            await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, t: serverTimestamp() }); 
+            // src stamp: the super-admin log viewer (AdminTab) labels these rows SHOP FLOOR.
+            await addDoc(collection(db, "hq_logs"), { u: user?.name || 'Unknown', msg, cat, src: 'SHOP', t: serverTimestamp() });
         } catch (error) {
             console.error("Failed to write log:", error);
         }
     };
     
-    const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
     // A tool's pool = its machine's category (interchangeable machines share one tool inventory).
     const poolOf = (machineName) => machineCategoryMap[machineName] || machineName;
     // HARD delete through the master ledger (Stuart 2026-08-25): the ledger entry carries a full
@@ -306,6 +313,8 @@ const ShopFloor = () => {
     };
     
     const handleLogout = () => {
+        // A real sign-out, not just a UI reset — the Firebase session used to survive this.
+        signOut(auth).catch(() => { /* already signed out */ });
         localStorage.removeItem('hq_session');
         navigate('/');
     };
@@ -423,7 +432,7 @@ const ShopFloor = () => {
     // EXECUTION ACTIONS
     // ==========================================
     const aiOptimizeSchedule = async () => {
-        if(!window.confirm("✨ AI RECOMMENDED SORT: Group identical Setup Codes on Automated machines, and strictly respect Operator Manual capacity limits?")) return;
+        if(!window.confirm("⚙ OPTIMIZE SCHEDULE: Group identical Setup Codes on Automated machines, and strictly respect Operator Manual capacity limits?\n\n(Deterministic sort — due date first, then setup-code grouping.)")) return;
         const pendingJobs = schedule.filter(s => s.status === 'Pending');
         let jobsByMach = {}; pendingJobs.forEach(t => { if(!jobsByMach[t.mach]) jobsByMach[t.mach] = []; jobsByMach[t.mach].push(t); });
         const batch = writeBatch(db); const today = new Date(); today.setHours(0,0,0,0);
@@ -465,7 +474,7 @@ const ShopFloor = () => {
                 machineAvailability[mach] = proposedStartMs + durationMs; 
             });
         });
-        await batch.commit(); writeLog('AI Optimized schedule', 'scheduler'); alert("✨ AI Schedule Optimization Complete!");
+        await batch.commit(); writeLog('Optimized schedule (setup-code grouping)', 'scheduler'); alert("⚙ Schedule optimized — jobs grouped by setup code, manual capacity respected.");
     };
 
     const updateJobStatus = async (id, newStatus) => {
@@ -589,14 +598,16 @@ const ShopFloor = () => {
             return routing && s.currentOpIndex === (routing.ops.length - 1);
         });
         if(unexported.length === 0) return alert("No new final operations ready to export.");
-        if(!window.confirm(`Archive ${unexported.length} finished parts to ERP Exported? This signals NetSuite synchronization.`)) return;
-        
+        // HONEST BUTTON (2026-08-26): this stamps erpExported in the app and nothing else — no
+        // NetSuite call exists on the shop route today. Never claim a write that didn't happen.
+        if(!window.confirm(`Archive ${unexported.length} finished parts as Exported?\n\nThis stamps them in the app so they leave this list. The NetSuite Work Order build is still entered MANUALLY — nothing is sent automatically.`)) return;
+
         const batch = writeBatch(db); const dateStr = new Date().toISOString().split('T')[0];
-        unexported.forEach(job => batch.update(doc(shopDb.collection("schedule"), job.id), { erpExported: true, erpExportDate: dateStr }));
-        
-        await batch.commit(); 
-        writeLog(`Exported batch to ERP`, 'admin');
-        alert("✅ Batch Exported. NetSuite Work Order Build routine triggered.");
+        unexported.forEach(job => batch.update(doc(shopDb.collection("schedule"), job.id), touched({ erpExported: true, erpExportDate: dateStr })));
+
+        await batch.commit();
+        writeLog(`Archived ${unexported.length} finished jobs as exported (manual NetSuite entry)`, 'admin');
+        alert(`✅ ${unexported.length} jobs archived as Exported.\n\nReminder: enter the Work Order builds in NetSuite by hand — the app did not send anything.`);
     };
 
     // ==========================================
@@ -714,7 +725,7 @@ const ShopFloor = () => {
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Pipeline Control</span>
                         <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>Active Production Tracker</h2>
                     </div>
-                    {['admin', 'programmer'].includes(safeUserRole) && <button onClick={aiOptimizeSchedule} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>✨ AI Optimize Schedule</button>}
+                    {['admin', 'programmer'].includes(safeUserRole) && <button onClick={aiOptimizeSchedule} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '12px 20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>⚙ Optimize Schedule (Group Setups)</button>}
                 </div>
 
                 {/* 🚀 QUEUE FROM MILLING BACKLOG */}
@@ -732,7 +743,7 @@ const ShopFloor = () => {
                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Qty: {q.qty}</span>
                                     </div>
                                     <div style={{ fontFamily: 'var(--sans)', fontSize: '0.9rem', color: 'var(--ink-soft)', marginBottom: '16px' }}>{routingsMap[q.partNum]?.displayName || q.partNum}</div>
-                                    <button onClick={() => dispatchToAIQueue(q)} style={{ width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Dispatch to AI Queue</button>
+                                    <button onClick={() => dispatchToAIQueue(q)} style={{ width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Dispatch to Schedule</button>
                                 </div>
                             ))}
                         </div>
@@ -893,7 +904,7 @@ const ShopFloor = () => {
             <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
                     <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', margin: 0 }}>ERP Export Batch (Final Ops Only)</h2>
-                    {['admin', 'purchasing', 'csr'].includes(safeUserRole) && <button onClick={handleExportBatch} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Batch Exported</button>}
+                    {['admin', 'purchasing', 'csr'].includes(safeUserRole) && <button onClick={handleExportBatch} style={{ background: 'var(--ink)', color: '#fff', border: 'none', padding: '12px 24px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Archive Batch (Mark Exported)</button>}
                 </div>
                 <div style={{ overflowX: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontFamily: 'var(--sans)' }}>
@@ -1029,9 +1040,9 @@ const ShopFloor = () => {
         // staged queue; ▶ Start moves ONE across to the RIGHT as the full working card. The
         // shared signal is status 'In Process', so every tablet sees the same active job.
         const inProcess = activeOrders.filter(o => o.status === 'In Process');
+        // ('Cut to Size Rods' split removed 2026-08-26 — no writer ever produced that category;
+        // rod cuts live on WMS → ROD CUTS.)
         const staged = activeOrders.filter(o => o.status !== 'In Process');
-        const stagedRods = staged.filter(o => o.category === 'Cut to Size Rods');
-        const stagedFabs = staged.filter(o => o.category !== 'Cut to Size Rods');
         // Same side effects as the card's Start button: sibling small parts release to
         // Pick/Pack and finishing gets notified — starting IS the release trigger (§A1).
         const startOrder = async (order) => {
@@ -1449,16 +1460,10 @@ const ShopFloor = () => {
                         <h3 style={{ margin: '0 0 6px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Staged Orders{staged.length ? ` (${staged.length})` : ''}</h3>
                         <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', margin: '10px 0 18px' }}>New orders wait here — ▶ Start moves one to the active side</div>
                         {staged.length === 0 && <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)' }}>No staged orders.</div>}
-                        {stagedRods.length > 0 && (
+                        {staged.length > 0 && (
                             <>
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', margin: '0 0 10px' }}>✂ Cut-to-Size Rods</div>
-                                {stagedRods.map(o => <StagedCard key={o.id} order={o} />)}
-                            </>
-                        )}
-                        {stagedFabs.length > 0 && (
-                            <>
-                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', margin: stagedRods.length ? '18px 0 10px' : '0 0 10px' }}>⚒ Custom Fabrication</div>
-                                {stagedFabs.map(o => <StagedCard key={o.id} order={o} />)}
+                                <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink)', margin: '0 0 10px' }}>⚒ Custom Fabrication</div>
+                                {staged.map(o => <StagedCard key={o.id} order={o} />)}
                             </>
                         )}
                     </div>

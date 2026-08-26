@@ -1,14 +1,11 @@
 import React, { useState } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, doc, setDoc, updateDoc, writeBatch, increment } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, writeBatch, increment } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { saveProgramPrint, resolvePrintUrl } from '../Shared/programPrints';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, collection as oldCol, getDocs as oldGetDocs } from 'firebase/firestore';
+import { recordDeletion } from '../Shared/orderLifecycle';
 import { unzipSync, strFromU8 } from 'fflate';
-
-const shopDb = { collection: (colName) => collection(db, colName.startsWith('shop_') ? colName : `shop_${colName}`) };
-const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
+import { shopDb, cleanId } from './shopShared';
 
 // Machine-screen photos off a tablet camera run 3–5MB — downscale to ≤1600px JPEG before
 // upload so step sheets open fast on the floor. Caller falls back to the raw file if the
@@ -94,22 +91,34 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
     const [matForm, setMatForm] = useState({ type: '', thick: '', width: '', length: '', sticks: '', scrap: '10' });
 
     // Bulk wipes (admin) — old tools clash with freshly-imported Fusion tools; materials are being re-modeled
-    // with stick length/count. Both batch-delete the loaded docs (counts are small).
-    const clearToolLibrary = async () => {
-        if (!window.confirm(`Delete ALL ${tooling.length} tools from the library? Cannot be undone — re-import your Fusion .tools file after.`)) return;
+    // with stick length/count. A bulk wipe is still a delete: ONE Deletion Ledger entry records the
+    // count and ids BEFORE anything is destroyed — if that entry cannot be written, the wipe is refused
+    // (same contract as the shop job nuke and every handleDelete).
+    const clearWithLedger = async (colName, docs, reason) => {
+        await recordDeletion({ db, doc, setDoc }, {
+            collection: `shop_${colName}`, docId: `BULK-${docs.length}`, kind: 'BULK_NUKE', mode: 'HARD',
+            by: user?.name || 'Unknown', from: 'SHOP_ENGINEERING', reason,
+            record: { count: docs.length, ids: docs.slice(0, 100).map(d => d.id) },
+        });
         const batch = writeBatch(db);
-        tooling.forEach(t => batch.delete(doc(shopDb.collection("tooling"), t.id)));
+        docs.forEach(d => batch.delete(doc(shopDb.collection(colName), d.id)));
         await batch.commit();
-        writeLog(`Cleared tool library (${tooling.length} tools)`, 'inventory');
-        alert(`✅ Tool library cleared (${tooling.length} removed). Re-import your .tools file.`);
+    };
+    const clearToolLibrary = async () => {
+        if (!window.confirm(`Delete ALL ${tooling.length} tools from the library? A copy of the id list is kept on the master Deletion Ledger. Re-import your Fusion .tools file after.`)) return;
+        try {
+            await clearWithLedger('tooling', tooling, 'clear tool library for re-import');
+            writeLog(`Cleared tool library (${tooling.length} tools) — ledgered`, 'inventory');
+            alert(`✅ Tool library cleared (${tooling.length} removed). Re-import your .tools file.`);
+        } catch (e) { console.error(e); alert('Wipe refused — the Deletion Ledger entry could not be written, so nothing was deleted. ' + (e?.message || e)); }
     };
     const clearAllMaterials = async () => {
-        if (!window.confirm(`Delete ALL ${materials.length} raw-material profiles? Cannot be undone.`)) return;
-        const batch = writeBatch(db);
-        materials.forEach(m => batch.delete(doc(shopDb.collection("materials"), m.id)));
-        await batch.commit();
-        writeLog(`Cleared raw materials (${materials.length})`, 'admin');
-        alert(`✅ All raw materials cleared (${materials.length} removed).`);
+        if (!window.confirm(`Delete ALL ${materials.length} raw-material profiles? A copy of the id list is kept on the master Deletion Ledger.`)) return;
+        try {
+            await clearWithLedger('materials', materials, 'clear raw materials for re-model');
+            writeLog(`Cleared raw materials (${materials.length}) — ledgered`, 'admin');
+            alert(`✅ All raw materials cleared (${materials.length} removed).`);
+        } catch (e) { console.error(e); alert('Wipe refused — the Deletion Ledger entry could not be written, so nothing was deleted. ' + (e?.message || e)); }
     };
     const receiveSticks = async (m) => {
         const n = parseInt(window.prompt(`Receive how many sticks of ${m.type} (${m.thickness}"×${m.width}")?\nEach adds ${(((m.lengthPerStick || 0) - (m.scrapPerStick || 0)) || 0).toFixed(1)}" usable.`, '12'));
@@ -292,16 +301,8 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         if (action === 'discard') { await updateDoc(refDoc, { benchedHours: null }); writeLog(`Discarded tool ${tool.name}`, 'inventory'); }
     };
 
-    const syncLegacyMaterials = async () => {
-        if(!window.confirm("WARNING: Pull Materials from Legacy DB?")) return;
-        try {
-            const oldApp = initializeApp({ apiKey: "AIzaSyAmXhVF4qX8WKW-8erHZfgSBQqkuqJ-hu0", authDomain: "shop-floor-b84ae.firebaseapp.com", projectId: "shop-floor-b84ae" }, "LegacyMatApp");
-            const snap = await oldGetDocs(oldCol(getFirestore(oldApp), "materials"));
-            let count = 0; const batch = writeBatch(db);
-            snap.docs.forEach(d => { batch.set(doc(shopDb.collection("materials"), d.id), d.data()); count++; });
-            await batch.commit(); alert(`✅ Synced ${count} raw materials!`);
-        } catch(e) { alert("Sync failed."); }
-    };
+    // (syncLegacyMaterials retired 2026-08-26 — the shop-floor-b84ae legacy project import, with
+    // its hardcoded API key, is dead. Materials are managed here or received via sticks.)
 
     const saveAdminDoc = async (col, id, data, msg) => { await setDoc(doc(shopDb.collection(col), cleanId(id, "")), data, {merge:true}); writeLog(msg, 'admin'); };
 
@@ -738,7 +739,6 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Inventory</span>
                         <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Tooling & Raw Material</h2>
                     </div>
-                    {['admin', 'programmer'].includes(safeUserRole) && <button onClick={syncLegacyMaterials} style={{ ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Sync Legacy Materials</button>}
                 </div>
 
                 {['admin', 'programmer'].includes(safeUserRole) && (

@@ -105,6 +105,25 @@ Phase 4 (polish): card hoisting/memoization, style extraction, alert→modal, li
 Add a **Shop Floor section to the User Guide tab** (`UserGuideTab.js`) when the dust settles —
 Work Orders and Orders & Customers sections exist; the floor deserves the same treatment.
 
+## 4.5 Status (2026-08-26 session)
+
+Phases 1–3 SHIPPED (commits `984d0c1` spine/queues, `95e51ca` holds/where-is-it, + the honesty/
+hardening commit). §2 #1–#6 and most of §3 are closed. Still open, deliberately parked:
+- **RTG payload stamps** — RTGDispatchTab.js is another session's territory; the shop side now
+  RESOLVES soNum/itemCode with fallbacks, but the autoSplit shop payload should still stamp
+  `soNum: so.soId || orderKey` + single-line `itemCode`, and pushToShop's payload should be
+  wrapped in `withItemCode(...)`. Patch spec handed to Stuart for the owning session.
+- **firestore.rules deploy** — shop master-data deletes now gated to admin/programmer/superadmin
+  (isShopEngineer). Needs the Cloud Shell rules deploy (along with the pending hq_deletion_log
+  append-only rule if not yet live).
+- **Real schedule optimizer** (Stuart's pick): replace the deterministic setup-code sort with a
+  genuinely smarter scheduler — machine capacity, due-date lateness, changeover minimization.
+  Buttons renamed honestly in the meantime ("Dispatch to Schedule" / "⚙ Optimize Schedule").
+- **NetSuite wiring for the shop route** — export tab is now honest (archive stamp, manual NS
+  entry); real ns_outbox wiring is its own project and needs the WO-mapping talk with Eric.
+- **Phase 4 polish** (§3 tail): card hoisting/memoization, BufferedInput, style extraction,
+  alert→modal, tablet nav overflow, division dropdown scope. Plus the User Guide section.
+
 ## 5. Key files & memories
 `ShopFloor/ShopFloor.js` · `ShopFloor/ShopEngineering.js` · `Shared/workOrderContract.js`
 (mirror + releaseSiblingToPickPack + withItemCode) · `Shared/orderLifecycle.js` (linkedDocsOf /

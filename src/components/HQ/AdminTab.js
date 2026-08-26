@@ -19,6 +19,7 @@ import { normalizeLocation } from '../Shared/assemblyTags';
 import { isSheet2dAssembly } from '../Shared/sheet2d';
 import { buildSheet2dFlow } from '../Shared/sheet2dFlow';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
+import { SHOP_TABS } from '../ShopFloor/shopShared';
 
 // Firestore rejects `undefined` field values (only null is allowed). Recursively drop undefined
 // keys so a flow/step that's missing some optional fields (e.g. an imported template) can save.
@@ -33,7 +34,8 @@ const stripUndefined = (v) => {
 };
 
 // CONSTANTS FOR GLOBAL PERMISSIONS
-const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'admin'];
+// SHOP_TABS comes from the shop app itself (ShopFloor/shopShared) — the hand-synced copy here
+// had drifted ('app imp' missing, so the permissions editor could never grant it).
 // Mirrors the Finishing app's TABS (FinishingFloor.js). 'MANAGEMENT' was retired (its user/perms
 // admin moved here to HQ); 'PRODUCTION TIMES' is the finishing timers + time-matrix config tab.
 const FIN_TABS = ['SETUP QUEUE', 'ACTIVE FLOOR', 'FINISH RECIPES', 'SUPPLIES', 'PRODUCTION TIMES', 'OS COMMS', 'ASSET GALLERY', 'DAILY SUMMARY'];
@@ -319,14 +321,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
       if (activeSection === "SUPER_ADMIN" && isSuperAdmin) {
           const fetchGlobalLogs = async () => {
               try {
-                  const shopSnap = await getDocs(query(collection(db, "shop_logs"), orderBy("t", "desc"), limit(150)));
+                  // shop_logs was never written to — the Shop Floor's writeLog goes to hq_logs
+                  // with a src:'SHOP' stamp (2026-08-26), so its rows are labeled from there.
                   const finSnap = await getDocs(query(collection(db, "fin_logs"), orderBy("t", "desc"), limit(150)));
                   const hqSnap = await getDocs(query(collection(db, "hq_logs"), orderBy("t", "desc"), limit(150)));
 
                   let combined = [
-                      ...shopSnap.docs.map(d => ({ id: d.id, app: 'SHOP FLOOR', ...d.data() })),
                       ...finSnap.docs.map(d => ({ id: d.id, app: 'FINISHING', ...d.data() })),
-                      ...hqSnap.docs.map(d => ({ id: d.id, app: 'HQ/WMS', ...d.data() }))
+                      ...hqSnap.docs.map(d => ({ id: d.id, app: d.data().src === 'SHOP' ? 'SHOP FLOOR' : 'HQ/WMS', ...d.data() }))
                   ];
                   
                   combined.sort((a, b) => {
