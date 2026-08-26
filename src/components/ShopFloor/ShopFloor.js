@@ -17,7 +17,9 @@ import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf } from '../Shared/workOrderContract';
+import { isHeld, holdFirst, HOLD_STAGES } from '../Shared/orderHold';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import WhereIsIt from '../Shared/WhereIsIt';
 import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 
@@ -31,6 +33,36 @@ const soNumOf = (o) => o?.soNum || o?.salesOrderId || o?.orderKey || 'N/A';
 const shopItemCodeOf = (o) => woItemCodeOf(o)
     || woItemCodeOf({ itemCode: o?.partNum })
     || woItemCodeOf({ itemCode: (o?.cutList || []).length === 1 ? o.cutList[0].legacyErpId : null });
+
+// RTG's job log sorts on updatedAt — every shop write stamps it (2026-08-26).
+const touched = (p) => ({ ...p, updatedAt: serverTimestamp() });
+
+// The shop doc's OWN lifecycle as a chip (the sibling OrderStatusChips covers the finishing
+// half). Tone rules follow Shared/orderStatus: grey = waiting, brass = in work, blue = off to
+// the next station, green = done, faint = closed.
+const ShopStatusChip = ({ order }) => {
+    const s = order?.closed ? 'Closed' : (order?.status || 'Pending');
+    const tone = { 'In Milling': '#b08d57', 'In Process': '#b08d57', 'Sent to Plating': '#3f7fc4', 'Completed': '#3a7d44', 'Closed': '#9b968c' }[s] || '#524e46';
+    return <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', border: `1px solid ${tone}`, color: tone, padding: '3px 7px', whiteSpace: 'nowrap' }}>{s}</span>;
+};
+
+// HQ writes held/heldReason/urgent onto shop docs (Shared/orderHold, RTG) — until 2026-08-26 the
+// floor rendered none of it, so an operator could start a stopped order.
+const HoldBanner = ({ order }) => !isHeld(order) ? null : (
+    <div style={{ marginBottom: '12px', padding: '10px 14px', background: '#fdf2f2', border: '2px solid #d9534f' }}>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 700, color: '#d9534f' }}>⛔ ON HOLD{order.heldStage ? ` — ${HOLD_STAGES[order.heldStage] || order.heldStage}` : ''}</div>
+        <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)', marginTop: '4px' }}>{order.heldReason || 'No reason recorded'}{order.heldBy ? ` — ${order.heldBy}` : ''}{order.heldAt ? ` · ${new Date(order.heldAt).toLocaleString()}` : ''}</div>
+        <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', marginTop: '4px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Do not start or complete — management clears the hold.</div>
+    </div>
+);
+const UrgentBanner = ({ order, onAck }) => !order?.urgent ? null : (
+    <div style={{ marginBottom: '12px', padding: '8px 12px', background: '#fdf8ef', border: '1px solid var(--brass)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', fontWeight: 700 }}>⚡ URGENT{order.needBy ? ` — need by ${order.needBy}` : ''}</span>
+        {order.urgentAck
+            ? <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>✓ ack{order.urgentAckBy ? ` · ${order.urgentAckBy}` : ''}</span>
+            : (onAck && <button onClick={onAck} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer', whiteSpace: 'nowrap' }}>Acknowledge</button>)}
+    </div>
+);
 
 const TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'app imp', 'admin'];
 const ENG_TABS = ['routings', 'programs', 'tooling', 'admin'];
@@ -332,12 +364,26 @@ const ShopFloor = () => {
         setMillForm({ partNum: '', woNum: '', soNum: '', item: '', qty: '', reqDate: '', phosphate: 'No', file: null, _sourceCustomOrderId: null });
     };
 
+    // A hold lands on the ORDER's spine doc (shop_custom_orders) — the milling/schedule rows
+    // walk back to it via sourceCustomOrderId so a stopped order stops on the machines too.
+    const spineOf = (row) => row?.sourceCustomOrderId ? customOrdersRaw.find(o => o.id === row.sourceCustomOrderId) : null;
+    const heldGuard = (row) => {
+        const spine = spineOf(row);
+        if (spine && isHeld(spine)) {
+            alert(`⛔ ${row.woNum} is ON HOLD — ${spine.heldReason || 'no reason recorded'}.\n\nIt cannot move until management clears the hold.`);
+            return true;
+        }
+        return false;
+    };
+
     const pushToTrackerQueue = async (m) => {
-        await updateDoc(doc(shopDb.collection("milling"), m.id), { status: 'Tracker' });
+        if (heldGuard(m)) return;
+        await updateDoc(doc(shopDb.collection("milling"), m.id), touched({ status: 'Tracker' }));
         writeLog(`Pushed ${m.woNum} to Scheduler Queue`, 'scheduler');
     };
 
     const dispatchToAIQueue = async (m) => {
+        if (heldGuard(m)) return;
         const routing = routingsMap[m.partNum];
         const firstOp = routing && routing.ops?.length > 0 ? routing.ops[0] : { machine: 'Unassigned', progId: 'Manual' };
 
@@ -424,12 +470,13 @@ const ShopFloor = () => {
 
     const updateJobStatus = async (id, newStatus) => {
         const task = schedule.find(s => s.id === id);
+        if (['Setup', 'Running'].includes(newStatus) && heldGuard(task)) return;
         const payload = { status: newStatus };
         if (newStatus === 'Setup') payload.setupStart = Date.now();
         if (newStatus === 'Running') { payload.actualSetupMins = task?.setupStart ? (Date.now() - task.setupStart) / 60000 : 0; payload.actualStart = serverTimestamp(); }
         if (newStatus === 'Paused') payload.lastPauseStart = Date.now();
         if (newStatus === 'Resume') { payload.status = 'Running'; payload.totalPausedMs = increment(Date.now() - (task?.lastPauseStart || Date.now())); }
-        await updateDoc(doc(shopDb.collection("schedule"), id), payload);
+        await updateDoc(doc(shopDb.collection("schedule"), id), touched(payload));
         if(newStatus !== 'Resume') writeLog(`Updated Job ${id} to ${newStatus}`, 'production');
     };
 
@@ -493,8 +540,8 @@ const ShopFloor = () => {
             await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `⚠️ MACHINING FAILURE: ${prog.name} on ${task.mach}. Reason: ${qcForm.failReason}. \nNotes: ${qcForm.failNotes}`, t: serverTimestamp(), readBy: [], isSystem: true });
         }
 
-        const hrsWorked = (Date.now() - (task.actualStart?.toMillis ? task.actualStart.toMillis() : Date.now()) - (task.totalPausedMs || 0)) / 3600000; 
-        await updateDoc(doc(shopDb.collection("schedule"), taskId), { status: statusType === 'GOOD' ? "Completed" : "Failed", actualFinish: serverTimestamp(), actualWork: hrsWorked, goodQty: grandTotalGood, scrapQty: sQty });
+        const hrsWorked = (Date.now() - (task.actualStart?.toMillis ? task.actualStart.toMillis() : Date.now()) - (task.totalPausedMs || 0)) / 3600000;
+        await updateDoc(doc(shopDb.collection("schedule"), taskId), touched({ status: statusType === 'GOOD' ? "Completed" : "Failed", actualFinish: serverTimestamp(), actualWork: hrsWorked, goodQty: grandTotalGood, scrapQty: sQty }));
 
         if (statusType === 'GOOD') {
             const routing = routingsMap[task.routingId];
@@ -813,8 +860,11 @@ const ShopFloor = () => {
                             {groupItems.length === 0 ? <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontFamily: 'var(--sans)', fontSize: '0.95rem' }}>No pending jobs.</div> : (
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
                                     {groupItems.map(m => {
+                                        const spine = spineOf(m);
                                         return (
-                                        <div key={m.id} style={{ background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)', position: 'relative' }}>
+                                        <div key={m.id} style={{ background: 'var(--paper)', padding: '24px', border: (spine && isHeld(spine)) ? '2px solid #d9534f' : '1px solid var(--line)', position: 'relative' }}>
+                                            {spine && <HoldBanner order={spine} />}
+                                            {spine && <UrgentBanner order={spine} />}
                                             {['admin', 'programmer'].includes(safeUserRole) && <button onClick={() => handleDelete('milling', m.id)} style={{ position: 'absolute', top: '16px', right: '16px', background: 'transparent', border: 'none', color: '#d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase' }}>Del</button>}
                                             <h4 style={{ margin: '0 0 12px 0', color: 'var(--ink)', fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500 }}>{routingsMap[m.partNum]?.displayName || m.partNum} {m.phosphate && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px', marginLeft: '8px' }}>Phos</span>}</h4>
                                             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink-soft)', marginBottom: '8px' }}>WO: <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{m.woNum}</span> {m.soNum && `| SO: ${m.soNum}`}</div>
@@ -970,7 +1020,11 @@ const ShopFloor = () => {
         // accepted → 'In Milling') belong to the Milling tab's pipeline, and showing them here
         // let the same order be started from two tabs at once.
         const isMillingRouted = (o) => o.routeTo === 'MILLING' || o.isStock === true || o.status === 'In Milling';
-        const activeOrders = customOrders.filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating' && !isMillingRouted(o)).sort((a,b) => a.priority - b.priority);
+        // Held pins to the top (oldest hold first), urgent next, then priority.
+        const activeOrders = customOrders
+            .filter(o => o.status !== 'Completed' && o.status !== 'Sent to Plating' && !o.closed && !isMillingRouted(o))
+            .sort((a, b) => holdFirst(a, b) || ((b.urgent === true) - (a.urgent === true)) || (a.priority - b.priority));
+        const ackUrgent = (order) => updateDoc(doc(db, 'shop_custom_orders', order.id), touched({ urgentAck: true, urgentAckBy: user.name, urgentAckAt: Date.now() })).catch(e => alert('Failed to acknowledge: ' + (e.message || e)));
         // STAGED → ACTIVE flow (Stuart 2026-07-16): new orders wait on the LEFT as a compact
         // staged queue; ▶ Start moves ONE across to the RIGHT as the full working card. The
         // shared signal is status 'In Process', so every tablet sees the same active job.
@@ -981,9 +1035,10 @@ const ShopFloor = () => {
         // Same side effects as the card's Start button: sibling small parts release to
         // Pick/Pack and finishing gets notified — starting IS the release trigger (§A1).
         const startOrder = async (order) => {
+            if (isHeld(order)) return alert(`⛔ ${order.woNum} is ON HOLD — ${order.heldReason || 'no reason recorded'}.\n\nIt cannot be started until management clears the hold.`);
             if (!window.confirm(`▶ START ${order.woNum}?\n\n${order.item || order.partNum || ''}\n\nIt moves to the Active side; sibling small parts release to Pick/Pack and finishing is notified.`)) return;
             try {
-                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process', startedAt: serverTimestamp(), startedBy: user.name });
+                await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process', startedAt: serverTimestamp(), startedBy: user.name }));
                 await mirrorCustomStatusToSibling(order, 'In Process');
                 await releaseSiblingToPickPack(order);
                 await addDoc(collection(db, "global_messages"), {
@@ -995,7 +1050,9 @@ const ShopFloor = () => {
         // Compact staged row: enough to review (View Item / SOP / Drawing) without the bulk —
         // the full card renders on the right once started.
         const StagedCard = ({ order }) => (
-            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '14px 16px', marginBottom: '12px' }}>
+            <div style={{ background: '#fff', border: isHeld(order) ? '2px solid #d9534f' : '1px solid var(--line)', padding: '14px 16px', marginBottom: '12px' }}>
+                <HoldBanner order={order} />
+                <UrgentBanner order={order} onAck={() => ackUrgent(order)} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', marginBottom: '6px' }}>
                     <span style={{ fontFamily: 'var(--sans)', fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem' }}>{order.item || order.partNum}</span>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', border: '1px solid var(--line)', padding: '3px 7px', whiteSpace: 'nowrap', color: 'var(--ink-soft)' }}>WO {order.woNum}</span>
@@ -1029,7 +1086,7 @@ const ShopFloor = () => {
         const undoComplete = async (order) => {
             if (!window.confirm(`↩ Put ${order.woNum} BACK INTO PRODUCTION?\n\n• Shop status returns to "In Process"\n• Finishing/staging is told the custom parts are NOT complete (the staging handshake blocks again until re-completed)\n\nUse this when Complete was hit by mistake.`)) return;
             try {
-                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process', completedAt: null, completedBy: null, reopenedAt: serverTimestamp(), reopenedBy: user.name });
+                await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process', completedAt: null, completedBy: null, reopenedAt: serverTimestamp(), reopenedBy: user.name }));
                 await mirrorCustomStatusToSibling(order, 'In Process');
                 await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `↩ UNDO: custom order ${order.woNum} returned to production by ${user.name} — custom parts are NOT complete.`, t: serverTimestamp(), isSystem: true });
                 writeLog(`Custom order ${order.woNum} completion UNDONE → back to In Process`, 'shop');
@@ -1072,7 +1129,8 @@ const ShopFloor = () => {
             const allPhosDone = !needsPhos || (phosMulti ? (phosDoneCount === phosCfgs.length && phosCfgs.length > 0) : !!order.phosDone);
 
             const handleStartProcess = async () => {
-                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: 'In Process' });
+                if (isHeld(order)) return alert(`⛔ ${order.woNum} is ON HOLD — ${order.heldReason || 'no reason recorded'}.\n\nIt cannot be started until management clears the hold.`);
+                await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process' }));
                 // §5: mirror onto the sibling fin WO so the Setup Queue flips to "In Process".
                 await mirrorCustomStatusToSibling(order, 'In Process');
                 // §A1: starting the custom job is the trigger that releases the sibling small
@@ -1085,6 +1143,7 @@ const ShopFloor = () => {
             };
 
             const handleCompleteWithLabel = async () => {
+                if (isHeld(order)) return alert(`⛔ ${order.woNum} is ON HOLD — ${order.heldReason || 'no reason recorded'}.\n\nIt cannot be completed until management clears the hold.`);
                 // Outsourced-finish detection: the RTG flag OR any /MEP //EP //P25 code in the
                 // recipe (MEP added 2026-07-21 — Brimar bronze-patina family plates out too).
                 const toPlating = order.isOutsourced || /(MEP\d*|EP[1-6]|P25)\b/i.test(String(order.finishRecipe || ''));
@@ -1096,7 +1155,7 @@ const ShopFloor = () => {
 
                 printZebraLabel(order);
                 const finalStatus = toPlating ? 'Sent to Plating' : 'Completed';
-                await updateDoc(doc(db, "shop_custom_orders", order.id), { status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name });
+                await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name }));
                 // §5: custom fabrication is done from the finishing floor's perspective.
                 await mirrorCustomStatusToSibling(order, 'Complete');
 
@@ -1120,7 +1179,7 @@ const ShopFloor = () => {
                             note: `Custom fab complete — OUTGOING bin${order.cutLength ? ` · cut ${order.cutLength}"` : ''} · SO ${soNumOf(order)}`,
                             createdBy: user?.name || 'Shop', createdAt: Date.now()
                         }, { merge: true });
-                        await updateDoc(doc(db, "shop_custom_orders", order.id), { platingDemandCreated: true, platingDemandId: demandId });
+                        await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ platingDemandCreated: true, platingDemandId: demandId }));
                         alert(`🚚 ${order.woNum}: take the pieces to the OB PLATING bin.\n\nScan them in on WMS → Plating (📥 OB Plating) — they ride the next weekly plater PO from there.`);
                     }
                     await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'PICK_PACK', msg: `🚚 OB PLATING: Custom parts for ${order.woNum} (${order.finishRecipe || 'EP'}) are headed to the OB PLATING bin — scan them in on WMS → Plating (📥 OB Plating) for the weekly plater PO.`, t: serverTimestamp(), isSystem: true });
@@ -1132,13 +1191,14 @@ const ShopFloor = () => {
             const isRunning = order.status === 'In Process';
 
             return (
-                <div style={{ background: '#fff', border: '1px solid var(--line)', borderLeft: isRunning ? '4px solid var(--brass)' : '1px solid var(--line)', padding: '24px', marginBottom: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                <div style={{ background: '#fff', border: isHeld(order) ? '2px solid #d9534f' : '1px solid var(--line)', borderLeft: isHeld(order) ? '4px solid #d9534f' : (isRunning ? '4px solid var(--brass)' : '1px solid var(--line)'), padding: '24px', marginBottom: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                    <HoldBanner order={order} />
+                    <UrgentBanner order={order} onAck={() => ackUrgent(order)} />
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
                         <h4 style={{ margin: 0, fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.item || order.partNum}</h4>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: isRunning ? 'var(--paper)' : 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 8px' }}>
-                                {isRunning ? 'In Process' : `WO: ${order.woNum}`}
-                            </span>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <ShopStatusChip order={order} />
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 8px' }}>WO: {order.woNum}</span>
                         </div>
                     </div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '16px' }}>SO: {soNumOf(order)}{(c => c ? ` · ${c}` : '')(shopItemCodeOf(order))}</div>
@@ -1178,18 +1238,18 @@ const ShopFloor = () => {
                         const toggle = async (c) => {
                             const cur = checks[c.key]?.done;
                             try {
-                                await updateDoc(doc(db, 'shop_custom_orders', order.id), {
+                                await updateDoc(doc(db, 'shop_custom_orders', order.id), touched({
                                     [`configChecks.${c.key}`]: cur ? { done: false } : { done: true, by: user.name, at: Date.now(), label: c.label }
-                                });
+                                }));
                             } catch (e) { alert('Failed to save the check: ' + (e.message || e)); }
                         };
                         // Separate map from configChecks so the completion toggle never clobbers it.
                         const togglePhos = async (c) => {
                             const cur = phosMap[c.key]?.done;
                             try {
-                                await updateDoc(doc(db, 'shop_custom_orders', order.id), {
+                                await updateDoc(doc(db, 'shop_custom_orders', order.id), touched({
                                     [`phosChecks.${c.key}`]: cur ? { done: false } : { done: true, by: user.name, at: Date.now(), label: c.label }
-                                });
+                                }));
                             } catch (e) { alert('Failed to save the phosphate check: ' + (e.message || e)); }
                         };
                         return (
@@ -1239,9 +1299,9 @@ const ShopFloor = () => {
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                                     <input type="checkbox" checked={!!order.phosDone} onChange={async () => {
                                         try {
-                                            await updateDoc(doc(db, 'shop_custom_orders', order.id), order.phosDone
+                                            await updateDoc(doc(db, 'shop_custom_orders', order.id), touched(order.phosDone
                                                 ? { phosDone: false, phosBy: null, phosAt: null }
-                                                : { phosDone: true, phosBy: user.name, phosAt: Date.now() });
+                                                : { phosDone: true, phosBy: user.name, phosAt: Date.now() }));
                                         } catch (e) { alert('Failed to save the phosphate check: ' + (e.message || e)); }
                                     }} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: order.phosDone ? '#3a7d44' : 'var(--ink)' }}>Phosphated{order.phosDone && order.phosBy ? ` · ${order.phosBy}` : ''}</span>
@@ -1469,6 +1529,9 @@ const ShopFloor = () => {
                     </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                  {/* Same lookup as finishing/WMS — searches the orders this screen already
+                      subscribes to (shop customs + their fin siblings), zero new listeners. */}
+                  <WhereIsIt orders={[...customOrdersRaw, ...Object.values(finSibs)]} compact />
                   <span style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Operator: <strong style={{ color: 'var(--ink)', fontWeight: 500 }}>{user.name}</strong></span>
                   <button onClick={handleLogout} style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }}>Return to Hub</button>
                 </div>
