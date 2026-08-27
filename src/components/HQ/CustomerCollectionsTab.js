@@ -368,6 +368,10 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     price: pick('price'),
                     clientSalesPrice: pick('clientSalesPrice'),
                     clientRetailPrice: pick('clientRetailPrice'),
+                    // The ADDITIONAL-FOOT triple (traverse kits) — import-stamped, now editable.
+                    perFootPrice: pick('perFootPrice'),
+                    perFootSales: pick('perFootSales'),
+                    perFootRetail: pick('perFootRetail'),
                     dirty: !!edits[p.id],
                 };
             })
@@ -398,7 +402,13 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                 if (!p) continue;
                 const e = edits[id];
                 const cur = rowFor(p);
+                // ⚠ START FROM THE EXISTING ROW, then lay the edits over it. The row used to be
+                // REBUILT from just the four grid fields — which silently DROPPED anything else it
+                // carried, and the kit import's perFootPrice/perFootSales/perFootRetail were being
+                // wiped by any later price edit on that kit (Stuart 2026-08-27: "i can't find
+                // where to maintain that either"). A field the grid does not know about survives.
                 const next = {
+                    ...(cur || {}),
                     customerId: custId,
                     customerName: customer?.name || '',
                     clientSku: e.clientSku !== undefined ? String(e.clientSku).trim() : (cur?.clientSku ?? ''),
@@ -407,9 +417,15 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                     clientRetailPrice: e.clientRetailPrice !== undefined ? money(e.clientRetailPrice) : (cur?.clientRetailPrice ?? ''),
                     source: 'COLLECTION_PAGE', updatedAt: Date.now(), updatedBy: String(currentUser || ''),
                 };
+                // The additional-foot triple (traverse kits): editable in the open-kit panel.
+                if (e.perFootPrice !== undefined) next.perFootPrice = money(e.perFootPrice);
+                if (e.perFootSales !== undefined) next.perFootSales = money(e.perFootSales);
+                if (e.perFootRetail !== undefined) next.perFootRetail = money(e.perFootRetail);
+                ['perFootPrice', 'perFootSales', 'perFootRetail'].forEach(k => { if (next[k] === '' || next[k] === null) delete next[k]; });
                 const others = (p.clientPricing || []).filter(r => !custKeys.has(upper(r?.customerId)));
                 // A row with nothing in it is removed rather than stored as an empty shell.
-                const keep = (next.clientSku || next.price !== '' || next.clientSalesPrice !== '' || next.clientRetailPrice !== '');
+                const keep = (next.clientSku || next.price !== '' || next.clientSalesPrice !== '' || next.clientRetailPrice !== ''
+                    || next.perFootPrice != null || next.perFootSales != null || next.perFootRetail != null);
                 const patch = { clientPricing: keep ? [...others, next] : others };
                 if (e.basePrice !== undefined) patch['manufacturingSpecs.basePrice'] = money(e.basePrice);
                 // Fee RULE — how the amount is worked out. The PRICE stays where every price lives
@@ -1554,6 +1570,24 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                     Flow-aligned kit — empty contents are correct: the order explodes from the traverse rules (fascia, track, brackets by length). Anything added here rides ON TOP of that explosion.
                                                 </div>
                                             )}
+                                            {/* ── ADDITIONAL-FOOT PRICING, THIS CUSTOMER (Stuart 2026-08-27: "we imported
+                                                these all at once with an extra per foot price, i can't find where to
+                                                maintain that") — the kit-sheet import stamps this triple on the customer's
+                                                Client Pricing row; this is its editor. Tab 7's "Additional foot" line
+                                                bills at the NET figure for feet beyond the kit's base length. */}
+                                            <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', flexWrap: 'wrap', margin: '4px 0 14px', padding: '10px 14px', border: `1px dashed ${theme.line}`, background: '#fff' }}>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.inkSoft, flexBasis: '100%' }}>
+                                                    Additional foot — {customer?.name || 'this customer'} (beyond the kit's base length; NET is what tab 7 bills)
+                                                </span>
+                                                {[['perFootPrice', 'Net $/ft'], ['perFootSales', 'Sales $/ft'], ['perFootRetail', 'Retail $/ft']].map(([k, label]) => (
+                                                    <label key={k} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft }}>{label}</span>
+                                                        <input value={r[k] ?? ''} onChange={ev => setEdit(r.p.id, k, ev.target.value)}
+                                                            placeholder="—" style={{ width: '90px', padding: '6px 8px', border: `1px solid ${r.dirty ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '12px', textAlign: 'right' }} />
+                                                    </label>
+                                                ))}
+                                                <span style={{ fontSize: '0.78rem', color: theme.inkSoft, fontStyle: 'italic' }}>Saves with 💾 like every other price on this page.</span>
+                                            </div>
                                             {kitContentsEditor(kitEditRows, setKitEditRows)}
                                             {(() => {
                                                 // FINISH MATRIX (Stuart 2026-08-13): check off which finishes THIS kit
