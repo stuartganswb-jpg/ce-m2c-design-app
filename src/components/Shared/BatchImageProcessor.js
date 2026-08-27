@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db, storage } from '../../firebase';
-import { collection, doc, setDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
+import { collection, doc, setDoc, updateDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import ProgramPrintUploader from './ProgramPrintUploader';
 import {
@@ -9,6 +9,7 @@ import {
     fabricutCodesOfDoc, fabricutCodeForFinish, ourFinishNameOf, fabricutColorNameOf,
     END_TREATMENT_LABELS, DIA_LABELS, PROJ_LABELS,
 } from './fabricutAssetTags';
+import { IMG_GALLERY, imageUpdate, photoMayOverwrite, splitCode, normFinish } from './partImage';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -466,6 +467,41 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             uploadedBy: currentUser || 'Unknown',
             createdAt: serverTimestamp()
         }, { merge: true });
+
+        // ── THE IMPORT LANDS ON THE ITEM (Stuart 2026-08-27) ───────────────────────────────────
+        // "i just imported images for H1-75BF and H1-75GF … all imported fine but the images are
+        //  not showing up on the items in the master library."
+        //
+        // They imported correctly — into global_assets. Nothing carried them the last step onto the
+        // library part, and the one tool that did (Library → Sync Thumbnails) is a button nobody
+        // was told to press AND skipped base codes: it required a '/' in legacyErpId, so H1-75BF —
+        // a finial imported PLATE ONLY, which is exactly a base code — was excluded by construction.
+        //
+        // So the upload now stamps the picture itself, on the base doc and on the finish variant
+        // for THIS finish. photoMayOverwrite lets a photograph replace a .glb render or an
+        // inherited stand-in, and refuses to touch another photograph.
+        try {
+            const targets = [];
+            if (base && base.doc) targets.push(base.doc);
+            if (safeFinish) {
+                const want = `${String(base?.base || meta.patternId).toUpperCase()}/${normFinish(safeFinish)}`;
+                (partIndex?.list || []).forEach(p => {
+                    const k = splitCode(p.legacyErpId || p.itemId);
+                    if (k && `${k.pattern}/${k.finish}` === want) targets.push(p);
+                });
+            }
+            const seen = new Set();
+            for (const t of targets) {
+                if (!t || !t.id || seen.has(t.id)) continue;
+                seen.add(t.id);
+                if (!photoMayOverwrite(t)) continue;                  // a real photo already there
+                await updateDoc(doc(db, 'Approved_Designs', t.id), imageUpdate(thumbUrl, IMG_GALLERY));
+            }
+        } catch (e) {
+            // The asset itself is written and safe. A failed stamp is recoverable from the Library's
+            // Sync Thumbnails button, so it must never fail the upload.
+            console.warn('Image stamped to gallery but not onto the library part:', e);
+        }
     };
 
     const metaFromForm = () => ({

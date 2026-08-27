@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage, imageUpdate, IMG_GALLERY } from '../Shared/partImage';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { buildStockFinPayload } from '../Shared/stockRun';
 import { finishCodeFromErp } from '../Shared/finishingTime';
@@ -732,53 +733,57 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       );
   };
 
-  // Sync Thumbnails: match library parts to Asset Gallery images by pattern + finish and set
-  // finalImageUrl on any that are missing one. Part codes are "<pattern>/<finish>" (e.g.
-  // "H1-138BE/P01"); assets store patternId + finishId. Finishes are normalised (the gallery
-  // zero-pads — EP01 — while parts don't — EP1), so leading zeros are stripped on both sides.
-  // Re-runnable: as new images are uploaded, re-run to fill more parts.
+  // ── SYNC THUMBNAILS — pull every real photograph out of the Asset Gallery onto its part ─────
+  // Rewritten 2026-08-27 (Stuart: images imported for H1-75BF / H1-75GF "all imported fine but the
+  // images are not showing up on the items in the master library"). Two independent reasons they
+  // could not land, both fixed here:
+  //
+  //   1. IT REFUSED TO LOOK AT BASE CODES. The old matcher required a '/' in legacyErpId, so only
+  //      finish variants were ever candidates. A finial imported PLATE ONLY is tagged against the
+  //      BASE doc — H1-75BF — which this could never select. The shared matcher resolves both the
+  //      asset's own associatedParts doc-id link (how 14.5 tags) and pattern|finish.
+  //   2. IT ONLY FILLED EMPTY PARTS (`!p.finalImageUrl`). Once the .glb thumbnail sweep stamped a
+  //      render — or a variant inherited its base's picture — the part was no longer empty, and the
+  //      photograph it was standing in for could never replace it. Now provenance decides:
+  //      photoMayOverwrite lets a photograph replace a stand-in and never another photograph.
+  //
+  // Re-runnable and idempotent: nothing is written where the URL already matches.
   const handleSyncThumbnails = async () => {
-      const normFinish = (s) => String(s || '').toUpperCase().trim().replace(/^([A-Z]+)0*(\d+)$/, '$1$2');
-      const split = (erp) => {
-          const i = String(erp || '').indexOf('/');
-          return i < 0 ? null : { pattern: erp.slice(0, i).toUpperCase().trim(), finish: normFinish(erp.slice(i + 1)) };
-      };
       try {
           setSyncingThumbs({ done: 0, total: 0 });
           const snap = await getDocs(collection(db, "global_assets"));
-          const assetMap = new Map();
-          snap.docs.forEach(d => {
-              const a = d.data();
-              const img = a.thumbnailUrl || a.url || a.originalUrl;
-              if (a.patternId && img) assetMap.set(`${String(a.patternId).toUpperCase().trim()}|${normFinish(a.finishId)}`, img);
-          });
+          const index = buildGalleryIndex(snap.docs.map(d => ({ id: d.id, ...d.data() })));
 
-          // Parts in this brand that have no image yet and carry a pattern/finish code.
-          const candidates = inventory.filter(p =>
-              (p.brandId === activeBrand || (p.sharedBrands && p.sharedBrands.includes(activeBrand))) &&
-              !p.finalImageUrl && p.legacyErpId && p.legacyErpId.includes('/'));
+          const mine = inventory.filter(p =>
+              p.brandId === activeBrand || (p.sharedBrands && p.sharedBrands.includes(activeBrand)));
 
           const hits = [];
-          candidates.forEach(p => {
-              const k = split(p.legacyErpId);
-              const img = k && assetMap.get(`${k.pattern}|${k.finish}`);
-              if (img) hits.push({ id: p.id, img });
+          let blocked = 0;
+          mine.forEach(p => {
+              const img = galleryImageForPart(p, index);
+              if (!img || img === p.finalImageUrl) return;
+              // A photograph replaces a render or an inherited stand-in — never another photograph.
+              if (!photoMayOverwrite(p)) { blocked++; return; }
+              hits.push({ id: p.id, img, replacing: isAutoImage(p) });
           });
 
-          if (hits.length === 0) { setSyncingThumbs(null); return alert(`No new matches. Checked ${candidates.length} image-less part(s) against ${assetMap.size} gallery image(s).`); }
+          if (hits.length === 0) {
+              setSyncingThumbs(null);
+              return alert(`No new matches.\n\nChecked ${mine.length} part(s) against ${index.byPartId.size + index.byCode.size} gallery image link(s).${blocked ? `\n\n${blocked} part(s) already carry their own photograph — those are never overwritten.` : ''}`);
+          }
 
-          // Commit in chunks (Firestore batch cap 500).
+          const replaced = hits.filter(h => h.replacing).length;
           let done = 0;
           for (let i = 0; i < hits.length; i += 400) {
               const chunk = hits.slice(i, i + 400);
               const batch = writeBatch(db);
-              chunk.forEach(h => batch.update(doc(db, "Approved_Designs", h.id), { finalImageUrl: h.img }));
+              chunk.forEach(h => batch.update(doc(db, "Approved_Designs", h.id), imageUpdate(h.img, IMG_GALLERY)));
               await batch.commit();
               done += chunk.length;
               setSyncingThumbs({ done, total: hits.length });
           }
           setSyncingThumbs(null);
-          alert(`✅ Synced ${hits.length} thumbnail(s) from the Asset Gallery (of ${candidates.length} image-less parts).`);
+          alert(`✅ ${hits.length} part(s) took their Asset Gallery photograph.\n\n• ${hits.length - replaced} had no picture\n• ${replaced} replaced a .glb render or inherited stand-in${blocked ? `\n• ${blocked} already had their own photo — untouched` : ''}`);
       } catch (e) { console.error(e); setSyncingThumbs(null); alert("Sync failed: " + (e.message || e)); }
   };
 

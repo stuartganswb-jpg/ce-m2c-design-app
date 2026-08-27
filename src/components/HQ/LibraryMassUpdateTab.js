@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { db, storage } from '../../firebase';
+import { buildGalleryIndex, galleryImageForPart, imageUpdate, IMG_GLB_RENDER, IMG_BASE_INHERIT } from '../Shared/partImage';
 import { mergeWindowConfig } from './systemWindows';
 import { fixMojibake } from '../Shared/textRepair';
 import { isStreamVariantCode } from '../Shared/finishingTime';
@@ -271,16 +272,16 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             // ── THE GALLERY OVERRULES, EVERY TIME (Stuart 2026-08-27) ─────────────────────────
             // A part with a real photograph (global_assets.associatedParts) is never re-rendered
             // and never overwritten — the render is the stand-in "till the photos arrive".
-            const gallery = new Map();
+            // Shared matcher (2026-08-27): resolves BOTH the associatedParts doc-id link and
+            // pattern|finish, so this and the Library's Sync Thumbnails cover the same parts. They
+            // used to join assets to parts by different keys and therefore disagreed about which
+            // parts already had a photograph.
+            let gIndex = { byPartId: new Map(), byCode: new Map() };
             try {
                 const gSnap = await getDocs(collection(db, 'global_assets'));
-                gSnap.docs.forEach(d => {
-                    const a = d.data();
-                    const url = a.thumbnailUrl || a.url || a.originalUrl || null;
-                    if (url && Array.isArray(a.associatedParts)) a.associatedParts.forEach(pid => { if (!gallery.has(pid)) gallery.set(pid, url); });
-                });
+                gIndex = buildGalleryIndex(gSnap.docs.map(d => ({ id: d.id, ...d.data() })));
             } catch (e) { /* gallery unreadable → renders still fill the blanks */ }
-            const photoOf = (p) => p?.finalImageUrl || newUrls.get(p?.id) || gallery.get(p?.id) || null;
+            const photoOf = (p) => p?.finalImageUrl || newUrls.get(p?.id) || galleryImageForPart(p, gIndex) || null;
 
             for (const asm of asms) {
                 const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', asm.id)));
@@ -305,7 +306,11 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                         const sref = ref(storage, `dynamic_assets/auto_thumbs/${partDocId}_${Date.now()}.png`);
                         await uploadBytes(sref, blob);
                         const dl = await getDownloadURL(sref);
-                        await updateDoc(doc(db, 'Approved_Designs', partDocId), { finalImageUrl: dl });
+                        // Stamped as a STAND-IN, not a photograph — so a real image imported in
+                        // 14.5 later overwrites it (Stuart: "actual images are to always over ride
+                        // and rule"). Before provenance existed this write was indistinguishable
+                        // from an uploaded photo and permanently blocked the real one.
+                        await updateDoc(doc(db, 'Approved_Designs', partDocId), imageUpdate(dl, IMG_GLB_RENDER));
                         newUrls.set(partDocId, dl);
                         made++;
                         setBulkTool({ running: 'thumbs', msg: `${made} thumbnail(s) saved…` });
@@ -335,7 +340,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             }
             for (let i = 0; i < vBatchDocs.length; i += 400) {
                 const batch = writeBatch(db);
-                vBatchDocs.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), { finalImageUrl: v.url }));
+                vBatchDocs.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), imageUpdate(v.url, IMG_BASE_INHERIT)));
                 await batch.commit();
                 variants = Math.min(i + 400, vBatchDocs.length);
                 setBulkTool({ running: 'thumbs', msg: `Variants filled: ${variants} / ${vBatchDocs.length}…` });
