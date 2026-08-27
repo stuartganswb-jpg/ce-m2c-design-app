@@ -177,7 +177,11 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
         // PO-alignment id) and the vendor purchase price never actually imported, and PO vendor
         // matching lived on names alone (Christie 2026-08-27: a NetSuite vendor RENAME broke PO
         // creation, precisely because the id fallback had no data).
-        const probeFrom = `FROM item LEFT JOIN ItemVendor ON ItemVendor.item = item.id LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id WHERE item.id = 0`;
+        // ROWNUM <= 1, not item.id = 0: a zero-row probe only PARSES the columns — a column can
+        // parse clean and still 500 when NetSuite executes it against real rows (2026-08-28: the
+        // H2-05 sync failed twice on exactly that after the probe waved all 16 columns through).
+        // One real row makes the probe an execution test, still tiny.
+        const probeFrom = `FROM item LEFT JOIN ItemVendor ON ItemVendor.item = item.id LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id WHERE ROWNUM <= 1`;
         try {
             await executeSuiteQL(`SELECT ${sel(candidates)} ${probeFrom}`);
             return { sql: candidates.map(c => `${c.expr} AS ${c.alias},`).join('\n                        '), aliases: new Set(candidates.map(c => c.alias)) };
@@ -675,7 +679,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             //     produced NO PO at all (Stuart 2026-08-15: "unable to create PO in the app").
             //   • ItemVendor.purchaseprice = what the vendor actually charges. PO lines were rated
             //     from `averagecost`, which is a costing artefact, not a price anyone agreed to.
-            const extraCols = await probeColumns([
+            let extraCols = await probeColumns([
                 { expr: 'ItemVendor.vendor', alias: 'vendor_internal_id' },
                 { expr: 'ItemVendor.purchaseprice', alias: 'vendor_purchase_price' },
                 { expr: 'item.custitem_sourcing_both', alias: 'sourcing_both' },
@@ -784,7 +788,20 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     ORDER BY item.id ASC
                 `;
 
-                const result = await executeSuiteQL(q);
+                // A PROBED COLUMN MUST NEVER BRICK THE SYNC (2026-08-28: two H2-05 runs died on a
+                // NetSuite 500 that only appeared with the optional columns in the query). If the
+                // batch fails and optional columns are in play, drop them and retry the same page —
+                // the core sync always proceeds; only the field-sheet extras skip this run.
+                let result;
+                try { result = await executeSuiteQL(q); }
+                catch (qErr) {
+                    if (extraCols.aliases.size) {
+                        addLog(`⚠ NetSuite refused the item query WITH the optional field-sheet columns (${String(qErr.message || qErr).slice(0, 160)}…). Retrying WITHOUT them — vendor id/price and the other sheet fields will not refresh this run.`, 'warn');
+                        extraCols = { sql: '', aliases: new Set() };
+                        continue;
+                    }
+                    throw qErr;
+                }
                 const batch = result.items || [];
                 allRawRecords = allRawRecords.concat(batch);
 
