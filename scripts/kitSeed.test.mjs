@@ -138,6 +138,14 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
     // the money for every per-foot part; the track is shop work and bills nothing.
     const fascia = r.lines.find(l => l.partId === 'H1-2TRVF');
     eq('the fascia carries the WHOLE additional-foot charge', [fascia.billedFeet, fascia.total], [6, 90]);
+
+    // ── ONE SOURCE OF TRUTH (Stuart 2026-08-27) ──────────────────────────────────────────────
+    // When the kit's Client Pricing row carries a perFootPrice, THAT is the additional-foot rate —
+    // the same figure tab 7 bills — not the flow's per-foot item rates. 6 extra ft × $22 = $132.
+    const r2 = applyKitPricing(priced, { kitCode: 'H1-2TRV-4/EP', kitPrice: 318, baseFeet: 4, perFootPrice: 22 });
+    const fascia2 = r2.lines.find(l => l.partId === 'H1-2TRVF');
+    eq('⚠ the row\'s perFootPrice IS the additional-foot rate (tab 7\'s source)', [fascia2.billedFeet, fascia2.total], [6, 132]);
+    eq('…and the track still bills nothing', r2.lines.find(l => l.partId === 'H1-2TRVT').total, 0);
     ok('and says so on the line', /6 ft above the 4 ft kit/.test(fascia.detail));
     eq('THE REAL LENGTH IS UNTOUCHED — the shop still cuts 10 ft', [fascia.feet, fascia.cutLength], [10, 120]);
 

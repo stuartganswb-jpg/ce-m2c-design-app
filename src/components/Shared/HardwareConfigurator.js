@@ -13,6 +13,7 @@ import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAl
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
+import { findClientPriceRow, customerKeys } from './clientPricing';
 import { handoffItem, customerLines } from './hardwareHandoff';
 import { finishLabelOf } from './finishLabel';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
@@ -651,13 +652,18 @@ function HardwareConfiguratorInner({
     const kitBill = useMemo(() => {
         if (!kitSource) return null;
         const kp = priceChoice({ partId: kitSource.code }, kitSource.record, priceCtx);
+        // The ADDITIONAL-FOOT rate, from the same Client Pricing row tab 7 bills from — one
+        // source of truth (Stuart 2026-08-27). Matched by the same key rule every row lookup
+        // uses; absent → applyKitPricing falls back to the flow's own per-foot item rates.
+        const kitRow = findClientPriceRow(kitSource.record?.clientPricing, customerKeys(customerId, customer));
         return {
             kitCode: kitSource.code, kitName: kitSource.name, kitPrice: kp?.price || 0,
             baseFeet: kitSource.baseFeet,
+            perFootPrice: kitRow?.perFootPrice,
             // THEIR number, resolved by the same rule every other line's alias is.
             clientSku: kp?.sku || kp?.aliasCode || '',
         };
-    }, [kitSource, priceCtx]);
+    }, [kitSource, priceCtx, customerId, customer]);
     const priced = useMemo(() => {
         const p = priceConfiguration(resolved, priceCtx);
         return kitBill ? applyKitPricing(p, kitBill) : p;

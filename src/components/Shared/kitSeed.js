@@ -197,7 +197,7 @@ const isPerFootLine = (l) => !!l.perFoot;
  *
  * @returns {{lines, total}} in the same shape priceConfiguration returns.
  */
-export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, clientSku } = {}) {
+export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, clientSku, perFootPrice } = {}) {
     if (!priced || !kitCode) return priced;
     const base = Number(baseFeet) > 0 ? Number(baseFeet) : 4;
     const price = Number(kitPrice) > 0 ? Number(kitPrice) : 0;
@@ -213,7 +213,19 @@ export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, 
     const perFoot = (priced.lines || []).filter(isPerFootLine);
     const billedOf = (l) => Math.max(0, (Number(l.feet) || 0) - base);
     const carrier = perFoot.find(l => U(l.role) === 'FASCIA') || perFoot[0] || null;
-    const extraMoney = perFoot.reduce((sum, l) => sum + (Number(l.unit) || 0) * billedOf(l), 0);
+    // ── ONE SOURCE OF TRUTH FOR THE ADDITIONAL FOOT (Stuart 2026-08-27: "def. want one source
+    // of truth for everything we do. Please point both to same") ─────────────────────────────
+    // Tab 7 bills extra feet at the kit row's perFootPrice (the customer's Client Pricing row,
+    // stamped by the kit-sheet import, edited in the 4.6 open-kit panel). CPQ used to sum the
+    // FLOW's own per-foot item rates instead — two numbers that could drift apart and quote the
+    // same order differently on the two tabs. When the row carries a rate, it IS the rate here
+    // too: additional-foot money = perFootPrice × feet beyond the kit, measured on the carrier
+    // (the fascia — the length the customer understands). A kit whose row has no per-foot rate
+    // falls back to the flow's item rates exactly as before.
+    const rowRate = Number(perFootPrice);
+    const extraMoney = (Number.isFinite(rowRate) && rowRate > 0 && carrier)
+        ? rowRate * billedOf(carrier)
+        : perFoot.reduce((sum, l) => sum + (Number(l.unit) || 0) * billedOf(l), 0);
 
     const rest = (priced.lines || []).map(l => {
         if (!isPerFootLine(l)) return l;
