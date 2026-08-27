@@ -992,7 +992,11 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 const payload = {
                     legacyErpId: item.itemid || item.id,
                     netSuiteInternalId: item.id,
-                    itemName: item.displayname || item.itemid,
+                    // ⚠ THE NAME IS APP-OWNED ONCE IT EXISTS (Stuart 2026-08-27). The bulk "strip
+                    // '- Mill Finish'" rename cleans descriptions NetSuite still carries verbatim —
+                    // re-stamping displayname on every sync would quietly undo it. A NEW record
+                    // takes the NetSuite name; an existing record keeps whatever the app says.
+                    ...(existingAppRecord?.itemName ? {} : { itemName: item.displayname || item.itemid }),
                     partClass: partClass,
                     routingType: routingType,
                     updatedAt: new Date().toISOString()

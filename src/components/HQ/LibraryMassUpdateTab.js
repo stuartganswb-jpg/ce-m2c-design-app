@@ -6,8 +6,9 @@ import { fixMojibake } from '../Shared/textRepair';
 import { isStreamVariantCode } from '../Shared/finishingTime';
 import { packSizeOf, rushFeeAmountOf, rushFeeLabelOf } from '../Shared/quickShipUom';
 import { SOURCING, sourcingPatch } from '../Shared/sourcing';
-import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where } from "firebase/firestore";
-import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { collection, onSnapshot, query, writeBatch, doc, setDoc, deleteDoc, updateDoc, where, getDocs } from "firebase/firestore";
+import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from "firebase/storage";
+import { renderThumbnails } from '../Shared/hardwareThumbs';
 
 const AVAILABLE_BRANDS = [
   { id: 'm2c', name: 'M2C Studio' },
@@ -220,6 +221,86 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         });
         return () => unsub();
     }, [activeBrand]);
+
+    // ── BULK TOOLS (Stuart 2026-08-27) ──────────────────────────────────────────────────────
+    const [bulkTool, setBulkTool] = useState({ running: '', msg: '' });
+
+    // 1. STRIP " - Mill Finish" from every item name — "put in place before the system was fully
+    //    built and really does not make sense to customers, save the descriptions before the -".
+    //    Only a TRAILING "- Mill Finish" is touched; everything before the dash is kept verbatim.
+    //    NetSuite names are NOT written back — and the item sync no longer overwrites an existing
+    //    app name, so the cleaned names stick.
+    const MILL_RX = /\s*[-–—]\s*mill\s*finish\s*$/i;
+    const stripMillFinish = async () => {
+        const targets = inventory.filter(p => MILL_RX.test(String(p.itemName || '')));
+        if (!targets.length) return alert('No item names end in "- Mill Finish" on this brand.');
+        const sample = targets.slice(0, 3).map(p => `  ${p.itemName}\n    → ${String(p.itemName).replace(MILL_RX, '')}`).join('\n');
+        if (!window.confirm(`Strip " - Mill Finish" from ${targets.length} item name(s) on ${activeBrand.toUpperCase()}?\n\n${sample}\n\nText before the dash is kept exactly. NetSuite names are untouched.`)) return;
+        setBulkTool({ running: 'mill', msg: `Renaming ${targets.length} item(s)…` });
+        try {
+            for (let i = 0; i < targets.length; i += 400) {
+                const batch = writeBatch(db);
+                targets.slice(i, i + 400).forEach(p => {
+                    batch.update(doc(db, 'Approved_Designs', p.id), { itemName: String(p.itemName).replace(MILL_RX, '').trim() });
+                });
+                await batch.commit();
+                setBulkTool({ running: 'mill', msg: `Renamed ${Math.min(i + 400, targets.length)} / ${targets.length}…` });
+            }
+            alert(`✅ Stripped " - Mill Finish" from ${targets.length} item name(s).`);
+        } catch (e) { alert('Rename failed: ' + (e?.message || e)); }
+        finally { setBulkTool({ running: '', msg: '' }); }
+    };
+
+    // 2. ITEM THUMBNAILS FROM THE ASSEMBLY .GLBs — "nearly 90% of this collection should show its
+    //    thumbnail and they do not." Every pinned part already owns nodes in a mainline assembly's
+    //    working GLB, so its thumbnail is that geometry photographed once (the SAME renderer/queue
+    //    the configurator uses — Shared/hardwareThumbs), uploaded, and stamped as finalImageUrl.
+    //    Parts that already have an image are never touched.
+    const generateItemThumbs = async () => {
+        const asms = inventory.filter(a => a.manufacturingSpecs?.cadUrl && (a.routingType === 'MAIN' || a.recordType === 'PRODUCT'));
+        if (!asms.length) return alert('No mainline assemblies with a working GLB on this brand.');
+        if (!window.confirm(`Generate missing item thumbnails from ${asms.length} assembly GLB(s)?\n\n${asms.map(a => `  • ${a.itemName || a.itemId || a.id}`).join('\n')}\n\nOnly items WITHOUT an image are photographed (384×288, from the item's own pinned nodes).`)) return;
+        const byId = new Map(inventory.map(p => [p.id, p]));
+        const byCode = new Map();
+        inventory.forEach(p => { [p.legacyErpId, p.itemId].forEach(k => { if (k) byCode.set(String(k).toUpperCase(), p); }); });
+        const done = new Set();
+        let made = 0, had = 0, noNodes = 0, failed = 0;
+        setBulkTool({ running: 'thumbs', msg: 'Scanning pins…' });
+        try {
+            for (const asm of asms) {
+                const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', asm.id)));
+                const groups = new Map();
+                pinSnap.docs.forEach(d => {
+                    const pin = d.data();
+                    const part = byId.get(pin.partId) || byCode.get(String(pin.partId || '').toUpperCase());
+                    if (!part || done.has(part.id) || groups.has(part.id)) return;
+                    if (part.finalImageUrl) { done.add(part.id); had++; return; }
+                    const nodes = String(pin.choiceNode || pin.targetNode || '').split(',').map(s => s.trim()).filter(Boolean);
+                    if (!nodes.length) { noNodes++; return; }
+                    groups.set(part.id, { key: part.id, nodes });
+                });
+                if (!groups.size) continue;
+                setBulkTool({ running: 'thumbs', msg: `${asm.itemName || asm.id}: photographing ${groups.size} part(s)…` });
+                const uploads = [];
+                await renderThumbnails(asm.manufacturingSpecs.cadUrl, [...groups.values()], (partDocId, dataUrl) => {
+                    done.add(partDocId);
+                    if (!dataUrl) { failed++; return; }
+                    uploads.push((async () => {
+                        const blob = await (await fetch(dataUrl)).blob();
+                        const sref = ref(storage, `dynamic_assets/auto_thumbs/${partDocId}_${Date.now()}.png`);
+                        await uploadBytes(sref, blob);
+                        const dl = await getDownloadURL(sref);
+                        await updateDoc(doc(db, 'Approved_Designs', partDocId), { finalImageUrl: dl });
+                        made++;
+                        setBulkTool({ running: 'thumbs', msg: `${made} thumbnail(s) saved…` });
+                    })().catch(() => { failed++; }));
+                }, { w: 384, h: 288 });
+                await Promise.all(uploads);
+            }
+            alert(`🖼 Item thumbnails from assembly GLBs:\n• ${made} created\n• ${had} already had an image (untouched)\n• ${noNodes} pin(s) carry no node to photograph\n• ${failed} render/upload failure(s)`);
+        } catch (e) { alert('Thumbnail run failed: ' + (e?.message || e)); }
+        finally { setBulkTool({ running: '', msg: '' }); }
+    };
 
     useEffect(() => {
         const unsubLists = onSnapshot(doc(db, "system", "master_lists"), (docSnap) => {
@@ -1109,6 +1190,26 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 <div style={{ textAlign: 'right' }}>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '14px', color: theme.brass, fontWeight: 'bold' }}>{selectedIds.size} Records Selected</div>
                 </div>
+            </div>
+
+            {/* ── ONE-CLICK BULK TOOLS (Stuart 2026-08-27) ────────────────────────────────── */}
+            <div style={{ background: '#fff', border: `1px solid var(--brass)`, padding: '20px 24px', borderRadius: '2px', display: 'flex', gap: '18px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: '260px' }}>
+                    <h3 style={{ margin: '0 0 6px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: theme.ink }}>Bulk Tools</h3>
+                    <span style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: theme.inkSoft }}>
+                        {bulkTool.msg || 'One-click sweeps over this brand’s whole library. Each previews its count and asks before writing.'}
+                    </span>
+                </div>
+                <button onClick={stripMillFinish} disabled={!!bulkTool.running}
+                    title={'Removes a TRAILING "- Mill Finish" from every item name, keeping the text before the dash exactly. NetSuite names untouched; the item sync no longer overwrites app names.'}
+                    style={{ padding: '12px 20px', background: bulkTool.running === 'mill' ? 'var(--brass)' : 'var(--paper-2)', color: bulkTool.running === 'mill' ? '#fff' : theme.ink, border: `1px solid ${theme.line}`, cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                    ✂ Strip “- Mill Finish” from names
+                </button>
+                <button onClick={generateItemThumbs} disabled={!!bulkTool.running}
+                    title={'For every pinned item WITHOUT an image: photograph its own nodes from the mainline assembly .glb (the configurator’s renderer) and save it as the item thumbnail.'}
+                    style={{ padding: '12px 20px', background: bulkTool.running === 'thumbs' ? 'var(--brass)' : 'var(--ink)', color: '#fff', border: 'none', cursor: bulkTool.running ? 'not-allowed' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                    🖼 Generate missing item thumbnails
+                </button>
             </div>
 
             <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '24px', marginBottom: '10px', borderRadius: '2px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

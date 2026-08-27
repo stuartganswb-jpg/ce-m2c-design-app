@@ -31,7 +31,9 @@ const CACHE = new Map();          // "url::nodes" → dataURL (or null when noth
 const SCENES = new Map();         // url → Promise<THREE.Group>
 const W = 128, H = 96;
 
-const keyOf = (url, nodes) => `${url}::${[...nodes].map(n => String(n).toLowerCase()).sort().join('|')}`;
+// Size rides the key ONLY when custom, so the configurator's existing cache entries stay valid.
+const keyOf = (url, nodes, w = W, h = H) =>
+    `${url}::${[...nodes].map(n => String(n).toLowerCase()).sort().join('|')}${(w !== W || h !== H) ? `::${w}x${h}` : ''}`;
 
 function loadScene(url) {
     if (SCENES.has(url)) return SCENES.get(url);
@@ -96,27 +98,31 @@ let _queue = Promise.resolve();
  * @param groups  [{ key, nodes: [name…] }]
  * @param onEach  (key, dataUrl) — called as each finishes, so the UI can fill in progressively
  */
-export function renderThumbnails(url, groups, onEach) {
+export function renderThumbnails(url, groups, onEach, opts = {}) {
+    const w = opts.w || W, h = opts.h || H;
     // Anything already photographed is handed back immediately; only the rest costs anything.
     groups.forEach(g => {
-        const k = keyOf(url, g.nodes || []);
+        const k = keyOf(url, g.nodes || [], w, h);
         if (CACHE.has(k) && typeof onEach === 'function') onEach(g.key, CACHE.get(k));
     });
-    const pending = groups.filter(g => g.nodes?.length && !CACHE.has(keyOf(url, g.nodes)));
+    const pending = groups.filter(g => g.nodes?.length && !CACHE.has(keyOf(url, g.nodes, w, h)));
     if (!url || !pending.length) return _queue;
     _queue = _queue
-        .then(() => runBatch(url, pending, onEach))
+        .then(() => runBatch(url, pending, onEach, w, h))
         .catch(e => console.warn('Thumbnail batch failed:', e));
     return _queue;
 }
 
-async function runBatch(url, groups, onEach) {
+async function runBatch(url, groups, onEach, w = W, h = H) {
     // A batch queued behind another may find its work already done — re-check before paying.
-    const todo = groups.filter(g => !CACHE.has(keyOf(url, g.nodes)));
+    const todo = groups.filter(g => !CACHE.has(keyOf(url, g.nodes, w, h)));
     if (!todo.length) return;
     try {
         const scene = await loadScene(url);
         let renderer = getRenderer();
+        // Every batch states its own size: the library tools photograph at card size (384×288)
+        // while the configurator keeps its light 128×96 — one renderer serves both.
+        renderer.setSize(w, h, false);
 
         const stage = new THREE.Scene();
         stage.add(new THREE.AmbientLight(0xffffff, 2.1));
@@ -127,7 +133,7 @@ async function runBatch(url, groups, onEach) {
         const meshes = [];
         scene.traverse(m => { if (m.isMesh) meshes.push(m); });
         const wasVisible = meshes.map(m => m.visible);
-        const cam = new THREE.PerspectiveCamera(28, W / H, 0.01, 5000);
+        const cam = new THREE.PerspectiveCamera(28, w / h, 0.01, 5000);
 
         for (const g of todo) {
             const wanted = new Set(g.nodes.map(n => String(n).toLowerCase()));
@@ -157,6 +163,7 @@ async function runBatch(url, groups, onEach) {
                     // leave this one uncached so a later visit retries it.
                     if (renderer.getContext().isContextLost()) {
                         renderer.dispose(); _renderer = null; renderer = getRenderer();
+                        renderer.setSize(w, h, false);   // the fresh context takes this batch's size
                     }
                     renderer.render(stage, cam);
                     if (renderer.getContext().isContextLost()) contextDied = true;
@@ -164,7 +171,7 @@ async function runBatch(url, groups, onEach) {
                 }
             }
             if (!contextDied) {
-                CACHE.set(keyOf(url, g.nodes), data);
+                CACHE.set(keyOf(url, g.nodes, w, h), data);
                 if (typeof onEach === 'function') onEach(g.key, data);
             }
             // Give the browser the thread back between frames. Twenty options in a slot must never
