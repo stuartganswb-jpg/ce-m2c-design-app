@@ -242,6 +242,30 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return [...seen.values()].sort((a, b) => a.localeCompare(b));
   }, [libraryParts]);
 
+  // The 4.6 rows stamp the CRM record id, which reads as CUST-4572 — resolve names so the picker
+  // (and the sheet subtitle) say who, not which. Fetched once per distinct id, only when the
+  // Customer #s edition is opened.
+  const [custNames, setCustNames] = useState({});
+  useEffect(() => {
+    if (edition !== 'CUST') return;
+    let dead = false;
+    (async () => {
+      const missing = custOptions.filter(k => /^CUST-/i.test(k) && !custNames[k.toUpperCase()]);
+      if (!missing.length) return;
+      const out = {};
+      await Promise.all(missing.map(async (k) => {
+        try {
+          const s = await getDoc(doc(db, 'crm_records', k));
+          const n = s.exists() ? (s.data().companyName || s.data().name || '') : '';
+          if (n) out[k.toUpperCase()] = n;
+        } catch (e) { /* unreadable record — the id stays the label */ }
+      }));
+      if (!dead && Object.keys(out).length) setCustNames(m => ({ ...m, ...out }));
+    })();
+    return () => { dead = true; };
+  }, [edition, custOptions, custNames]);
+  const custLabel = useCallback((k) => custNames[String(k).toUpperCase()] ? `${custNames[String(k).toUpperCase()]} (${k})` : k, [custNames]);
+
   const custCodeFor = useCallback((partName) => {
     if (!custKey) return null;
     const part = (libraryParts || []).find(p => p.legacyErpId === partName || p.itemId === partName || p.id === partName);
@@ -259,7 +283,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
 
   // What the subtitle calls this printing — the reader must know whose numbers they hold.
   const editionLabel = edition === 'FAB' ? 'Fabricut edition'
-    : edition === 'CUST' ? `${custKey || 'customer'} part numbers` : 'H1 edition';
+    : edition === 'CUST' ? `${custKey ? custLabel(custKey) : 'customer'} part numbers` : 'H1 edition';
 
   // ── EVERY PRINTED CODE FOLLOWS THE EDITION (Stuart 2026-08-27: "the fabricut codes print on
   // the right but not for the items on the left") ─────────────────────────────────────────────
@@ -1715,7 +1739,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
             {edition === 'CUST' && (
               <select value={custKey} onChange={e => setCustKey(e.target.value)} style={{ padding: '5px', fontSize: '0.8rem', maxWidth: '190px' }}>
                 <option value="">— pick customer —</option>
-                {custOptions.map(k => <option key={k} value={k}>{k}</option>)}
+                {custOptions.map(k => <option key={k} value={k}>{custLabel(k)}</option>)}
               </select>
             )}
           </div>
