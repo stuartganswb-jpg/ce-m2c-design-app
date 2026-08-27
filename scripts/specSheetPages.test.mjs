@@ -351,5 +351,34 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
         !dp.filter(p => p.subject?.partId !== 'CE-FEE-77').some(p => rodIds(p).includes('P-RB85RTN')));
 }
 
+// ── A TIERED ARM DOES NOT FAN ACROSS THE PLATES' PROJECTIONS (Stuart 2026-08-27, H1-75D) ─────
+// H1-75D was tagged CORRECTLY (FRONT:6.5 / BACK:3.25, same pattern as H1-138D) — the four
+// phantom D page-groups came from the PLATES: H1-75's backplates carry flat proj tags, keeping
+// the projection axis alive under DOUBLE, and the projection-less arm was handed one page per
+// plate depth. A projTiers arm answers projection itself, so its pages build from the leaf
+// WITHOUT the proj answer: one page group, plates unfanned.
+{
+    const cs = [
+        { id: 'ROD-F', partId: 'P75F', role: 'ROD', rodKind: 'SOLID', tier: 'FRONT', nodes: ['rf'] },
+        { id: 'ROD-B', partId: 'P75B', role: 'ROD', rodKind: 'SOLID', tier: 'BACK', setup: 'DOUBLE', proj: 'FRONT:6.5, BACK:3.25', nodes: ['rb'] },
+        { id: 'ARM-D75', partId: 'H1-75D', role: 'BRACKET', position: 'CENTER', setup: 'DOUBLE', proj: 'FRONT:6.5, BACK:3.25', nodes: ['d75'] },
+        { id: 'ARM-S75', partId: 'H1-75DS', role: 'BRACKET', position: 'CENTER', setup: 'SINGLE', proj: '3.625', nodes: ['s75'] },
+        { id: 'ARM-E75', partId: 'H1-75DE', role: 'BRACKET', position: 'CENTER', setup: 'SINGLE', proj: '4.625', nodes: ['e75'] },
+        // The troublemakers: proj-tagged plates that keep the axis alive under DOUBLE.
+        { id: 'PL-A75', partId: 'H1-75BP-A', role: 'BACKPLATE', position: 'CENTER', proj: '3.625', nodes: ['pa75'] },
+        { id: 'PL-B75', partId: 'H1-75BP-B', role: 'BACKPLATE', position: 'CENTER', proj: '4.625', nodes: ['pb75'] },
+    ];
+    const pages = specPages({ choices: cs });
+    const dPages = pages.filter(p => p.subject?.partId === 'H1-75D');
+    ok('the tiered arm gets pages at all', dPages.length > 0);
+    ok('⚠ its pages carry NO projection answer — the arm answers projection itself',
+        dPages.every(p => p.answers.proj === undefined));
+    eq('and ONE page group, not one per plate depth',
+        new Set(dPages.map(p => `${p.plateFamily}|${p.part || ''}`)).size, dPages.length);
+    // Flat single arms keep the old behavior: their leaf carries the depth.
+    const sPages = pages.filter(p => p.subject?.partId === 'H1-75DS');
+    ok('a flat single arm still narrows by its projection', sPages.every(p => p.answers.proj !== undefined));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

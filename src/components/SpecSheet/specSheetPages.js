@@ -237,7 +237,22 @@ export function specPages({ choices, answers = {} }) {
             // once the rtn-only swap put wall plates on a ceiling page. The engine's own pairing
             // comment already states the rule: a return always meets the wall.
             if (kind === 'RETURN' && U(leaf.mount) === 'CEILING') continue;
-            const rod = rodForArm(offered, subject);
+            // ── A TIERED ARM ANSWERS PROJECTION ITSELF (Stuart 2026-08-27, H1-75D) ──────────
+            // "i do not see any wrong tags on H1-75D … tagged with front and rear projection just
+            // like in H1-138." He is right — the pin is correct. The fan-out came from the LEAF:
+            // H1-75's backplates carry flat proj tags, so the projection axis stays alive under
+            // DOUBLE and handed the (projection-less) double arm one page per plate depth — four
+            // near-identical D page groups. The axis doctrine already says a projTiers bracket IS
+            // the projection question, so its pages are built from the leaf WITHOUT the proj
+            // answer: plates unfiltered by leaf depth (pairing rules still apply), one page set,
+            // which is exactly how H1-138D — whose plates carry no proj tags — always behaved.
+            const tiered = !!(subject.projTiers && Object.keys(subject.projTiers).length);
+            const leafFor = (tiered && leaf.proj !== undefined)
+                ? Object.fromEntries(Object.entries(leaf).filter(([k]) => k !== 'proj'))
+                : leaf;
+            const offeredFor = leafFor === leaf ? offered : { choices: judge(norm, leafFor).in };
+            const pageLabel = leafFor === leaf ? label : narrowingLabel(norm, leafFor);
+            const rod = rodForArm(offeredFor, subject);
             // ── A DOUBLE HAS TWO POLES AND THE SHEET SHOWS BOTH ─────────────────────────────
             // Stuart 2026-08-23: "on doubles you should show both poles in their place not just
             // one." rodForArm answers WHICH rod this arm holds — the tier question, and still the
@@ -257,9 +272,9 @@ export function specPages({ choices, answers = {} }) {
             // the leaf does not narrow. The configurator pairs the rear rod to the CHOSEN bracket
             // by its cut; backRodForArm applies that same rule here.
             const rods = U(leaf.setup) === 'DOUBLE'
-                ? [rod, backRodForArm(offered, subject, rod, { forReturn: kind === 'RETURN' })].filter(Boolean)
+                ? [rod, backRodForArm(offeredFor, subject, rod, { forReturn: kind === 'RETURN' })].filter(Boolean)
                 : (rod ? [rod] : []);
-            const { plates: plates0, rings: rings0, suppressedBy, reason } = pageSlots({ choices: norm, answers: leaf, subject, rod });
+            const { plates: plates0, rings: rings0, suppressedBy, reason } = pageSlots({ choices: norm, answers: leafFor, subject, rod });
             // ── A RETURN DRAWS THE RETURN PLATES (Stuart 2026-08-23b) ────────────────────────
             // "on the miter and french returns, you are currently showing them with ceiling
             //  backplates and they need to be shown with the backplates marked rtn-only." The
@@ -275,7 +290,7 @@ export function specPages({ choices, answers = {} }) {
             // which copies belong at this leaf; the swap picks among those.
             const plates = kind !== 'RETURN' ? plates0 : plates0.map(p => {
                 if (p.returnOnly) return p;
-                const twin = (offered.choices || []).find(c => c.returnOnly && U(c.role) === 'BACKPLATE'
+                const twin = (offeredFor.choices || []).find(c => c.returnOnly && U(c.role) === 'BACKPLATE'
                     && U(c.partId) === U(p.partId)
                     && (!c.position || !p.position || c.position === p.position));
                 return twin || p;
@@ -316,7 +331,7 @@ export function specPages({ choices, answers = {} }) {
                 // collapsing a subject tagged at several depths into its first leaf's page; one
                 // page per projection keeps each leaf's own plates and its own projection figure
                 // (the plate depth and the dim both read the LEAF's tag).
-                String(leaf.proj ?? ''),
+                String(leafFor.proj ?? ''),
                 U(rod?.partId || ''),
                 fam.plates.map(p => U(p.partId || p.id)).sort().join(','),
                 rings.map(r => U(r.partId || r.id)).sort().join(','),
@@ -325,14 +340,14 @@ export function specPages({ choices, answers = {} }) {
             seen.add(sig);
             pages.push({
                 key: `${U(subject.partId || subject.id)}__${U(fam.stem)}__${pages.length}`,
-                kind, answers: leaf, label, subject, rod, rods, plates: fam.plates, plateFamily: fam.stem,
+                kind, answers: leafFor, label: pageLabel, subject, rod, rods, plates: fam.plates, plateFamily: fam.stem,
                 part: fam.part || '',
                 rings, suppressedBy, reason,
                 isTraverse: isTrav,
                 // ⚠ RIDERS ARE ONLY THERE ONCE THE ROD IS. `ridersFor` is deliberately additive —
                 // nothing chosen, nothing rides — so asking with no selection returns nothing and a
                 // traverse page would draw an empty track. The page's own rod is what carries them.
-                riders: rod ? ridersFor(norm, leaf, [rod.id]) : [],
+                riders: rod ? ridersFor(norm, leafFor, [rod.id]) : [],
             });
             }
         }
