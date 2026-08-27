@@ -5,7 +5,7 @@
 // (hole spacing, ring height from top hole) is drawn with the manual dimension tool and
 // saved to the assembly doc (specSheetOverrides). Wall-mount styles carry bulk-entered
 // dims in system/spec_sheet_config. Editions: H1 (internal) or Fabricut customer codes.
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { fabricutCodeOf } from '../Shared/priceLevels';
@@ -35,7 +35,10 @@ const FS_LABEL_ROOM = 14;
 // does not shrink with the page scale, so on any reduced sheet neighbouring ids collide whatever
 // the geometric spread is. Alternate ids drop one line further (their leaders already bridge the
 // gap), which is his own fix, re-applied now that each id is centred under its own ring.
-const RING_LABEL_DROP = 34;
+// 34 → 48 (Stuart 2026-08-27: "space everything out so it is clearly legible"): the ring DROP
+// measurement now sits under its own measure line (dim `below`), so the codes start a clear lane
+// further down instead of sharing the band with the numbers.
+const RING_LABEL_DROP = 48;
 // Three levels, not two (Stuart 2026-08-23b: "please stagger further as the text is
 // overlapping") — with two, alternate ids sat one thin line apart and long codes still touched.
 // On three levels a code's same-level neighbour is three ring pitches away.
@@ -97,7 +100,14 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     () => (basePins || []).some(p => p && p.choiceNode && !p.isHiddenPart && p.partId),
     [basePins]);
 
-  const [edition, setEdition] = useState('H1'); // 'H1' | 'FAB'
+  const [edition, setEdition] = useState('H1'); // 'H1' | 'FAB' | 'CUST'
+  // ── THE CUSTOMER'S OWN PART #s (Stuart 2026-08-27: "add the ability to print this with
+  // customers part# rather than ours as an option at the top") ─────────────────────────────────
+  // Same idea as the Fabricut edition, generalized: pick a customer and every code on the sheet
+  // becomes THEIR number. The numbers come from the items' own clientPricing rows ("Their SKU" in
+  // 4.6) — no extra load, and a part the customer has no SKU for falls back to our number rather
+  // than printing a hole.
+  const [custKey, setCustKey] = useState('');
   // ── ONE MASTER, TWO PAPERS (Stuart 2026-08-23) ───────────────────────────────────────────
   // "i am ok having it scale 1:1 at 11 x17 as long as the page formats to print well at the
   //  reduced 8.5x11 … the call out measurements show the true dim's so that is fine."
@@ -219,10 +229,37 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return exact ? fab[exact].fabCode : null;
   }, [libraryParts]);
 
+  // Every customer identity that appears on any loaded item's clientPricing rows — the picker's
+  // options. The key is whatever 4.6 stamped (a CRM id or a company name); it matches the same way.
+  const custOptions = useMemo(() => {
+    const seen = new Map();
+    for (const p of libraryParts || []) {
+      for (const r of (Array.isArray(p.clientPricing) ? p.clientPricing : [])) {
+        const k = String(r?.customerId || '').trim();
+        if (k && !seen.has(k.toUpperCase())) seen.set(k.toUpperCase(), k);
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  }, [libraryParts]);
+
+  const custCodeFor = useCallback((partName) => {
+    if (!custKey) return null;
+    const part = (libraryParts || []).find(p => p.legacyErpId === partName || p.itemId === partName || p.id === partName);
+    const row = (Array.isArray(part?.clientPricing) ? part.clientPricing : [])
+      .find(r => String(r?.customerId || '').trim().toUpperCase() === custKey.toUpperCase());
+    const sku = String(row?.clientSku || '').trim();
+    return sku || null;
+  }, [libraryParts, custKey]);
+
   const rowCode = useCallback((partName) => {
     if (edition === 'FAB') return fabCodeFor(partName) || `${partName} (no Fabricut code)`;
+    if (edition === 'CUST') return custCodeFor(partName) || partName;   // no SKU → our number, never a hole
     return partName;
-  }, [edition, fabCodeFor]);
+  }, [edition, fabCodeFor, custCodeFor]);
+
+  // What the subtitle calls this printing — the reader must know whose numbers they hold.
+  const editionLabel = edition === 'FAB' ? 'Fabricut edition'
+    : edition === 'CUST' ? `${custKey || 'customer'} part numbers` : 'H1 edition';
 
   // ---- load GLB + wall-plate config once ----
   useEffect(() => {
@@ -971,9 +1008,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const dims = { front: [], profile: [], detail: [] };
       let measProjIn = null; // captured for the geometry-vs-cell check (IM has no projection)
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
-      // one drop dim per ring option, and its pattern id under it
+      // one drop dim per ring option — the VALUE under the measure line, in its own lane
+      // (Stuart 2026-08-27), and the pattern id staggered further below.
       ringBoxes.forEach((rb, i) => {
-        dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 24, ldy: 20, in: (poleF.maxV - rb.minV) * M2IN });
+        dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 24, below: true, in: (poleF.maxV - rb.minV) * M2IN });
         const code = rowRings[i]?.partName;
         if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, text: code });
       });
@@ -1221,10 +1259,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
       if (ringF) {
         // ring drop: TOP OF ROD → bottom of the eyelet (Stuart's definition), for EVERY ring
-        // option on the rod — that measurement is the thing that differs between them. Label
-        // drops ~1/4" printed so the text clears the underside of the pole.
+        // option on the rod — that measurement is the thing that differs between them. The value
+        // sits UNDER its own measure line (2026-08-27) so each drop reads in its own lane.
         ringBoxes.forEach((rb, i) => {
-          dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 24, ldy: 20, in: (poleF.maxV - rb.minV) * M2IN });
+          dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 24, below: true, in: (poleF.maxV - rb.minV) * M2IN });
           // ⚠ THE RING NAMES ITSELF WHERE IT HANGS (Stuart 2026-08-23: "lose the rings along the
           // bottom just keep them along the rod on the left and add their pattern ids below each
           // one"). The bottom strip was a second drawing of parts already on the page, and it cost
@@ -1465,7 +1503,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
                 const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(r.__arm || page.bracketPin.partName) }));
         const anyAsMounted = rows.some(r => r.hasAsMounted);
         const titleCode = (page.combo || [page])
-          .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName) : s.bracketPin.partName))
+          .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
+            : edition === 'CUST' ? (custCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
+            : s.bracketPin.partName))
           .join(' + ');
         // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
         // engine paired with the arm — or, when there are none, the engine's own reason.
@@ -1474,7 +1514,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           .filter(Boolean).join(' · ');
         const result = buildPageSvg({
           title: `${baseAssembly.itemName || baseAssembly.itemId} — ${titleCode}`,
-          subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel}`,
+          subtitle: `${editionLabel} · ${famLabel}`,
           rows,
           manualDims: manualDims.filter(d => d.pageKey === page.key),
           noteLines: [
@@ -1497,7 +1537,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
+  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; finialsRef.current = null; }, [wallCfg, side]);
@@ -1563,7 +1603,9 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     const built = builtRowsFor(page);
     const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(r.__arm || page.bracketPin.partName) }));
     const titleCode = (page.combo || [page])
-      .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName) : s.bracketPin.partName))
+      .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
+        : edition === 'CUST' ? (custCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
+        : s.bracketPin.partName))
       .join(' + ');
     // The subtitle says what this page IS: the CPQ leaf it belongs to, and how many plates the
     // engine paired with the arm — or, when there are none, the engine's own reason.
@@ -1574,7 +1616,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return {
       svg: buildPageSvg({
         title: `${baseAssembly.itemName || baseAssembly.itemId} — ${titleCode}`,
-        subtitle: `${edition === 'FAB' ? 'Fabricut edition' : 'H1 edition'} · ${famLabel}`,
+        subtitle: `${editionLabel} · ${famLabel}`,
         rows,
         manualDims: manualDims.filter(d => d.pageKey === page.key),
         noteLines: [
@@ -1644,6 +1686,16 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           <div style={{ display: 'flex', gap: '4px' }}>
             <button style={edition === 'H1' ? btnOn : btn} onClick={() => setEdition('H1')}>H1 codes</button>
             <button style={edition === 'FAB' ? btnOn : btn} onClick={() => setEdition('FAB')}>Fabricut codes</button>
+            <button style={edition === 'CUST' ? btnOn : btn} onClick={() => setEdition('CUST')}
+              title="Print with a customer's own part numbers (their SKUs from 4.6) — parts they have no SKU for keep our number.">
+              Customer #s
+            </button>
+            {edition === 'CUST' && (
+              <select value={custKey} onChange={e => setCustKey(e.target.value)} style={{ padding: '5px', fontSize: '0.8rem', maxWidth: '190px' }}>
+                <option value="">— pick customer —</option>
+                {custOptions.map(k => <option key={k} value={k}>{k}</option>)}
+              </select>
+            )}
           </div>
           <div style={{ display: 'flex', gap: '4px' }} title="8.5×11 binder pages — portrait is the standard; a double is a wide drawing, so its sheets turn landscape automatically. Click to override the page you are on.">
             <button style={layoutPaper === 'letterP' ? btnOn : btn} onClick={() => setPaperMode('P')}>8.5×11 ↕</button>

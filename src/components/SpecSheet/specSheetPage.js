@@ -7,7 +7,7 @@
 //                                  rows stacked by their real content height.
 // The tabloid master can also be printed reduced onto letter (~64%, footer marks it
 // NOT TO SCALE) — same SVG, different output paper.
-import { fracSvg, fracSvgFromText } from './specSheetGeometry';
+import { fracSvg, fracSvgFromText, fracWidth } from './specSheetGeometry';
 
 export const PAPERS = {
   // ── THE PAPER IS THE BINDER'S (Stuart 2026-08-23) ──────────────────────────────────────────
@@ -43,7 +43,10 @@ const SW = 0.6; // dimension line weight
 // sheets run ~7pt on letter; at ~104 page units per printed inch that is ~10 units, and the
 // whole annotation system below is sized from it. Every unit shaved off the fixed overhead goes
 // straight back into drawn geometry on the height-bound multi-row sheets.
-const FS = { title: 13, sub: 10, code: 11, label: 10, dim: 10, note: 9, zone: 9 };
+// FS.dim 10 → 12 (Stuart 2026-08-27: "the measurements are all listed in a font that is too
+// small, please go up one pt and there is plenty of room" — ~1pt printed is ~1.4 page units, and
+// the dim labels were a mix of 10 and 11; one size, one point up from the larger).
+const FS = { title: 13, sub: 10, code: 11, label: 10, dim: 12, note: 9, zone: 9 };
 // Breathing room around a drawing, in page units, so dimension lines and their labels have
 // somewhere to go. ~1/4" printed on either side.
 // ⚠ PADDING IS CHARGED PER ROW, SO IT IS SPENT FOUR TIMES. At 26 units a side this was ~1/2"
@@ -56,22 +59,30 @@ export function dimH(x0, x1, y, inches) {
   let s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x0}" y1="${y - 4}" x2="${x0}" y2="${y + 4}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x1}" y1="${y - 4}" x2="${x1}" y2="${y + 4}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg((x0 + x1) / 2 - 7, y - 8, inches);
+  s += fracSvg((x0 + x1) / 2 - fracWidth(inches, FS.dim) / 2, y - 8, inches, FS.dim);
   return s;
 }
 // side: +1 label right of the line (default), -1 label to the left (clear of artwork).
 // labelDy: extra vertical label offset in page units (~26 = 1/4" printed on letter).
-export function dimV(x, y0, y1, inches, dia = false, side = 1, labelDy = 0) {
+// below: the label sits CENTERED UNDER the line's bottom end instead of beside its middle —
+// Stuart 2026-08-27: "can we put the ring drop measurements under the measure line and space
+// everything out so it is clearly legible." Beside-the-line labels on a row of ring drops all
+// land in the same crowded band between rings; under the line each value sits in its own lane.
+export function dimV(x, y0, y1, inches, dia = false, side = 1, labelDy = 0, below = false) {
   let s = `<line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y0}" x2="${x + 4}" y2="${y0}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x - 4}" y1="${y1}" x2="${x + 4}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg(side < 0 ? x - 34 : x + 9, (y0 + y1) / 2 + 4 + labelDy, inches, 10, dia);
+  if (below) {
+    s += fracSvg(x - fracWidth(inches, FS.dim, dia) / 2, Math.max(y0, y1) + FS.dim + 5, inches, FS.dim, dia);
+  } else {
+    s += fracSvg(side < 0 ? x - 6 - fracWidth(inches, FS.dim, dia) : x + 9, (y0 + y1) / 2 + 4 + labelDy, inches, FS.dim, dia);
+  }
   return s;
 }
 // dir +1: leader runs up-right, text right of it (default); -1: up-left, text to the left.
 export function leaderDia(x, y, inches, dir = 1) {
   let s = `<line x1="${x}" y1="${y}" x2="${x + 24 * dir}" y2="${y - 16}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg(dir < 0 ? x - 24 - 40 : x + 26, y - 18, inches, 10, true);
+  s += fracSvg(dir < 0 ? x - 26 - fracWidth(inches, FS.dim, true) : x + 26, y - 18, inches, FS.dim, true);
   return s;
 }
 // Aligned manual dimension between two arbitrary page points, label = user text.
@@ -81,7 +92,7 @@ export function dimManual(x0, y0, x1, y1, valueText) {
   let s = `<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x0 - tx}" y1="${y0 - ty}" x2="${x0 + tx}" y2="${y0 + ty}" stroke="black" stroke-width="${SW}"/>`;
   s += `<line x1="${x1 - tx}" y1="${y1 - ty}" x2="${x1 + tx}" y2="${y1 + ty}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvgFromText((x0 + x1) / 2 + 6, (y0 + y1) / 2 - 5, valueText);
+  s += fracSvgFromText((x0 + x1) / 2 + 6, (y0 + y1) / 2 - 5, valueText, FS.dim);
   return s;
 }
 
@@ -174,7 +185,7 @@ const cellAboveBelow = (view, scale, datumV, dims) => {
   // shrink with the scale. Measured only by mesh bounds, a tight page let one row's dims walk
   // straight into the caption of the row above (H1-138D, first render of the paired-rod sheet).
   // Same rule as padBelow: the row declares the room its annotations need.
-  let extraAbove = 0;
+  let extraAbove = 0, extraBelow = 0;
   for (const dm of dims || []) {
     if (dm.t === 'h') {
       // line sits (zb.maxV - v)·scale + off below the top; label ~18 above the line
@@ -188,12 +199,17 @@ const cellAboveBelow = (view, scale, datumV, dims) => {
       // a label riding ABOVE the artwork (ceiling plates) needs its line of room up there
       const room = FS.label + 2 - ((zb.maxV - dm.v) * scale + dm.off);
       if (room > extraAbove) extraAbove = room;
+    } else if (dm.t === 'v' && dm.below) {
+      // a below-the-line label hangs FS.dim+~10 under the line's lower end — text, so the row
+      // declares that room the same way it declares the head-room above.
+      const room = FS.dim + 10 - (Math.min(dm.v0, dm.v1) - zb.minV) * scale - PAD.y;
+      if (room > extraBelow) extraBelow = room;
     }
   }
   return {
     w: (zb.maxU - zb.minU) * scale + PAD.x * 2,
     above: (zb.maxV - d) * scale + PAD.y + extraAbove,
-    below: (d - zb.minV) * scale + PAD.y,
+    below: (d - zb.minV) * scale + PAD.y + extraBelow,
   };
 };
 
@@ -258,30 +274,51 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   const bodyH = P.H - MARGIN - bodyTop - notesH;
   const bodyW = P.W - 2 * MARGIN - 80;
 
-  // One scale for the page: true 1:1, reduced uniformly only if the content will not fit. A page
-  // that had to shrink says so in the footer rather than quietly lying about being actual size.
+  // ── THE DRAWINGS PRINT AS LARGE AS THE PAGE ALLOWS (Stuart 2026-08-27) ─────────────────────
+  // "we still do not have a nice even scale amount so that the images print as large as possible,
+  //  the H1-75 items are shown much smaller since they are smaller … set scale … so the generator
+  //  reads each one and sets appropriately."
+  //
+  // 1:1 was the old master and the page only ever SHRANK to fit — so a physically small assembly
+  // (H1-75) printed small while a big one filled the sheet. The scale now converges toward the
+  // page in BOTH directions: grow a small assembly, shrink a big one. An enlarged page then snaps
+  // DOWN to the nearest even ratio (1.25 / 1.5 / 1.75 / 2 / 2.5 / 3 — capped at 3:1) so the footer
+  // can state a scale a person can reason about, and the dimensions stay the authority either way.
   // ⚠ THE FIT HAS TO CONVERGE, NOT BE GUESSED ONCE. A row's height is partly GEOMETRY, which
-  // shrinks with the scale, and partly TEXT — captions, dimension labels, the room they need —
-  // which does not. Scaling once by bodyH/totalH therefore undershoots: the drawings get smaller,
-  // the fixed part stays, and the last row still walks off the page (Stuart 2026-08-23: "the
-  // lowest row is now off the page and there is tons of wasted white space"). Re-measuring after
-  // each step converges in two or three passes and stops early once it fits.
+  // scales, and partly TEXT — captions, dimension labels, the room they need — which does not.
+  // Re-measuring after each step converges in a few passes; growth is damped so a text-heavy page
+  // cannot overshoot and oscillate.
+  const RATIO_LADDER = [3, 2.5, 2, 1.75, 1.5, 1.25];
   let scale = oneToOne;
   let grid = measureGrid(rows, scale);
-  for (let i = 0; i < 6; i++) {
-    if (grid.totalW <= bodyW && grid.totalH <= bodyH) break;
+  for (let i = 0; i < 8; i++) {
+    const k = Math.min(bodyW / (grid.totalW || 1), bodyH / (grid.totalH || 1));
+    if (!isFinite(k) || (k >= 0.999 && k <= 1.02)) break;
+    scale *= Math.min(k, 1.5);
+    grid = measureGrid(rows, scale);
+  }
+  // Never leave the page overflowing after a growth overshoot.
+  for (let i = 0; i < 4 && (grid.totalW > bodyW || grid.totalH > bodyH); i++) {
     const k = Math.min(bodyW / (grid.totalW || 1), bodyH / (grid.totalH || 1), 1);
     if (!isFinite(k) || k >= 0.999) break;
     scale *= k;
     grid = measureGrid(rows, scale);
   }
+  let ratio = scale / oneToOne;
+  if (ratio > 1.02) {
+    const snapped = RATIO_LADDER.find(r => r <= ratio) || 1;
+    scale = oneToOne * snapped;
+    ratio = snapped;
+    grid = measureGrid(rows, scale);
+  }
   const shrink = scale / oneToOne;
-  const toScale = shrink >= 0.999;
+  const enlarged = shrink > 1.02;
+  const toScale = !enlarged && shrink >= 0.999;
   // WHICH CONSTRAINT BOUND THE FIT. Height and width shrink the page for completely different
   // reasons and want opposite fixes — a narrower elevation helps one and does nothing for the
   // other. Saying which is binding turns "it looks small" into a number that points somewhere.
   const bindW = grid.totalW / bodyW, bindH = grid.totalH / bodyH;
-  const boundBy = toScale ? '' : (bindW >= bindH ? 'width' : 'height');
+  const boundBy = (toScale || enlarged) ? '' : (bindW >= bindH ? 'width' : 'height');
 
   let svg = pageFrame(P, title, subtitle);
 
@@ -307,7 +344,7 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     let s2 = '';
     for (const d of dims || []) {
       if (d.t === 'h') s2 += dimH(mu(d.u0), mu(d.u1), mv(d.v) + (d.off || 0), d.in);
-      else if (d.t === 'v') s2 += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia, d.side || 1, d.ldy || 0);
+      else if (d.t === 'v') s2 += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia, d.side || 1, d.ldy || 0, !!d.below);
       else if (d.t === 'dia') s2 += leaderDia(mu(d.u), mv(d.v), d.in, d.dir || 1);
       // A caption at a world point — the ring's pattern id, under the ring it names. `lead`
       // draws the thin leader back up to the part, so a label dropped clear of a crowded row is
@@ -375,7 +412,9 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   });
   const footer = footerNote || (toScale
     ? `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`
-    : `REDUCED ${Math.round(shrink * 100)}% TO FIT ${P.label} (${rows.length} row${rows.length === 1 ? '' : 's'}, bound by ${boundBy}) — NOT TO SCALE, READ THE DIMENSIONS`);
+    : enlarged
+      ? `SCALE ${shrink}:1 ON ${P.label} (enlarged to fill the sheet — READ THE DIMENSIONS)`
+      : `REDUCED ${Math.round(shrink * 100)}% TO FIT ${P.label} (${rows.length} row${rows.length === 1 ? '' : 's'}, bound by ${boundBy}) — NOT TO SCALE, READ THE DIMENSIONS`);
   svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 14}" font-size="${FS.note}" text-anchor="end">${footer}</text>`;
 
   return { svg: wrapSvg(P, svg), viewMaps, paper: PAPERS[paper] ? paper : 'letterP', toScale, scale };

@@ -183,6 +183,8 @@ export function breakMarks(u, vLo, vHi) {
 }
 
 // Stacked-fraction SVG text (matches the CAD drawing style). Returns markup string.
+// Every measurement on these sheets is inches, and the number now SAYS so — 1 5/8" not 1 5/8
+// (Stuart 2026-08-27: 'i think it is best to add " after the measurements as well for inches').
 export function fracSvg(x, y, inches, fontSize = 11, dia = false) {
   const f = frac(inches);
   let out = '', dx = x;
@@ -195,7 +197,18 @@ export function fracSvg(x, y, inches, fontSize = 11, dia = false) {
     out += `<line x1="${dx}" y1="${y - fontSize * 0.1}" x2="${dx + fs2 * 1.1}" y2="${y - fontSize * 0.1}" stroke="black" stroke-width="0.6"/>`;
     dx += fs2 * 1.25;
   }
+  out += `<text x="${dx + fontSize * 0.06}" y="${y}" font-size="${fontSize}">"</text>`;
   return out;
+}
+// The width fracSvg will occupy — so a label can be CENTERED (e.g. under a dimension line)
+// instead of always growing to the right of its anchor.
+export function fracWidth(inches, fontSize = 11, dia = false) {
+  const f = frac(inches);
+  let w = 0;
+  if (dia) w += fontSize * 0.75;
+  if (f.whole || !f.num) w += fontSize * 0.6 * String(f.whole).length;
+  if (f.num) w += fontSize * 0.6 * 1.25;
+  return w + fontSize * 0.45;   // the inch mark
 }
 // Same, from a user-entered string value (manual dims print verbatim).
 export function fracSvgFromText(x, y, text, fontSize = 11) {
