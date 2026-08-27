@@ -21,7 +21,9 @@ import { matchesCustomerCode } from '../Shared/aliasSearch';
 // everywhere on the next snapshot. No mirror, no deploy.
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, query, where, doc, setDoc, updateDoc, writeBatch, deleteField } from "firebase/firestore";
+import { collection, onSnapshot, query, where, doc, getDoc, setDoc, updateDoc, writeBatch, deleteField } from "firebase/firestore";
+import { explodeTraverse } from '../Shared/traverseExplode';
+import { configuratorOffer } from '../Shared/traverseConfigurator';
 import { parseControlWorkbook, workbookFileToSheets, collapseBySku, diffControlRows, diffSummary, upper } from '../Shared/customerControlFile';
 import { parseTraverseKitSheets, diffTraverseKits, kitPricingRow, BILLABLE_ACCESSORY_SEED } from '../Shared/traverseKitImport';
 import { fabricutCodeOf, isPlatedSuffix, PRICE_LEVELS, customerPriceLevel } from '../Shared/priceLevels';
@@ -175,6 +177,34 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
     const [kitSearch, setKitSearch] = useState('');        // component picker (form + row editor share it)
     const [masterFin, setMasterFin] = useState([]);        // system/master_finishes — the in-house codes
     const [kitFinSel, setKitFinSel] = useState({});        // code → true while the kit row editor is open
+    // ── WHAT THE SHOP FLOOR WILL GET (Stuart 2026-08-27: "the contents of the main kit are not
+    // listed, how would we know what you are going to include in the bom on shop floor, we would
+    // come here to check it") ────────────────────────────────────────────────────────────────
+    // A flow-aligned kit's components come from the traverse-rules explosion at order time — so
+    // the panel PREVIEWS that explosion with the SAME function the order push runs
+    // (explodeTraverse, QuickShipTab's exact call), at the kit's base length. Read-only: to change
+    // what explodes, change the traverse rules / count tables, not this kit.
+    const [kitExplode, setKitExplode] = useState(null);    // { base, lines, skipped, offer } | { error }
+    useEffect(() => {
+        setKitExplode(null);
+        if (!kitRow) return;
+        const kitDoc = inventory.find(x => x.id === kitRow);
+        const align = kitDoc?.manufacturingSpecs?.kitAlign;
+        if (!align) return;
+        const family = kitDoc?.manufacturingSpecs?.kitFamily || 'H1-2TRV';
+        let dead = false;
+        (async () => {
+            try {
+                const snap = await getDoc(doc(db, 'system', `traverse_rules_${family}`));
+                const rules = snap.exists() ? snap.data() : null;
+                const base = Number(align.minFeet) > 0 ? Number(align.minFeet) : 4;
+                const ex = explodeTraverse({ family, align, feet: base, motorItem: '', rules, proj: '' });
+                const offer = configuratorOffer({ rules, drive: align.drive, feet: base });
+                if (!dead) setKitExplode({ base, lines: ex.lines || [], skipped: ex.skipped || [], offer });
+            } catch (e) { if (!dead) setKitExplode({ error: e?.message || String(e) }); }
+        })();
+        return () => { dead = true; };
+    }, [kitRow, inventory]);
     const fileRef = useRef(null);
 
     useEffect(() => {
@@ -1566,8 +1596,45 @@ const CustomerCollectionsTab = ({ currentUser, activeBrand }) => {
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>what ONE kit explodes to · item metadata, shared by every customer</span>
                                             </div>
                                             {!!(inventory.find(x => x.id === kitRow)?.manufacturingSpecs?.kitAlign) && (
-                                                <div style={{ fontSize: '0.82rem', color: theme.inkSoft, fontStyle: 'italic', marginBottom: '8px' }}>
-                                                    Flow-aligned kit — empty contents are correct: the order explodes from the traverse rules (fascia, track, brackets by length). Anything added here rides ON TOP of that explosion.
+                                                <div style={{ marginBottom: '12px' }}>
+                                                    <div style={{ fontSize: '0.82rem', color: theme.inkSoft, fontStyle: 'italic', marginBottom: '8px' }}>
+                                                        Flow-aligned kit — the shop-floor BOM explodes from the traverse rules at order time. Anything added in the contents list below rides ON TOP of that explosion.
+                                                    </div>
+                                                    {/* The explosion, PREVIEWED with the same function the order push runs —
+                                                        so this panel answers "what will the shop get" without a second
+                                                        opinion. Read-only: the count tables (traverse rules) are the truth. */}
+                                                    <div style={{ border: `1px solid ${theme.line}`, background: '#fff', padding: '12px 14px' }}>
+                                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: theme.brass, marginBottom: '8px' }}>
+                                                            Shop-floor explosion — ONE {kitExplode?.base || 4} ft kit (per-ft lines scale with ordered feet)
+                                                        </div>
+                                                        {!kitExplode && <div style={{ fontSize: '0.82rem', color: theme.inkSoft }}>Reading the traverse rules…</div>}
+                                                        {kitExplode?.error && <div style={{ fontSize: '0.82rem', color: '#b00020' }}>Could not read the traverse rules: {kitExplode.error}</div>}
+                                                        {kitExplode?.lines && (
+                                                            <>
+                                                                {kitExplode.lines.map((l, i) => (
+                                                                    <div key={i} style={{ display: 'flex', gap: '12px', padding: '4px 0', borderTop: i ? `1px solid rgba(28,26,22,.06)` : 'none', fontSize: '0.85rem' }}>
+                                                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', minWidth: '140px', color: theme.ink }}>{l.code}</span>
+                                                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', minWidth: '46px', textAlign: 'right', color: theme.ink }}>× {l.qty}</span>
+                                                                        <span style={{ color: theme.inkSoft }}>{l.why}{l.subFinish ? ' · base colour (matches track)' : ''}</span>
+                                                                    </div>
+                                                                ))}
+                                                                {!!kitExplode.offer?.carrierStyles?.length && (
+                                                                    <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: `1px dashed ${theme.line}`, fontSize: '0.82rem', color: theme.inkSoft }}>
+                                                                        <b style={{ fontWeight: 600, color: theme.ink }}>+ the components configurator at order time:</b>{' '}
+                                                                        carriers ({kitExplode.offer.carrierStyles.map(s => `${s.itemId} ×${s.includedQty}`).join(' or ')}),
+                                                                        {kitExplode.offer.picks?.length ? ` included picks (${kitExplode.offer.picks.map(p => p.itemId + (p.includedQty ? ` ×${p.includedQty}` : '')).join(', ')}),` : ''}
+                                                                        {kitExplode.offer.accessories?.length ? ` billable accessories on request (${kitExplode.offer.accessories.map(a => a.itemId).join(', ')})` : ''}
+                                                                    </div>
+                                                                )}
+                                                                {kitExplode.skipped.map((s, i) => (
+                                                                    <div key={`s${i}`} style={{ fontSize: '0.78rem', color: theme.inkSoft, fontStyle: 'italic', marginTop: i ? '2px' : '8px' }}>○ {s}</div>
+                                                                ))}
+                                                                <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '8px' }}>
+                                                                    To change these quantities or parts, edit the traverse rules / count tables (the kit-sheet import's Carrier Usage) — every kit of this family follows them.
+                                                                </div>
+                                                            </>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             )}
                                             {/* ── ADDITIONAL-FOOT PRICING, THIS CUSTOMER (Stuart 2026-08-27: "we imported
