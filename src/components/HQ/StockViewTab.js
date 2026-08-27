@@ -1985,6 +1985,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             setOrderQty({});
             const lines = [
                 ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
+                ...poResult.unmatched.map(u => `• ⚠ NO PO for "${u.vendor || '(no vendor)'}" — no matching NetSuite vendor (11.1 → Sync Active Vendors): ${u.items.join(', ')}`),
                 ...(woRes.n ? [`• ${woRes.n} stock work order(s) → RTG Dispatch (release to the floor there)`] : []),
                 ...(convN ? [`• ${convN} convert to-do(s) → WMS · Convert tab ("Needs Phosphating")`] : []),
                 ...(woRes.made.length ? [`• Component pre-check raised:`, ...woRes.made.map(m => `   ${m}`)] : []),
@@ -2067,18 +2068,27 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const rows = (salesHist?.rows) || [];
         const toMake = rows.map(r => { const info = reorderFor(r); const qty = parseInt(orderQty[r.internalId]) || 0; return { r, info, qty }; }).filter(x => x.qty > 0);
         if (!toMake.length) return alert('Enter an Order quantity on at least one row first — the Rec column is guidance; Order always starts at 0.');
-        const buy = [], make = [], ambiguous = [], noVendor = [];
+        const buy = [], make = [], ambiguous = [], noVendor = [], unlinked = [];
         toMake.forEach(x => {
+            // Same guard as RAW/TIER (missing here until 2026-08-28): a row with no library part
+            // cannot be routed — skip it loudly instead of guessing.
+            if (!x.info.part) { unlinked.push(x); return; }
             const specs = x.info.part?.manufacturingSpecs || {};
             const vendorName = String(specs.vendorName || '').trim();
             const outsourced = specs.isInHouse === false;
+            // SOURCED BOTH WAYS → ALWAYS ASK (the RAW/TIER rule, checked FIRST — BOTH stores
+            // isInHouse true, so without this test the row fell through as plain in-house and a
+            // vendor-less BOTH item became a WO with no prompt). Defaults to the WORK ORDER —
+            // doing nothing produces the safe answer, same as the ⚖ vendor modal elsewhere.
+            if (sourcingOf(specs) === SOURCING.BOTH) { ambiguous.push({ ...x, bothSourced: true }); return; }
             if (outsourced && vendorName) buy.push(x);
             else if (outsourced && !vendorName) noVendor.push(x);
             else if (vendorName) ambiguous.push(x);
             else make.push(x);
         });
+        if (unlinked.length) alert(`⚠️ ${unlinked.length} row(s) have no Master Library part and were skipped:\n\n${unlinked.slice(0, 10).map(x => `• ${x.r.itemid}`).join('\n')}`);
         if (noVendor.length) alert(`⚠️ ${noVendor.length} outsourced item(s) have NO vendor set and were skipped — add the vendor in the Master Library first:\n\n${noVendor.slice(0, 10).map(x => `• ${x.r.itemid}`).join('\n')}`);
-        if (ambiguous.length) { setRouteModal({ buy, make, items: ambiguous.map(x => ({ ...x, choice: 'PO' })) }); return; }
+        if (ambiguous.length) { setRouteModal({ buy, make, items: ambiguous.map(x => ({ ...x, choice: x.bothSourced ? 'WO' : 'PO' })) }); return; }
         executeOrders(buy, make);
     };
 
@@ -3009,12 +3019,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.8)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div style={{ background: '#fff', padding: '32px', width: '720px', maxHeight: '85vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 4px 24px rgba(0,0,0,0.15)' }}>
                         <h2 style={{ margin: '0 0 6px 0', fontFamily: 'var(--serif)', fontSize: '1.6rem', color: 'var(--ink)' }}>Choose Sourcing</h2>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>These items are set up in-house but also carry a vendor — purchase order to the vendor, or work order to the floor?</div>
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>These items can go either way — flagged ⚖ BOTH in the library, or set up in-house with a vendor. Purchase order to the vendor, or work order to the floor? (⚖ rows default to the work order.)</div>
                         {routeModal.items.map((x, idx) => (
                             <div key={x.r.internalId} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 0', borderBottom: '1px solid var(--paper-2)' }}>
                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }}>{x.r.itemid} <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}>× {x.qty}</span></div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{x.info.part?.itemName || ''} · vendor: {x.info.part?.manufacturingSpecs?.vendorName}</div>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)' }}>{x.r.itemid} <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}>× {x.qty}</span>{x.bothSourced && <span title="Flagged BOTH in the Master Library — we make it and we buy it." style={{ marginLeft: '8px', color: 'var(--brass)', fontWeight: 400, fontSize: '10px' }}>⚖ BOTH</span>}</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)' }}>{x.info.part?.itemName || ''} · vendor: {x.info.part?.manufacturingSpecs?.vendorName || '— none stored (a PO pick will need one that resolves)'}</div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '6px' }}>
                                     <button onClick={() => setRouteModal(m => ({ ...m, items: m.items.map((y, i) => i === idx ? { ...y, choice: 'PO' } : y) }))} style={{ padding: '8px 14px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', cursor: 'pointer', border: `1px solid ${x.choice === 'PO' ? 'var(--brass)' : 'var(--line)'}`, background: x.choice === 'PO' ? 'var(--brass)' : '#fff', color: x.choice === 'PO' ? '#fff' : 'var(--ink)' }}>PO → {String(x.info.part?.manufacturingSpecs?.vendorName || 'vendor').split(' ')[0]}</button>
