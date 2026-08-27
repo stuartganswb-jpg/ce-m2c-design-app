@@ -289,15 +289,17 @@ export function specPages({ choices, answers = {} }) {
             // rings when that collection arrives: they hang on the SOLID front rod's page.
             const rings = isTrav ? [] : rings0;
             const fams0 = plates.length ? plateFamilies(plates) : [{ stem: '', plates: [] }];
-            // ── A DEEP DOUBLE PRINTS TWO ROWS PER SHEET (Stuart 2026-08-23) ─────────────────
-            // "can we start with the deep doubles 2 per page and see how that looks."
-            // The dec double's section is ~9" wide (8.5" projection + plate), so a row is ~22"
-            // of columns — no orientation of 11×17 holds four such rows near scale. Two rows
-            // free the height so the width can bind at the best the columns allow. The split is
-            // presentation only, exactly like the family split above it: which plates belong to
-            // the arm is still entirely the engine's answer.
+            // ── EVERY MULTI-PLATE FAMILY PRINTS TWO ROWS PER SHEET (Stuart 2026-08-27) ──────
+            // Began as the deep-double rule (2026-08-23: "start with the deep doubles 2 per page")
+            // and is now universal: "look at H1-138CB … the CB is way too small … in the H1-75 it
+            // is even worse, super small with tons of wasted white space." A row's height is
+            // partly TEXT — captions, dim labels, the ring-code lanes — which does not shrink
+            // with the scale, so FOUR rows of it on one portrait sheet crushes the drawings no
+            // matter the assembly. Two rows per sheet frees the height, and the page-level scale
+            // then grows each sheet to fill the paper. The split is presentation only: which
+            // plates belong to the arm is still entirely the engine's answer.
             const fams = fams0.flatMap(f => {
-                if (!(subject?.projTiers && f.plates.length > 2)) return [f];
+                if (!(f.plates.length > 2)) return [f];
                 const out = [];
                 const n = Math.ceil(f.plates.length / 2);
                 for (let i = 0; i < f.plates.length; i += 2) {

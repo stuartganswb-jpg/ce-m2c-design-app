@@ -261,6 +261,27 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   const editionLabel = edition === 'FAB' ? 'Fabricut edition'
     : edition === 'CUST' ? `${custKey || 'customer'} part numbers` : 'H1 edition';
 
+  // ── EVERY PRINTED CODE FOLLOWS THE EDITION (Stuart 2026-08-27: "the fabricut codes print on
+  // the right but not for the items on the left") ─────────────────────────────────────────────
+  // The row builder bakes ring ids, plate ids and the wall-mount code into the drawing as text
+  // dims — in OUR numbers, and cached that way (the cache must stay edition-blind or switching
+  // editions rebuilds every drawing). So the codes are translated at COMPOSE time instead: text
+  // dims flagged `code: true` and the row's wallCode run through the edition here. Soft fallback
+  // on purpose — a small in-drawing label has no room for "(no Fabricut code)".
+  const labelCodeFor = useCallback((name) => {
+    if (edition === 'FAB') return fabCodeFor(name) || name;
+    if (edition === 'CUST') return custCodeFor(name) || name;
+    return name;
+  }, [edition, fabCodeFor, custCodeFor]);
+  const editionRows = useCallback((builtRows, armName) => builtRows.map(r => ({
+    ...r,
+    code: rowCode(r.partName),
+    armCode: rowCode(r.__arm || armName),
+    ...(r.wallCode ? { wallCode: labelCodeFor(r.wallCode) } : {}),
+    dims: Object.fromEntries(Object.entries(r.dims || {}).map(([k, list]) => [k,
+      (list || []).map(d => (d.t === 'text' && d.code) ? { ...d, text: labelCodeFor(d.text) } : d)])),
+  })), [rowCode, labelCodeFor]);
+
   // ---- load GLB + wall-plate config once ----
   useEffect(() => {
     let dead = false;
@@ -1013,7 +1034,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       ringBoxes.forEach((rb, i) => {
         dims.front.push({ t: 'v', u: rb.maxU, v0: poleF.maxV, v1: rb.minV, off: 24, below: true, in: (poleF.maxV - rb.minV) * M2IN });
         const code = rowRings[i]?.partName;
-        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, text: code });
+        if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, code: true, text: code });
       });
       if (opts.isIM) {
         // inside mount: barrel length + Ø; end view gets plate Ø + ring Ø leaders.
@@ -1230,15 +1251,16 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       const plateTopV = Math.max(coverF.maxV, viewBbox(poleDrawn, views.front).maxV);
       if (platePin.partName) {
         dims.front.push(opts.isCeiling
-          ? { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateTopV, off: -(RING_LABEL_DROP - 8), lead: true, text: platePin.partName }
+          ? { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateTopV, off: -(RING_LABEL_DROP - 8), lead: true, code: true, text: platePin.partName }
           // The id sits a clear line BELOW the width dim bar (Stuart 2026-08-24b: "the item id
           // is printed really close to the line, can you lower the id's").
-          : { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP + 22, lead: true, text: platePin.partName });
+          : { t: 'text', u: (coverF.minU + coverF.maxU) / 2, v: plateAnchorV, off: RING_LABEL_DROP + 22, lead: true, code: true, text: platePin.partName });
       }
       const plateWIn = (coverF.maxU - coverF.minU) * M2IN;
-      // round plate: Ø leader off the circle's upper-LEFT arc (clear of the pole Ø leader)
+      // round plate: Ø leader off the circle's LOWER-left arc, running DOWN — anchored up top it
+      // walked its label straight into the pole (Stuart 2026-08-27, the stray ⌀ on the -R rows).
       // plate width BELOW the plate — above it the rod crosses the dim on short plates
-      if (isRound && !opts.isCeiling) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.maxV - (coverF.maxV - coverF.minV) * 0.15, dir: -1, in: plateWIn });
+      if (isRound && !opts.isCeiling) dims.front.push({ t: 'dia', u: coverF.minU + (coverF.maxU - coverF.minU) * 0.15, v: coverF.minV + (coverF.maxV - coverF.minV) * 0.15, dir: -1, down: true, in: plateWIn });
       else if (opts.isCeiling) dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateTopV, off: -12, in: plateWIn });
       else dims.front.push({ t: 'h', u0: coverF.minU, u1: coverF.maxU, v: plateAnchorV, off: 32, in: plateWIn });
       dims.front.push({ t: 'dia', u: frontHi - 0.008, v: poleF.maxV, in: (poleF.maxV - poleF.minV) * M2IN });
@@ -1272,7 +1294,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
           // longer than the gap between rings, so they are dropped clear of the eyelets on two
           // alternating lines, each on its own leader back to the ring it names.
           const code = rowRings[i]?.partName;
-          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, text: code });
+          if (code) dims.front.push({ t: 'text', u: (rb.minU + rb.maxU) / 2, v: rb.minV, off: RING_LABEL_DROP + (i % RING_LABEL_LEVELS) * RING_LABEL_STAGGER, lead: true, code: true, text: code });
         });
         // as-mounted: top hole of the wall mount → bottom of the ring, from bulk-entered offset
         const topHoleOff = parseInches(wallCfg[wallCode]?.topHole);
@@ -1500,7 +1522,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
         // with what the selected dia×proj cell CLAIMS (sizeMatrix inches). The sheet still renders
         // — borrowing geometry is sometimes deliberate — but it stops doing so silently. This was
         // the most likely silent failure of the H1 mass load (a ¾" file registered under 1-3/8").
-                const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(r.__arm || page.bracketPin.partName) }));
+                const rows = editionRows(built.rows, page.bracketPin.partName);
         const anyAsMounted = rows.some(r => r.hasAsMounted);
         const titleCode = (page.combo || [page])
           .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
@@ -1537,7 +1559,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
       }
     }, 30);
     return () => clearTimeout(t);
-  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
+  }, [shownPages, pageIndex, edition, manualDims, wallCfg, builtRowsFor, rowCode, fabCodeFor, custCodeFor, editionLabel, editionRows, assembly, error, layoutPaper, reducedNote, composeWallMountsPage, composeCatalogPage, baseAssembly]);
 
   // wall config affects measures → invalidate the caches when it changes
   useEffect(() => { rowCacheRef.current = {}; wallMountsRef.current = null; finialsRef.current = null; }, [wallCfg, side]);
@@ -1601,7 +1623,7 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     if (page.kind === 'WALLMOUNTS') return { svg: composeWallMountsPage('letterP').svg, paper: 'letterP' };
     if (page.kind === 'CATALOG') return { svg: composeCatalogPage(page, 'letterP').svg, paper: 'letterP' };
     const built = builtRowsFor(page);
-    const rows = built.rows.map(r => ({ ...r, code: rowCode(r.partName), armCode: rowCode(r.__arm || page.bracketPin.partName) }));
+    const rows = editionRows(built.rows, page.bracketPin.partName);
     const titleCode = (page.combo || [page])
       .map(s => (edition === 'FAB' ? (fabCodeFor(s.bracketPin.partName) || s.bracketPin.partName)
         : edition === 'CUST' ? (custCodeFor(s.bracketPin.partName) || s.bracketPin.partName)

@@ -80,9 +80,14 @@ export function dimV(x, y0, y1, inches, dia = false, side = 1, labelDy = 0, belo
   return s;
 }
 // dir +1: leader runs up-right, text right of it (default); -1: up-left, text to the left.
-export function leaderDia(x, y, inches, dir = 1) {
-  let s = `<line x1="${x}" y1="${y}" x2="${x + 24 * dir}" y2="${y - 16}" stroke="black" stroke-width="${SW}"/>`;
-  s += fracSvg(dir < 0 ? x - 26 - fracWidth(inches, FS.dim, true) : x + 26, y - 18, inches, FS.dim, true);
+// down: the leader runs DOWNWARD instead — for an anchor near the pole (a round plate's ⌀ sits
+// just under the rod), where an upward leader walks its label straight into the pole artwork
+// (Stuart 2026-08-27, the stray ⌀ on the H1-75D / H1-138D round-plate rows).
+export function leaderDia(x, y, inches, dir = 1, down = false) {
+  const vy = down ? 16 : -16;
+  let s = `<line x1="${x}" y1="${y}" x2="${x + 24 * dir}" y2="${y + vy}" stroke="black" stroke-width="${SW}"/>`;
+  const ty = down ? y + 16 + FS.dim : y - 18;
+  s += fracSvg(dir < 0 ? x - 26 - fracWidth(inches, FS.dim, true) : x + 26, ty, inches, FS.dim, true);
   return s;
 }
 // Aligned manual dimension between two arbitrary page points, label = user text.
@@ -191,10 +196,14 @@ const cellAboveBelow = (view, scale, datumV, dims) => {
       // line sits (zb.maxV - v)·scale + off below the top; label ~18 above the line
       const room = 14 - ((zb.maxV - dm.v) * scale + (dm.off || 0));
       if (room > extraAbove) extraAbove = room;
-    } else if (dm.t === 'dia') {
+    } else if (dm.t === 'dia' && !dm.down) {
       // leader rises 16 from the point, label above that
       const room = 24 - (zb.maxV - dm.v) * scale;
       if (room > extraAbove) extraAbove = room;
+    } else if (dm.t === 'dia' && dm.down) {
+      // downward leader: 16 down plus the label's line
+      const room = 16 + FS.dim + 6 - (dm.v - zb.minV) * scale - PAD.y;
+      if (room > extraBelow) extraBelow = room;
     } else if (dm.t === 'text' && (dm.off || 0) < 0) {
       // a label riding ABOVE the artwork (ceiling plates) needs its line of room up there
       const room = FS.label + 2 - ((zb.maxV - dm.v) * scale + dm.off);
@@ -331,11 +340,16 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   //  a separate view rather than a continuation of the drawing.
   const used = CELL_KEYS.reduce((a, k) => a + (grid.colW[k] ? grid.colW[k] + GUTTER : 0), -GUTTER);
   const spare = Math.max(0, bodyW - used);
+  // ⚠ THE GAP IS CAPPED (Stuart 2026-08-27: "super small with tons of wasted white space in
+  // between the left and the right"). All the leftover width used to pour into the gap before
+  // the section; on a page whose scale is height-bound that gap grew enormous and read as waste.
+  // The section still stands apart — up to ~1.3" printed — and the rest centres the whole strip.
+  const gap = Math.min(spare, 140);
   const cx = {};
-  let x = MARGIN + 40;
+  let x = MARGIN + 40 + (spare - gap) / 2;
   CELL_KEYS.forEach(k => {
     if (!grid.colW[k]) return;
-    if (k === 'profile') x += spare;
+    if (k === 'profile') x += gap;
     cx[k] = x + grid.colW[k] / 2;
     x += grid.colW[k] + GUTTER;
   });
@@ -345,7 +359,7 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
     for (const d of dims || []) {
       if (d.t === 'h') s2 += dimH(mu(d.u0), mu(d.u1), mv(d.v) + (d.off || 0), d.in);
       else if (d.t === 'v') s2 += dimV(mu(d.u) + (d.off || 0), mv(d.v0), mv(d.v1), d.in, d.dia, d.side || 1, d.ldy || 0, !!d.below);
-      else if (d.t === 'dia') s2 += leaderDia(mu(d.u), mv(d.v), d.in, d.dir || 1);
+      else if (d.t === 'dia') s2 += leaderDia(mu(d.u), mv(d.v), d.in, d.dir || 1, !!d.down);
       // A caption at a world point — the ring's pattern id, under the ring it names. `lead`
       // draws the thin leader back up to the part, so a label dropped clear of a crowded row is
       // still unambiguously attached to one ring.

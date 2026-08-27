@@ -336,8 +336,13 @@ const ringIds = (p) => (p ? p.rings.map(x => x.partId).sort() : null);
         decs.map(p => p.plates.map(x => x.name)),
         [['H1-138BP-H', 'H1-138BP-R'], ['H1-138BP-S', 'H1-138BP-V']]);
     eq('and each sheet says which it is', decs.map(p => p.part), ['1/2', '2/2']);
-    eq('while a single arm keeps all four rows on one sheet',
-        dp.find(p => p.subject?.partId === 'CE-INV-56746' && p.plateFamily === 'H1-138BP')?.plates.length, 4);
+    // 2026-08-27: the split is UNIVERSAL now — a single arm's four plates also go two per sheet
+    // ("the CB is way too small … super small with tons of wasted white space"): text overhead is
+    // charged per row, so four rows crush the drawing scale on any assembly.
+    const singles = dp.filter(p => p.subject?.partId === 'CE-INV-56746' && p.plateFamily === 'H1-138BP');
+    eq('a single arm also splits its four plates two per sheet',
+        singles.map(p => p.plates.length), [2, 2]);
+    eq('…and numbers its sheets too', singles.map(p => p.part), ['1/2', '2/2']);
     // ── THE RETURN'S REAR POLE IS RTN-ONLY (Stuart 2026-08-24) ───────────────────────────────
     const rtnDbl = dp.find(p => p.subject?.partId === 'CE-FEE-77');
     ok('the double return gets a page', !!rtnDbl);
