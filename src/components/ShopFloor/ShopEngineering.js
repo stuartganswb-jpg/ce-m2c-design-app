@@ -259,7 +259,9 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
     };
 
     const handleSaveProgram = async () => {
-        if(!progForm.name || progForm.machines.length === 0) return alert("Name & at least one Compatible Machine required.");
+        // Guarded: legacy programs stored a single `machine` and no `machines` array — the bare
+        // .length read crashed the save for every one of them (found live 2026-08-26).
+        if(!progForm.name || (progForm.machines || []).length === 0) return alert("Name & at least one Compatible Machine required.");
         let drawingUrl = null;
         if(progForm.file) { const fRef = ref(storage, `drawings/${progForm.name}.pdf`); await uploadBytesResumable(fRef, progForm.file); drawingUrl = await getDownloadURL(fRef); }
         const payload = { name: progForm.name, machines: progForm.machines, timePerPiece: parseFloat(progForm.timePerPiece)||0, setupTime: parseFloat(progForm.setupTime)||0, setupCode: progForm.setupCode, steps: progForm.steps, toolTimes: progForm.toolTimes,
@@ -711,13 +713,15 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         <div key={p.id} style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', padding: '24px', position: 'relative', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                             {['admin', 'programmer'].includes(safeUserRole) && (
                                 <div style={{ position: 'absolute', top: '24px', right: '24px', display: 'flex', gap: '12px' }}>
-                                    <button onClick={() => setProgForm(p)} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Edit</button>
+                                    {/* Normalize on load: defaults for the new fields, and the legacy
+                                        singular `machine` becomes a one-entry machines array. */}
+                                    <button onClick={() => setProgForm({ ...EMPTY_PROG_FORM, ...p, machines: p.machines || (p.machine ? [p.machine] : []) })} style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '6px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Edit</button>
                                     <button onClick={() => handleDelete('programs', p.id)} style={{ background: 'transparent', border: 'none', color: '#d9534f', padding: '6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Del</button>
                                 </div>
                             )}
                             <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', paddingRight: '80px' }}>{p.name}</h4>
                             <div style={{ fontFamily: 'var(--sans)', fontSize: '0.95rem', color: 'var(--ink)', marginBottom: '8px', lineHeight: '1.4' }}>
-                                Machines: <span style={{ fontWeight: 500 }}>{(p.machines || []).join(', ')}</span>
+                                Machines: <span style={{ fontWeight: 500 }}>{(p.machines || (p.machine ? [p.machine] : [])).join(', ') || '—'}</span>
                                 {p.setupCode && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '4px 8px', marginLeft: '12px', display: 'inline-block' }}>Setup: {p.setupCode}</span>}
                             </div>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>
