@@ -259,10 +259,170 @@ const RodPiecesGuide = () => (
     </div>
 );
 
+// ── WORKING ON THE APP ──────────────────────────────────────────────────────────────────────────
+// A different audience from the rest of this guide: not "how do I run this screen" but "how does
+// the system hang together, and what breaks it". Written for Stuart and anyone helping him change
+// the app — so it states rules and diagnostics, not file paths. The engineering-level companion is
+// APP_ARCHITECTURE_BRIEF.md in the repo.
+const AppWorkGuide = () => (
+    <div>
+        <p style={S.stand}>
+            The rest of this guide is for running the system. This section is for CHANGING it — the
+            handful of rules that keep one screen agreeing with another, and the reasons a change can
+            look like it did nothing.
+        </p>
+
+        <h2 style={S.h2}>The principle everything else follows from</h2>
+        <div style={S.rule}>
+            The app was built around the H1 items — all new, created clean, identity and routing
+            stamped correctly from birth. That setup is the reference model. Nearly every recurring
+            problem started when the system was opened to older legacy items and workarounds
+            accumulated to cope with them. A legacy accommodation lives at the EDGE — an adapter when
+            data is imported or read — and never bends the path the new collections travel.
+        </div>
+        <p style={S.p}>
+            The practical form of that: <b>throughout the app we should see the SAME data.</b> One
+            screen must reflect what is actually happening across the whole ecosystem. When two
+            screens disagree about the same fact, that is the bug — not a display problem.
+        </p>
+
+        <h2 style={S.h2}>The mistake that causes most of the bugs</h2>
+        <p style={S.p}>
+            The same fact stored under different names in different places, then read with a test
+            that only knows some of them. It never looks like that from the floor — it looks like a
+            blank card, or a pick list asking for the wrong part.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+            <table style={S.table}>
+                <thead><tr><th style={S.th}>What was reported</th><th style={S.th}>What it actually was</th></tr></thead>
+                <tbody>
+                    <tr><td style={S.td}>“Orders from Stocked Sales show no item information”</td><td style={S.td}>The item code was being written seven different ways. The reader knew six of them.</td></tr>
+                    <tr><td style={S.td}>“CP poles are being treated as small parts”</td><td style={S.td}>Four places asked “is this a pole?” four different ways. Only some knew about RODS. The items were tagged correctly the whole time.</td></tr>
+                    <tr><td style={S.td}>“There is no Cut icon on the 4-ft rods”</td><td style={S.td}>The tool decided from what the item CODE looked like instead of what the item was, so rods named another way had no tool at all.</td></tr>
+                    <tr><td style={S.td}>“The images imported but do not show on the items”</td><td style={S.td}>Two tools matched photos to parts by different keys, so each covered parts the other could not see.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div style={S.rule}>
+            Ask what the item IS, not what its code looks like. Ask once, in one place, and have
+            everything else use that answer.
+        </div>
+        <div style={S.note}>
+            <b>Before adding a field to anything,</b> check what already holds that fact. Before
+            writing a new test for “is this a pole / is this painted / what item is this”, check
+            whether the answer already exists somewhere. A second version of an existing rule is a
+            future bug with a date on it.
+        </div>
+
+        <h2 style={S.h2}>The two product models</h2>
+        <p style={S.p}>
+            The divisions stock differently, and anything touching BOMs has to know which it is
+            looking at. The system tells them apart by one question: does the item have a BOM?
+        </p>
+        <Screen title="Model A — stocked finished assemblies" tag="Brimar · legacy · H2 Simple Elegance">
+            <Path name="Has a BOM" goes="pull exactly what the BOM names">
+                The finished code IS a complete NetSuite assembly. Some bill a phosphated component,
+                some bill the bare base and are painted straight over it. Both are correct — the BOM
+                says which, and it is taken literally.
+            </Path>
+            <Path name="Why literal">
+                NetSuite's assembly build consumes those component lines. Picking anything other than
+                what the build consumes is how the app and NetSuite start disagreeing about what left
+                the shelf.
+            </Path>
+        </Screen>
+        <Screen title="Model B — custom division" tag="H1 · mill and phosphate only">
+            <Path name="No BOM" goes="mill → phosphate → apply the finish">
+                Stocked only as the mill core and its /P phosphate. The finished code is not a stocked
+                assembly, so the routing IS the answer: pull the item's own /P core. Plated finishes
+                take the mill core out to the plater instead.
+            </Path>
+        </Screen>
+
+        <h2 style={S.h2}>Why a fix can look like it did nothing</h2>
+        <ul style={{ paddingLeft: 0, listStyle: 'none', margin: '0 0 18px' }}>
+            <li style={S.edge}>• <b>A work order's parts list is a photograph, not a link.</b> It is
+                taken when the order is raised and never re-read. Correcting an item does NOT correct
+                orders already created from it — that is why screens carry repair buttons (RTG's
+                BOM refresh, the backfills in 11.1). Every data fix has two halves: fix the source,
+                then repair the open orders. One without the other reads as “the fix didn't work”.</li>
+            <li style={S.edge}>• <b>You must hard-refresh (⌘⇧R / Ctrl+Shift+R)</b> after a change ships.
+                The browser holds the old version until you do.</li>
+            <li style={S.edge}>• <b>Occasionally the site serves old code even when the deploy says
+                Ready.</b> If a change is definitely live and definitely doing nothing, that is the
+                first thing to suspect — it is fixed by redeploying with the build cache turned OFF,
+                not by pushing again.</li>
+            <li style={S.edge}>• <b>The NetSuite connection and the customer portal do not deploy with
+                the app.</b> They are deployed separately, by hand. A change to either looks exactly
+                like a broken feature until it is pushed.</li>
+        </ul>
+
+        <h2 style={S.h2}>Changing data in bulk</h2>
+        <p style={S.p}>
+            Nothing outside the app can read or write live data — that is a deliberate security
+            setting, not a limitation to work around. So every bulk correction is a BUTTON inside the
+            app, and each one should offer a <b>dry run</b> that reports exactly what it would touch
+            and writes nothing.
+        </p>
+        <div style={S.note}>
+            <b>Always run the dry pass and read the list.</b> That is where you find out a rule is
+            broader than intended — a pole rule that also catches “rod socket”, a name rule that
+            catches more than the names you meant.
+        </div>
+
+        <h2 style={S.h2}>Refusing well</h2>
+        <div style={S.rule}>
+            Refuse only on complete knowledge. Warn when you might be wrong. Never block someone who
+            is right.
+        </div>
+        <ul style={{ paddingLeft: 0, listStyle: 'none', margin: '0 0 18px' }}>
+            <li style={S.edge}>• A check that refuses on partial information is worse than no check.
+                The operator can SEE the bin is real, so the app just looks broken and gets worked
+                around — which spends the trust the check was bought with.</li>
+            <li style={S.edge}>• <b>Never invent data to make something succeed.</b> A mistyped bin is
+                rejected, never created. An item with no NetSuite id gets its step skipped and named,
+                never adjusted against a guessed record.</li>
+            <li style={S.edge}>• When something is refused, say where the right answer IS — “that bin
+                exists at the other location” is an answer; “not found” is a dead end.</li>
+        </ul>
+
+        <h2 style={S.h2}>Pictures — what outranks what</h2>
+        <p style={S.p}>
+            Items can show a real photograph or a stand-in, and the app now records which is which.
+            Uploading real images in <b>14.5 Batch Processor</b> puts them on the item straight away.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+            <table style={S.table}>
+                <thead><tr><th style={S.th}>Picture</th><th style={S.th}>Where it comes from</th><th style={S.th}>Rank</th></tr></thead>
+                <tbody>
+                    <tr><td style={S.td}>Photograph</td><td style={S.td}>Uploaded in 14.5 Batch Processor / Asset Gallery</td><td style={S.td}><b>Always wins.</b> Never overwritten by a stand-in.</td></tr>
+                    <tr><td style={S.td}>3D render</td><td style={S.td}>Photographed from the item's own .glb</td><td style={S.td}>Stand-in — a real photo replaces it.</td></tr>
+                    <tr><td style={S.td}>Inherited</td><td style={S.td}>A finish variant borrowing its base part's picture</td><td style={S.td}>Stand-in — that finish's own photo replaces it.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div style={S.note}>
+            If images look missing after an import, run <b>4. Master Library → Sync Thumbnails</b>.
+            It now says WHY when it finds nothing — either the part already has its own photograph, or
+            the gallery has no image for that exact pattern and finish, and it names the codes it
+            could not match.
+        </div>
+
+        <h2 style={S.h2}>Reporting something</h2>
+        <p style={S.p}>
+            Use the <b>App Imp.</b> tab, and attach a screenshot whenever you can — the screenshot is
+            usually what identifies the cause. Name the work order or item number if there is one.
+            Marking a card <b>Tested — it works</b> matters as much as raising it: an untested fix and
+            a broken one look identical from here.
+        </p>
+    </div>
+);
+
 const SECTIONS = [
     { key: 'WO', label: 'Work Orders', comp: WorkOrdersGuide },
     { key: 'OC', label: 'Orders & Customers', comp: OrdersCustomersGuide },
     { key: 'RP', label: 'Rod Pieces', comp: RodPiecesGuide },
+    { key: 'APP', label: 'Working on the App', comp: AppWorkGuide },
 ];
 
 const UserGuideTab = () => {
