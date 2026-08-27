@@ -132,13 +132,14 @@ const solidFamily = [
     ok('and the question is asked again', !asked.implied);
 }
 
-// ── FIXTURE 2c: PASSING RINGS AND THE CENTRE BRACKET ─────────────────────────────────────────
-// Stuart 2026-08-22: "standard rings can not pass at all and passing rings can only pass when used
-// with passing brackets… a typical order has standard brackets at left and right sides with either
-// passing in the centers with passing rings or standard in the center with standard rings."
+// ── FIXTURE 2c: PASSING RINGS FOLLOW THE CENTRE BRACKET ──────────────────────────────────────
+// Stuart 2026-08-27, live on H1-75: "the passing bracket is not being shown as an option… if
+// passing bracket is selected then passing rings are the preferred ring selection, if not passing
+// then standard rings."
 //
-// A passing ring on a standard centre bracket is not a preference — it is a curtain that stops in
-// the middle of the window. One axis makes the pair impossible to get wrong.
+// The first cut asked Ring Style up front and filtered the centre bracket by the answer — which
+// hid the passing brackets from the step where the decision is made. The rule runs the other way:
+// the BRACKET is the decision, the rings follow the chosen bracket's tag. No axis, no question.
 {
     const ends = [
         C({ id: 'BKT-L', partId: 'ARM', role: 'BRACKET', position: 'LEFT', nodes: ['bl'] }),   // blank: suits either
@@ -153,33 +154,37 @@ const solidFamily = [
         C({ id: 'RING-PAS', partId: 'H1-1BPR', role: 'RING', position: 'CENTER', passing: 'PASSING', nodes: ['rp'] }),
     ];
     const m = resolve({ choices: passingFamily, answers: {} });
-    const axis = m.axes.find(a => a.key === 'passing');
-    ok('the assembly asks for a ring style', !!axis && !axis.implied);
-    eq('and it offers both', axis.values, ['PASSING', 'STANDARD']);
+    ok('ring style is NOT a question — the bracket is the decision', !m.axes.some(a => a.key === 'passing'));
+    const openCentre = m.slots.find(s => s.kind === 'BRACKET' && s.position === 'CENTER');
+    eq('the centre bracket step offers BOTH styles', openCentre.options.map(o => o.id).sort(), ['BKT-C-PAS', 'BKT-C-STD']);
+    const openRings = m.slots.find(s => s.kind === 'RING');
+    eq('with no bracket chosen, no ring is filtered — guessing hides legitimate choices',
+        openRings.options.map(o => o.id).sort(), ['RING-PAS', 'RING-STD']);
 
-    // STANDARD: standard centre + standard rings, and BOTH end arms still there.
-    const std = resolve({ choices: passingFamily, answers: { passing: 'STANDARD' } });
-    const stdIds = std.choices.filter(c => std.admissible ? true : true).length;   // shape guard only
-    const stdCentre = std.slots.find(s => s.kind === 'BRACKET' && s.position === 'CENTER');
-    eq('a standard order offers the standard centre arm only', stdCentre.options.map(o => o.id), ['BKT-C-STD']);
-    const stdRings = std.slots.find(s => s.kind === 'RING');
-    eq('…and the standard rings only', stdRings.options.map(o => o.id), ['RING-STD']);
+    // STANDARD centre chosen: standard rings only, and BOTH end arms still there.
+    const std = resolve({ choices: passingFamily, answers: {}, selectedIds: ['BKT-C-STD'] });
+    eq('a standard centre bracket keeps only the standard rings',
+        std.slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING-STD']);
+    eq('…and the centre step still offers both styles — a step is never filtered by its own answer',
+        std.slots.find(s => s.kind === 'BRACKET' && s.position === 'CENTER').options.map(o => o.id).sort(), ['BKT-C-PAS', 'BKT-C-STD']);
     ok('the untagged END arms survive a standard order', ['LEFT', 'RIGHT'].every(p =>
         std.slots.find(s => s.kind === 'BRACKET' && s.position === p).options.length === 1));
-    ok('shape guard', stdIds > 0);
 
-    // PASSING: the mirror — and the end arms must NOT vanish, which is the whole trap.
-    const pas = resolve({ choices: passingFamily, answers: { passing: 'PASSING' } });
-    eq('a passing order offers the passing centre arm', pas.slots.find(s => s.kind === 'BRACKET' && s.position === 'CENTER').options.map(o => o.id), ['BKT-C-PAS']);
-    eq('…and the passing rings', pas.slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING-PAS']);
+    // PASSING centre chosen: the mirror — and the end arms must NOT vanish, which is the whole trap.
+    const pas = resolve({ choices: passingFamily, answers: {}, selectedIds: ['BKT-C-PAS'] });
+    eq('a passing centre bracket keeps only the passing rings',
+        pas.slots.find(s => s.kind === 'RING').options.map(o => o.id), ['RING-PAS']);
     ok('⚠ THE END ARMS ARE UNTAGGED AND MUST SURVIVE — tagging them STANDARD would delete them here',
         ['LEFT', 'RIGHT'].every(p => pas.slots.find(s => s.kind === 'BRACKET' && s.position === p).options.length === 1));
 
-    // The refusal tells the operator what to change, because that is what the FAQ acts on.
+    // The refusal names the bracket step, because that is where the fix lives.
     const why = admits(normalizeChoice({ id: 'RING-PAS', partId: 'H1-1BPR', role: 'RING', passing: 'PASSING' }), { passing: 'STANDARD' });
-    ok('a passing ring on a standard order says how to fix it', !why.ok && /switch Ring Style to passing/.test(why.detail), JSON.stringify(why));
+    ok('a passing ring on a standard order says how to fix it', !why.ok && /choose a passing centre bracket/.test(why.detail), JSON.stringify(why));
     const why2 = admits(normalizeChoice({ id: 'RING-STD', partId: 'H1-1BR', role: 'RING', passing: 'STANDARD' }), { passing: 'PASSING' });
     ok('and the other way round', !why2.ok && /cannot pass the centre bracket/.test(why2.detail), JSON.stringify(why2));
+    // A bracket is NEVER refused by the passing rule — that is the H1-75 bug this block pins.
+    const bkt = admits(normalizeChoice({ id: 'BKT-C-PAS', partId: 'ARM-P', role: 'BRACKET', passing: 'PASSING' }), { passing: 'STANDARD' });
+    ok('⚠ a passing BRACKET always stays on offer', bkt.ok, JSON.stringify(bkt));
 }
 
 // ── AND AN ASSEMBLY THAT HAS NEVER HEARD OF PASSING IS UNTOUCHED ─────────────────────────────

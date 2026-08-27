@@ -419,25 +419,19 @@ export const AXES = [
     // where no bracket is made at that depth — inventing a configuration that cannot be built. The
     // mounting hardware establishes the projections; everything else is filtered BY them.
     { key: 'proj', label: 'Bracket Projection', tag: 'proj', order: 40, scope: 'admissible', roles: MOUNTED_ROLES },
-    // ── PASSING (Stuart 2026-08-22) ──────────────────────────────────────────────────────────
-    // "standard rings can not pass at all and passing rings can only pass when used with passing
-    // brackets… a typical order has standard brackets at left and right sides with either passing
-    // in the centers with passing rings or standard in the center with standard rings."
+    // ── PASSING IS NOT AN AXIS (Stuart 2026-08-27, live on H1-75) ────────────────────────────
+    // "the passing bracket is not being shown as an option… if passing bracket is selected then
+    // passing rings are the preferred ring selection, if not passing then standard rings."
     //
-    // Two parts, one decision. A passing ring on a standard centre bracket is not a preference, it
-    // is a curtain that stops in the middle of the window — so the pair must be impossible to get
-    // wrong, not merely discouraged. As an axis it is exactly that: ONE answer filters the centre
-    // bracket and the rings together, and no combination of correct clicks produces a mismatch.
+    // The first cut asked Ring Style as a framing question and filtered the centre bracket by the
+    // answer — which HID the passing brackets from the very step where the decision is actually
+    // made. The rule runs the other way: the BRACKET is the decision, the rings follow it. So there
+    // is no Ring Style question at all; the centre bracket step shows every style, and the chosen
+    // bracket's `passing` tag filters the rings (see slots() — the same chosen-part pattern as
+    // projection pairing). The spec sheet already reads it this direction.
     //
-    // ⚠ THE TAG BELONGS ON THE PIN, NOT THE ITEM, AND THE END BRACKETS STAY BLANK. Passing brackets
-    // are only ever used in the centre, so the left and right arms must suit either order — and
-    // blank already means "suits every value". Tagging an end bracket STANDARD would delete it from
-    // every passing order, which is the one way to get this wrong. The same physical arm is
-    // therefore untagged at the ends and tagged in the centre; tags are per-pin, so that costs
-    // nothing.
-    //
-    // Scoped to brackets and rings because nothing else has an opinion: a finial does not pass.
-    { key: 'passing', label: 'Ring Style', tag: 'passing', order: 45, scope: 'admissible', roles: ['BRACKET', 'RING'] },
+    // ⚠ THE TAG STILL BELONGS ON THE PIN, AND END BRACKETS STAY BLANK: blank means "suits either",
+    // and the same physical arm is untagged at the ends and tagged in the centre.
 ];
 
 // A CONSTRAINT IS NOT AN OPTION. Only a part that IS a value votes for it; a part that merely
@@ -528,14 +522,16 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     if (!skip('mount') && ctx.mount && choice.mount && choice.mount !== ctx.mount) {
         return no('mount', `tagged ${choice.mount}, this order is ${ctx.mount}`);
     }
-    // ⚠ THE REASON IS WRITTEN TO BE ACTED ON, NOT JUST READ (Stuart 2026-08-22: "rather than hiding
-    // i would present a FAQ to switch to passing bracket if you would like to use passing rings").
-    // The operator meets this on the rings step, where the answer is one step behind them — so it
-    // says what to change, in the words of the thing they are looking at.
-    if (!skip('passing') && ctx.passing && choice.passing && choice.passing !== ctx.passing) {
+    // ⚠ THE RINGS FOLLOW THE BRACKET, NEVER THE REVERSE (Stuart 2026-08-27: "if passing bracket is
+    // selected then passing rings are the preferred ring selection, if not passing then standard
+    // rings"). ctx.passing arrives from the CHOSEN bracket's tag (slots() derives it — there is no
+    // Ring Style question), so this rule is scoped to RINGS ONLY: a bracket must never be filtered
+    // by it, or picking one style would hide the way back to the other. The reason is written to be
+    // acted on — it names the bracket step, where the fix lives.
+    if (!skip('passing') && choice.role === 'RING' && ctx.passing && choice.passing && choice.passing !== ctx.passing) {
         return no('passing', ctx.passing === 'STANDARD'
-            ? 'a passing ring only slides past a PASSING centre bracket — switch Ring Style to passing to use it'
-            : 'a standard ring cannot pass the centre bracket — switch Ring Style to standard to use it');
+            ? 'a passing ring only slides past a PASSING centre bracket — this order’s centre bracket is standard; choose a passing centre bracket to use it'
+            : 'a standard ring cannot pass the centre bracket — this order’s centre bracket is a passing style; use passing rings');
     }
     // A rod has no projection either — the arm holding it does. (Setup and drive still apply: a
     // rear track genuinely is double-only.)
@@ -924,6 +920,15 @@ export function slots(choices, answers = {}, selectedIds = []) {
         chosenPairs.filter(c => (c.position || '') !== (position || '')).forEach(c => Object.assign(o, c.projTiers));
         return o;
     };
+    // ── THE RINGS FOLLOW THE CHOSEN BRACKET (Stuart 2026-08-27) ─────────────────────────────
+    // Same chosen-part pattern as projection above: once a `passing`-tagged bracket is picked
+    // (only centre pins carry the tag — end arms are deliberately blank), its value rides the
+    // ring slots at that rod, and admits() filters mismatched rings with a reason that names the
+    // bracket. Before a bracket is chosen nothing is filtered — guessing hides legitimate
+    // choices. Untagged brackets (assemblies with no passing program) filter nothing.
+    const tierPassing = {};
+    choices.filter(c => want.has(c.id) && c.role === 'BRACKET' && c.passing)
+        .forEach(c => { tierPassing[c.tier || ''] = c.passing; });
     const bucket = new Map();
     choices.forEach(c => {
         if (c.always) return;                       // riders are never a question
@@ -961,10 +966,12 @@ export function slots(choices, answers = {}, selectedIds = []) {
             // return that needs 6" is offered on the front rod and refused on the back.
             // A bracket answers to its siblings, not to itself.
             const pair = (kind === 'BRACKET') ? pairExcept(pos) : tierProj;
+            const passHere = tierPassing[tier || ''] || tierPassing[''];
             const v = admits(c, {
                 ...ctx,
                 ...(Object.keys(pair).length ? { tierProj: pair } : {}),
                 ...(tier && pair[tier] !== undefined ? { proj: pair[tier] } : {}),
+                ...(passHere ? { passing: passHere } : {}),
                 position: pos ? pos : undefined, tier: tier || undefined,
             });
             if (v.ok) slot.options.push(c); else slot.rejected.push({ choice: c, ...v });
