@@ -509,7 +509,7 @@ export function buildItemsGridPage({ title, subtitle, items = [], noteLines = []
   });
   const footer = footerNote || (toScale
     ? `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`
-    : `REDUCED ${Math.round((scale / oneToOne) * 100)}% TO FIT ${P.label} — NOT TO SCALE, READ THE DIMENSIONS`);
+    : 'NOT TO SCALE, READ THE DIMENSIONS');
   svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 12}" font-size="${FS.note}" text-anchor="end">${footer}</text>`;
   return { svg: wrapSvg(P, svg), viewMaps: [], paper: PAPERS[paper] ? paper : 'letterP' };
 }
