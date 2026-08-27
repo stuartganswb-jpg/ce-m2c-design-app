@@ -1544,6 +1544,12 @@ export function projectionAudit(model, fabProjOf, flowPreset = null, nameOf = nu
         const key = String(c.partId).toUpperCase();
         if (seen.has(key)) return;                 // one note per PART, however many pins it has
         seen.add(key);
+        // ⚠ A CEILING BRACKET HAS A DROP, NOT A PROJECTION (Stuart 2026-08-27, on H1-75CB's red
+        // note: "ceiling brackets do not get a projection, they get a drop from the ceiling, the
+        // spec sheet generator is showing it correctly"). Projection is a wall-depth question;
+        // demanding the tag from a ceiling pin is a false alarm that teaches people to ignore
+        // this audit. The pin's own mount tag identifies it — no new tag invented.
+        if (String(c.mount || '').toUpperCase() === 'CEILING') return;
         const tagged = c.projs || [];
         const tiered = c.projTiers && Object.keys(c.projTiers).length;
         if (!tagged.length && !tiered) {

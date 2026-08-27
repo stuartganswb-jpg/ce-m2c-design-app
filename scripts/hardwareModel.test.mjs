@@ -1873,6 +1873,9 @@ eq('nonsense is null', measureOf('n/a'), null);
         C({ id: 'BLANKITEM', partId: 'A-BLANKITEM', role: 'BRACKET', position: 'LEFT', proj: '6', nodes: ['a3'] }),
         C({ id: 'UNTAG', partId: 'A-UNTAG', role: 'BRACKET', position: 'LEFT', nodes: ['a4'] }),
         C({ id: 'STALE2', partId: 'A-STALE', role: 'BRACKET', position: 'RIGHT', proj: '6', nodes: ['a5'] }),
+        // Untagged for depth AND ceiling-mounted — a ceiling bracket has a DROP, not a projection
+        // (Stuart 2026-08-27, H1-75CB), so the audit must not demand the tag from it.
+        C({ id: 'CEIL', partId: 'A-CEIL', role: 'BRACKET', position: 'LEFT', mount: 'CEILING', nodes: ['a6'] }),
     ];
     const model = resolve({ choices: cs, answers: {}, selectedIds: ['ROD'] });
     const fab = { 'A-OK': 6, 'A-STALE': 4.625, 'A-BLANKITEM': null, 'A-UNTAG': 6 };
@@ -1882,6 +1885,7 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('a tagged part whose item agrees says nothing', !noteFor('A-OK'));
     ok('a tagged part with a blank item says nothing either', !noteFor('A-BLANKITEM'));
     ok('an UNTAGGED part is the real fault, and it is red', noteFor('A-UNTAG')?.sev === 'red');
+    ok('⚠ a CEILING bracket is exempt — it has a drop, not a projection', !noteFor('A-CEIL'));
     ok('…and it says Vision has nothing to engineer from', /engineer/.test(noteFor('A-UNTAG')?.msg || ''));
     ok('a stale item field is amber, not red', noteFor('A-STALE')?.sev === 'amber');
     ok('…and names both numbers so it can be corrected', /6"/.test(noteFor('A-STALE')?.msg || '') && /4\.625/.test(noteFor('A-STALE')?.msg || ''));
