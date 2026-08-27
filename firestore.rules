@@ -140,6 +140,8 @@ service cloud.firestore {
     match /convert_demand/{document=**}         { allow read, write: if isAuth(); }
     match /sample_chip_orders/{document=**}     { allow read, write: if isAuth(); }
     match /rod_pieces/{document=**}             { allow read, write: if isAuth(); }
+    match /rod_cut_orders/{document=**}         { allow read, write: if isAuth(); }
+    match /core_urgent_demand/{document=**}     { allow read, write: if isAuth(); }
 
     // Anything not explicitly listed above is denied by default.
   }
