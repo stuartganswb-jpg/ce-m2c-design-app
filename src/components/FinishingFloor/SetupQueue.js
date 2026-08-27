@@ -8,7 +8,8 @@ import { makeFullTasks, woItemCodeOf, woItemNameOf, isPlaceholderDims, withItemC
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import { finishRouteOf } from '../Shared/finishRouting';
 import { isPoleCategory, autoFinishStream } from '../Shared/poleCut';
-import { finishCodeFromErp } from '../Shared/finishingTime';
+import { finishCodeFromErp, machineLoadPlan } from '../Shared/finishingTime';
+import { printMachineLoadLabels } from '../Shared/labelPrint';
 import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
@@ -799,6 +800,32 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                         ⇄ <b>PLANNER SUGGESTS:</b> convert {wo.convertSuggestion.qty} × {wo.convertSuggestion.from} → {wo.convertSuggestion.to} (raw short — use the converter above)
                     </div>
                 )}
+
+                {/* ONE ORDER, MACHINE-SIZED LOADS (Stuart 2026-08-28): a small-parts order bigger
+                    than one spray-zone load (70 S · 35 M · 17 L) shows its load breakdown and
+                    prints one label per load — PART 1 OF n, same barcode — so a 280-piece order
+                    stays ONE work order instead of the old several-small-orders workaround. */}
+                {(() => {
+                    const isPole = !!(wo.poles || wo.totalPoles) || /POLE|ROD/.test(String(wo.productType || ''));
+                    const plan = !isPole ? machineLoadPlan(null, wo.paintSize, wo.productType, wo.totalParts) : null;
+                    if (!plan) return null;
+                    return (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', marginTop: '8px', padding: '10px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', letterSpacing: '.03em' }}>
+                                ⚙ <b>MACHINE LOADS:</b> {plan.count} × {plan.perLoad} ({String(wo.paintSize || '').toUpperCase()}){plan.loads[plan.count - 1].qty !== plan.perLoad ? ` · last load ${plan.loads[plan.count - 1].qty}` : ''} — one order, {plan.total} pcs
+                            </span>
+                            <button onClick={() => printMachineLoadLabels({
+                                kind: 'SETUP · SMALL PARTS',
+                                woRef: wo.nsWoTran || wo.woNum || wo.displayId || wo.id,
+                                orderKey: wo.orderKey || wo.salesOrderId || wo.soNum || wo.id,
+                                item: woItemCodeOf(wo) || wo.type || '',
+                                qty: wo.totalParts || '',
+                                finish: wo.recipe || '',
+                                customer: wo.customerName || wo.clientName || wo.customer || ''
+                            }, plan.loads)} style={{ ...btnStyle, padding: '7px 12px', fontSize: '9px', background: 'transparent', border: '1px solid var(--ink)', color: 'var(--ink)', whiteSpace: 'nowrap' }}>🖨 Load Labels ×{plan.count}</button>
+                        </div>
+                    );
+                })()}
                 
                 {isMatched && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '14px', padding: '10px 12px', background: '#eaf5ec', border: '1px solid #3a7d44', borderRadius: '2px' }}>

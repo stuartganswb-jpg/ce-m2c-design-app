@@ -24,7 +24,8 @@ import { LANGS, readLang, writeLang, translator, coverageOf } from '../Shared/i1
 import { holdOrder, releaseHold } from '../Shared/orderHold';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
-import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
+import { printItemLabel, printBinLabel, printItemLabels, printSetupLabel, printHandshakeLabels, printMachineLoadLabels, printStockItemLabels, printRodLabels, code128BSvg, emitLabel } from '../Shared/labelPrint';
+import { machineLoadPlan } from '../Shared/finishingTime';
 import { shortagesOf, coverPlan } from '../Shared/finishRouting';
 import { readConvertDiag, diagSummary, isHealthyState } from '../Shared/convertDiag';
 import { useRetiredSet } from '../Shared/retiredItems';
@@ -2658,7 +2659,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     // prints the 4×2 the Staging Handshake scans AND that rides the fixture into finishing.
     // Barcode = the shared staging key (orderKey), exactly what VERIFY & STAGE resolves.
     const printZebraLabel = (job, type) => {
-        printSetupLabel({
+        const base = {
             kind: type === 'SMALL_PARTS' ? 'SETUP · SMALL PARTS' : String(type || 'SETUP').replace(/_/g, ' '),
             woRef: packRef(job),
             orderKey: job.orderKey || job.salesOrderId || job.soNum || job.id,
@@ -2666,7 +2667,16 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             qty: job.totalParts || '',
             finish: job.recipe || '',
             customer: job.customerName || job.clientName || job.customer || ''
-        });
+        };
+        // ONE ORDER, MACHINE-SIZED LOADS (Stuart 2026-08-28): a small-parts order bigger than one
+        // spray-zone load (70 S · 35 M · 17 L) prints one label PER LOAD — PART 1 OF n — instead
+        // of a single label. Same barcode on every label, so they stage and scan as one order.
+        // Poles are racked, never zone-loaded, and an unsized job falls back to the single label.
+        const isPole = !!(job.poles || job.totalPoles) || /POLE|ROD/.test(String(job.productType || ''));
+        const plan = (type === 'SMALL_PARTS' && !isPole)
+            ? machineLoadPlan(null, job.paintSize, job.productType, job.totalParts) : null;
+        if (plan) return printMachineLoadLabels(base, plan.loads);
+        printSetupLabel(base);
     };
 
     // Filter Logic for cycle counting (robust search header, mirrors HQ Master Library)

@@ -198,6 +198,16 @@ const setupLabelInner = ({ kind, woRef, orderKey, item, qty, finish, customer })
 </div>`;
 };
 export const printSetupLabel = (o) => printDoc(`Setup ${o?.woRef || ''}`, SETUP_CSS, [setupLabelInner(o)]);
+// ── MACHINE LOAD LABELS (Stuart 2026-08-28) ────────────────────────────────────────────────────
+// One work order, machine-sized loads: an order bigger than one spray-zone load prints one label
+// PER LOAD — "SETUP · SMALL PARTS · PART 1 OF 4 · ×70 (of 280)" — every label barcoding the SAME
+// staging key, so the loads travel and scan as one order.
+export const printMachineLoadLabels = (o, loads) => printDoc(`Setup ${o?.woRef || ''} × ${loads.length} loads`, SETUP_CSS,
+    loads.map(l => setupLabelInner({
+        ...o,
+        kind: `${(o && o.kind) || 'SETUP · SMALL PARTS'} · PART ${l.part} OF ${loads.length}`,
+        qty: `${l.qty} (of ${o && o.qty ? o.qty : ''})`,
+    })));
 // Both halves of the handshake: the small-parts label + (when the order has shop custom parts)
 // the CUSTOM label — both barcode the same orderKey, which is exactly how VERIFY & STAGE pairs them.
 export const printHandshakeLabels = (o) => printDoc(`Handshake ${o?.woRef || ''}`, SETUP_CSS, [

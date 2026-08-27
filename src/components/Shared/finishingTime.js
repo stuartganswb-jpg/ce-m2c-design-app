@@ -15,7 +15,9 @@
 //   hand labor   = parts × handSmallMins                 // if the recipe has any Hand Applied step
 
 export const WILDCARD = '*';
-export const SIZE_CAPACITY = { S: 70, M: 35, L: 22 }; // baseline pieces-per-sled by size
+// Baseline pieces per spray-machine ZONE (blue/red) by size — Stuart 2026-08-28: "70 pc each if
+// parts are small, 35 each if medium, and 17 each if large" (L corrected from the old 22).
+export const SIZE_CAPACITY = { S: 70, M: 35, L: 17 };
 
 const normSize = (v) => { const s = String(v || '').trim().toUpperCase(); return ['S', 'M', 'L'].includes(s) ? s : ''; };
 const normType = (v) => String(v || '').trim().toUpperCase() || WILDCARD;
@@ -38,6 +40,22 @@ export function lookupCapacity(matrix, size, type) {
     if (SIZE_CAPACITY[S]) return SIZE_CAPACITY[S];
   }
   return (matrix && Number(matrix.default) > 0) ? Number(matrix.default) : null;
+}
+
+// ── MACHINE LOAD PLAN (Stuart 2026-08-28) ─────────────────────────────────────────────────────
+// One big order stays ONE work order — the shop sets up once for the total — but the spray
+// machine takes it in ZONE-SIZED loads (70 S · 35 M · 17 L per zone, matrix-refinable per type).
+// This turns a WO's quantity into the load list its labels print (PART 1 OF n …), so the floor
+// runs one order in machine-sized bites that visibly belong together, replacing the old
+// workaround of entering several small orders. Returns null when the order fits one load (or
+// the size can't resolve a capacity) — callers then behave exactly as before.
+export function machineLoadPlan(matrix, size, type, qty) {
+  const per = lookupCapacity(matrix, size, type);
+  const n = Math.max(0, Math.floor(Number(qty) || 0));
+  if (!per || !n || n <= per) return null;
+  const loads = [];
+  for (let i = 0, left = n; left > 0; i++) { const q = Math.min(per, left); loads.push({ part: i + 1, qty: q }); left -= q; }
+  return { perLoad: per, total: n, count: loads.length, loads };
 }
 
 // Normalize a work order to [{ size, type, qty }] part lines. Custom WOs carry per-part keys on
