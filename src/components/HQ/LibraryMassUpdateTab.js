@@ -259,14 +259,29 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
     const generateItemThumbs = async () => {
         const asms = inventory.filter(a => a.manufacturingSpecs?.cadUrl && (a.routingType === 'MAIN' || a.recordType === 'PRODUCT'));
         if (!asms.length) return alert('No mainline assemblies with a working GLB on this brand.');
-        if (!window.confirm(`Generate missing item thumbnails from ${asms.length} assembly GLB(s)?\n\n${asms.map(a => `  • ${a.itemName || a.itemId || a.id}`).join('\n')}\n\nOnly items WITHOUT an image are photographed (384×288, from the item's own pinned nodes).`)) return;
+        if (!window.confirm(`Generate missing item thumbnails from ${asms.length} assembly GLB(s)?\n\n${asms.map(a => `  • ${a.itemName || a.itemId || a.id}`).join('\n')}\n\nOnly items WITHOUT any photo are touched (an Asset Gallery photo always wins). Finish variants (/P, /P01, /EP1, /W…) inherit their base part's image until real photos arrive.`)) return;
         const byId = new Map(inventory.map(p => [p.id, p]));
         const byCode = new Map();
         inventory.forEach(p => { [p.legacyErpId, p.itemId].forEach(k => { if (k) byCode.set(String(k).toUpperCase(), p); }); });
         const done = new Set();
-        let made = 0, had = 0, noNodes = 0, failed = 0;
-        setBulkTool({ running: 'thumbs', msg: 'Scanning pins…' });
+        const newUrls = new Map();   // partDocId → url stamped THIS run (inventory state lags)
+        let made = 0, had = 0, noNodes = 0, failed = 0, variants = 0;
+        setBulkTool({ running: 'thumbs', msg: 'Reading the Asset Gallery…' });
         try {
+            // ── THE GALLERY OVERRULES, EVERY TIME (Stuart 2026-08-27) ─────────────────────────
+            // A part with a real photograph (global_assets.associatedParts) is never re-rendered
+            // and never overwritten — the render is the stand-in "till the photos arrive".
+            const gallery = new Map();
+            try {
+                const gSnap = await getDocs(collection(db, 'global_assets'));
+                gSnap.docs.forEach(d => {
+                    const a = d.data();
+                    const url = a.thumbnailUrl || a.url || a.originalUrl || null;
+                    if (url && Array.isArray(a.associatedParts)) a.associatedParts.forEach(pid => { if (!gallery.has(pid)) gallery.set(pid, url); });
+                });
+            } catch (e) { /* gallery unreadable → renders still fill the blanks */ }
+            const photoOf = (p) => p?.finalImageUrl || newUrls.get(p?.id) || gallery.get(p?.id) || null;
+
             for (const asm of asms) {
                 const pinSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', asm.id)));
                 const groups = new Map();
@@ -274,7 +289,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                     const pin = d.data();
                     const part = byId.get(pin.partId) || byCode.get(String(pin.partId || '').toUpperCase());
                     if (!part || done.has(part.id) || groups.has(part.id)) return;
-                    if (part.finalImageUrl) { done.add(part.id); had++; return; }
+                    if (photoOf(part)) { done.add(part.id); had++; return; }
                     const nodes = String(pin.choiceNode || pin.targetNode || '').split(',').map(s => s.trim()).filter(Boolean);
                     if (!nodes.length) { noNodes++; return; }
                     groups.set(part.id, { key: part.id, nodes });
@@ -291,13 +306,43 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                         await uploadBytes(sref, blob);
                         const dl = await getDownloadURL(sref);
                         await updateDoc(doc(db, 'Approved_Designs', partDocId), { finalImageUrl: dl });
+                        newUrls.set(partDocId, dl);
                         made++;
                         setBulkTool({ running: 'thumbs', msg: `${made} thumbnail(s) saved…` });
                     })().catch(() => { failed++; }));
                 }, { w: 384, h: 288 });
                 await Promise.all(uploads);
             }
-            alert(`🖼 Item thumbnails from assembly GLBs:\n• ${made} created\n• ${had} already had an image (untouched)\n• ${noNodes} pin(s) carry no node to photograph\n• ${failed} render/upload failure(s)`);
+
+            // ── FINISH VARIANTS INHERIT THE BASE'S PICTURE (Stuart 2026-08-27) ────────────────
+            // "broaden the search so that it applies the thumbnails to even the finished items …
+            // /P, /P01, /EP1 etc — i would prefer to at least have the thumbnail of the part,
+            // better than nothing till the photos arrive." A variant code is BASE/SUFFIX; a
+            // variant with no photo of its own takes the base's — the base's gallery photo first,
+            // else the thumbnail just rendered (or previously stamped). Its own photo, whenever it
+            // arrives in the gallery, overrules on every screen that reads the gallery.
+            setBulkTool({ running: 'thumbs', msg: 'Filling finish variants from their base parts…' });
+            const vBatchDocs = [];
+            for (const p of inventory) {
+                const code = String(p.legacyErpId || p.itemId || '');
+                const cut = code.indexOf('/');
+                if (cut <= 0) continue;                     // not a variant code
+                if (photoOf(p)) continue;                   // its own photo (gallery or stamped) wins
+                const base = byCode.get(code.slice(0, cut).toUpperCase());
+                const src = base && base.id !== p.id ? photoOf(base) : null;
+                if (!src) continue;
+                vBatchDocs.push({ id: p.id, url: src });
+            }
+            for (let i = 0; i < vBatchDocs.length; i += 400) {
+                const batch = writeBatch(db);
+                vBatchDocs.slice(i, i + 400).forEach(v => batch.update(doc(db, 'Approved_Designs', v.id), { finalImageUrl: v.url }));
+                await batch.commit();
+                variants = Math.min(i + 400, vBatchDocs.length);
+                setBulkTool({ running: 'thumbs', msg: `Variants filled: ${variants} / ${vBatchDocs.length}…` });
+            }
+            variants = vBatchDocs.length;
+
+            alert(`🖼 Item thumbnails from assembly GLBs:\n• ${made} rendered from geometry\n• ${variants} finish variant(s) (/P, /EPn, /W…) filled from their base part\n• ${had} already had a photo (untouched — gallery always wins)\n• ${noNodes} pin(s) carry no node to photograph\n• ${failed} render/upload failure(s)`);
         } catch (e) { alert('Thumbnail run failed: ' + (e?.message || e)); }
         finally { setBulkTool({ running: '', msg: '' }); }
     };
