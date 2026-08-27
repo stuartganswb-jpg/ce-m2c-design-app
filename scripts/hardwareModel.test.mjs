@@ -1876,9 +1876,12 @@ eq('nonsense is null', measureOf('n/a'), null);
         // Untagged for depth AND ceiling-mounted — a ceiling bracket has a DROP, not a projection
         // (Stuart 2026-08-27, H1-75CB), so the audit must not demand the tag from it.
         C({ id: 'CEIL', partId: 'A-CEIL', role: 'BRACKET', position: 'LEFT', mount: 'CEILING', nodes: ['a6'] }),
+        // A DOUBLE bracket vs the legacy master's ONE projection field — guaranteed noise, exempt
+        // (Stuart 2026-08-27: "the legacy on the item master does not have fields for double brackets").
+        C({ id: 'DBL', partId: 'A-DBL', role: 'BRACKET', position: 'LEFT', setup: 'DOUBLE', proj: '6.5', nodes: ['a7'] }),
     ];
     const model = resolve({ choices: cs, answers: {}, selectedIds: ['ROD'] });
-    const fab = { 'A-OK': 6, 'A-STALE': 4.625, 'A-BLANKITEM': null, 'A-UNTAG': 6 };
+    const fab = { 'A-OK': 6, 'A-STALE': 4.625, 'A-BLANKITEM': null, 'A-UNTAG': 6, 'A-DBL': 3.25 };
     const notes = projectionAudit(model, (id) => fab[id]);
     const noteFor = (code) => notes.find(n => n.msg.startsWith(code));
 
@@ -1886,6 +1889,7 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('a tagged part with a blank item says nothing either', !noteFor('A-BLANKITEM'));
     ok('an UNTAGGED part is the real fault, and it is red', noteFor('A-UNTAG')?.sev === 'red');
     ok('⚠ a CEILING bracket is exempt — it has a drop, not a projection', !noteFor('A-CEIL'));
+    ok('⚠ a DOUBLE bracket is exempt from the stale-field note — the master holds one number', !noteFor('A-DBL'));
     ok('…and it says Vision has nothing to engineer from', /engineer/.test(noteFor('A-UNTAG')?.msg || ''));
     ok('a stale item field is amber, not red', noteFor('A-STALE')?.sev === 'amber');
     ok('…and names both numbers so it can be corrected', /6"/.test(noteFor('A-STALE')?.msg || '') && /4\.625/.test(noteFor('A-STALE')?.msg || ''));

@@ -1560,7 +1560,12 @@ export function projectionAudit(model, fabProjOf, flowPreset = null, nameOf = nu
             return;
         }
         const old = legacy(c.partId);
-        if (old != null && !tiered && !tagged.some(t => sameMeasure(t, old))) {
+        // A DOUBLE bracket carries two depths and the legacy item master has ONE projection field
+        // (Stuart 2026-08-27: "the legacy on the item master does not have fields for double
+        // brackets — that is the other mismatch"). Comparing two numbers against a field that can
+        // only hold one is guaranteed noise, so doubles are exempt the same way tiered pins are.
+        const isDouble = String(c.setup || '').toUpperCase() === 'DOUBLE';
+        if (old != null && !tiered && !isDouble && !tagged.some(t => sameMeasure(t, old))) {
             out.push({ sev: 'amber', kind: 'projection',
                 msg: `${name(c.partId)} is tagged ${tagged.map(t => `${t}"`).join(' / ')}, but its ITEM still says ${old}" in the old projection field. Nothing reads that field any more — clear it or correct it before somebody believes it.` });
         }
