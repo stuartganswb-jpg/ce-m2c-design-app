@@ -201,9 +201,68 @@ const OrdersCustomersGuide = () => (
     </div>
 );
 
+// Rod Pieces: the offcut ledger — 6.5 setup, the cut-station panel, the shelf screens. (2026-08-27)
+const RodPiecesGuide = () => (
+    <div>
+        <h2 style={S.h2}>The idea in one minute</h2>
+        <p style={S.p}>Rods, poles and fascia are stocked in full lengths (12, 20 or 22 ft), sold by the foot — and every
+        sale leaves an offcut. NetSuite keeps <b>feet</b>, which is the right number for money and the wrong number for
+        the saw: "200 ft available" can be a pile of 3 ft stubs that will never make a 9 ft pole. So the app keeps a
+        <b> piece ledger</b> alongside: full rods on the shelf stay an unlabelled count, and the moment a rod is cut,
+        the remainder gets a <b>piece #, a label and a ledger row</b>. From then on the system can answer the real
+        question — "what's the longest piece we actually have?" — and recommend which piece to pull for the next order.</p>
+        <div style={{ overflowX: 'auto' }}>
+            <table style={S.table}>
+                <thead><tr><th style={S.th}>You want to…</th><th style={S.th}>Go to</th></tr></thead>
+                <tbody>
+                    <tr><td style={S.td}>Declare how a rod item is stocked (12 / 20 / 22 ft) so the tools switch on for it</td><td style={S.td}><b>6.5 Tools, Specs &amp; FAQs → Rod Piece Stock</b></td></tr>
+                    <tr><td style={S.td}>See every offcut, reprint a label, scrap a piece</td><td style={S.td}><b>6.5 Rod Piece Stock</b> (HQ) or the same shelf panel on <b>Shop Floor → Custom</b></td></tr>
+                    <tr><td style={S.td}>Decide which rod to pull for an order's cuts</td><td style={S.td}>The <b>✂ Rod Pieces — Cut Source</b> panel on the active shop custom card</td></tr>
+                    <tr><td style={S.td}>Get the offcuts standing in the shop today into the system</td><td style={S.td}>Either shelf panel → <b>＋ Add &amp; label</b></td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h2 style={S.h2}>Setting up <span style={S.tabno}>(6.5 → Rod Piece Stock — once per rod item)</span></h2>
+        <Screen title="The declaration" tag="a row here is the on-switch">
+            <Path name="1 · Piece length">At the bottom of the tool, add a row per stocked rod item: the item code and the length it arrives in (ft), optionally its home bin. Finish variants match automatically — declaring the base code covers its /P and plated spellings.</Path>
+            <Path name="2 · Today's shelf">Walk the rack once with <b>＋ Add a standing piece</b>: item, measured length, brand — each add prints the piece label to stick on the pole. Full uncut rods are NOT added; they stay a shelf count.</Path>
+            <Path name="No row, no tool">An item without a declaration gets no recommendation panel at the saw — the system won't guess how something is stocked.</Path>
+        </Screen>
+
+        <h2 style={S.h2}>At the saw <span style={S.tabno}>(Shop Floor → Custom → the active card)</span></h2>
+        <Screen title="✂ Rod Pieces — Cut Source" tag="recommend → log → label">
+            <Path name="1 · Read the recommendation">Every cut on the order gets a line: "USE PIECE P-… (7 ft) — scrap the 12&quot;" or "CUT NEW 12 ft ROD — label the 72&quot; remainder". The dropdown lists the alternatives if the recommended pole isn't where it should be.</Path>
+            <Path name="2 · Cut, then Log Cut">Make the cut, press <b>✂ Log Cut</b>, confirm. The ledger updates for every tablet at once — a piece two saws both wanted can only be spent once.</Path>
+            <Path name="3 · Label the remainder" goes="the label IS the inventory">If the remainder is worth keeping the piece label prints immediately — put it on the remaining pole before it leaves your hand. An unlabelled offcut doesn't exist.</Path>
+            <Path name="4 · Scrap the stub">If the remainder is too short the panel says so: bin it, done — the feet post to NetSuite by themselves.</Path>
+            <Path name="Multi-cut orders">Left/centre/right cuts are matched one by one, and a remainder from the first cut is offered to the second. <b>Mitered</b> poles are the exception: angled joints must match, so ALL pieces come from ONE rod — the panel combines them for you.</Path>
+        </Screen>
+        <div style={S.rule}><b>The waste rule</b> (why the panel says what it says): always use an offcut when possible — a 7 ft piece is the right answer for a 6 ft order. Cutting a piece may leave at most <b>18"</b> of scrap, and a keepable remainder must be at least <b>36"</b>. In between is the dead zone: from a 96" piece, a 72" order would leave 24" — unusable AND too wasteful, so take a new rod and leave the piece for an order it fits. An 80" order leaves 16" — use the piece, scrap the stub. You can override a dead-zone call, but the panel makes you say so.</div>
+
+        <h2 style={S.h2}>The shelf <span style={S.tabno}>(both vantages — same ledger)</span></h2>
+        <Screen title="Rod Piece Inventory" tag="HQ 6.5 · Shop Custom tab">
+            <Path name="Per item">Offcut count, total feet in pieces, and the number that matters: the <b>longest piece</b>. Expand for every piece — length, age, which order it came from.</Path>
+            <Path name="🖨 / 🗑">Reprint a lost label; scrap a damaged or hopeless piece. Scrapping posts the feet to NetSuite automatically.</Path>
+            <Path name="🧹 The sweep">Anything under 36" is scrap by standing rule — when stubs appear (a dead-zone override, a miscut), the banner offers to sweep them all in one press.</Path>
+        </Screen>
+
+        <div style={S.note}><b>NetSuite stays feet-based — and honest.</b> Selling by the foot bills the feet; an offcut is still sellable inventory, so nothing moves in NetSuite when a piece is born. Only <b>scrap</b> adjusts NetSuite (rounded up to the foot, so the count can only ever understate the shelf). Postings ride the same staged queue as everything else — 11.1 → NetSuite Sync Queue if one needs a look; a posting that couldn't identify its item shows a <b>⟳ post to NS</b> retry in the ledger's history view.</div>
+
+        <h2 style={S.h2}>Edges to know</h2>
+        <ul style={{ paddingLeft: '4px', listStyle: 'none' }}>
+            <li style={S.edge}>• <b>This is not the WMS Rod Cuts tab.</b> That flow cuts stocked 8 ft rods into stocked 6/4 ft <em>items</em> (one NetSuite item becomes another). This ledger tracks <em>offcuts of the same item</em> born at the custom saw. Log each cut in the flow that raised it — never both.</li>
+            <li style={S.edge}>• <b>Pieces belong to a brand.</b> A CE order is only offered CE pieces — matching how NetSuite splits the stock. Pieces added without a brand show everywhere.</li>
+            <li style={S.edge}>• <b>Full rods never get labels.</b> If someone labels a full rod as a piece, scrap-math still works but the shelf count reads low — labels are for remainders only.</li>
+            <li style={S.edge}>• <b>Log the cut when you make it,</b> not at shift end — the recommendation for the next order is only as honest as the ledger at that moment.</li>
+        </ul>
+    </div>
+);
+
 const SECTIONS = [
     { key: 'WO', label: 'Work Orders', comp: WorkOrdersGuide },
     { key: 'OC', label: 'Orders & Customers', comp: OrdersCustomersGuide },
+    { key: 'RP', label: 'Rod Pieces', comp: RodPiecesGuide },
 ];
 
 const UserGuideTab = () => {
