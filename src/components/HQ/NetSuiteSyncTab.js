@@ -172,13 +172,19 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     const probeColumns = async (candidates, addLogFn) => {
         if (!candidates.length) return { sql: '', aliases: new Set() };
         const sel = (list) => list.map(c => `${c.expr} AS ${c.alias}`).join(', ');
+        // Probe with the SAME joins the item query uses. Probing bare `FROM item` silently failed
+        // every ItemVendor.* candidate on every account, forever — which is why vendorNsId (the
+        // PO-alignment id) and the vendor purchase price never actually imported, and PO vendor
+        // matching lived on names alone (Christie 2026-08-27: a NetSuite vendor RENAME broke PO
+        // creation, precisely because the id fallback had no data).
+        const probeFrom = `FROM item LEFT JOIN ItemVendor ON ItemVendor.item = item.id LEFT JOIN Vendor ON ItemVendor.vendor = Vendor.id WHERE item.id = 0`;
         try {
-            await executeSuiteQL(`SELECT ${sel(candidates)} FROM item WHERE item.id = 0`);
+            await executeSuiteQL(`SELECT ${sel(candidates)} ${probeFrom}`);
             return { sql: candidates.map(c => `${c.expr} AS ${c.alias},`).join('\n                        '), aliases: new Set(candidates.map(c => c.alias)) };
         } catch (batchErr) { /* one of them is wrong — find out which */ }
         const good = [], bad = [];
         for (const c of candidates) {
-            try { await executeSuiteQL(`SELECT ${sel([c])} FROM item WHERE item.id = 0`); good.push(c); }
+            try { await executeSuiteQL(`SELECT ${sel([c])} ${probeFrom}`); good.push(c); }
             catch (e) { bad.push(c); }
         }
         if (bad.length && addLogFn) addLogFn(`⚠ ${bad.length} NetSuite column(s) not available on this account — syncing without them: ${bad.map(c => c.expr).join(', ')}.`, 'warn');
