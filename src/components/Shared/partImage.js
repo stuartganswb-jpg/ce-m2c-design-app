@@ -15,9 +15,11 @@
 //     GALLERY        a real photograph (14.5 Batch Processor → global_assets)   ← always wins
 //     BASE_INHERIT   a variant borrowing its base part's picture                ← stand-in
 //     GLB_RENDER     geometry photographed from the assembly's own .glb         ← stand-in
-//     (unstamped)    written before provenance existed — treated as REAL, because
-//                    most of them are, and demoting someone's uploaded photo to a
-//                    stand-in would let a render overwrite it. The one safe default.
+//     (unstamped)    written before provenance existed. Classified by EVIDENCE, not by
+//                    assumption: a `dynamic_assets/auto_thumbs/` URL is a render, and a
+//                    variant holding its base part's exact URL is an inherited copy.
+//                    Anything else stays REAL — demoting someone's uploaded photo would
+//                    let a render overwrite it, and that is the one mistake with no undo.
 //
 // A stand-in is always overwritable by a photograph. A photograph is never overwritten by a
 // stand-in. Two photographs are the same photograph arriving twice, so the newer one may land.
@@ -26,22 +28,71 @@ export const IMG_GALLERY = 'GALLERY';
 export const IMG_BASE_INHERIT = 'BASE_INHERIT';
 export const IMG_GLB_RENDER = 'GLB_RENDER';
 
+/** EP01 → EP1; P01 stays P01 (master_finishes zero-pads P##/S##, parts don't zero-pad EP). */
+export const normFinish = (s) => String(s || '').toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1');
+
+const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
+
+/** Split an item code into { pattern, finish }. finish is '' for a base code (no slash). */
+export const splitCode = (erp) => {
+    const s = U(erp);
+    if (!s) return null;
+    const i = s.indexOf('/');
+    return i < 0 ? { pattern: s, finish: '' } : { pattern: s.slice(0, i), finish: normFinish(s.slice(i + 1)) };
+};
+
 const AUTO = new Set([IMG_BASE_INHERIT, IMG_GLB_RENDER]);
+
+// LEGACY STAND-INS CARRY THEIR OWN EVIDENCE (Stuart 2026-08-27, second pass: "in master library
+// with .glb black and white thumbnail which is the fall back").
+//
+// The first pass defaulted an UNSTAMPED image to "real", to protect uploads made before provenance
+// existed. Correct in principle, and it locked in exactly the pictures he was complaining about:
+// every .glb render already on a part predates the stamp, so it read as a photograph and refused
+// to be replaced by one. The default protected the stand-ins it was meant to demote.
+//
+// It does not have to be a guess. The render sweep uploads to a path nothing else writes —
+// `dynamic_assets/auto_thumbs/` — while real photographs come from `global_assets/`. A Firebase
+// download URL percent-encodes the slashes, so both spellings are matched.
+const AUTO_PATH_RE = /dynamic_assets(\/|%2F)auto_thumbs(\/|%2F)/i;
+export const isAutoThumbUrl = (url) => AUTO_PATH_RE.test(String(url == null ? '' : url));
 
 /** Where a part's current picture came from. '' when it has none. */
 export const imageSourceOf = (part) => {
     if (!part || !part.finalImageUrl) return '';
-    return String(part.imageSource || '').toUpperCase();
+    const stamped = String(part.imageSource || '').toUpperCase();
+    if (stamped) return stamped;
+    // Unstamped: infer from where the file lives. Only the render path is inferable — anything
+    // else stays unstamped and is treated as real, which is still the safe direction.
+    return isAutoThumbUrl(part.finalImageUrl) ? IMG_GLB_RENDER : '';
 };
 
 /** A stand-in — a render or an inherited base picture — that a real photograph may overwrite. */
 export const isAutoImage = (part) => AUTO.has(imageSourceOf(part));
 
 /**
+ * A finish variant showing its BASE part's picture rather than one of its own finish. The sweep
+ * that filled variants predates provenance too, and its copies are indistinguishable from a real
+ * photo by URL alone — but not by comparison: the variant's URL IS the base's URL. That is the
+ * exact inverse of what the sweep did, so it identifies its work without guessing.
+ * @param {object} part      the variant
+ * @param {Map} byCode       PATTERN(upper) → part, over the same inventory
+ */
+export const isInheritedFromBase = (part, byCode) => {
+    if (!part || !part.finalImageUrl || !byCode) return false;
+    if (imageSourceOf(part) === IMG_BASE_INHERIT) return true;
+    const k = splitCode(part.legacyErpId || part.itemId);
+    if (!k || !k.finish) return false;                     // a base part inherits from nothing
+    const base = byCode.get(k.pattern);
+    return !!(base && base.id !== part.id && base.finalImageUrl === part.finalImageUrl);
+};
+
+/**
  * May a REAL photograph be written onto this part? True when it has no picture at all, or only a
  * stand-in. This is the test that replaces `!part.finalImageUrl` everywhere a gallery photo lands.
  */
-export const photoMayOverwrite = (part) => !part || !part.finalImageUrl || isAutoImage(part);
+export const photoMayOverwrite = (part, byCode) =>
+    !part || !part.finalImageUrl || isAutoImage(part) || (byCode ? isInheritedFromBase(part, byCode) : false);
 
 /**
  * May a STAND-IN be written onto this part? Only when it has no picture at all. A render must never
@@ -61,19 +112,6 @@ export const imageUpdate = (url, source) => ({ finalImageUrl: url, imageSource: 
 //     base code like H1-75BF was excluded by construction and could never receive its own photo.
 // Between them a "plate only" finial import landed nowhere: the asset pointed at the base, and the
 // only stamper refused to look at base codes. Both keys are honoured here, in one place.
-
-/** EP01 → EP1; P01 stays P01 (master_finishes zero-pads P##/S##, parts don't zero-pad EP). */
-export const normFinish = (s) => String(s || '').toUpperCase().trim().replace(/^EP0+(\d+)$/, 'EP$1');
-
-const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
-
-/** Split an item code into { pattern, finish }. finish is '' for a base code (no slash). */
-export const splitCode = (erp) => {
-    const s = U(erp);
-    if (!s) return null;
-    const i = s.indexOf('/');
-    return i < 0 ? { pattern: s, finish: '' } : { pattern: s.slice(0, i), finish: normFinish(s.slice(i + 1)) };
-};
 
 /**
  * Index global_assets docs for lookup. Returns { byPartId, byCode } where byCode is keyed

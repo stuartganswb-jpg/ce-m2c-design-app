@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage, imageUpdate, IMG_GALLERY } from '../Shared/partImage';
+import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage, isInheritedFromBase, splitCode, imageUpdate, IMG_GALLERY } from '../Shared/partImage';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { buildStockFinPayload } from '../Shared/stockRun';
 import { finishCodeFromErp } from '../Shared/finishingTime';
@@ -756,20 +756,36 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
 
           const mine = inventory.filter(p =>
               p.brandId === activeBrand || (p.sharedBrands && p.sharedBrands.includes(activeBrand)));
+          // PATTERN → base part, so a variant showing its BASE's picture is recognised as the
+          // inherited stand-in it is (that sweep predates provenance and stamped nothing).
+          const byCode = new Map();
+          mine.forEach(p => { const k = splitCode(p.legacyErpId || p.itemId); if (k && !k.finish) byCode.set(k.pattern, p); });
 
           const hits = [];
-          let blocked = 0;
+          const blockedCodes = [];
+          const unmatched = [];
           mine.forEach(p => {
               const img = galleryImageForPart(p, index);
-              if (!img || img === p.finalImageUrl) return;
+              if (!img) { if (p.legacyErpId) unmatched.push(String(p.legacyErpId).toUpperCase()); return; }
+              if (img === p.finalImageUrl) return;
               // A photograph replaces a render or an inherited stand-in — never another photograph.
-              if (!photoMayOverwrite(p)) { blocked++; return; }
-              hits.push({ id: p.id, img, replacing: isAutoImage(p) });
+              if (!photoMayOverwrite(p, byCode)) { blockedCodes.push(String(p.legacyErpId || p.id).toUpperCase()); return; }
+              hits.push({ id: p.id, img, replacing: isAutoImage(p) || isInheritedFromBase(p, byCode) });
           });
+          const blocked = blockedCodes.length;
 
           if (hits.length === 0) {
               setSyncingThumbs(null);
-              return alert(`No new matches.\n\nChecked ${mine.length} part(s) against ${index.byPartId.size + index.byCode.size} gallery image link(s).${blocked ? `\n\n${blocked} part(s) already carry their own photograph — those are never overwritten.` : ''}`);
+              // SAY WHY, NOT JUST "NO". A bare "no new matches" is what sent us hunting the last
+              // time; the two real answers — the gallery has no image for this finish, or the part
+              // already holds its own photograph — need telling apart from the screen.
+              const sample = unmatched.slice(0, 12).join(', ');
+              return alert(
+                  `No new matches.\n\n` +
+                  `Checked ${mine.length} part(s) against ${index.byPartId.size + index.byCode.size} gallery image link(s).\n` +
+                  `• ${blocked} already carry their own photograph — never overwritten\n` +
+                  `• ${unmatched.length} have no gallery image for their exact pattern + finish\n` +
+                  (sample ? `\nNo image found for: ${sample}${unmatched.length > 12 ? `, +${unmatched.length - 12} more` : ''}\n\nIf one of those IS in the Asset Gallery, its finish id doesn't match the item code — check the finish on the asset.` : ''));
           }
 
           const replaced = hits.filter(h => h.replacing).length;

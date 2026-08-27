@@ -490,11 +490,15 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     if (k && `${k.pattern}/${k.finish}` === want) targets.push(p);
                 });
             }
+            // Base-part map, so a variant still showing its BASE's picture is recognised as the
+            // inherited stand-in it is rather than mistaken for its own photograph.
+            const byBase = new Map();
+            (partIndex?.list || []).forEach(p => { const k = splitCode(p.legacyErpId || p.itemId); if (k && !k.finish) byBase.set(k.pattern, p); });
             const seen = new Set();
             for (const t of targets) {
                 if (!t || !t.id || seen.has(t.id)) continue;
                 seen.add(t.id);
-                if (!photoMayOverwrite(t)) continue;                  // a real photo already there
+                if (!photoMayOverwrite(t, byBase)) continue;           // a real photo already there
                 await updateDoc(doc(db, 'Approved_Designs', t.id), imageUpdate(thumbUrl, IMG_GALLERY));
             }
         } catch (e) {
