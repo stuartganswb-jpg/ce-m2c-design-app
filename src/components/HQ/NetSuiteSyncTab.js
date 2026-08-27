@@ -7,6 +7,7 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { buildNsItemBody } from "../Shared/nsItemFields";
 import { isPoleCategory, autoFinishStream, autoPartHandlingFor } from "../Shared/poleCut";
 import { woItemCodeOf } from "../Shared/workOrderContract";
+import { SOURCING, sourcingOf } from "../Shared/sourcing";
 
 // ONE copy now — Shared/brandNetsuite.js (2026-08-25).
 
@@ -55,6 +56,7 @@ const PULL_FIELDS = [
     { key: 'isInHouse', label: 'In-House · custitem26' },
     { key: 'isStocked', label: 'Stocked · custitem27' },
     { key: 'isRetired', label: 'Old / retired · custitem28' },
+    { key: 'sourcingMode', label: 'Sourced BOTH ways · custitem_sourcing_both' },
     { key: 'outsourceAction', label: 'Outsource action' },
     { key: 'partHandling', label: 'Part handling' },
     { key: 'uom', label: 'UOM' },
@@ -72,7 +74,7 @@ const PULL_FIELDS = [
 // about "should NetSuite own the tax schedule" as a separate decision from "the cost category".
 const NS_MIRROR_KEYS = ['purchasePrice', 'nsClass', 'nsLocation', 'costCategory', 'taxSchedule', 'finishDetail', 'partCategory', 'purchaseDescription', 'salesDescription', 'vendorNameText', 'useBins', 'trackLandedCost', 'sendToFicalora'];
 // The three NetSuite checkbox fields, and the app spec each one mirrors.
-const NS_FLAG_FIELDS = { isStocked: 'custitem27', isInHouse: 'custitem26', isRetired: 'custitem28' };
+const NS_FLAG_FIELDS = { isStocked: 'custitem27', isInHouse: 'custitem26', isRetired: 'custitem28', sourcingBoth: 'custitem_sourcing_both' };
 const PUSH_FIELDS = [
     { key: 'itemid', label: 'Item # (SKU)', def: true },
     { key: 'displayname', label: 'Display name', def: true },
@@ -81,6 +83,9 @@ const PUSH_FIELDS = [
     { key: 'isStocked', label: 'Stocked · custitem27', def: false, flag: true },
     { key: 'isInHouse', label: 'In-House · custitem26', def: false, flag: true },
     { key: 'isRetired', label: 'Old / retired · custitem28', def: false, flag: true },
+    // Seeds the app's BOTH flags INTO NetSuite once Eric creates custitem_sourcing_both —
+    // run this push BEFORE the first pull with that field live, or app-set BOTHs get cleared.
+    { key: 'sourcingBoth', label: 'Sourced BOTH · custitem_sourcing_both', def: false, flag: true },
 ];
 const defaultPullFlags = () => PULL_FIELDS.reduce((a, f) => ({ ...a, [f.key]: true }), {});
 const defaultPushFlags = () => PUSH_FIELDS.reduce((a, f) => ({ ...a, [f.key]: f.def }), {});
@@ -667,6 +672,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             const extraCols = await probeColumns([
                 { expr: 'ItemVendor.vendor', alias: 'vendor_internal_id' },
                 { expr: 'ItemVendor.purchaseprice', alias: 'vendor_purchase_price' },
+                { expr: 'item.custitem_sourcing_both', alias: 'sourcing_both' },
                 { expr: 'item.cost', alias: 'purchase_price' },
                 { expr: 'item.vendorname', alias: 'vendor_name_text' },
                 { expr: 'BUILTIN.DF(item.class)', alias: 'ns_class' },
@@ -999,6 +1005,16 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // alongside the name so PO creation can stop guessing (StockViewTab resolves this
                 // first and only falls back to name-matching for items synced before this existed).
                 if (hasCol('vendor_internal_id') && nsHasVal(item.vendor_internal_id)) newSpecs.vendorNsId = String(item.vendor_internal_id);
+                // SOURCED BOTH WAYS (Stuart 2026-08-28): custitem_sourcing_both is NetSuite's word
+                // for the app's BOTH sourcing mode, so Eric maintains make-AND-buy in one place.
+                // T → BOTH (isInHouse forced true — the sourcingPatch pairing); F → the mode falls
+                // back to custitem26 (IN/OUT), so un-ticking in NetSuite clears an app-set BOTH.
+                // Field not created in NetSuite yet → column absent → key never written → an
+                // app-set BOTH survives every sync untouched, exactly as before.
+                if (hasCol('sourcing_both')) {
+                    if (nsBool(item.sourcing_both)) { newSpecs.sourcingMode = SOURCING.BOTH; newSpecs.isInHouse = true; }
+                    else newSpecs.sourcingMode = isInHouse ? SOURCING.IN : SOURCING.OUT;
+                }
                 // Vendor purchase price ≠ average cost. PO line rates use this when NetSuite has it.
                 if (hasCol('vendor_purchase_price')) {
                     const vpp = parseFloat(item.vendor_purchase_price);
@@ -1206,8 +1222,12 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
             if (enabledFlags.length) {
                 addLog(`Reading current ${enabledFlags.map(k => NS_FLAG_FIELDS[k]).join(' / ')} values from NetSuite for ${items.length} item(s)…`, 'info');
                 const ids = items.map(p => String(p.netSuiteInternalId)).filter(Boolean);
+                // Only the ENABLED flags' columns — custitem_sourcing_both may not exist yet, and
+                // selecting a missing column fails the whole read (the guard below then stops the
+                // push safely rather than writing blind).
+                const flagCols = enabledFlags.map(k => NS_FLAG_FIELDS[k]).join(', ');
                 for (let i = 0; i < ids.length; i += 400) {
-                    const rows = await suiteqlQuery(`SELECT id, custitem26, custitem27, custitem28 FROM item WHERE id IN (${ids.slice(i, i + 400).join(',')})`);
+                    const rows = await suiteqlQuery(`SELECT id, ${flagCols} FROM item WHERE id IN (${ids.slice(i, i + 400).join(',')})`);
                     (rows || []).forEach(r => { nsFlagById[String(r.id)] = r; });
                 }
                 // Read failed entirely → we have no idea what NetSuite currently holds, and pushing a
@@ -1218,10 +1238,13 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                     setIsSyncing(false); return;
                 }
             }
+            // sourcingBoth is DERIVED (sourcingMode === 'BOTH'), not a stored boolean spec —
+            // the other three flags read their spec field directly.
+            const flagWant = (specs, k) => k === 'sourcingBoth' ? sourcingOf(specs) === SOURCING.BOTH : !!specs[k];
             const flagDelta = (p, k) => {
                 const row = nsFlagById[String(p.netSuiteInternalId)];
                 if (!row) return null;                                   // unknown in NetSuite — don't claim a change
-                const want = !!(p.manufacturingSpecs || {})[k];
+                const want = flagWant(p.manufacturingSpecs || {}, k);
                 const have = nsBoolOf(row[NS_FLAG_FIELDS[k]]);
                 return want === have ? 'same' : (want ? 'set' : 'clear');
             };
@@ -1251,7 +1274,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 enabledFlags.forEach(k => {
                     const d = flagDelta(p, k);
                     if (d === null) return;                              // not in NetSuite — nothing to write onto
-                    full[NS_FLAG_FIELDS[k]] = !!specs[k];
+                    full[NS_FLAG_FIELDS[k]] = flagWant(specs, k);
                     if (d !== 'same') flagChange = true;
                 });
                 // A flags-only run touches ONLY the items that actually disagree.
