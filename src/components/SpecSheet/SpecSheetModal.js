@@ -275,11 +275,20 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
     return sku || null;
   }, [libraryParts, custKey]);
 
+  // A part with NO Fabricut code prints our DESCRIPTION, not our id (Stuart 2026-08-27: "mostly
+  // the backplates since they are included in their order with the bracket arm, defer back to our
+  // item description (not id but description)") — a Fabricut reader can use "Horizontal Backplate"
+  // where "H1-138BP-H" means nothing to them.
+  const descFor = useCallback((partName) => {
+    const part = (libraryParts || []).find(p => p.legacyErpId === partName || p.itemId === partName || p.id === partName);
+    return String(part?.itemName || '').trim() || null;
+  }, [libraryParts]);
+
   const rowCode = useCallback((partName) => {
-    if (edition === 'FAB') return fabCodeFor(partName) || `${partName} (no Fabricut code)`;
+    if (edition === 'FAB') return fabCodeFor(partName) || descFor(partName) || partName;
     if (edition === 'CUST') return custCodeFor(partName) || partName;   // no SKU → our number, never a hole
     return partName;
-  }, [edition, fabCodeFor, custCodeFor]);
+  }, [edition, fabCodeFor, custCodeFor, descFor]);
 
   // What the subtitle calls this printing — the reader must know whose numbers they hold.
   const editionLabel = edition === 'FAB' ? 'Fabricut edition'
@@ -293,10 +302,10 @@ const SpecSheetModal = ({ assembly: baseAssembly, pins: basePins, libraryParts, 
   // dims flagged `code: true` and the row's wallCode run through the edition here. Soft fallback
   // on purpose — a small in-drawing label has no room for "(no Fabricut code)".
   const labelCodeFor = useCallback((name) => {
-    if (edition === 'FAB') return fabCodeFor(name) || name;
+    if (edition === 'FAB') return fabCodeFor(name) || descFor(name) || name;
     if (edition === 'CUST') return custCodeFor(name) || name;
     return name;
-  }, [edition, fabCodeFor, custCodeFor]);
+  }, [edition, fabCodeFor, custCodeFor, descFor]);
   const editionRows = useCallback((builtRows, armName) => builtRows.map(r => ({
     ...r,
     code: rowCode(r.partName),

@@ -263,21 +263,29 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
 
   // Space the drawings may occupy, once the title block, the notes and the bottom strip are out.
   const bodyTop = MARGIN + 60;
-  // Notes are CENTERED and word-wrapped to the page (Stuart 2026-08-23b: "the text disclaimer
-  // on bottom is not centered it goes off page to right side") — the convention note is longer
-  // than a portrait page, and a clipped disclaimer is no disclaimer.
-  const noteMax = Math.max(20, Math.floor((P.W - 2 * MARGIN - 24) / (FS.note * 0.52)));
-  const wrappedNotes = noteLines.flatMap(line => {
-    const words = String(line).split(' ');
-    const out = []; let cur = '';
-    for (const w of words) {
-      if (cur && cur.length + 1 + w.length > noteMax) { out.push(cur); cur = w; }
-      else cur = cur ? `${cur} ${w}` : w;
+  // ── THE DISCLAIMER IS EXACTLY TWO CENTERED LINES (Stuart 2026-08-27: "resize it to fit in
+  // just two lines of text centered") ─────────────────────────────────────────────────────────
+  // All the convention notes join into one passage, split at the word boundary nearest its
+  // middle, and the font shrinks (never grows past FS.note) until the longer line fits the page.
+  const noteText = noteLines.map(l => String(l).trim()).filter(Boolean).join(' ');
+  let wrappedNotes = [];
+  let noteFs = FS.note;
+  if (noteText) {
+    const words = noteText.split(/\s+/);
+    let best = [noteText, ''];
+    if (words.length > 1) {
+      let bestDiff = Infinity;
+      for (let i = 1; i < words.length; i++) {
+        const a = words.slice(0, i).join(' '), b = words.slice(i).join(' ');
+        const diff = Math.abs(a.length - b.length);
+        if (diff < bestDiff) { bestDiff = diff; best = [a, b]; }
+      }
     }
-    if (cur) out.push(cur);
-    return out;
-  });
-  const notesH = (wrappedNotes.length + 1) * (FS.note + 4) + 18;
+    wrappedNotes = best.filter(Boolean);
+    const maxLen = Math.max(...wrappedNotes.map(l => l.length), 1);
+    noteFs = Math.min(FS.note, (P.W - 2 * MARGIN - 24) / (maxLen * 0.52));
+  }
+  const notesH = (wrappedNotes.length + 1) * (noteFs + 4) + 18;
   // The bottom ring strip is gone (Stuart 2026-08-23): each ring is named where it hangs, so
   // the whole body height belongs to the rows.
   const bodyH = P.H - MARGIN - bodyTop - notesH;
@@ -323,11 +331,6 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   const shrink = scale / oneToOne;
   const enlarged = shrink > 1.02;
   const toScale = !enlarged && shrink >= 0.999;
-  // WHICH CONSTRAINT BOUND THE FIT. Height and width shrink the page for completely different
-  // reasons and want opposite fixes — a narrower elevation helps one and does nothing for the
-  // other. Saying which is binding turns "it looks small" into a number that points somewhere.
-  const bindW = grid.totalW / bodyW, bindH = grid.totalH / bodyH;
-  const boundBy = (toScale || enlarged) ? '' : (bindW >= bindH ? 'width' : 'height');
 
   let svg = pageFrame(P, title, subtitle);
 
@@ -422,13 +425,15 @@ export function buildPageSvg({ title, subtitle, rows, manualDims = [], noteLines
   // Notes end one line ABOVE the footer — on letter the two shared a baseline and the long
   // convention note ran straight through the scale statement (Stuart's 2026-08-23b screenshots).
   wrappedNotes.forEach((line, i) => {
-    svg += `<text x="${P.W / 2}" y="${P.H - MARGIN - 14 - (wrappedNotes.length - i) * (FS.note + 4)}" font-size="${FS.note}" text-anchor="middle">${line}</text>`;
+    svg += `<text x="${P.W / 2}" y="${P.H - MARGIN - 14 - (wrappedNotes.length - i) * (noteFs + 4)}" font-size="${noteFs}" text-anchor="middle">${line}</text>`;
   });
+  // A reduced sheet says only what the reader must DO — the % / paper / bound-by diagnostics are
+  // gone at Stuart's ask (2026-08-27: 'remove the portion that states REDUCED 76% TO FIT …').
   const footer = footerNote || (toScale
     ? `SCALE 1:1 ON ${P.label} (0.25" margins, print at 100%)`
     : enlarged
       ? `SCALE ${shrink}:1 ON ${P.label} (enlarged to fill the sheet — READ THE DIMENSIONS)`
-      : `REDUCED ${Math.round(shrink * 100)}% TO FIT ${P.label} (${rows.length} row${rows.length === 1 ? '' : 's'}, bound by ${boundBy}) — NOT TO SCALE, READ THE DIMENSIONS`);
+      : 'NOT TO SCALE, READ THE DIMENSIONS');
   svg += `<text x="${P.W - MARGIN - 8}" y="${P.H - MARGIN - 14}" font-size="${FS.note}" text-anchor="end">${footer}</text>`;
 
   return { svg: wrapSvg(P, svg), viewMaps, paper: PAPERS[paper] ? paper : 'letterP', toScale, scale };
