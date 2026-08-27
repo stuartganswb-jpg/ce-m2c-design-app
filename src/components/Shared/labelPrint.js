@@ -244,6 +244,32 @@ export const printRodLabels = ({ orderRef, itemId, sidemark, length, count = 1 }
     return printDoc(`Rod labels ${orderRef || ''} ×${n}`, ROD_CSS, bodies);
 };
 
+// ── ROD PIECE LABEL (Stuart 2026-08-27, rod piece inventory) ──────────────────────────────────
+// Applied to the REMAINING pole at the cut station — the moment a piece enters the ledger. The
+// barcode is the piece # (= the rod_pieces doc id), so scanning any labelled offcut resolves its
+// ledger record. Full shelf stock stays unlabelled; only remainders get identity.
+const PIECE_CSS = `${PAGE_CSS}
+.l{padding:0.1in 0.16in;display:flex;flex-direction:column;}
+.hd{display:flex;justify-content:space-between;align-items:baseline;}
+.k{font-size:9pt;font-weight:800;letter-spacing:2.5px;}
+.pn{font-size:12pt;font-weight:800;}
+.len{font-size:26pt;font-weight:900;line-height:1.0;margin-top:2pt;}
+.it{font-size:11pt;font-weight:700;margin-top:1pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.src{font-size:8pt;color:#333;margin-top:1pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.bc{margin-top:auto;} .bc svg{width:100%;height:0.38in;display:block;} .bct{font-size:7.5pt;letter-spacing:2px;text-align:center;}`;
+export const printRodPieceLabel = ({ pieceId, itemCode, lengthIn, bornOfRef }) => {
+    const id = String(pieceId || '');
+    const len = Number(lengthIn) || 0;
+    const ftIn = len >= 12 ? ` (${Math.floor(len / 12)} ft ${Math.round(len % 12)} in)` : '';
+    return printDoc(`Piece ${id}`, PIECE_CSS, [`<div class="l">
+  <div class="hd"><span class="k">ROD PIECE · OFFCUT</span><span class="pn">${esc(id)}</span></div>
+  <div class="len">${esc(String(len))}"${esc(ftIn)}</div>
+  <div class="it">${esc(itemCode || '')}</div>
+  <div class="src">${bornOfRef ? `from ${esc(bornOfRef)}` : ''}</div>
+  <div class="bc">${code128BSvg(id)}<div class="bct">${esc(id)}</div></div>
+</div>`]);
+};
+
 export const printStockItemLabels = ({ itemId, itemName, uom, woNum, copies = 1 }) =>
     printDoc(`Item ${itemId || ''} ×${copies}`, STOCK_CSS, Array.from({ length: Math.max(1, Math.min(50, parseInt(copies) || 1)) }, () => stockItemLabelInner({ itemId, itemName, uom, woNum })));
 

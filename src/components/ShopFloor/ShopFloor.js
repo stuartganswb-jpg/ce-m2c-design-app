@@ -22,6 +22,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
+import RodPieceInventory, { RodCutPanel } from '../Shared/RodPieceInventory';
 import { shopDb, cleanId, SHOP_TABS } from './shopShared';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
@@ -1470,6 +1471,12 @@ const ShopFloor = () => {
                         </div>
                     )}
 
+                    {/* ✂ WHICH ROD TO PULL (Stuart 2026-08-27, rod piece inventory): the offcut
+                        ledger's recommendation for this order's cuts — use a piece when the waste
+                        rule allows, else a new rod; logging the cut labels the remainder and
+                        posts scrap. Renders only for items with a 6.5 piece-length declaration. */}
+                    <RodCutPanel order={order} itemCode={shopItemCodeOf(order)} brand={brandOf(order) || 'ce'} user={user} />
+
                     {Array.isArray(order.fabNotes?.hangerLocations) && order.fabNotes.hangerLocations.length > 0 && (
                         <div style={{ marginBottom: '20px', border: '1px solid var(--line)' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: 'var(--ink-soft)', padding: '6px 12px' }}>Hidden Hanger Locations</div>
@@ -1539,6 +1546,9 @@ const ShopFloor = () => {
         return (
             <div>
                 <h2 style={{ fontFamily: 'var(--serif)', fontSize: '1.6rem', fontWeight: 500, color: 'var(--ink)', marginBottom: '24px' }}>Custom Orders Inbox</h2>
+                {/* The offcut shelf, from the floor's vantage (collapsed until tapped): every
+                    labelled piece, reprint/scrap, and manual add for pieces standing today. */}
+                <RodPieceInventory vantage="SHOP" activeBrand={floorBrand} currentUser={user?.name || 'Shop'} />
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 400px) 1fr', gap: '30px', alignItems: 'start' }}>
                     <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <h3 style={{ margin: '0 0 6px 0', fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)', borderBottom: '1px solid var(--line)', paddingBottom: '12px' }}>Staged Orders{staged.length ? ` (${staged.length})` : ''}</h3>

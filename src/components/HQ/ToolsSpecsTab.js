@@ -5,6 +5,7 @@ import {
     FABRIC_CLASSES, fabricClass, loadPerFoot, spanTable, bracketsFor, ftIn,
     ROD_COLLECTIONS, rodCollectionsFor, DEFAULT_DROP_FT, ASSUMPTIONS, STUD_NOTE,
 } from '../Shared/bracketSpan';
+import RodPieceInventory from '../Shared/RodPieceInventory';
 
 // TOOLS, SPECS & FAQs (HQ 6.5) — the staff-side twin of the portal's Tools page. Same engineering
 // (Shared/bracketSpan.js, a verbatim-copy pair with portal/src/shared/), but staff also see the
@@ -255,6 +256,10 @@ const BracketSpanGuide = ({ showAssumptions, activeBrand }) => {
 // ---- The page --------------------------------------------------------------------------------
 const TOOLS = [
     { id: 'span', label: 'Bracket Span Guide', blurb: 'Bracket spacing by fabric weight and drop', render: (p) => <BracketSpanGuide {...p} /> },
+    // TOOL 2 · ROD PIECE STOCK (Stuart 2026-08-27): the piece-length declaration per rod item
+    // ("we receive in 100 pcs which equals 1200 ft") + the offcut ledger, HQ vantage. The same
+    // component mounts on the shop's Custom tab; the cut-station recommendation reads this config.
+    { id: 'rodpieces', label: 'Rod Piece Stock', blurb: 'Stocked piece lengths + the offcut ledger', render: (p) => <RodPieceInventory vantage="HQ" activeBrand={p.activeBrand} currentUser="HQ" /> },
 ];
 
 const ToolsSpecsTab = ({ activeBrand }) => {
