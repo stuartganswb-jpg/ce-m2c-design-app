@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { db, storage } from '../../firebase';
-import { doc, setDoc, updateDoc, writeBatch, increment } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, writeBatch, increment, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { saveProgramPrint, resolvePrintUrl } from '../Shared/programPrints';
 import { recordDeletion } from '../Shared/orderLifecycle';
@@ -31,7 +31,8 @@ const defaultToolLife = (type) => { const v = DEFAULT_TOOL_LIFE_HRS[String(type 
 const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, programsMap, machines, categories, setupCodes, tooling, materials, writeLog, handleDelete, safeUserRole, printMap = new Map(), nukeTestJobs }) => {
     
     const [routingForm, setRoutingForm] = useState({ id: null, partId: '', isRawMat: false, matProfile: '', matLength: '', ops: [] });
-    const [progForm, setProgForm] = useState({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {}, machineSteps: [] });
+    const EMPTY_PROG_FORM = { id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {}, machineSteps: [], coordSystem: '', zeroX: '', zeroY: '', zeroZ: '', zeroNote: '' };
+    const [progForm, setProgForm] = useState(EMPTY_PROG_FORM);
     const [stepViewer, setStepViewer] = useState(null);   // program whose step-by-step sheet is open
     const [stepUploading, setStepUploading] = useState(null); // index of the step with a photo in flight
     const [toolForm, setToolForm] = useState({ item: '', desc: '', machine: '', max: '', qty: '', reorder: '', toolNum: '' });
@@ -89,6 +90,22 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         } finally { setImportBusy(false); }
     };
     const [matForm, setMatForm] = useState({ type: '', thick: '', width: '', length: '', sticks: '', scrap: '10' });
+    const [matUsage, setMatUsage] = useState(null); // { mat, rows } — per-material usage history modal
+
+    // Usage ledger for one material — finishRun writes shop_material_history on every OP-1
+    // finalize (good AND failed since 2026-08-26). Fetch recent rows and filter client-side
+    // (a where+orderBy pair would demand a composite index).
+    const openMatUsage = async (m) => {
+        setMatUsage({ mat: m, rows: null });
+        try {
+            const snap = await getDocs(query(shopDb.collection('material_history'), orderBy('t', 'desc'), limit(200)));
+            const rows = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.matId === m.id).slice(0, 40);
+            setMatUsage({ mat: m, rows });
+        } catch (e) {
+            console.error('usage fetch failed', e);
+            setMatUsage({ mat: m, rows: [], error: e.message || String(e) });
+        }
+    };
 
     // Bulk wipes (admin) — old tools clash with freshly-imported Fusion tools; materials are being re-modeled
     // with stick length/count. A bulk wipe is still a delete: ONE Deletion Ledger entry records the
@@ -246,6 +263,10 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         let drawingUrl = null;
         if(progForm.file) { const fRef = ref(storage, `drawings/${progForm.name}.pdf`); await uploadBytesResumable(fRef, progForm.file); drawingUrl = await getDownloadURL(fRef); }
         const payload = { name: progForm.name, machines: progForm.machines, timePerPiece: parseFloat(progForm.timePerPiece)||0, setupTime: parseFloat(progForm.setupTime)||0, setupCode: progForm.setupCode, steps: progForm.steps, toolTimes: progForm.toolTimes,
+            // Machine setup identity (Stuart 2026-08-26): the work coordinate system + part zero
+            // the program was posted with, plus the programmer's note — the operator job screen
+            // shows these verbatim at Begin Setup.
+            coordSystem: progForm.coordSystem || '', zeroX: progForm.zeroX || '', zeroY: progForm.zeroY || '', zeroZ: progForm.zeroZ || '', zeroNote: progForm.zeroNote || '',
             // Step-by-step machine data set (Stuart 2026-07-18): the exact values keyed into the
             // control at program start — label + data + optional machine-screen photo, in order.
             machineSteps: (progForm.machineSteps || []).map(s => ({ label: s.label || '', value: s.value || '', imageUrl: s.imageUrl || null })).filter(s => s.label || s.value || s.imageUrl) };
@@ -258,7 +279,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
         }
         await setDoc(doc(shopDb.collection("programs"), progForm.id || cleanId(progForm.name, "")), payload, {merge:true});
         writeLog(`Saved Operation Program: ${progForm.name}`, 'engineering');
-        setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {}, machineSteps: [] });
+        setProgForm(EMPTY_PROG_FORM);
     };
 
     // --- Step-by-step machine data builder (functional updates: a photo upload finishing
@@ -611,6 +632,22 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                             <div><label style={labelStyle}>Setup Category</label><select value={progForm.setupCode} onChange={e => setProgForm({...progForm, setupCode: e.target.value})} style={fieldStyle}><option value="">Setup Category...</option>{setupCodes.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}</select></div>
                         </div>
                         
+                        {/* MACHINE SETUP IDENTITY (Stuart 2026-08-26): work coordinate system + part
+                            zero + programmer note. The operator job screen (scheduler → Begin Setup)
+                            shows these numbers huge — enter them exactly as posted. */}
+                        <div style={{ marginTop: '24px', background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px' }}>
+                            <h4 style={{ ...sectionHeaderStyle, marginBottom: '6px' }}>Coordinate System & Zero Location</h4>
+                            <p style={{ margin: '0 0 16px 0', fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Shown to the operator on the job start screen, exactly as entered here.</p>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 1fr', gap: '20px', marginBottom: '16px' }}>
+                                <div><label style={labelStyle}>Coordinate System</label><input type="text" placeholder='e.g. "G54"' value={progForm.coordSystem || ''} onChange={e => setProgForm({...progForm, coordSystem: e.target.value})} style={{ ...fieldStyle, fontFamily: 'var(--mono)' }} /></div>
+                                <div><label style={labelStyle}>Zero — X</label><input type="text" placeholder="X" value={progForm.zeroX || ''} onChange={e => setProgForm({...progForm, zeroX: e.target.value})} style={{ ...fieldStyle, fontFamily: 'var(--mono)' }} /></div>
+                                <div><label style={labelStyle}>Zero — Y</label><input type="text" placeholder="Y" value={progForm.zeroY || ''} onChange={e => setProgForm({...progForm, zeroY: e.target.value})} style={{ ...fieldStyle, fontFamily: 'var(--mono)' }} /></div>
+                                <div><label style={labelStyle}>Zero — Z</label><input type="text" placeholder="Z" value={progForm.zeroZ || ''} onChange={e => setProgForm({...progForm, zeroZ: e.target.value})} style={{ ...fieldStyle, fontFamily: 'var(--mono)' }} /></div>
+                            </div>
+                            <label style={labelStyle}>Setup Note (zero location, work holding, anything the operator must know)</label>
+                            <textarea value={progForm.zeroNote || ''} onChange={e => setProgForm({...progForm, zeroNote: e.target.value})} placeholder='e.g. "Zero off the BACK-LEFT corner, top of stock. Vise jaw B."' style={{ ...fieldStyle, minHeight: '70px', resize: 'vertical' }}></textarea>
+                        </div>
+
                         {progForm.machines?.length > 0 && (
                             <div style={{ marginTop: '24px', background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px' }}>
                                 <h4 style={sectionHeaderStyle}>Assign Cutting Tools</h4>
@@ -664,7 +701,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         
                         <div style={{ display: 'flex', gap: '16px', marginTop: '30px' }}>
                             <button onClick={handleSaveProgram} style={{ flex: 2, ...btnStyle, background: progForm.id ? 'var(--brass)' : 'var(--ink)' }}>{progForm.id ? 'Update Program' : 'Save New Program'}</button>
-                            {progForm.id && <button onClick={() => setProgForm({ id: null, name: '', machines: [], timePerPiece: '', setupTime: '', setupCode: '', steps: '', file: null, toolTimes: {}, machineSteps: [] })} style={{ flex: 1, ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Cancel</button>}
+                            {progForm.id && <button onClick={() => setProgForm(EMPTY_PROG_FORM)} style={{ flex: 1, ...btnStyle, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)' }}>Cancel</button>}
                         </div>
                     </div>
                 )}
@@ -683,9 +720,43 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                 Machines: <span style={{ fontWeight: 500 }}>{(p.machines || []).join(', ')}</span>
                                 {p.setupCode && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '4px 8px', marginLeft: '12px', display: 'inline-block' }}>Setup: {p.setupCode}</span>}
                             </div>
-                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '20px' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>
                                 Cycle: {p.timePerPiece}m | Setup: {p.setupTime}m
                             </div>
+                            {(p.coordSystem || p.zeroX || p.zeroY || p.zeroZ || p.zeroNote) && (
+                                <div style={{ border: '1px solid var(--line)', background: 'var(--paper)', padding: '10px 12px', marginBottom: '12px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>Machine Setup</div>
+                                    <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--ink)' }}>
+                                        {p.coordSystem && <span><b>{p.coordSystem}</b></span>}
+                                        {p.zeroX && <span>X <b>{p.zeroX}</b></span>}
+                                        {p.zeroY && <span>Y <b>{p.zeroY}</b></span>}
+                                        {p.zeroZ && <span>Z <b>{p.zeroZ}</b></span>}
+                                    </div>
+                                    {p.zeroNote && <div style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink)', marginTop: '6px', lineHeight: 1.4 }}>{p.zeroNote}</div>}
+                                </div>
+                            )}
+                            {/* NOTES FROM THE FLOOR (Stuart 2026-08-26): the operator's job screen sends
+                                these back — a manual change at the machine the programmer must know
+                                about. Brass border = unread inbox; Clear removes the note once handled. */}
+                            {(p.operatorNotes || []).length > 0 && (
+                                <div style={{ border: '1px solid var(--brass)', background: '#fdf8ef', padding: '10px 12px', marginBottom: '12px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', fontWeight: 700, marginBottom: '6px' }}>📝 Notes from the floor ({p.operatorNotes.length})</div>
+                                    {p.operatorNotes.map((n, i) => (
+                                        <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', borderTop: i ? '1px solid var(--line)' : 'none', padding: '6px 0' }}>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ fontFamily: 'var(--sans)', fontSize: '0.88rem', color: 'var(--ink)', lineHeight: 1.4 }}>{n.note}</div>
+                                                <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', marginTop: '2px' }}>{n.by || '?'}{n.mach ? ` · ${n.mach}` : ''}{n.woNum ? ` · WO ${n.woNum}` : ''}{n.at ? ` · ${new Date(n.at).toLocaleString()}` : ''}</div>
+                                            </div>
+                                            {['admin', 'programmer'].includes(safeUserRole) && (
+                                                <button onClick={async () => {
+                                                    await updateDoc(doc(shopDb.collection('programs'), p.id), { operatorNotes: (p.operatorNotes || []).filter((_, x) => x !== i) });
+                                                    writeLog(`Cleared operator note on ${p.name}`, 'engineering');
+                                                }} title="Handled — remove this note" style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', padding: '4px 8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', cursor: 'pointer', whiteSpace: 'nowrap' }}>✓ Clear</button>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                             {(() => {
                                 const url = resolvePrintUrl(printMap, p.name, p.drawingUrl);
                                 return url
@@ -819,6 +890,7 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                                     <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
                                         <button onClick={() => receiveSticks(m)} style={{ flex: 1, padding: '9px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>+ Receive Sticks</button>
                                         <button onClick={() => scrapMaterial(m)} style={{ flex: 1, padding: '9px', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>− Scrap</button>
+                                        <button onClick={() => openMatUsage(m)} title="What consumed this material — per-run deductions from OP-1 finalizes" style={{ flex: 1, padding: '9px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>📜 Usage</button>
                                     </div>
                                 )}
                             </div>
@@ -882,6 +954,34 @@ const ShopEngineering = ({ activeTab, user, hqParts, routings, programs, program
                         </div>
                     )})}
                 </div>
+
+                {/* MATERIAL USAGE LEDGER — every OP-1 finalize's deduction for one profile. */}
+                {matUsage && (
+                    <div onClick={() => setMatUsage(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '620px', maxWidth: '96vw', maxHeight: '88vh', overflowY: 'auto', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 12px 48px rgba(0,0,0,0.2)' }}>
+                            <div style={{ padding: '18px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0 }}>
+                                <div>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Usage ledger · last {Array.isArray(matUsage.rows) ? matUsage.rows.length : '…'} runs</span>
+                                    <span style={{ fontFamily: 'var(--serif)', fontSize: '1.3rem', fontWeight: 500, color: 'var(--ink)' }}>{matUsage.mat.type} ({matUsage.mat.thickness}" × {matUsage.mat.width}")</span>
+                                </div>
+                                <button onClick={() => setMatUsage(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.6rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ padding: '16px 24px' }}>
+                                {matUsage.rows === null && <div style={{ fontFamily: 'var(--sans)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>Loading…</div>}
+                                {matUsage.error && <div style={{ fontFamily: 'var(--sans)', color: '#d9534f' }}>Could not load usage: {matUsage.error}</div>}
+                                {Array.isArray(matUsage.rows) && matUsage.rows.length === 0 && !matUsage.error && <div style={{ fontFamily: 'var(--sans)', fontStyle: 'italic', color: 'var(--ink-soft)' }}>No recorded runs yet — deductions appear here when an OP-1 job with this profile finalizes.</div>}
+                                {Array.isArray(matUsage.rows) && matUsage.rows.map(r => (
+                                    <div key={r.id} style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '8px 0', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', minWidth: '118px' }}>{r.t?.toDate ? r.t.toDate().toLocaleString() : '—'}</span>
+                                        <span style={{ fontWeight: 500, color: 'var(--ink)', minWidth: '110px' }}>{r.woNum || '—'}</span>
+                                        <span style={{ color: 'var(--ink-soft)', flex: 1 }}>{r.prog || ''}{r.op ? ` · ${r.op}` : ''}{r.outcome === 'FAILED' ? ' · ⚠ failed run' : ''}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '0.85rem', color: 'var(--ink)', whiteSpace: 'nowrap' }}>{r.parts} pc · <b>−{Number(r.inches || 0).toFixed(1)}"</b></span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     }

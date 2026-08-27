@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions, storage, getOuterIdToken } from '../../firebase';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, onSnapshot, writeBatch, serverTimestamp, increment } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, onSnapshot, writeBatch, serverTimestamp, increment, arrayUnion } from "firebase/firestore";
 import { hardDeleteWithLedger, recordDeletion } from '../Shared/orderLifecycle';
 import { signInWithCustomToken, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
@@ -126,6 +126,7 @@ const ShopFloor = () => {
     const [modalData, setModalData] = useState({});
     const [qcForm, setQcForm] = useState({ good: 0, scrap: 0, failReason: 'Out of Tolerance', failNotes: '', failImg: null });
     const [shiftLogQty, setShiftLogQty] = useState(0);
+    const [opNote, setOpNote] = useState(''); // job-screen note the operator sends back to the program card
 
     // Treat a super admin (role or flag) as 'admin' everywhere on the Shop Floor, so admin-gated
     // controls (tool import, add tool/material, deletes, AI optimize…) show for them, not just on tabs.
@@ -489,7 +490,25 @@ const ShopFloor = () => {
         if(newStatus !== 'Resume') writeLog(`Updated Job ${id} to ${newStatus}`, 'production');
     };
 
-    const triggerStartModal = (taskId, progId) => { setModalData({ taskId, prog: programsMap[progId] || {}, task: schedule.find(s=>s.id===taskId) }); setActiveModal('start'); };
+    // The JOB SCREEN (Stuart 2026-08-26): one tablet screen with everything the programmer
+    // entered — coordinate system, part zero, setup note, step-by-step machine data — plus a
+    // note box that sends what the operator changed BACK to the program card. Opens at Begin
+    // Setup (mode 'setup') and again at Verify & Run (mode 'run').
+    const triggerStartModal = (taskId, progId, mode = 'run') => { setOpNote(''); setModalData({ taskId, prog: programsMap[progId] || {}, task: schedule.find(s=>s.id===taskId), mode }); setActiveModal('start'); };
+    const sendOperatorNote = async () => {
+        const txt = opNote.trim();
+        if (!txt) return;
+        const { prog, task } = modalData;
+        if (!prog?.id) return alert('No program on this job to attach the note to.');
+        try {
+            await updateDoc(doc(shopDb.collection('programs'), prog.id), {
+                operatorNotes: arrayUnion({ note: txt, by: user.name, at: Date.now(), woNum: task?.woNum || '', mach: task?.mach || '' })
+            });
+            writeLog(`Operator note → program ${prog.name}: ${txt.slice(0, 80)}`, 'engineering');
+            setOpNote('');
+            alert('📝 Note sent — it shows on the program card (Programs tab) until the programmer clears it.');
+        } catch (e) { alert('Failed to send the note: ' + (e.message || e)); }
+    };
     const triggerShiftLog = (taskId) => { setModalData({ taskId, task: schedule.find(s=>s.id===taskId) }); setShiftLogQty(0); setActiveModal('shiftLog'); };
     
     const submitShiftLog = async () => {
@@ -533,20 +552,27 @@ const ShopFloor = () => {
                     }
                 }
             }
-            const routing = routingsMap[task.routingId];
-            if(task.currentOpIndex === 0 && routing?.isRawMat && routing?.matProfile) {
-                const deductInches = (parseFloat(routing.matLength) || 0) * totalPartsRun;
-                if(deductInches > 0) {
-                    await updateDoc(doc(shopDb.collection("materials"), routing.matProfile), { totalLength: increment(-deductInches) });
-                    await addDoc(shopDb.collection("material_history"), { matId: routing.matProfile, woNum: task.woNum || 'N/A', prog: routing.partId, parts: totalPartsRun, inches: deductInches, op: user.name, t: serverTimestamp() });
-                }
-            }
         } else {
             let imgUrl = null; 
             if(qcForm.failImg) { const fRef = ref(storage, `fails/${Date.now()}.jpg`); await uploadBytesResumable(fRef, qcForm.failImg); imgUrl = await getDownloadURL(fRef); }
             await addDoc(shopDb.collection("shop_failures"), { machine: task.mach, program: prog.name, operator: user.name, reason: qcForm.failReason, notes: qcForm.failNotes, status: 'Open', timestamp: serverTimestamp() });
             
             await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `⚠️ MACHINING FAILURE: ${prog.name} on ${task.mach}. Reason: ${qcForm.failReason}. \nNotes: ${qcForm.failNotes}`, t: serverTimestamp(), readBy: [], isSystem: true });
+        }
+
+        // RAW MATERIAL (audit 2026-08-26): every piece that RAN ate material — good, scrap, and
+        // the pieces logged by earlier shifts. This used to run only on a GOOD finalize and only
+        // for this shift's count, so failed runs and multi-shift jobs under-deducted the stock.
+        {
+            const matRouting = routingsMap[task.routingId];
+            const matParts = grandTotalGood + sQty; // shift-logged + this shift + scrap, each once
+            if (task.currentOpIndex === 0 && matRouting?.isRawMat && matRouting?.matProfile && matParts > 0) {
+                const deductInches = (parseFloat(matRouting.matLength) || 0) * matParts;
+                if (deductInches > 0) {
+                    await updateDoc(doc(shopDb.collection("materials"), matRouting.matProfile), { totalLength: increment(-deductInches) });
+                    await addDoc(shopDb.collection("material_history"), { matId: matRouting.matProfile, woNum: task.woNum || 'N/A', prog: matRouting.partId, parts: matParts, inches: deductInches, op: user.name, outcome: statusType === 'GOOD' ? 'COMPLETED' : 'FAILED', t: serverTimestamp() });
+                }
+            }
         }
 
         const hrsWorked = (Date.now() - (task.actualStart?.toMillis ? task.actualStart.toMillis() : Date.now()) - (task.totalPausedMs || 0)) / 3600000;
@@ -617,27 +643,83 @@ const ShopFloor = () => {
         if (!activeModal) return null;
         return (
             <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ background: '#fff', padding: '40px', borderRadius: '2px', width: activeModal === 'specs' ? '800px' : '600px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)' }}>
+                <div style={{ background: '#fff', padding: '40px', borderRadius: '2px', width: activeModal === 'specs' ? '800px' : (activeModal === 'start' ? '880px' : '600px'), maxWidth: '96vw', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)' }}>
                     
-                    {activeModal === 'start' && (
+                    {activeModal === 'start' && (() => {
+                        const { prog = {}, task = {}, mode } = modalData;
+                        const isSetup = mode === 'setup';
+                        const hasZero = prog.coordSystem || prog.zeroX || prog.zeroY || prog.zeroZ || prog.zeroNote;
+                        return (
                         <div>
-                            <h2 style={{ fontFamily: 'var(--serif)', margin: '0 0 20px 0', color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>First Part Verification</h2>
-                            <div style={{ background: 'var(--paper)', padding: '24px', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)', whiteSpace: 'pre-wrap', marginBottom: '30px', fontFamily: 'var(--sans)', fontSize: '0.95rem', lineHeight: '1.6', color: 'var(--ink)' }}>
-                                <strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>Instructions</strong>
-                                {modalData.prog.steps || 'None provided'}
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.14em', color: 'var(--brass)', display: 'block', marginBottom: '6px' }}>{isSetup ? 'Job Setup' : 'First Part Verification'}</span>
+                            <h2 style={{ fontFamily: 'var(--serif)', margin: '0 0 6px 0', color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>{prog.name || 'Job'}</h2>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)', marginBottom: '20px' }}>
+                                WO {task.woNum || '—'} · {routingsMap[task.routingId]?.displayName || task.routingId || ''} · {task.mach || ''} · OP {(task.currentOpIndex ?? 0) + 1}{task.targetQty ? ` · Qty ${task.targetQty}` : ''}
                             </div>
+
+                            {/* THE PROGRAMMER'S SETUP IDENTITY — coordinate system + part zero, huge,
+                                because these are the numbers keyed into the control before anything runs. */}
+                            {hasZero ? (
+                                <div style={{ border: '1px solid var(--ink)', marginBottom: '20px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: 'var(--ink)', padding: '8px 14px' }}>Coordinate System & Zero Location</div>
+                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '16px 14px' }}>
+                                        {prog.coordSystem && <div style={{ flex: '1 1 120px', textAlign: 'center', background: 'var(--paper-2)', border: '1px solid var(--line)', padding: '12px' }}><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '6px' }}>Coord System</div><div style={{ fontFamily: 'var(--mono)', fontSize: '1.8rem', fontWeight: 700, color: 'var(--ink)' }}>{prog.coordSystem}</div></div>}
+                                        {[['X', prog.zeroX], ['Y', prog.zeroY], ['Z', prog.zeroZ]].filter(([, v]) => v).map(([axis, v]) => (
+                                            <div key={axis} style={{ flex: '1 1 120px', textAlign: 'center', background: 'var(--paper)', border: '1px solid var(--line)', padding: '12px' }}><div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginBottom: '6px' }}>Zero {axis}</div><div style={{ fontFamily: 'var(--mono)', fontSize: '1.8rem', fontWeight: 700, color: 'var(--ink)' }}>{v}</div></div>
+                                        ))}
+                                    </div>
+                                    {prog.zeroNote && <div style={{ padding: '0 14px 14px', fontFamily: 'var(--sans)', fontSize: '0.95rem', lineHeight: 1.5, color: 'var(--ink)' }}>📌 {prog.zeroNote}</div>}
+                                </div>
+                            ) : (
+                                <div style={{ marginBottom: '20px', padding: '12px', textAlign: 'center', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', border: '1px dashed var(--line)' }}>No coordinate system / zero on file — ask the programmer to add it on the Programs tab</div>
+                            )}
+
+                            {/* Step-by-step machine data — label small, DATA huge (same sheet as the
+                                Programs-tab viewer, inline so the operator never leaves this screen). */}
+                            {(prog.machineSteps || []).length > 0 && (
+                                <div style={{ border: '1px solid var(--line)', marginBottom: '20px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', background: 'var(--paper-2)', padding: '8px 14px' }}>Machine Data — Step by Step</div>
+                                    {(prog.machineSteps || []).map((s, i) => (
+                                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 14px', borderTop: i ? '1px solid var(--line)' : 'none' }}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', fontWeight: 700, color: '#fff', background: 'var(--ink)', borderRadius: '50%', width: '24px', height: '24px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{i + 1}</span>
+                                            <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>{s.label || '—'}</span>
+                                            {s.value && <span style={{ fontFamily: 'var(--mono)', fontSize: '1.4rem', fontWeight: 700, color: 'var(--ink)' }}>{s.value}</span>}
+                                            {s.imageUrl && <img src={s.imageUrl} alt={`step ${i + 1}`} onClick={() => window.open(s.imageUrl, '_blank')} style={{ height: '42px', width: '62px', objectFit: 'cover', border: '1px solid var(--line)', cursor: 'zoom-in' }} />}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {prog.steps && (
+                                <div style={{ background: 'var(--paper)', padding: '18px 20px', border: '1px solid var(--line)', borderLeft: '4px solid var(--brass)', whiteSpace: 'pre-wrap', marginBottom: '20px', fontFamily: 'var(--sans)', fontSize: '0.95rem', lineHeight: '1.6', color: 'var(--ink)' }}>
+                                    <strong style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '10px' }}>Instructions</strong>
+                                    {prog.steps}
+                                </div>
+                            )}
                             {(() => {
-                                const url = resolvePrintUrl(printMap, modalData.prog?.name, modalData.prog?.drawingUrl);
+                                const url = resolvePrintUrl(printMap, prog?.name, prog?.drawingUrl);
                                 return url
-                                    ? <button onClick={() => window.open(url, '_blank')} style={{ width: '100%', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', marginBottom: '20px' }}>🖨 View Program Print</button>
+                                    ? <button onClick={() => window.open(url, '_blank')} style={{ width: '100%', background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '14px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', marginBottom: '20px' }}>🖨 View Program Print</button>
                                     : <div style={{ width: '100%', textAlign: 'center', padding: '12px', marginBottom: '20px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', border: '1px dashed var(--line)', boxSizing: 'border-box' }}>No print on file</div>;
                             })()}
+
+                            {/* BACK-CHANNEL TO THE PROGRAMMER — a manual change at the machine (offset
+                                tweak, different jaw, edited feed) lands on the program card until cleared. */}
+                            <div style={{ border: '1px solid var(--line)', background: 'var(--paper-2)', padding: '14px', marginBottom: '24px' }}>
+                                <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Note to the programmer (changed something at the machine? say it here)</label>
+                                <textarea value={opNote} onChange={e => setOpNote(e.target.value)} placeholder='e.g. "Bumped X offset +0.002 — parts were cutting shy."' style={{ width: '100%', boxSizing: 'border-box', minHeight: '60px', resize: 'vertical', padding: '10px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)', fontSize: '0.95rem' }} />
+                                <button onClick={sendOperatorNote} disabled={!opNote.trim()} style={{ marginTop: '10px', background: opNote.trim() ? 'var(--brass)' : 'var(--paper)', color: opNote.trim() ? '#fff' : 'var(--ink-soft)', border: opNote.trim() ? 'none' : '1px solid var(--line)', padding: '10px 18px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: opNote.trim() ? 'pointer' : 'default' }}>📝 Send to Program Card</button>
+                            </div>
+
                             <div style={{ display: 'flex', gap: '16px' }}>
-                                <button onClick={() => { updateJobStatus(modalData.taskId, 'Running'); setActiveModal(null); }} style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Verified (Start Run)</button>
-                                <button onClick={() => setActiveModal(null)} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'all 0.2s' }}>Cancel</button>
+                                {isSetup
+                                    ? <button onClick={() => { updateJobStatus(modalData.taskId, 'Setup'); setActiveModal(null); }} style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Begin Setup</button>
+                                    : <button onClick={() => { updateJobStatus(modalData.taskId, 'Running'); setActiveModal(null); }} style={{ flex: 1, background: 'var(--ink)', color: '#fff', border: 'none', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Verified (Start Run)</button>}
+                                <button onClick={() => setActiveModal(null)} style={{ flex: 1, background: 'transparent', color: 'var(--ink)', border: '1px solid var(--line)', padding: '16px', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Cancel</button>
                             </div>
                         </div>
-                    )}
+                        );
+                    })()}
                     {activeModal === 'shiftLog' && (
                         <div>
                             <h2 style={{ fontFamily: 'var(--serif)', margin: '0 0 20px 0', color: 'var(--ink)', fontSize: '1.8rem', fontWeight: 500 }}>Log Intermediate Shift Progress</h2>
@@ -793,7 +875,9 @@ const ShopFloor = () => {
                                         </span>
                                     </td>
                                     <td style={{ padding: '16px', textAlign: 'right' }}>
-                                        {canRun && t.status === 'Pending' && <button onClick={() => updateJobStatus(t.id, 'Setup')} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Begin Setup</button>}
+                                        {/* Begin Setup opens the JOB SCREEN (zero location, coord system,
+                                            machine data, programmer note) — the stamp happens inside it. */}
+                                        {canRun && t.status === 'Pending' && <button onClick={() => triggerStartModal(t.id, t.prog, 'setup')} style={{ background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Begin Setup</button>}
                                         {canRun && t.status === 'Setup' && <button onClick={() => triggerStartModal(t.id, t.prog)} style={{ background: 'var(--brass)', color: '#fff', border: 'none', padding: '8px 12px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Verify & Run</button>}
                                         {canRun && t.status === 'Running' && (
                                             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
