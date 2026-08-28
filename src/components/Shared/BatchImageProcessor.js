@@ -773,7 +773,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             {safeQueue.length === 0 ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px dashed ${theme.brass}`, color: theme.inkSoft, fontFamily: theme.serif, fontSize: '1.4rem', padding: '60px 20px' }}>
                     <div>Drag & Drop or Select a Batch of Images to Begin</div>
-                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', textAlign: 'center', lineHeight: 1.8 }}>SELECT FOLDER = Kermit renders (folder name is the plate code, finishes read from filenames)<br />or Uniquity soft goods — a folder named "Bubley 01 20x12" resolves to Bubley/01P20x12</div>
+                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', textAlign: 'center', lineHeight: 1.8 }}>SELECT FOLDER = Kermit renders (folder name is the plate code, finishes read from filenames)<br />or name a folder after the item — "Bubley/01P23x23" (macOS shows it as Bubley:01P23x23) imports straight onto that item</div>
                 </div>
             ) : isDone ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: theme.paper2, border: `1px solid ${theme.line}`, color: theme.ink }}>
@@ -921,7 +921,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
                         {/* THE COMBO: fee item (french/miter return) or bracket arm shown WITH the plate */}
                         <div style={{ border: `1px solid ${pairedDoc ? theme.brass : theme.line}`, background: theme.paper, padding: '12px' }}>
-                            <label style={labelStyle}>PAIRED FEE / BRACKET ARM (CPQ COMBO)</label>
+                            <label style={labelStyle}>SECOND ITEM SHOWN (HARDWARE COMBO — OPTIONAL)</label>
                             {pairedDoc ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
                                     <span style={{ background: '#fff', border: `1px solid ${theme.brass}`, color: theme.ink, padding: '6px 10px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em' }}>
@@ -1131,17 +1131,29 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             {imagePreview ? <img src={imagePreview} alt="folder sample" style={{ maxWidth: '100%', maxHeight: '55vh', objectFit: 'contain' }} /> : <span style={{ color: theme.inkSoft }}>⚲</span>}
                         </div>
                         <div style={{ flex: 1, padding: '30px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                            <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Pair This Folder</div>
+                            <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>What is in these images?</div>
                             <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, letterSpacing: '.05em' }}>
-                                FOLDER = PLATE: <span style={{ color: theme.brass }}>{pairPrompt.folder}</span>
+                                FOLDER: <span style={{ color: theme.brass }}>{pairPrompt.folder}</span>
                             </div>
                             {resolved && (
                                 <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, letterSpacing: '.05em' }}>
                                     ✓ {String(resolved.doc.itemName || resolved.base)}{resolved.summary ? ` — ${resolved.summary}` : ''}
                                 </div>
                             )}
-                            <div style={{ fontFamily: theme.sans, fontSize: '0.9rem', color: theme.inkSoft }}>
-                                Which <b>bracket arm</b> or <b>fee item</b> (french/miter return) is combined with this plate in these images? Applies to the whole folder.
+                            {/* Generalised 2026-08-27 (Stuart: "add in something about general images
+                                not just brackets"). This screen takes product photography of every
+                                kind now — pillows, throws, lifestyle shots — and the old wording asked
+                                a hardware question of all of them, which reads as though the tool does
+                                not know what it is looking at. The pairing is still only meaningful for
+                                a hardware combo, so it is offered rather than demanded. */}
+                            <div style={{ fontFamily: theme.sans, fontSize: '0.9rem', color: theme.inkSoft, lineHeight: 1.6 }}>
+                                If these are <b>hardware combo</b> shots, name the second item shown with it —
+                                a <b>bracket arm</b>, or a <b>fee item</b> (french/miter return). Applies to the whole folder.
+                                <div style={{ marginTop: '8px' }}>
+                                    Anything else — a single item, a pillow or throw, a lifestyle or detail
+                                    shot — needs no pairing. Take the option below and the images import
+                                    against this folder's item on its own.
+                                </div>
                             </div>
                             <input
                                 autoFocus
@@ -1165,7 +1177,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                 )}
                             </div>
                             <button onClick={() => { setFolderMeta(prev => ({ ...prev, [pairPrompt.folder]: { ...(prev[pairPrompt.folder] || {}), pairedDocId: null, pairedChosen: true } })); setPairPrompt(null); }} style={{ padding: '10px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', cursor: 'pointer' }}>
-                                PLATE ONLY — NO COMBO IN THESE IMAGES
+                                NO SECOND ITEM — SINGLE PRODUCT, PILLOW OR LIFESTYLE SHOT
                             </button>
                         </div>
                     </div>

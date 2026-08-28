@@ -51,6 +51,35 @@ export function parsePillowFolder(folder) {
     // Strip a trailing extension and any leading numbering ("01 - Bubley…" style filing).
     const name = raw.replace(/\.[a-z0-9]{2,4}$/i, '');
 
+    // ── THE FOLDER IS USUALLY THE CODE ITSELF ──────────────────────────────────────────────────
+    // Stuart's folders read "Bubley:01p23x23" — which IS Bubley/01P23x23. macOS stores a folder
+    // named with a slash by swapping it for a colon (Finder shows the slash, the filesystem and
+    // the browser hand us the colon), so naming a folder after the item produces exactly this.
+    //
+    // The loose "Bubley 01 23x23" parse below could not read it: colour, kind and size run
+    // together with no separators, so "01p" never looked like a standalone colour number and the
+    // banner said "no colour number" on a folder that was already perfectly named. This form is
+    // tried FIRST because it is the most exact thing a folder can say.
+    const direct = /^\s*([A-Za-z][A-Za-z0-9 _-]*?)\s*[:/]\s*(\d{1,3})\s*([PT])\s*(.*?)\s*$/i.exec(name);
+    if (direct) {
+        const dPattern = direct[1].trim();
+        const dColor = padColor(direct[2]);
+        const dKind = direct[3].toUpperCase();
+        const rest = direct[4] || '';
+        const dSizeM = SIZE_RE.exec(rest);
+        const dSize = dSizeM ? `${Number(dSizeM[1])}x${Number(dSizeM[2])}` : '';
+        const dXL = XL_RE.test(rest) || /^-?\s*XL$/i.test(rest.trim());
+        // A P with no readable size, or a T with trailing text that is not XL, is not something to
+        // guess at — fall through to the loose reader rather than invent half a code.
+        if ((dKind === 'P' && dSize) || (dKind === 'T' && (!rest.trim() || dXL))) {
+            const dVariant = `${dColor}${dKind}${dKind === 'P' ? dSize : (dXL ? '-XL' : '')}`;
+            return {
+                pattern: dPattern, color: dColor, kind: dKind, size: dSize, isXL: dXL,
+                code: `${dPattern}/${dVariant}`, confident: true, why: [],
+            };
+        }
+    }
+
     const sizeM = SIZE_RE.exec(name);
     const size = sizeM ? `${Number(sizeM[1])}x${Number(sizeM[2])}` : '';
 
