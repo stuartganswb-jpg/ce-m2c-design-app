@@ -926,17 +926,30 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // union across its pinned parts. A checkout item tagged to collections shows only where they
   // intersect; an untagged item (rush, freight) stays global. A flow with no derivable scope
   // (pillow, 2D, untagged parts) sees everything, exactly as before.
+  // ⚠ THE ROD NAMES THE COLLECTION (Stuart 2026-08-28: "it is showing fees and such for fabricut
+  // that should not be seen on a brimar flow"). The union over EVERY pinned part was the leak:
+  // shared hardware — the french return, the 16-gauge joiner — legitimately belongs to several
+  // collections, and one such pin dragged the WHOLE sibling collection's checkout catalogue in.
+  // A flow's identity is its rod: BRIMAR's pole is tagged BRIMAR alone, H1-75's rods are
+  // Fabricut's — so the scope is derived from the ROD/POLE pins, and only when no rod carries a
+  // collection does it fall back to the all-parts union (then to unscoped, exactly as before).
   const flowCollections = useMemo(() => {
       const byKey = new Map();
       (libraryParts || []).forEach(p => {
           [p.id, p.itemId, p.legacyErpId].forEach(k => { if (k) byKey.set(String(k).trim().toUpperCase(), p); });
       });
-      const set = new Set();
+      const all = new Set(); const rods = new Set();
       (activeBomPins || []).forEach(pn => {
           const p = byKey.get(String(pn.partId || '').trim().toUpperCase());
-          (p?.manufacturingSpecs?.collections || []).forEach(c => set.add(String(c).trim().toUpperCase()));
+          if (!p) return;
+          const kind = String(p.manufacturingSpecs?.productType || p.category || '').toUpperCase();
+          (p.manufacturingSpecs?.collections || []).forEach(c => {
+              const k = String(c).trim().toUpperCase();
+              all.add(k);
+              if (/POLE|ROD|FASCIA|TRAVERSE/.test(kind)) rods.add(k);
+          });
       });
-      return set;
+      return rods.size ? rods : all;
   }, [activeBomPins, libraryParts]);
   const addOnCatalog = useMemo(() => {
       // ⚠ THE ONE CHAIN (tie-in phase). This picker used to price its own way — the customer's row,
