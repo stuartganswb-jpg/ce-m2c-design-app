@@ -380,6 +380,9 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           fabShape: flow.fabShape || '',
           defaultFinishOptions: flow.defaultFinishOptions || [],
           hiddenClusters: flow.hiddenClusters || [],
+          kitFamily: flow.kitFamily || '',
+          // The checkout scope override — stored as an array on the flow, edited as comma text.
+          checkoutCollections: Array.isArray(flow.checkoutCollections) ? flow.checkoutCollections.join(', ') : '',
           // Per-kind last-resort prices — see the editor below the finish list.
           fallbackPrices: flow.fallbackPrices || {}
       });
@@ -1841,7 +1844,11 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
           const formattedName = flowSettings.name.toUpperCase();
           const formattedErpId = (flowSettings.legacyErpId || 'PENDING').toUpperCase();
 
-          await setDoc(doc(db, "cpq_flows", activeFlowId), stripUndefined({ ...flowSettings, name: formattedName, legacyErpId: formattedErpId }), { merge: true });
+          await setDoc(doc(db, "cpq_flows", activeFlowId), stripUndefined({
+              ...flowSettings, name: formattedName, legacyErpId: formattedErpId,
+              // Comma text on the form → clean array on the doc. Empty = derived from the rod.
+              checkoutCollections: String(flowSettings.checkoutCollections || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+          }), { merge: true });
           
           if (flowSettings.linkedAssemblyId) {
               // Size-group flows share ONE rollup name/ERP id across all siblings — cascading
@@ -2348,7 +2355,14 @@ const AdminTab = ({ currentUser, activeBrand, TABS }) => {
                                         <input type="number" step="0.01" value={flowSettings.basePrice} onChange={e => setFlowSettings({...flowSettings, basePrice: e.target.value})} placeholder="0.00" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
                                     </div>
                                 </div>
-                                
+
+                                {/* ── CHECKOUT COLLECTIONS (Stuart 2026-08-28: "yes add collections") ── */}
+                                <div style={{ marginTop: '15px' }}>
+                                    <label title="Which collections this flow's CHECKOUT belongs to. Blank = derived automatically from the flow's rod/pole (its 4.6 collection membership). Filled = exactly these win — checkout add-ons, Std-ticked items and customer items are filtered to them. Comma-separate several." style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Checkout Collections 🛒</label>
+                                    <input value={flowSettings.checkoutCollections || ''} onChange={e => setFlowSettings({...flowSettings, checkoutCollections: e.target.value})} placeholder="blank = derived from the rod · e.g. BRIMAR or FABRICUT H1, TRAVERSE" style={{ width: '100%', padding: '12px', border: '1px solid var(--line)', outline: 'none', fontFamily: 'var(--sans)' }} />
+                                    <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', display: 'block', marginTop: '6px' }}>Scopes the checkout add-ons for this flow. Items/fees with no collection tags in 4.6 stay global regardless.</span>
+                                </div>
+
                                 <div style={{ marginTop: '20px', padding: '16px 20px', background: 'var(--paper)', border: '1px solid var(--line)' }}>
                                     <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '6px' }}>Fabrication Preset (drives the Vision Hardware tool)</label>
                                     <span style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', display: 'block', marginBottom: '12px' }}>This flow is 1:1 with a bay configuration + end style + bracket projection — set it here and Vision auto-applies it. CPQ item/finish picks never change fabrication.</span>

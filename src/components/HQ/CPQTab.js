@@ -934,6 +934,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // Fabricut's — so the scope is derived from the ROD/POLE pins, and only when no rod carries a
   // collection does it fall back to the all-parts union (then to unscoped, exactly as before).
   const flowCollections = useMemo(() => {
+      // ── TAB 11 HAS ULTIMATE SAY (Stuart 2026-08-28: "yes add collections") ────────────────
+      // A flow whose Flow Settings declare Checkout Collections uses EXACTLY those — no
+      // derivation, no inference. Blank keeps the automatic rod-derived scope below.
+      const declared = ((cpqFlows.find(f => f.id === activeFlowId) || {}).checkoutCollections || [])
+          .map(c => String(c).trim().toUpperCase()).filter(Boolean);
+      if (declared.length) return new Set(declared);
       const byKey = new Map();
       (libraryParts || []).forEach(p => {
           [p.id, p.itemId, p.legacyErpId].forEach(k => { if (k) byKey.set(String(k).trim().toUpperCase(), p); });
@@ -955,7 +961,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           });
       });
       return rods.size ? rods : all;
-  }, [activeBomPins, libraryParts]);
+  }, [activeBomPins, libraryParts, cpqFlows, activeFlowId]);
   const addOnCatalog = useMemo(() => {
       // ⚠ THE ONE CHAIN (tie-in phase). This picker used to price its own way — the customer's row,
       // else base — which skipped the Fabricut tier entirely: a FAB_COST customer's checkout add-ons
