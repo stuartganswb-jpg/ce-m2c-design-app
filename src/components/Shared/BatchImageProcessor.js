@@ -773,7 +773,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             {safeQueue.length === 0 ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px dashed ${theme.brass}`, color: theme.inkSoft, fontFamily: theme.serif, fontSize: '1.4rem', padding: '60px 20px' }}>
                     <div>Drag & Drop or Select a Batch of Images to Begin</div>
-                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', textAlign: 'center', lineHeight: 1.8 }}>SELECT FOLDER = Kermit renders (folder name is the plate code, finishes read from filenames)<br />or name a folder after the item — "Bubley/01P23x23" (macOS shows it as Bubley:01P23x23) imports straight onto that item</div>
+                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', textAlign: 'center', lineHeight: 1.8 }}>SELECT FOLDER = Kermit renders (folder name is the plate code, finishes read from filenames)<br />or name a folder after the item — Bubley/01P23x23, Bubley:01P23x23 or Bubley_01P23x23 all import onto that item</div>
                 </div>
             ) : isDone ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: theme.paper2, border: `1px solid ${theme.line}`, color: theme.ink }}>

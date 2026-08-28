@@ -60,7 +60,14 @@ export function parsePillowFolder(folder) {
     // together with no separators, so "01p" never looked like a standalone colour number and the
     // banner said "no colour number" on a folder that was already perfectly named. This form is
     // tried FIRST because it is the most exact thing a folder can say.
-    const direct = /^\s*([A-Za-z][A-Za-z0-9 _-]*?)\s*[:/]\s*(\d{1,3})\s*([PT])\s*(.*?)\s*$/i.exec(name);
+    //
+    // THE SEPARATOR IS NOT THE POINT (Stuart 2026-08-27: "the folders are saved on dropbox and
+    // maybe have : between the Bubley and /01 and on pc's they are seeing it with _"). The same
+    // Dropbox folder reaches a Mac as ":", a PC as "_", and a browser that got the real name as
+    // "/". Three spellings of ONE character, decided by whose machine is looking — so the
+    // character is skipped rather than matched. What identifies the item is what sits either
+    // side of it, which is the same everywhere.
+    const direct = /^\s*([A-Za-z][A-Za-z0-9 _-]*?)\s*[:/_\-\s]+\s*(\d{1,3})\s*([PT])\s*(.*?)\s*$/i.exec(name);
     if (direct) {
         const dPattern = direct[1].trim();
         const dColor = padColor(direct[2]);
