@@ -69,6 +69,23 @@ ok('add-by-hand line exists', !!splice);
 ok('its note rides to the floor', splice?.customNote === 'splice at 48"');
 ok('it routes like any other line', classifyLine(splice, findPart('H1-138R')) === DIVISION_CUSTOM);
 
+// ── AND IT BILLS WHAT THE PANEL SHOWED (Stuart 2026-08-28: the joiner "displays the correct
+// pricing on the cpq, but once past the cpq … on the doc's it shows $0 and in the bom it is not
+// there, does not push to floor or netsuite"). The panel's own priced extraLines travel in ctx
+// and are used verbatim — money, THEIR sku, and the doc id every downstream join expects.
+{
+    const it2 = handoffItem(resolved, {
+        findPart, assembly: { id: 'A1', itemName: 'H1-138' }, flow: { id: 'F1' },
+        finishes: [], extras: [{ code: 'H1-138JNR', qty: '1', note: 'center' }],
+        extraLines: [{ partId: 'H1-138JNR', name: 'Joiner for 16-Gauge 1" Round Rod', qty: 1, unit: 14, total: 14, sku: 'FAB-JNR-1', finishCode: '' }],
+    });
+    const jn = (it2.pricingBreakdown || []).find(l => l.addedByHand);
+    ok('⚠ the extra bills the PANEL price, never $0', jn?.price === 14 && jn?.total === 14);
+    ok('…carries THEIR sku', jn?.clientSku === 'FAB-JNR-1');
+    ok('…and joins by our code for the push', jn?.legacyErpId === 'H1-138JNR');
+    ok('…and its note still rides', jn?.customNote === 'center');
+}
+
 // ── traverse components (Stuart 2026-08-21: asked at the last step, not at checkout) ─────────
 // Where they are ASKED moved; what the cart carries did not. The push reads item.trvComponents and
 // the documents read the breakdown rows, so both have to survive the handoff.

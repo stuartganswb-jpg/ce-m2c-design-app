@@ -132,12 +132,32 @@ export function handoffItem(resolved, ctx = {}) {
 
     // Added by hand — real lines, so they route and bill like everything else. They carry their own
     // note because a splice's location is the whole point of adding one.
-    const extraRows = (extras || []).filter(x => x.code && Number(x.qty) > 0).map(x => {
+    //
+    // ⚠ PRICED BY THE PANEL'S OWN LINES, JOINED BY THE DOC ID (Stuart 2026-08-28: the joiner
+    // "displays the correct pricing on the cpq, but once past the cpq, everything else is wrong —
+    // on the doc's it shows $0 and in the bom it is not there, does not push to floor or
+    // netsuite"). This used to RE-derive the price by searching the flow's priced lines — where a
+    // hand-added extra does not exist — so every extra left the engine at $0; and it stamped the
+    // tab-11 CODE as partId, which is not the doc id every downstream join expects. The engine's
+    // extraLines (priceChoice — the customer's own row) travel in ctx and are used VERBATIM: same
+    // money the panel showed, partId = the resolved part's doc id, our code on legacyErpId.
+    const pricedExtras = (Array.isArray(ctx.extraLines) && ctx.extraLines.length)
+        ? ctx.extraLines.map(l => ({ code: l.partId, name: l.name, qty: l.qty, unit: l.unit, total: l.total, sku: l.sku, finishCode: l.finishCode, note: l.note ?? (extras || []).find(x => x.code === l.partId)?.note }))
+        : (extras || []).map(x => ({ code: x.code, name: null, qty: Number(x.qty) || 1, unit: (priced.lines.find(l => l.partId === x.code)?.unit) || 0, total: null, sku: null, finishCode: null, note: x.note }));
+    const extraRows = pricedExtras.filter(x => x.code && Number(x.qty) > 0).map(x => {
         const part = typeof findPart === 'function' ? findPart(x.code) : null;
-        const unit = (priced.lines.find(l => l.partId === x.code)?.unit) || 0;
         const n = Number(x.qty) || 1;
+        const unit = Number(x.unit) || 0;
         return {
-            ...handoffLine({ partId: x.code, name: part?.itemName || x.code, qty: n, unit, total: unit * n }, part),
+            ...handoffLine({
+                partId: part?.id || x.code,
+                billedId: codeOf(part, x.code),
+                name: x.name || part?.itemName || x.code,
+                qty: n, unit,
+                total: Number.isFinite(Number(x.total)) && x.total !== null ? Number(x.total) : unit * n,
+                ...(x.sku ? { sku: x.sku } : {}),
+                ...(x.finishCode ? { finishCode: x.finishCode } : {}),
+            }, part, finishNameOf(x.finishCode)),
             addedByHand: true,
             ...(x.note ? { customNote: x.note } : {}),
         };

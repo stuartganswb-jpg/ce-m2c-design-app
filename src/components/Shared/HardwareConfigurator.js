@@ -1071,7 +1071,11 @@ function HardwareConfiguratorInner({
             sidemark: configMemo, memo: configMemo,
             finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
             priceLevel: effectiveLevel, lengthInches, lengthFeet,
-            extras, stepNotes, answers, picks: livePicks, partFinish, globalFinish,
+            // extraLines = the extras AS THE PANEL PRICED THEM (priceChoice, customer row) — the
+            // handoff uses these verbatim so the docs, floors and NetSuite bill what was shown.
+            // Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
+            extras, extraLines: extraLines.filter(l => Number((extras.find(x => x.code === l.partId) || {}).qty) > 0),
+            stepNotes, answers, picks: livePicks, partFinish, globalFinish,
             // The kit, so the cart bills exactly what the panel showed.
             kit: kitBill,
             // The track's components, in the shape the cart has always carried them — the ERP push
