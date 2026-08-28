@@ -698,6 +698,34 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         return pairedCandidatesFor(pairPrompt.folder, partIndex, pairPromptQuery);
     }, [pairPrompt, partIndex, pairPromptQuery]);
 
+    // ── THE WAY OUT (Stuart 2026-08-27: "there is no cancel or way out once you go in") ────────
+    // Loading a folder committed you to it: the only exit was SKIP THIS IMAGE, one press per file,
+    // or reaching the end. On a folder of eighty photographs that is not an exit. Both escapes are
+    // additive — nothing already uploaded is touched, because those assets are saved and real.
+    const resetBatch = () => {
+        setQueue([]); setCurrentIndex(0);
+        setPatternId(''); setFinishId(''); setFabCode(''); setFabColorName('');
+        setCustomerId(''); setClientSku(''); setNotes('');
+        setAssociatedParts([]); setAssociatedFinishes([]); setFolderMeta({});
+        setCropMode(false); setDragRect(null); setAutoRun(null); setPairPrompt(null);
+    };
+    const cancelBatch = () => {
+        if (isProcessing) return alert('An upload is in flight — wait for it to finish, then cancel.');
+        const left = safeQueue.length - currentIndex;
+        if (left > 0 && !window.confirm(`Leave this batch?\n\n${left} image(s) not yet processed will be dropped from the queue.\n\nAnything already uploaded stays in the Asset Gallery — this only clears what is waiting.`)) return;
+        resetBatch();
+    };
+    const skipFolder = () => {
+        const f = queue[currentIndex]?.folder;
+        if (!f) { setCurrentIndex(i => i + 1); return; }
+        let i = currentIndex;
+        while (i < queue.length && queue[i].folder === f) i++;
+        const n = i - currentIndex;
+        if (!window.confirm(`Skip the rest of "${f}"?\n\n${n} image(s) in this folder will be passed over without importing.`)) return;
+        setNotes(''); setClientSku('');
+        setCurrentIndex(i);
+    };
+
     const inputStyle = { width: '100%', padding: '12px', background: theme.paper, border: `1px solid ${theme.line}`, fontFamily: theme.sans, fontSize: '0.95rem', boxSizing: 'border-box', textTransform: 'uppercase', marginTop: '5px', outline: 'none' };
     const labelStyle = { fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', color: theme.inkSoft, textTransform: 'uppercase' };
 
@@ -725,6 +753,12 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     <div style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', fontWeight: 500, color: remaining > 0 ? theme.brass : theme.inkSoft }}>
                         {remaining} IMAGES REMAINING
                     </div>
+                    {safeQueue.length > 0 && (
+                        <button onClick={cancelBatch} disabled={isProcessing} title="Drop everything still waiting. Uploaded assets are unaffected."
+                            style={{ padding: '10px 16px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: isProcessing ? 'not-allowed' : 'pointer' }}>
+                            ✕ Cancel batch
+                        </button>
+                    )}
                     <label style={{ background: '#fff', color: theme.ink, padding: '10px 20px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', border: `1px solid ${theme.ink}`, transition: 'background 0.2s' }}>
                         + SELECT FOLDER
                         <input type="file" multiple webkitdirectory="" onChange={handleFolderSelect} style={{ display: 'none' }} />
@@ -746,7 +780,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     <div style={{ fontSize: '3rem' }}>✅</div>
                     <h2 style={{ margin: '15px 0 10px 0', fontFamily: theme.serif, fontWeight: 500 }}>Batch Complete</h2>
                     <p style={{ fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.inkSoft }}>Processed {safeQueue.length} images.</p>
-                    <button onClick={() => { setQueue([]); setCurrentIndex(0); setPatternId(''); setFinishId(''); setFabCode(''); setFabColorName(''); setCustomerId(''); setClientSku(''); setAssociatedParts([]); setAssociatedFinishes([]); setFolderMeta({}); }} style={{ marginTop: '20px', padding: '12px 24px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>START NEW BATCH</button>
+                    <button onClick={resetBatch} style={{ marginTop: '20px', padding: '12px 24px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.18em', textTransform: 'uppercase', border: 'none', cursor: 'pointer', transition: 'background 0.2s' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>START NEW BATCH</button>
                 </div>
             ) : (
                 <div style={{ display: 'flex', gap: '20px', flex: 1 }}>
@@ -1075,6 +1109,11 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             <button onClick={() => { setNotes(""); setClientSku(""); setCurrentIndex(prev => prev + 1); }} disabled={isProcessing} style={{ padding: '10px', background: 'transparent', color: theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textDecoration: 'underline', cursor: 'pointer' }}>
                                 SKIP THIS IMAGE
                             </button>
+                            {queue[currentIndex]?.folder && (
+                                <button onClick={skipFolder} disabled={isProcessing} style={{ padding: '10px', background: 'transparent', color: theme.inkSoft, border: 'none', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textDecoration: 'underline', cursor: 'pointer' }}>
+                                    SKIP REST OF THIS FOLDER
+                                </button>
+                            )}
                         </div>
 
                     </div>
