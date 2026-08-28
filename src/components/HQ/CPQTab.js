@@ -1585,11 +1585,40 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // Pull an already-added cart line back INTO the configurator to edit it — the cart item retains its
   // full step selections/quantities/dimensions, so we restore them and remove it from the cart; finishing
   // the config re-adds it (a fresh line). Without this there was no way back to a line once it was added.
+  // The TAGS engine's restore payload — set by Edit on a TAGS cart line, consumed once by the
+  // configurator (keyed, so re-renders never re-apply it).
+  const [engineSeed, setEngineSeed] = useState(null);
   const handleEditCartItem = (itemId) => {
       const item = cart.find(c => c.id === itemId);
       if (!item) return;
       if (activeFlowId && (Object.keys(dynamicConfigParams).length || currentStepIndex > 0) &&
           !window.confirm("You have a configuration in progress. Editing this cart line will replace it. Continue?")) return;
+      // ── A TAGS LINE REOPENS INTO THE TAGS ENGINE (Stuart 2026-08-28: "once we hit reopen
+      // there is no data, all the selections are lost") ─────────────────────────────────────
+      // Edit restored ONLY the old engine's fields (dynamicConfigParams/stepQuantities), so a
+      // new-engine line opened a blank walk — after the line had already been pulled from the
+      // cart. The cart item has carried `engineConfig` (answers, picks, per-part finishes,
+      // length, step notes, memo) since the engine shipped precisely so a quote can be reopened
+      // into it; this hands it back.
+      if (item.engine === 'TAGS') {
+          setNewEngine(true);
+          setActiveFlowId(item.flowId || "");
+          setActiveAssemblyId(item.assemblyId || "");
+          if (item.masterQuoteId) setActiveMasterQuoteId(item.masterQuoteId);
+          setEngineSeed({
+              key: Date.now(),
+              ...(item.engineConfig || {}),
+              qty: item.qty,
+              sidemark: (!item.sidemark || item.sidemark === 'No Sidemark') ? '' : item.sidemark,
+              globalFinish: item.engineConfig?.globalFinish || item.finishes?.[0]?.code || '',
+              // Hand-added extras (splices, odd rings) live as flagged breakdown rows.
+              extras: (item.pricingBreakdown || []).filter(l => l.addedByHand)
+                  .map(l => ({ code: l.partId, qty: String(l.qty || 1), note: l.customNote || '' })),
+          });
+          setCart(cart.filter(c => c.id !== itemId));
+          if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+          return;
+      }
       setActiveFlowId(item.flowId || "");
       setActiveAssemblyId(item.assemblyId || "");
       if (item.masterQuoteId) setActiveMasterQuoteId(item.masterQuoteId);
@@ -4724,6 +4753,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                               <HardwareConfigurator
                                   key={asmId}
                                   assembly={activeAssembly}
+                                  reopenSeed={engineSeed}
                                   pins={shadowPins}
                                   isSuperAdmin={isSuperAdmin}
                                   finishes={[...globalFinishes, ...outsourceFinishes]}

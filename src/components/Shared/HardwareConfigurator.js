@@ -115,7 +115,7 @@ class EngineBoundary extends React.Component {
 function HardwareConfiguratorInner({
     assembly, pins, isSuperAdmin = false,
     finishes = [], parts = [], customer = null, customerId = '', priceLevel = 'STANDARD',
-    outsourceCodes = [], onAdd = null, onCheckout = null, cartCount = 0, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [], trvRules = null, visionDraft = null,
+    outsourceCodes = [], onAdd = null, onCheckout = null, cartCount = 0, flow = null, spanMap = {}, spanCaps = {}, extraItems = [], flowFinishes = [], trvRules = null, visionDraft = null, reopenSeed = null,
     // Quick Ship kits this assembly could be started from. Empty on every flow that has none, and
     // the picker does not render — so a collection with no kits is untouched by all of this.
     kits = [],
@@ -969,6 +969,33 @@ function HardwareConfiguratorInner({
     }, []);
 
     const [stepIx, setStepIx] = useState(0);
+    // ── REOPENING A SAVED CONFIGURATION (Stuart 2026-08-28: "once we hit reopen there is no
+    // data, all the selections are lost") ────────────────────────────────────────────────────
+    // Edit on a TAGS cart line hands back the item's own engineConfig — the exact answers, picks,
+    // per-part finishes, length, notes, memo and qty the walk produced. Applied ONCE per key (a
+    // re-render or a model refresh must never stomp what the operator has since changed); picks
+    // reseat against the live model exactly as the Vision and kit seeds rely on.
+    const reopenAppliedRef = useRef(null);
+    useEffect(() => {
+        const s = reopenSeed;
+        if (!s || !s.key || reopenAppliedRef.current === s.key) return;
+        reopenAppliedRef.current = s.key;
+        setAnswers({ ...(s.answers || {}) });
+        setPicks({ ...(s.picks || {}) });
+        setPartFinish({ ...(s.partFinish || {}) });
+        setStepNotes({ ...(s.stepNotes || {}) });
+        setExtras(Array.isArray(s.extras) ? s.extras : []);
+        if (s.globalFinish) setGlobalFinish(s.globalFinish);
+        if (Number(s.lengthInches) > 0) {
+            const whole = Math.floor(Number(s.lengthInches));
+            const frac = Number(s.lengthInches) - whole;
+            setPoleIn(String(whole));
+            setPoleFrac(frac > 0.001 ? `${Math.round(frac * 16)}/16` : '');
+        } else { setPoleIn(''); setPoleFrac(''); }
+        setConfigMemo(s.memo || s.sidemark || '');
+        setCfgQty(String(parseInt(s.qty, 10) > 0 ? parseInt(s.qty, 10) : 1));
+        setStepIx(0);
+    }, [reopenSeed]);
     const ix = Math.min(stepIx, Math.max(0, steps.length - 1));
     const step = steps[ix];
     // MASTER CONTROL (Stuart 2026-08-26): tab 11's item list IS what CPQ presents, and each item
@@ -1044,7 +1071,7 @@ function HardwareConfiguratorInner({
             sidemark: configMemo, memo: configMemo,
             finishes: chosenFinishObjects, finishLabel: finishLabelOf(chosenFinishObjects),
             priceLevel: effectiveLevel, lengthInches, lengthFeet,
-            extras, stepNotes, answers, picks: livePicks, partFinish,
+            extras, stepNotes, answers, picks: livePicks, partFinish, globalFinish,
             // The kit, so the cart bills exactly what the panel showed.
             kit: kitBill,
             // The track's components, in the shape the cart has always carried them — the ERP push

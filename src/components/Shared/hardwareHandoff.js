@@ -191,6 +191,9 @@ export function handoffItem(resolved, ctx = {}) {
             answers: ctx.answers || {},
             picks: ctx.picks || {},
             partFinish: ctx.partFinish || {},
+            // The whole-configuration finish, so a reopened line restores it exactly (per-part
+            // exceptions are partFinish; older items without it fall back to finishes[0]).
+            globalFinish: ctx.globalFinish || '',
             lengthInches, lengthFeet,
             stepNotes,
             memo,
