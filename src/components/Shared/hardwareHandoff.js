@@ -214,6 +214,10 @@ export function handoffItem(resolved, ctx = {}) {
             // The whole-configuration finish, so a reopened line restores it exactly (per-part
             // exceptions are partFinish; older items without it fall back to finishes[0]).
             globalFinish: ctx.globalFinish || '',
+            // Operator-TYPED slot counts (ring count, centre brackets…). Without these a reopened
+            // line fell back to the recommendations — 20 rings restored as the chart's 50
+            // (Stuart 2026-08-28, first live heal). Defaults stay defaults: only typed counts save.
+            stepQty: ctx.stepQty || {},
             lengthInches, lengthFeet,
             stepNotes,
             memo,

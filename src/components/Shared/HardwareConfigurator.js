@@ -984,6 +984,7 @@ function HardwareConfiguratorInner({
         setPicks({ ...(s.picks || {}) });
         setPartFinish({ ...(s.partFinish || {}) });
         setStepNotes({ ...(s.stepNotes || {}) });
+        setStepQty({ ...(s.stepQty || {}) });   // operator-typed counts (rings, centre brackets) — defaults otherwise
         setExtras(Array.isArray(s.extras) ? s.extras : []);
         if (s.globalFinish) setGlobalFinish(s.globalFinish);
         if (Number(s.lengthInches) > 0) {
@@ -1075,7 +1076,7 @@ function HardwareConfiguratorInner({
             // handoff uses these verbatim so the docs, floors and NetSuite bill what was shown.
             // Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
             extras, extraLines: extraLines.filter(l => Number((extras.find(x => x.code === l.partId) || {}).qty) > 0),
-            stepNotes, answers, picks: livePicks, partFinish, globalFinish,
+            stepNotes, answers, picks: livePicks, partFinish, globalFinish, stepQty,
             // The kit, so the cart bills exactly what the panel showed.
             kit: kitBill,
             // The track's components, in the shape the cart has always carried them — the ERP push
@@ -1110,7 +1111,7 @@ function HardwareConfiguratorInner({
         if (typeof onAdd === 'function') onAdd(item);
         setSaved(s => [...s, { memo: `${configMemo || `Configuration ${s.length + 1}`}${cfgQtyN > 1 ? ` × ${cfgQtyN}` : ''}`, total: grandTotal * cfgQtyN, lines: customerLines(priced.lines).length }]);
         setConfigMemo(''); setCfgQty('1'); setPicks({}); setAnswers({}); setPoleIn(''); setPoleFrac('');
-        setStepNotes({}); setExtras([]); setPartFinish({}); setTrvSel(null); setStepIx(0);
+        setStepNotes({}); setExtras([]); setPartFinish({}); setStepQty({}); setTrvSel(null); setStepIx(0);
     };
 
     const railCell = (st, i) => {
