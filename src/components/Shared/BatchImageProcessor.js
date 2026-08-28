@@ -10,6 +10,7 @@ import {
     END_TREATMENT_LABELS, DIA_LABELS, PROJ_LABELS,
 } from './fabricutAssetTags';
 import { IMG_GALLERY, imageUpdate, photoMayOverwrite, splitCode, normFinish } from './partImage';
+import { parsePillowFolder, matchPillowPart, galleryIdsFor } from './pillowCodes';
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -17,6 +18,11 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     // queue entries: { file, folder } — folder = the containing folder's name when the batch came
     // in via SELECT FOLDER (Kermit renders: folder name IS the plate code), '' for loose files.
     const [queue, setQueue] = useState([]);
+    // ONE IMAGE BECOMES THE THUMBNAIL (Stuart 2026-08-27: "apply one as the thumbnail for the
+    // master library"). A folder holds several photographs of the same pillow; they all belong in
+    // the gallery, but exactly one is the item's picture. Defaults to the FIRST image of each
+    // folder and is a tick the operator can move to any other.
+    const [useAsThumb, setUseAsThumb] = useState(true);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isProcessing, setIsProcessing] = useState(false);
     const [autoRun, setAutoRun] = useState(null); // { done, total } while PROCESS REST OF FOLDER runs
@@ -178,7 +184,22 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             } catch (err) { console.warn("Failed to read file", err); }
 
             const parsed = parseRenderFilename(file.name);
-            if (entry.folder) {
+            // UNIQUITY SOFT GOODS (Stuart 2026-08-27): the folder carries the whole identity —
+            // "Bubley 01 20x12" IS Bubley/01P20x12. Read it, resolve it against the library, and
+            // fill the form from what the LIBRARY says rather than from the folder's spelling; the
+            // banner below shows both so a folder that does not resolve is obvious before upload.
+            const soft = entry.folder ? softGoodsFor(entry.folder) : null;
+            if (soft && soft.hit) {
+                const ids = galleryIdsFor(soft.libCode);
+                setPatternId(ids.patternId);
+                setFinishId(ids.finishId);
+                setFabCode("");
+                setFabColorName("");
+                // Take the product type from the ITEM (PILLOW / THROW), not from whatever the
+                // dropdown happened to be left on — the gallery filters on it.
+                const pt = soft.hit.manufacturingSpecs?.productType || soft.hit.productType || '';
+                if (pt) setProductType(String(pt).toUpperCase());
+            } else if (entry.folder) {
                 // Kermit render folder: ONLY the folder name (plate code) and the finish/color
                 // token are trustworthy — the filename's Fabricut code is usually WRONG, so it is
                 // ignored; the code autofills from the CrossReference import (or the folder-sticky
@@ -202,6 +223,11 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                     setFinishId("");
                 }
             }
+            // First image of this folder (or a loose file) → offer it as the thumbnail.
+            const firstOfFolder = entry.folder
+                ? queue.findIndex(q => q.folder === entry.folder) === currentIndex
+                : true;
+            setUseAsThumb(firstOfFolder);
             setCropMode(false);
             setDragRect(null);
 
@@ -213,6 +239,28 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         }
     }, [currentIndex, queue]);
 
+    // ── SOFT GOODS: FOLDER → ITEM (Uniquity pillows & throws) ──────────────────────────────────
+    // Parses the folder, then asks the LIBRARY whether that item exists. A folder is filing, not a
+    // key — so nothing is imported against a code the library does not have. `hit` is the item
+    // itself; without one the operator is shown what was read and what was missing, and types it.
+    const softGoodsFor = useMemo(() => {
+        const cache = new Map();
+        return (folder) => {
+            if (!folder) return null;
+            if (cache.has(folder)) return cache.get(folder);
+            const parsed = parsePillowFolder(folder);
+            const m = parsed ? matchPillowPart(parsed, safeHqParts) : null;
+            const out = parsed ? {
+                parsed,
+                hit: m ? m.part : null,
+                matchedBy: m ? m.matchedBy : '',
+                libCode: m ? String(m.part.legacyErpId || m.part.itemId || '') : (parsed.code || ''),
+            } : null;
+            cache.set(folder, out);
+            return out;
+        };
+    }, [safeHqParts]);
+
     const folderKey = queue[currentIndex]?.folder || '~loose~';
     const currentFolderMeta = folderMeta[folderKey] || {};
 
@@ -222,6 +270,9 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     useEffect(() => {
         const entry = queue[currentIndex];
         if (!entry || !entry.folder || autoRun) { setPairPrompt(null); return; }
+        // A pillow has no bracket arm and no return fee — the combo question is a hardware
+        // question, and asking it on every soft-goods folder would be pure friction.
+        if (softGoodsFor(entry.folder)?.hit) { setPairPrompt(null); return; }
         const fm = folderMeta[entry.folder] || {};
         if (!fm.pairedChosen) { setPairPrompt({ folder: entry.folder }); setPairPromptQuery(""); }
         else setPairPrompt(null);
@@ -271,8 +322,17 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
     // IMPORT GATE — Fabricut items don't import unless identified BOTH ways: our item # resolves
     // in the Master Library AND a Fabricut code is present. Missing info is entered right then.
-    const missingFor = (m) => {
+    // The import gate. FABRICUT assets must carry our item # AND a Fabricut code — that is what
+    // makes them findable to Christie and to the portal. SOFT GOODS (Uniquity pillows/throws) have
+    // no Fabricut identity at all and their pattern is not a standalone library doc — "Bubley" is
+    // not an item, "Bubley/01P20x12" is. For those the question is simply: did the folder resolve
+    // to a real library item? Asking a Fabricut question of a pillow would block every import.
+    const missingFor = (m, soft) => {
         const out = [];
+        if (soft) {
+            if (!soft.hit) out.push(`OUR ITEM # (folder "${soft.parsed?.pattern || ''}" → ${soft.libCode || 'nothing'} is not in the Master Library)`);
+            return out;
+        }
         if (!resolveBaseDoc(m.patternId, partIndex).doc) out.push('OUR ITEM # (no Master Library match)');
         if (!m.finishId) out.push('FINISH ID');
         if (!m.fabCode) out.push('FABRICUT CODE');
@@ -480,7 +540,11 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         // So the upload now stamps the picture itself, on the base doc and on the finish variant
         // for THIS finish. photoMayOverwrite lets a photograph replace a .glb render or an
         // inherited stand-in, and refuses to touch another photograph.
+        // Only the image marked as the thumbnail becomes the item's picture. The rest still land
+        // in the gallery — a folder of eight photographs is eight assets and one thumbnail, not
+        // eight fights over the same field where the last upload silently wins.
         try {
+            if (!meta.setAsThumbnail) return;
             const targets = [];
             if (base && base.doc) targets.push(base.doc);
             if (safeFinish) {
@@ -514,6 +578,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         customerId, clientSku, collectionName, productType, notes,
         associatedParts, associatedFinishes,
         portalFlag: portalEnable ? String(collectionName || '').trim().toUpperCase() : '',
+        setAsThumbnail: useAsThumb,
     });
 
     const handleProcessAndNext = async (e) => {
@@ -522,7 +587,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         if (portalEnable && !String(collectionName || '').trim()) return alert("Portal flagging needs a COLLECTION — the portal shows an asset only to customers entitled to its collection. Pick one (e.g. Fabricut H1) or un-tick the portal box.");
         if (queue[currentIndex]?.folder) {
             // Fabricut folder conveyor: hard gate — identify with OUR item # AND a Fabricut code.
-            const missing = missingFor(metaFromForm());
+            const missing = missingFor(metaFromForm(), softGoodsFor(queue[currentIndex].folder));
             if (missing.length) return alert(`NOT IMPORTED — missing: ${missing.join(' · ')}.\nEnter it now; Fabricut assets must be identified by our item # and a matching Fabricut code.`);
         } else if (/^H1-/i.test(String(patternId).trim()) && !resolved) {
             if (!window.confirm("This H1 pattern does not resolve to a Master Library item — import anyway?")) return;
@@ -556,8 +621,9 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const handleProcessFolder = async () => {
         const baseMeta = metaFromForm();
         if (portalEnable && !baseMeta.portalFlag) return alert("Portal flagging needs a COLLECTION — pick one (e.g. Fabricut H1) or un-tick the portal box before running the folder.");
-        const missing = missingFor(baseMeta);
-        if (missing.length) return alert(`NOT IMPORTED — missing: ${missing.join(' · ')}.\nSet up the first image completely (our item #, finish, Fabricut code) before running the folder.`);
+        const soft = softGoodsFor(queue[currentIndex]?.folder);
+        const missing = missingFor(baseMeta, soft);
+        if (missing.length) return alert(`NOT IMPORTED — missing: ${missing.join(' · ')}.\n${soft ? 'Fix the folder name, or type our item # by hand, before running the folder.' : 'Set up the first image completely (our item #, finish, Fabricut code) before running the folder.'}`);
         const idxs = [currentIndex];
         queue.forEach((q, i) => { if (i > currentIndex && q.folder && q.folder === queue[currentIndex]?.folder) idxs.push(i); });
         const stickyFab = String(folderMeta[folderKey]?.fabCode || '').toUpperCase();
@@ -569,12 +635,19 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             for (let n = 0; n < idxs.length && !stopped; n++) {
                 const entry = queue[idxs[n]];
                 let meta = baseMeta;
-                if (n > 0) {
+                // SOFT GOODS: every image in the folder is the SAME pillow, so the identity comes
+                // from the FOLDER and is not re-read per file. The Fabricut branch below scans each
+                // filename for its own finish — correct there, where one folder holds one plate in
+                // twenty finishes, and exactly wrong here, where it would strip the identity off
+                // every image after the first.
+                if (soft && soft.hit) {
+                    meta = { ...baseMeta, setAsThumbnail: n === 0 && baseMeta.setAsThumbnail };
+                } else if (n > 0) {
                     const parsed = parseRenderFilename(entry.file.name);
                     const fin = parsed?.finishId || '';
                     const perFab = stickyFab || fabricutCodeForFinish(pairedDoc, fin) || fabricutCodeForFinish(plateDocForRun, fin) || baseMeta.fabCode || '';
                     const color = fabricutColorNameOf(fin, finishLists) || parsed?.fabColorName || ourFinishNameOf(fin, finishLists) || '';
-                    meta = { ...baseMeta, finishId: fin, fabCode: perFab, fabColorName: color };
+                    meta = { ...baseMeta, finishId: fin, fabCode: perFab, fabColorName: color, setAsThumbnail: false };
                     if (!fin || !perFab) {
                         const fix = await requestFix({
                             file: entry.file, folder: entry.folder,
@@ -666,7 +739,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             {safeQueue.length === 0 ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px dashed ${theme.brass}`, color: theme.inkSoft, fontFamily: theme.serif, fontSize: '1.4rem', padding: '60px 20px' }}>
                     <div>Drag & Drop or Select a Batch of Images to Begin</div>
-                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase' }}>SELECT FOLDER = Kermit renders — folder name is the plate code, finishes read from filenames</div>
+                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', textAlign: 'center', lineHeight: 1.8 }}>SELECT FOLDER = Kermit renders (folder name is the plate code, finishes read from filenames)<br />or Uniquity soft goods — a folder named "Bubley 01 20x12" resolves to Bubley/01P20x12</div>
                 </div>
             ) : isDone ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: theme.paper2, border: `1px solid ${theme.line}`, color: theme.ink }}>
@@ -735,7 +808,46 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
 
                     {/* Metadata Form Panel */}
                     <div style={{ flex: 1.2, background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 4px 24px rgba(0,0,0,0.02)', overflowY: 'auto', maxHeight: '75vh' }}>
-                        <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: '10px' }}>Metadata Injection</div>
+                        <div style={{ fontFamily: theme.serif, fontSize: '1.4rem', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.line}`, paddingBottom: `10px` }}>Metadata Injection</div>
+
+                        {/* SOFT-GOODS BANNER — says what the folder was read as and whether the
+                            Master Library actually has that item. A folder is filing, not a key, so
+                            the resolution is shown rather than assumed. */}
+                        {(() => {
+                            const soft = softGoodsFor(queue[currentIndex]?.folder);
+                            if (!soft) return null;
+                            const ok = !!soft.hit;
+                            return (
+                                <div style={{ border: `1px solid ${ok ? theme.brass : '#d9534f'}`, background: ok ? theme.paper : '#fdf3f3', padding: '14px 16px' }}>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.14em', textTransform: 'uppercase', color: ok ? theme.brass : '#d9534f', marginBottom: '6px' }}>
+                                        {ok ? 'Soft goods — folder resolved' : 'Soft goods — folder NOT resolved'}
+                                    </div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
+                                        {soft.parsed.pattern || '—'} · colour {soft.parsed.color || '—'} · {soft.parsed.kind === 'T' ? `throw${soft.parsed.isXL ? ' XL' : ''}` : (soft.parsed.size || '—')}
+                                    </div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '12px', marginTop: '5px', color: ok ? '#3a7d44' : '#d9534f' }}>
+                                        {ok
+                                            ? `✓ ${soft.libCode}${soft.matchedBy === 'parts' ? '  (matched on pattern + colour + size)' : ''}`
+                                            : `✗ ${soft.libCode || 'could not build a code'} — ${(soft.parsed.why || []).join(' · ') || 'not in the Master Library'}`}
+                                    </div>
+                                    {!ok && <div style={{ fontFamily: theme.mono, fontSize: '10px', marginTop: '6px', color: theme.inkSoft, lineHeight: 1.6 }}>Type our item # below to import anyway — nothing is written against a code the library does not have.</div>}
+                                </div>
+                            );
+                        })()}
+
+                        {/* WHICH PICTURE BECOMES THE ITEM'S. Every image in the folder goes to the
+                            gallery; exactly one becomes the Master Library thumbnail. Defaults to the
+                            first of each folder. A real photograph always outranks a .glb render, so
+                            ticking this replaces a stand-in but never another photograph. */}
+                        <label style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', border: `1px solid ${useAsThumb ? theme.brass : theme.line}`, background: useAsThumb ? theme.paper : '#fff', padding: '12px 14px', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={useAsThumb} onChange={e => setUseAsThumb(e.target.checked)} style={{ marginTop: '3px' }} />
+                            <span>
+                                <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', color: theme.ink }}>★ Master Library thumbnail</span>
+                                <span style={{ display: 'block', fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '4px', lineHeight: 1.6 }}>
+                                    {useAsThumb ? 'This image becomes the item picture. The rest of the folder still goes to the gallery.' : 'Gallery only — the item keeps whichever picture it has.'}
+                                </span>
+                            </span>
+                        </label>
 
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <div style={{ flex: 1 }}>
