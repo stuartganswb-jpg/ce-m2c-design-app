@@ -942,11 +942,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       (activeBomPins || []).forEach(pn => {
           const p = byKey.get(String(pn.partId || '').trim().toUpperCase());
           if (!p) return;
-          const kind = String(p.manufacturingSpecs?.productType || p.category || '').toUpperCase();
+          // Rod-ness is read from every signal that carries it: the pin's category ("Pole" on the
+          // H1 pins), the part's productType — and the CODE itself, because the Brimar pole pins
+          // are categorized "Raw Material" and only HBR1-1INPOLE says what it is.
+          const kind = String(pn.category || p.manufacturingSpecs?.productType || p.category || '').toUpperCase();
+          const code = String(p.legacyErpId || p.itemId || pn.partId || '').toUpperCase();
+          const rodish = /POLE|\bROD\b|FASCIA|TRAVERSE/.test(kind) || /POLE|FASCIA|TRV\b/.test(code);
           (p.manufacturingSpecs?.collections || []).forEach(c => {
               const k = String(c).trim().toUpperCase();
               all.add(k);
-              if (/POLE|ROD|FASCIA|TRAVERSE/.test(kind)) rods.add(k);
+              if (rodish) rods.add(k);
           });
       });
       return rods.size ? rods : all;
