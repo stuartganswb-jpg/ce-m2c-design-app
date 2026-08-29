@@ -1712,7 +1712,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 if (dm && dm.finWoId) {
                     try {
                         const cleared = await clearConvertGate(dm, operator?.name || '');
-                        if (cleared) writeLog(`Convert done — WO ${dm.finWoId} released from its convert gate (RTG can dispatch it).`, 'wms');
+                        if (cleared) writeLog(`Convert done — WO ${dm.finWoId} ${cleared === 'released' ? 'AUTO-RELEASED to the finishing floor (Order Entry auto-flow)' : 'released from its convert gate (RTG can dispatch it)'}.`, 'wms');
                     } catch (e) { console.warn('convert gate clear failed for', dm.finWoId, e); }
                 }
             }
@@ -1952,7 +1952,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 if (dm && dm.finWoId) {
                     try {
                         const cleared = await clearConvertGate(dm, operator?.name || '');
-                        if (cleared) writeLog(`Convert done — WO ${dm.finWoId} released from its convert gate (RTG can dispatch it).`, 'wms');
+                        if (cleared) writeLog(`Convert done — WO ${dm.finWoId} ${cleared === 'released' ? 'AUTO-RELEASED to the finishing floor (Order Entry auto-flow)' : 'released from its convert gate (RTG can dispatch it)'}.`, 'wms');
                     } catch (e) { console.warn('convert gate clear failed for', dm.finWoId, e); }
                 }
             }

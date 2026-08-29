@@ -6,6 +6,7 @@ import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, dele
 import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines} from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
+import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, DELETION_LEDGER } from '../Shared/orderLifecycle';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -358,6 +359,28 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [autoRelease, liveSO, liveWO]);
 
+
+    // 🔁 ORDER ENTRY AUTO-FLOW — independent of the ⚡ per-brand toggle: these orders authorized
+    // their own routing at creation (Stuart 2026-08-28: "the system should already have all the
+    // information it needs"). RTG just executes the release the moment every gate — SO accept,
+    // phosphate convert, rod cut — is open. The WMS convert-complete hook releases most of them
+    // directly; this catches the rest (e.g. an SO acceptance writeBack opening the last gate).
+    useEffect(() => {
+        if (autoBusyRef.current || isSyncing) return;
+        const wo = liveWO.find(o => o.autoFlow && o.status === 'Approved' && o.finPayload && !o.pushedToFinishing
+            && !o.awaitingSoAccept && !o.awaitingConvert && !o.awaitingRodCut && !o.stopped && !autoTriedRef.current.has(`flow:${o.id}`));
+        if (!wo) return;
+        autoBusyRef.current = true;
+        autoTriedRef.current.add(`flow:${wo.id}`);
+        (async () => {
+            try {
+                addLog(`🔁 Auto-flow: ${wo.id} — gates open, releasing to the finishing floor…`, 'info');
+                await releaseFinWoToFloor(wo, currentUser || 'auto-flow');
+            } catch (e) { addLog(`🔁 Auto-flow release FAILED for ${wo.id}: ${e.message} — left parked.`, 'error'); }
+            finally { autoBusyRef.current = false; setTimeout(() => loadRTGOrders(), 900); }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [liveWO]);
 
     // Form branding (shared with Admin > Form Templates) so printed docs use the configured
     // header/footer/terms + brand logo.
@@ -2131,6 +2154,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(wo, 'stock')}>View</button>
                                         <button style={{ ...btnStyle, flex: 1 }} title="Re-explode this assembly against today's BOM and rewrite the warehouse pull lines. Refused once picking has started." onClick={() => refreshBomLines(wo, 'stock')}>↻ BOM</button>
+                                        {/* ORDER ENTRY AUTO-FLOW (Stuart 2026-08-28): the system already has
+                                            everything it needs to route this order — shop → phosphate →
+                                            finishing → WMS — so no Push buttons are offered. It releases
+                                            itself the moment its gates open. */}
+                                        {wo.autoFlow ? (
+                                            <span title="Auto-flow: components in stock → straight to finishing; /P short → releases when the WMS convert posts; raw short → its milling WO is already on the shop floor." style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, color: 'var(--brass)', border: '1px dashed var(--brass)', background: '#fdf8ef' }}>
+                                                🔁 AUTO-FLOW · {wo.awaitingSoAccept ? 'awaiting SO accept' : wo.awaitingConvert ? 'awaiting phosphate convert' : wo.awaitingRodCut ? 'awaiting rod cut' : 'releasing…'}
+                                            </span>
+                                        ) : (<>
                                         <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>
                                             {wo.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
                                         </button>
@@ -2139,6 +2171,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                                 {wo.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
                                             </button>
                                         )}
+                                        </>)}
                                     </div>
                                 </div>
                             ))}

@@ -1368,7 +1368,10 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     });
                     await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
                         id: woId, woId, brand: activeBrand, type: finishedErp, status: 'Approved',
-                        source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload,
+                        // autoFlow: once NetSuite accepts the SO and any convert gate opens, the
+                        // system routes this itself — RTG shows status, never Push buttons.
+                        source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload, autoFlow: true,
+                        itemName: rawPart?.itemName || '',
                         orderClass: 'ORDER_ENTRY', soAppId: hqId, customerId,
                         customer: selectedCustomer?.name || customerId,
                         recipe: l.finishCode, erpId: finishedErp, partErpId: finishedErp, rootItem: l.erp,

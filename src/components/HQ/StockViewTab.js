@@ -13,7 +13,7 @@ import { poleCutPlan, poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
-import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
+import { runBatchPrecheck, executeMakeupActions, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode } from '../Shared/finishRouting';
 
 const BRAND_NETSUITE_MAP = {
@@ -2114,7 +2114,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             let gate = {};
             if (pre && pre.actions.length) {
                 try {
-                    const exec = await executeMakeupActions({ actions: pre.actions, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp, createdBy: currentUser || '', inventory: hqParts, source: 'oe-needs-precheck', reqDate: needBy });
+                    const exec = await executeMakeupActions({ actions: pre.actions, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp, createdBy: currentUser || '', inventory: hqParts, source: 'oe-needs-precheck', reqDate: needBy, dispatchShop: true, soRef: so.soId || so.id, customerName: so.customer || '' });
                     gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
                     addLog(`🧩 ${finishedErp} pre-check: ${exec.made.join(' · ')}`, 'warn');
                 } catch (e) { addLog(`⚠ ${finishedErp}: make-up orders failed (${e.message || e}) — WO created un-gated.`, 'error'); }
@@ -2127,6 +2127,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 orderType: 'sales', soId: so.soId || so.id, soNum: so.soId || so.id,
                 customerId: so.customerId || null, customerName: so.customer || '', customer: so.customer || '', clientName: so.customer || '',
                 recipe: finish, reqDate: needBy, type: finishedErp, totalParts: qty,
+                itemName: part.itemName || '',
                 stockErpId: finishedErp, stockInternalId: null,
                 paintSize: isPole ? null : (size || null), productType: ptype || null,
                 paintSizes: (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null,
@@ -2142,17 +2143,28 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
                 brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
             });
+            // ORDER ENTRY AUTO-FLOW (Stuart 2026-08-28): the system has everything it needs to
+            // route this — no Push buttons. Components in stock → straight to the finishing
+            // floor NOW; /P short → the convert gate holds it and the WMS convert-complete
+            // releases it; raw short too → the component milling WO is already ON the shop floor
+            // and the chain is shop → phosphate (convert) → finishing → WMS.
             await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
                 id: woId, woId, brand: activeBrand, type: finishedErp, status: 'Approved',
-                source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload,
+                source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload, autoFlow: true,
                 orderClass: 'ORDER_ENTRY', soAppId: so.id, customerId: so.customerId || null,
                 customer: so.customer || '', recipe: finish, erpId: finishedErp, partErpId: finishedErp, rootItem: erp,
+                itemName: part.itemName || '',
                 qty, totalParts: qty, reqDate: needBy, ...(needBy ? { needBy } : {}),
                 soAccepted: !!so.nsInternalId,
                 ...gate,
                 createdAt: Date.now(), createdBy: currentUser || ''
             }), { merge: true });
-            addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} for ${so.customer || ''} (linked to ${so.soId || so.id}) — parked in RTG.`, 'success');
+            if (!gate.awaitingConvert) {
+                await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-needs');
+                addLog(`✅ ${qty} × ${finishedErp} for ${so.customer || ''} (SO ${so.soId || so.id}) — components in stock → RELEASED straight to the finishing floor (${woId}).`, 'success');
+            } else {
+                addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} for ${so.customer || ''} (SO ${so.soId || so.id}) — waiting on its phosphate convert; it auto-releases to finishing the moment the WMS posts it.`, 'success');
+            }
             await loadOeNeeds();
         } catch (e) { addLog(`OE generate failed: ${e.message || e}`, 'error'); alert('Generate failed:\n\n' + (e.message || e)); }
         setGenBusy(false);

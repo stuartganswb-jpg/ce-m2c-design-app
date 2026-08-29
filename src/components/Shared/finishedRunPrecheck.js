@@ -27,7 +27,7 @@ import { millBaseOf } from './finishRouting.js';
 // The firebase imports serve only the executor/gate-clearer at the bottom — the planners above
 // never touch them, so node tests can import the planning half without dragging firebase in.
 import { db } from '../../firebase';
-import { doc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { withItemCode } from './workOrderContract';
 
 // ── PURE PLANNING ──────────────────────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ export const runBatchPrecheck = async ({ rows = [], inventory = [], locationId }
 // Returns what was made plus the gate fields the caller stamps on the parent work order.
 // `seq` de-dupes doc ids across same-millisecond calls (two batch rows shorting one component).
 let seq = 0;
-export const executeMakeupActions = async ({ actions = [], brandId, finWoId, finWoErpId, createdBy = '', inventory = [], source = 'precheck', reqDate = '' }) => {
+export const executeMakeupActions = async ({ actions = [], brandId, finWoId, finWoErpId, createdBy = '', inventory = [], source = 'precheck', reqDate = '', dispatchShop = false, soRef = '', customerName = '' }) => {
     const partOf = (c) => inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(c).toUpperCase()) || null;
     const made = [], convertDemandIds = [], shopWoIds = [];
     for (let i = 0; i < actions.length; i++) {
@@ -153,19 +153,41 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             const safe = String(a.code).replace(/[^A-Za-z0-9]+/g, '-');
             const woId = `WO-CMP-${safe}-${stamp}-${++seq}`;
             await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
-                id: woId, woId, brand: brandId, type: 'Stock', status: 'Approved',
+                id: woId, woId, brand: brandId, type: 'Stock', status: dispatchShop ? 'Dispatched' : 'Approved',
                 source: 'PRECHECK_MAKEUP', routeTo: 'SHOP',
+                ...(dispatchShop ? { pushedToShop: true, dispatchedAt: Date.now(), dispatchedBy: createdBy || 'auto-flow' } : {}),
                 erpId: a.code, partErpId: a.code, rootItem: a.code,
+                itemName: p.itemName || '',
                 nsItemId: p.netSuiteInternalId ? String(p.netSuiteInternalId) : null,
                 hqJobId: p.id || null,
                 qty: a.qty, totalParts: a.qty, reqDate: reqDate || '',
                 customer: 'Internal Stock',
                 routingType: p.routingType || 'Standard',
-                note: `Component make-up for ${finWoErpId || finWoId || 'finished run'} — ${a.reason || 'short'}`,
+                note: `Component make-up for ${finWoErpId || finWoId || 'finished run'} — ${a.reason || 'short'}${soRef ? ` · SO ${soRef}` : ''}`,
                 createdAt: Date.now(), createdBy,
             }), { merge: true });
+            // ORDER ENTRY AUTO-FLOW (Stuart 2026-08-28): the system already knows the route — a
+            // component milling WO goes STRAIGHT to the shop's milling intake instead of parking
+            // in RTG for a human's Push to Shop. Same doc shape RTG's pushToShop writes.
+            if (dispatchShop) {
+                await setDoc(doc(db, 'shop_custom_orders', `SHOP-${woId}`), {
+                    id: `SHOP-${woId}`, woNum: `SHOP-${woId}`, orderKey: woId,
+                    quoteId: null, salesOrderId: null, finSiblingId: null, hasSmallSibling: false,
+                    soNum: soRef || 'N/A', isStock: true, routeTo: 'MILLING',
+                    partNum: a.code, itemCode: a.code, item: p.itemName || a.code, qty: a.qty,
+                    isOutsourced: false, finishRecipe: 'PENDING-RECIPE', outsourcePrice: 0,
+                    reqDate: reqDate || '', category: 'Stock Milling', status: 'Pending', priority: 999,
+                    brand: brandId, customerId: null, clientName: customerName || 'Internal Stock',
+                    note: `Component make-up for ${finWoErpId || ''}${soRef ? ` · SO ${soRef}` : ''} — mill, then phosphate (convert), then finishing`,
+                    cpqSpecs: {}, imageUrl: null,
+                    // The raw this WO makes is destined for the /P convert — the shop's own
+                    // in-house-finish rule would derive this anyway; stated explicitly here.
+                    needsPhosphating: true, isPlatingDemand: false,
+                    rootItem: a.code, createdAt: Date.now(), createdBy,
+                });
+            }
             shopWoIds.push(woId);
-            made.push(`🏭 SHOP WO ${woId} — ${a.qty} × ${a.code} (RTG → Push to Shop)`);
+            made.push(`🏭 SHOP WO ${woId} — ${a.qty} × ${a.code}${dispatchShop ? ' (sent to shop milling)' : ' (RTG → Push to Shop)'}`);
         }
     }
     const gateFields = convertDemandIds.length ? {
@@ -175,9 +197,24 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
     return { made, convertDemandIds, shopWoIds, gateFields };
 };
 
+// Release a parked finishing WO to the floor: verbatim finPayload copy → fin_workorders, the hq
+// record marked Dispatched. Used by the ORDER ENTRY AUTO-FLOW — at creation when components are
+// in stock, and from the WMS convert-complete hook when the last gate opens. Route A (an
+// app-queued NetSuite work order) deliberately never runs here: sales-typed payloads' NetSuite
+// record is the sales order itself.
+export const releaseFinWoToFloor = async (hqWo, by = '') => {
+    const fp = hqWo && hqWo.finPayload;
+    if (!fp || !fp.id || hqWo.pushedToFinishing) return false;
+    await setDoc(doc(db, 'fin_workorders', fp.id), withItemCode({ ...fp, dispatchedAt: Date.now(), dispatchedBy: by || 'auto-flow' }));
+    await updateDoc(doc(db, 'hq_work_orders', hqWo.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: Date.now(), dispatchedBy: by || 'auto-flow' });
+    return true;
+};
+
 // Called by the WMS after a convert_demand carrying a finWoId completes (the demand doc is deleted
 // by then — pass the data captured before the delete). The gate opens only when no OTHER open
-// demand still points at the same work order. Returns true when the gate was cleared.
+// demand still points at the same work order. An AUTO-FLOW work order (Order Entry) then releases
+// itself straight to the finishing floor — raw was made, /P now exists, finishing is next; no
+// human hop in between. Returns 'released' | 'cleared' | false.
 export const clearConvertGate = async (demand, operatorName = '') => {
     const finWoId = demand && demand.finWoId;
     if (!finWoId) return false;
@@ -186,5 +223,13 @@ export const clearConvertGate = async (demand, operatorName = '') => {
     await updateDoc(doc(db, 'hq_work_orders', finWoId), {
         awaitingConvert: false, convertDoneAt: Date.now(), convertDoneBy: operatorName || '',
     });
-    return true;
+    try {
+        const woSnap = await getDoc(doc(db, 'hq_work_orders', finWoId));
+        const wo = woSnap.exists() ? { id: woSnap.id, ...woSnap.data() } : null;
+        if (wo && wo.autoFlow && !wo.awaitingSoAccept && !wo.awaitingRodCut) {
+            const released = await releaseFinWoToFloor(wo, operatorName || 'convert-complete');
+            if (released) return 'released';
+        }
+    } catch (e) { console.warn('auto-flow release after convert failed (gate is cleared; release from RTG):', e); }
+    return 'cleared';
 };
