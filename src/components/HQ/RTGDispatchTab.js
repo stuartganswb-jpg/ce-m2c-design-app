@@ -367,7 +367,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // directly; this catches the rest (e.g. an SO acceptance writeBack opening the last gate).
     useEffect(() => {
         if (autoBusyRef.current || isSyncing) return;
-        const wo = liveWO.find(o => o.autoFlow && o.status === 'Approved' && o.finPayload && !o.pushedToFinishing
+        // orderClass ORDER_ENTRY counts as autoFlow even without the flag — heals the WOs
+        // generated in the minutes before the flag shipped (2026-08-29 morning).
+        const wo = liveWO.find(o => (o.autoFlow || o.orderClass === 'ORDER_ENTRY') && o.status === 'Approved' && o.finPayload && !o.pushedToFinishing
             && !o.awaitingSoAccept && !o.awaitingConvert && !o.awaitingRodCut && !o.stopped && !autoTriedRef.current.has(`flow:${o.id}`));
         if (!wo) return;
         autoBusyRef.current = true;
@@ -2158,7 +2160,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                             everything it needs to route this order — shop → phosphate →
                                             finishing → WMS — so no Push buttons are offered. It releases
                                             itself the moment its gates open. */}
-                                        {wo.autoFlow ? (
+                                        {(wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') ? (
                                             <span title="Auto-flow: components in stock → straight to finishing; /P short → releases when the WMS convert posts; raw short → its milling WO is already on the shop floor." style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, color: 'var(--brass)', border: '1px dashed var(--brass)', background: '#fdf8ef' }}>
                                                 🔁 AUTO-FLOW · {wo.awaitingSoAccept ? 'awaiting SO accept' : wo.awaitingConvert ? 'awaiting phosphate convert' : wo.awaitingRodCut ? 'awaiting rod cut' : 'releasing…'}
                                             </span>

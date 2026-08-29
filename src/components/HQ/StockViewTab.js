@@ -2010,6 +2010,19 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // flows to WMS pick/pack against the SO — typically pack-and-hold in a bin until every part
     // arrives, which can span weeks. Master Library / the stock views stay for STOCK.
     const oeLineFinish = (l) => l.finishCode || (String(l.note || '').match(/TO BE FINISHED\s*·\s*([A-Z0-9-]+)/i) || [])[1] || '';
+    // The toolbar's green Generate in the OENEEDS view: every made-to-order line that has no
+    // linked order yet, across every open SO, generated in one press (per-line buttons remain
+    // for one-at-a-time). Sequential — each generation reloads the board, so links are re-read.
+    const generateAllOeMissing = async () => {
+        if (!oeNeeds || oeNeeds.loading) return alert('The Order Entry Needs board is still loading.');
+        const work = [];
+        oeNeeds.orders.forEach(({ so, wos, pos }) => (so.lines || []).filter(oeIsTbf).forEach(l => {
+            if (!oeLinkFor({ wos, pos }, l)) work.push({ so, l });
+        }));
+        if (!work.length) return alert('Every made-to-order line already has a linked order — nothing to generate.');
+        if (!window.confirm(`Generate linked orders for ${work.length} line(s) with no order yet?\n\n${work.slice(0, 12).map(w => `• ${w.so.soId || w.so.id}: ${w.l.erp} ×${w.l.qty}`).join('\n')}${work.length > 12 ? `\n…and ${work.length - 12} more` : ''}\n\nEach routes itself: in stock → finishing floor now · /P short → convert then finishing · raw short → shop milling first.`)) return;
+        for (const w of work) { await generateOeLineOrder(w.so, w.l); }
+    };
     const oeIsTbf = (l) => !!(l.toBeFinished || /TO BE FINISHED/i.test(String(l.note || '')));
     const loadOeNeeds = async () => {
         setOeNeeds({ loading: true, orders: [] });
@@ -2510,7 +2523,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     Need by
                                     <input type="date" value={woNeedBy} onChange={e => setWoNeedBy(e.target.value)} style={{ padding: '6px 8px', border: `1px solid ${woNeedBy ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '11px', outline: 'none' }} />
                                 </label>
-                                <button onClick={snapView === 'RAW' ? generateRawOrders : snapView === 'TIER' ? generateTierOrders : generateOrders} disabled={genBusy || !shownCount} title={snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : snapView === 'TIER' ? 'Route every tier row with an Order qty by what it IS: raw core → shop-floor WO (or a vendor PO if it\'s bought), /P → WMS Convert to-do, plated → WMS Plating to-do, finished → Finishing WO.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : snapView === 'TIER' ? '⚙ Generate Tier Orders' : '⚙ Generate Orders (PO + WO)')}</button>
+                                <button onClick={snapView === 'OENEEDS' ? generateAllOeMissing : snapView === 'RAW' ? generateRawOrders : snapView === 'TIER' ? generateTierOrders : generateOrders} disabled={genBusy || (snapView !== 'OENEEDS' && !shownCount)} title={snapView === 'OENEEDS' ? 'Generate the linked orders for EVERY made-to-order line that has none yet — each routes itself (in stock → finishing now · /P short → convert then finishing · raw short → shop milling first). Lines already linked are untouched.' : snapView === 'RAW' ? 'Route every core with an Order qty: bought cores confirm their vendor then group into ONE PO per vendor; in-house cores become shop-floor work orders. Both stage in RTG Dispatch.' : snapView === 'TIER' ? 'Route every tier row with an Order qty by what it IS: raw core → shop-floor WO (or a vendor PO if it\'s bought), /P → WMS Convert to-do, plated → WMS Plating to-do, finished → Finishing WO.' : 'Route every row with an Order qty: bought items → ONE PO per vendor (RTG Dispatch pushes to NetSuite); made items → RTG-parked work orders; in-house items with a vendor ask PO-or-WO per item'} style={{ padding: '9px 16px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>{genBusy ? 'Generating…' : (snapView === 'OENEEDS' ? '⚙ Generate All Missing (OE)' : snapView === 'RAW' ? '⚙ Generate Core Orders (PO + WO)' : snapView === 'TIER' ? '⚙ Generate Tier Orders' : '⚙ Generate Orders (PO + WO)')}</button>
                             </div>
 
                             {/* ⚠ URGENT CORES — a live backorder is waiting on these being MADE. The reorder
@@ -2557,6 +2570,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.1rem' }}>No open Order Entry sales orders with made-to-order lines.</div>
                                     ) : (
                                         <div style={{ padding: '18px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>{oeNeeds.orders.length} open order(s) with made-to-order lines · links re-read on refresh</span>
+                                                <button onClick={loadOeNeeds} style={{ padding: '7px 12px', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>↻ Refresh</button>
+                                            </div>
                                             {oeNeeds.orders.map(({ so, wos, pos }) => (
                                                 <div key={so.id} style={{ border: '1px solid var(--line)', background: '#fff', marginBottom: '16px' }}>
                                                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '8px 18px', padding: '12px 18px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>

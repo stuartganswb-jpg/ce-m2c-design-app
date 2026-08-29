@@ -226,7 +226,7 @@ export const clearConvertGate = async (demand, operatorName = '') => {
     try {
         const woSnap = await getDoc(doc(db, 'hq_work_orders', finWoId));
         const wo = woSnap.exists() ? { id: woSnap.id, ...woSnap.data() } : null;
-        if (wo && wo.autoFlow && !wo.awaitingSoAccept && !wo.awaitingRodCut) {
+        if (wo && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && !wo.awaitingSoAccept && !wo.awaitingRodCut) {
             const released = await releaseFinWoToFloor(wo, operatorName || 'convert-complete');
             if (released) return 'released';
         }
