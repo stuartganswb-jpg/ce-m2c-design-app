@@ -3579,6 +3579,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <div>
                                     <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{o.customer || 'Customer'}</span>
                                     <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>SO {o.soId || o.id} · {o.totalParts || 0} pcs{o.jobName ? ` · ${o.jobName}` : ''}</span>
+                                    {o.needByDate && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>NEED BY {o.needByDate}</span>}
+                                    {/* Made-to-order lines arrive from the floors over days/weeks — the order
+                                        typically PACKS & HOLDS in a bin until every part is in. */}
+                                    {(o.lines || []).some(l => l.toBeFinished) && <span style={{ fontFamily: theme.mono, fontSize: '9px', fontWeight: 700, color: theme.brass, marginLeft: '12px', letterSpacing: '.05em' }}>📦 PACK &amp; HOLD — parts arrive from the floors</span>}
+                                    {o.productionNotes && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink, marginTop: '4px' }}>📝 {o.productionNotes}</div>}
                                 </div>
                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: o.status === 'Shipped' ? '#3a7d44' : (o.status === 'Picked' ? theme.brass : theme.inkSoft) }}>{o.status || 'Pending'}</span>
                             </div>

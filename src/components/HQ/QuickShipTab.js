@@ -161,7 +161,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // NetSuite header fields (Stuart 2026-08-13, from the failed SO push — the exact alignment
     // list): PO# → otherrefnum, sidemark → mainline memo + every line's Tag (custcol3), internal
     // memo → custbody_bit_internalmemo. Form/class/status ride the payload, not fields here.
-    const [soExtras, setSoExtras] = useState({ po: '', sidemark: '', internalMemo: '' });
+    const [soExtras, setSoExtras] = useState({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '' });
     // The components configurator (required at checkout): opens right after a kit lands in the
     // cart, offering the rules doc's carrier styles / included picks / billable accessories.
     const [trvCfg, setTrvCfg] = useState(null);          // { drive, feet, kitCode, finish } while open
@@ -1193,6 +1193,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 brand: activeBrand,
                 customer: selectedCustomer?.name || nsCustomerId, customerId,
                 jobName: jobName || '', memo: memoText,
+                needByDate: String(soExtras.needBy || '').trim(), productionNotes: String(soExtras.prodNotes || '').trim(),
                 // NS_QUEUED until NetSuite accepts — the writeBack flips it to 'Pending' and the real
                 // SO number replaces the app id, and only then does WMS list it (uniform 2026-08-25).
                 status: 'NS_QUEUED', pickStatus: 'Pending',
@@ -1223,7 +1224,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // Loose lines invoice in the unit the customer BUYS: "2 × 7 PACK" at the pack
                     // price, with the each count kept for reference. qty stays the each count so an
                     // older invoice reader (which knows nothing about packs) still totals correctly.
-                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty }));
+                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty, note: l.note || '', ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) }));
                     return out;
                 })(),
                 invoiceTotal: lines.reduce((s, l) => s + l.rate * l.eachQty, 0),
@@ -1311,7 +1312,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                     finishCode: l.finishCode, finishName: (finishList.find(f => f.code === l.finishCode) || {}).name || l.finishCode,
                                     qty: cl.quantity, source: 'orderentry',
                                     soAppId: hqId, customerId, customerName: selectedCustomer?.name || customerId,
-                                    note: `Order Entry ${hqId} · ${selectedCustomer?.name || customerId} · ${l.erp} in ${l.finishCode}${row && !row.known ? ' · ⚠ core stock unverified' : ''}`,
+                                    note: `Order Entry ${hqId} · ${selectedCustomer?.name || customerId} · ${l.erp} in ${l.finishCode}${String(soExtras.needBy || '').trim() ? ` · need by ${String(soExtras.needBy).trim()}` : ''}${String(soExtras.prodNotes || '').trim() ? ` · 📝 ${String(soExtras.prodNotes).trim()}` : ''}${row && !row.known ? ' · ⚠ core stock unverified' : ''}`,
                                     createdBy: currentUser || '', createdAt: Date.now(),
                                 });
                                 tbfMade.push(`${cl.quantity} × ${core} → ${target} (WMS Plating tab)`);
@@ -1349,13 +1350,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         // NetSuite side is the SALES ORDER itself — never an app-queued work order.
                         orderType: 'sales', soId: hqId, soNum: hqId,
                         customerId, customerName: selectedCustomer?.name || customerId, customer: selectedCustomer?.name || customerId, clientName: selectedCustomer?.name || customerId,
-                        recipe: l.finishCode, reqDate: '', type: finishedErp, totalParts: l.eachQty,
+                        recipe: l.finishCode, reqDate: String(soExtras.needBy || '').trim(), type: finishedErp, totalParts: l.eachQty,
                         stockErpId: finishedErp, stockInternalId: null,
                         paintSize: isPole ? null : (size || null), productType: ptype || null,
                         paintSizes: (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: l.eachQty } : null,
                         ...(isPole ? { poles: { qty: l.eachQty, type: ptype || 'POLE' }, totalPoles: l.eachQty } : {}),
                         ...(rawPart?.manufacturingSpecs?.finishStream ? { finishStream: String(rawPart.manufacturingSpecs.finishStream).toUpperCase() } : {}),
-                        note: `Order Entry ${hqId} · ${selectedCustomer?.name || customerId} · ${l.erp} in ${l.finishCode}${l.note ? ` · ${l.note}` : ''}`,
+                        note: `Order Entry ${hqId} · ${selectedCustomer?.name || customerId} · ${l.erp} in ${l.finishCode}${l.note ? ` · ${l.note}` : ''}${String(soExtras.prodNotes || '').trim() ? ` · 📝 ${String(soExtras.prodNotes).trim()}` : ''}`,
                         cpqSpecs: {}, imageUrl: rawPart?.finalImageUrl || null,
                         dimensions: { length: 0, width: 0, height: 0 },
                         partsList: planLines, ...(pre && pre.plan.exploded ? { bomExploded: true } : {}),
@@ -1371,7 +1372,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         orderClass: 'ORDER_ENTRY', soAppId: hqId, customerId,
                         customer: selectedCustomer?.name || customerId,
                         recipe: l.finishCode, erpId: finishedErp, partErpId: finishedErp, rootItem: l.erp,
-                        qty: l.eachQty, totalParts: l.eachQty, reqDate: '',
+                        qty: l.eachQty, totalParts: l.eachQty, reqDate: String(soExtras.needBy || '').trim(),
+                        ...(String(soExtras.needBy || '').trim() ? { needBy: String(soExtras.needBy).trim() } : {}),
                         // A rejected order never becomes work (the CPQ rule): the WO waits until
                         // NetSuite accepts the SO — the outbox writeBack lifts this on post.
                         awaitingSoAccept: true,
@@ -1973,6 +1975,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             <div><span style={lbl}>Customer PO #</span><input value={soExtras.po} onChange={e => setSoExtras(p2 => ({ ...p2, po: e.target.value }))} placeholder="their PO number" style={{ ...inp, width: '100%' }} /></div>
                             <div><span style={lbl}>Sidemark / job (memo + line tag)</span><input value={soExtras.sidemark} onChange={e => setSoExtras(p2 => ({ ...p2, sidemark: e.target.value }))} placeholder="e.g. SMITH RESIDENCE" style={{ ...inp, width: '100%' }} /></div>
                             <div style={{ gridColumn: '1 / -1' }}><span style={lbl}>Internal memo (optional — never customer-facing)</span><input value={soExtras.internalMemo} onChange={e => setSoExtras(p2 => ({ ...p2, internalMemo: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
+                            {/* Need-by + production notes (Stuart 2026-08-28): ride the SO record, the
+                                Order Entry Needs board, every work order this order fires, and the WMS
+                                card — the manufacturing side reads them everywhere the order goes. */}
+                            <div><span style={lbl}>Need-by date (production)</span><input type="date" value={soExtras.needBy} onChange={e => setSoExtras(p2 => ({ ...p2, needBy: e.target.value }))} style={{ ...inp, width: '100%' }} /></div>
+                            <div><span style={lbl}>Production notes (rides to the floor)</span><input value={soExtras.prodNotes} onChange={e => setSoExtras(p2 => ({ ...p2, prodNotes: e.target.value }))} placeholder="e.g. match sample on file · ship complete" style={{ ...inp, width: '100%' }} /></div>
                         </div>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
                             <span style={{ ...lbl, marginBottom: 0, flex: 1 }}>Shipping</span>

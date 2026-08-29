@@ -14,6 +14,7 @@ import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
+import { isOutsourcedFinishCode } from '../Shared/finishRouting';
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -91,7 +92,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         });
     };
     const [snapWatch, setSnapWatch] = useState('');     // snapshot watchlist filter (catalog is growing)
-    const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants · TIER = raw + /P + plated read together
+    const [snapView, setSnapView] = useState('FIN');    // FIN = finished stocked items · RAW = BOM core parts behind the finish variants · TIER = raw + /P + plated read together · OENEEDS = Order Entry sales-order needs
+    const [oeNeeds, setOeNeeds] = useState(null);       // { loading, orders: [{so, wos, pos}], error } — the Order Entry Needs board
     const [snapSort, setSnapSort] = useState('item');   // 'item' (load order) | 'finish' (/SG · /N25 grouped — batch same-finish WOs)
     const [snapCat, setSnapCat] = useState('');         // snapshot category (productType) filter
     const [snapColl, setSnapColl] = useState('');       // snapshot collection filter
@@ -1999,6 +2001,163 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
         setGenBusy(false);
     };
+    // ── ORDER ENTRY NEEDS (Stuart 2026-08-28) ──────────────────────────────────────────────────
+    // Client-manufactured lines keep their SALES link (the CPQ rule, extended to Order Entry):
+    // this board lists open Order Entry sales orders whose lines are made to order, shows the
+    // orders already linked to each (WOs/POs found by soAppId), and generates anything missing —
+    // the same sourcing validation as everywhere: in-house finish → linked finishing WO;
+    // outsourced FINISH → plating demand; raw item bought → linked vendor PO. Completed work
+    // flows to WMS pick/pack against the SO — typically pack-and-hold in a bin until every part
+    // arrives, which can span weeks. Master Library / the stock views stay for STOCK.
+    const oeLineFinish = (l) => l.finishCode || (String(l.note || '').match(/TO BE FINISHED\s*·\s*([A-Z0-9-]+)/i) || [])[1] || '';
+    const oeIsTbf = (l) => !!(l.toBeFinished || /TO BE FINISHED/i.test(String(l.note || '')));
+    const loadOeNeeds = async () => {
+        setOeNeeds({ loading: true, orders: [] });
+        try {
+            const snap = await getDocs(query(collection(db, 'hq_sales_orders'), where('orderClass', '==', 'QUICKSHIP'), where('brand', '==', activeBrand)));
+            const sos = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+                .filter(o => !o.deleted && !['Shipped', 'Closed', 'CANCELLED', 'Deleted'].includes(String(o.status || '')))
+                .filter(o => (o.lines || []).some(oeIsTbf));
+            const woBySo = {}, poBySo = {};
+            const ids = sos.map(o => o.id);
+            for (let i = 0; i < ids.length; i += 10) {
+                const chunk = ids.slice(i, i + 10);
+                const [ws, ps] = await Promise.all([
+                    getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', 'in', chunk))),
+                    getDocs(query(collection(db, 'hq_purchase_orders'), where('soAppId', 'in', chunk))),
+                ]);
+                ws.docs.forEach(d => { const w = { id: d.id, ...d.data() }; if (!w.deleted) (woBySo[w.soAppId] = woBySo[w.soAppId] || []).push(w); });
+                ps.docs.forEach(d => { const p = { id: d.id, ...d.data() }; (poBySo[p.soAppId] = poBySo[p.soAppId] || []).push(p); });
+            }
+            sos.sort((a, b) => String(a.needByDate || '9999').localeCompare(String(b.needByDate || '9999')) || (b.createdAt || 0) - (a.createdAt || 0));
+            setOeNeeds({ loading: false, orders: sos.map(o => ({ so: o, wos: woBySo[o.id] || [], pos: poBySo[o.id] || [] })) });
+        } catch (e) { setOeNeeds({ loading: false, orders: [], error: e.message || String(e) }); }
+    };
+    // The order already covering a line: a WO whose rootItem is the line's raw code (recipe
+    // matching when the line knows its finish), or a PO carrying the code on a line.
+    const oeLinkFor = (entry, line) => {
+        const erp = String(line.erp || '').toUpperCase();
+        const fin = oeLineFinish(line);
+        const wo = entry.wos.find(w => String(w.rootItem || '').toUpperCase() === erp && (!fin || String(w.recipe || '').toUpperCase() === fin.toUpperCase()));
+        if (wo) return { kind: 'WO', doc: wo };
+        const po = entry.pos.find(p => (p.items || []).some(it => String(it.itemId || '').toUpperCase() === erp));
+        return po ? { kind: 'PO', doc: po } : null;
+    };
+    const generateOeLineOrder = async (so, line) => {
+        const erp = String(line.erp || '').toUpperCase();
+        const part = partByKey['erp:' + erp];
+        if (!part) return alert(`${erp} is not in the Master Library — sync it first.`);
+        const finish = oeLineFinish(line);
+        if (!finish) return alert(`${erp}: no finish recorded on this line — the order predates finish capture. Add it to the line note in the form "TO BE FINISHED · CODE", or re-enter the line on tab 7.`);
+        const qty = Number(line.qty) || 0;
+        if (!qty) return alert('Line has no quantity.');
+        const specs = part.manufacturingSpecs || {};
+        const needBy = so.needByDate || '';
+        const prodNote = so.productionNotes || '';
+        setGenBusy(true);
+        try {
+            // OUTSOURCED FINISH → the plater, linked to the SO (mirrors tab 7's routing).
+            if (isOutsourcedFinishCode(finish)) {
+                const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}`;
+                await setDoc(doc(db, 'plating_demand', demandId), {
+                    id: demandId, brandId: activeBrand, status: 'open',
+                    woNum: `PLW-${activeBrand.toUpperCase()}-${Date.now().toString().slice(-6)}`,
+                    baseItemId: part.id || null, baseErpId: erp, targetErpId: `${erp}/${finish}`,
+                    finishCode: finish, finishName: finish, qty,
+                    source: 'oe-needs', soAppId: so.id, customerId: so.customerId || null, customerName: so.customer || '',
+                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''}${needBy ? ` · need by ${needBy}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
+                    createdBy: currentUser || '', createdAt: Date.now(),
+                });
+                addLog(`⚡ ${erp}/${finish} ×${qty} → plating demand (linked to ${so.soId || so.id}).`, 'success');
+                await loadOeNeeds(); setGenBusy(false); return;
+            }
+            // RAW ITEM WE BUY → a linked vendor PO (BOTH always asks, defaulted to make).
+            const vendorName = String(specs.vendorName || '').trim();
+            let wantPo = specs.isInHouse === false && !!vendorName;
+            if (sourcingOf(specs) === SOURCING.BOTH) wantPo = window.confirm(`${erp} is flagged ⚖ BOTH (make and buy).\n\nOK = vendor PO to ${vendorName || 'its vendor'} · Cancel = finishing work order.`);
+            if (wantPo) {
+                const vendors = await loadNsVendors();
+                const rec = resolveVendorRec(vendors, vendorName) || resolveVendorByNsId(vendors, specs.vendorNsId || consensusVendorNsId([part]));
+                if (!rec) { alert(`No NetSuite-synced vendor matches "${vendorName || '(none stored)'}" — sync vendors (11.1) or fix the item's vendor, then retry.`); setGenBusy(false); return; }
+                let poId; try { poId = await reserveShortNo('PO'); } catch (e) { poId = `PO-OE-${Date.now().toString().slice(-6)}`; }
+                await setDoc(doc(db, 'hq_purchase_orders', poId), {
+                    id: poId, poId, brand: activeBrand, status: 'Approved',
+                    vendor: rec.name || vendorName, nsVendorId: String(rec.id || '').replace(/^VEND-/, ''), vendorCrmId: rec.id,
+                    soAppId: so.id, soRef: so.soId || so.id, customer: so.customer || '',
+                    items: [{ itemId: erp, nsItemId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null, vendorPart: specs.vendorId || 'N/A', quantity: qty, rate: poRateOf(part), description: `${specs.purchaseDescription || part.itemName || erp} — Order Entry ${so.soId || so.id}${prodNote ? ` · ${prodNote}` : ''}` }],
+                    reqDate: needBy || new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''}`,
+                    createdAt: Date.now(), createdBy: currentUser || '',
+                });
+                addLog(`✅ PO ${poId} → ${rec.name} · ${qty} × ${erp} (linked to ${so.soId || so.id}) — push to NetSuite from RTG.`, 'success');
+                await loadOeNeeds(); setGenBusy(false); return;
+            }
+            // IN-HOUSE → a linked finishing WO, same shape tab 7 fires at SO save (recipe = the
+            // finish, /P pulls via the planner, component pre-check with convert gates).
+            let pins = [];
+            if (isAssemblyPart(part)) {
+                try {
+                    const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
+                    pins = pinsSnap.docs.map(d => d.data());
+                    if (!pins.length) addLog(`⚠ ${erp} is an assembly with NO BOM pins — the pre-check cannot see its components.`, 'warn');
+                } catch (e) { console.warn('pins load failed', e); }
+            }
+            const finishedErp = `${erp}/${finish}`;
+            const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}`;
+            let pre = null;
+            try {
+                const preRun = await runBatchPrecheck({ rows: [{ key: 0, part: { ...part, legacyErpId: finishedErp }, qty, pins }], inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17' });
+                if (preRun.nsError) addLog(`⚠ Component pre-check skipped — NetSuite unreachable.`, 'warn'); else pre = preRun.results[0];
+            } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
+            const planLines = pre ? pre.plan.lines.map(pl => String(pl.legacyErpId || '').toUpperCase() === finishedErp
+                ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl) : [];
+            let gate = {};
+            if (pre && pre.actions.length) {
+                try {
+                    const exec = await executeMakeupActions({ actions: pre.actions, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp, createdBy: currentUser || '', inventory: hqParts, source: 'oe-needs-precheck', reqDate: needBy });
+                    gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
+                    addLog(`🧩 ${finishedErp} pre-check: ${exec.made.join(' · ')}`, 'warn');
+                } catch (e) { addLog(`⚠ ${finishedErp}: make-up orders failed (${e.message || e}) — WO created un-gated.`, 'error'); }
+            }
+            const ptype = String(specs.productType || '').toUpperCase();
+            const isPole = /POLE|ROD/.test(ptype);
+            const size = String(specs.paintSize || '').toUpperCase();
+            const finPayload = withItemCode({
+                id: woId, orderKey: so.id, quoteId: null, salesOrderId: so.id, estimateId: null,
+                orderType: 'sales', soId: so.soId || so.id, soNum: so.soId || so.id,
+                customerId: so.customerId || null, customerName: so.customer || '', customer: so.customer || '', clientName: so.customer || '',
+                recipe: finish, reqDate: needBy, type: finishedErp, totalParts: qty,
+                stockErpId: finishedErp, stockInternalId: null,
+                paintSize: isPole ? null : (size || null), productType: ptype || null,
+                paintSizes: (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null,
+                ...(isPole ? { poles: { qty, type: ptype || 'POLE' }, totalPoles: qty } : {}),
+                ...(specs.finishStream ? { finishStream: String(specs.finishStream).toUpperCase() } : {}),
+                note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
+                cpqSpecs: {}, imageUrl: part.finalImageUrl || null,
+                dimensions: { length: 0, width: 0, height: 0 },
+                partsList: planLines, ...(pre && pre.plan.exploded ? { bomExploded: true } : {}),
+                currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
+                tasks: makeFullTasks(),
+                machineAssigned: null, redlineAlert: false, sentToPickPack: false, pickStatus: 'Pending',
+                shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
+                brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
+            });
+            await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
+                id: woId, woId, brand: activeBrand, type: finishedErp, status: 'Approved',
+                source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload,
+                orderClass: 'ORDER_ENTRY', soAppId: so.id, customerId: so.customerId || null,
+                customer: so.customer || '', recipe: finish, erpId: finishedErp, partErpId: finishedErp, rootItem: erp,
+                qty, totalParts: qty, reqDate: needBy, ...(needBy ? { needBy } : {}),
+                soAccepted: !!so.nsInternalId,
+                ...gate,
+                createdAt: Date.now(), createdBy: currentUser || ''
+            }), { merge: true });
+            addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} for ${so.customer || ''} (linked to ${so.soId || so.id}) — parked in RTG.`, 'success');
+            await loadOeNeeds();
+        } catch (e) { addLog(`OE generate failed: ${e.message || e}`, 'error'); alert('Generate failed:\n\n' + (e.message || e)); }
+        setGenBusy(false);
+    };
+
     // ---- RAW CORES ORDERING (Stuart 2026-07-28) ----------------------------------------------
     // The Raw Cores view used to be read-only ("sets thresholds only"). It now orders the same way
     // the Finished view does, with two differences: MADE cores go to the SHOP floor (they're
@@ -2316,6 +2475,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <button onClick={() => setSnapView('FIN')} style={{ padding: '9px 14px', background: snapView === 'FIN' ? 'var(--ink)' : '#fff', color: snapView === 'FIN' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Finished Items</button>
                                     <button onClick={() => { setSnapView('RAW'); if (!rawStock) loadRawStock(); }} title="Demand rolled up to the RAW core behind each finish variant (…/BL + /CP + /SG → base item) — set core ROPs so finishing never runs out of parts" style={{ padding: '9px 14px', background: snapView === 'RAW' ? 'var(--ink)' : '#fff', color: snapView === 'RAW' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Raw Cores (BOM)</button>
                                     <button onClick={() => { setSnapView('TIER'); if (!rawStock) loadRawStock(); }} title="Three-tier items (Fabricut H1): the raw mill core, its /P phosphated base and the plated /EP tiers read together, each with its own Order column — raw → shop floor, /P → WMS Convert, plated → WMS Plating" style={{ padding: '9px 14px', background: snapView === 'TIER' ? 'var(--ink)' : '#fff', color: snapView === 'TIER' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>3-Tier (raw · /P · plated)</button>
+                                    <button onClick={() => { setSnapView('OENEEDS'); loadOeNeeds(); }} title="Made-to-order lines from Order Entry sales orders — SO#, customer, need-by, notes; generate the linked work orders / POs from here. Client work keeps its sales link; the other views stay for STOCK." style={{ padding: '9px 14px', background: snapView === 'OENEEDS' ? 'var(--brass)' : '#fff', color: snapView === 'OENEEDS' ? '#fff' : 'var(--brass)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700 }}>🧾 Order Entry Needs</button>
                                 </div>
                                 <div style={{ display: 'flex', border: '1px solid var(--line)' }} title="Row order — Finish groups /SG · /N25 · … together so same-finish work orders go out as one batch">
                                     <button onClick={() => setSnapSort('item')} style={{ padding: '9px 14px', background: snapSort === 'item' ? 'var(--ink)' : '#fff', color: snapSort === 'item' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Item #</button>
@@ -2375,7 +2535,51 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                             })()}
 
                             <div style={{ overflow: 'auto', flex: 1, border: '1px solid var(--line)' }}>
-                                {salesHist.loading ? (
+                                {snapView === 'OENEEDS' ? (
+                                    /* ORDER ENTRY NEEDS — made-to-order sales lines with their linked orders. */
+                                    !oeNeeds || oeNeeds.loading ? (
+                                        <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Reading Order Entry sales orders…</div>
+                                    ) : oeNeeds.error ? (
+                                        <div style={{ padding: '32px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '12px' }}>Failed: {oeNeeds.error}</div>
+                                    ) : oeNeeds.orders.length === 0 ? (
+                                        <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.1rem' }}>No open Order Entry sales orders with made-to-order lines.</div>
+                                    ) : (
+                                        <div style={{ padding: '18px' }}>
+                                            {oeNeeds.orders.map(({ so, wos, pos }) => (
+                                                <div key={so.id} style={{ border: '1px solid var(--line)', background: '#fff', marginBottom: '16px' }}>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '8px 18px', padding: '12px 18px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+                                                        <span style={{ fontFamily: 'var(--serif)', fontSize: '1.15rem', fontWeight: 500, color: 'var(--ink)' }}>{so.customer || 'Customer'}</span>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>SO {so.soId || so.id}{so.jobName ? ` · ${so.jobName}` : ''} · {so.createdAt ? new Date(so.createdAt).toLocaleDateString() : ''}</span>
+                                                        {so.needByDate && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 700, color: '#d9534f', letterSpacing: '.05em' }}>NEED BY {so.needByDate}</span>}
+                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid var(--line)', color: 'var(--ink-soft)', marginLeft: 'auto' }}>{so.status === 'NS_QUEUED' ? 'AWAITING NETSUITE' : (so.status || 'Pending')}</span>
+                                                    </div>
+                                                    {so.productionNotes && <div style={{ padding: '8px 18px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>📝 {so.productionNotes}</div>}
+                                                    {(so.lines || []).filter(oeIsTbf).map((l, li) => {
+                                                        const link = oeLinkFor({ wos, pos }, l);
+                                                        const fin = oeLineFinish(l);
+                                                        return (
+                                                            <div key={li} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 16px', padding: '10px 18px', borderBottom: '1px solid var(--paper-2)' }}>
+                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', fontWeight: 700, color: 'var(--ink)', minWidth: '180px' }}>{l.erp} <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}>× {l.qty}</span></span>
+                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 700, color: '#8f6f3e' }}>{fin ? `FINISH: ${fin}` : '⚠ NO FINISH RECORDED'}</span>
+                                                                <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', flex: 1, minWidth: '160px' }}>{l.name || ''}</span>
+                                                                {link ? (
+                                                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', padding: '4px 9px', border: '1px solid #3a7d44', color: '#3a7d44', whiteSpace: 'nowrap' }}>
+                                                                        {link.kind === 'WO' ? `⚒ ${link.doc.nsWoTran || link.doc.id} · ${link.doc.status || ''}${link.doc.awaitingConvert ? ' · ⇄ convert' : ''}${link.doc.awaitingSoAccept ? ' · ⏳ SO' : ''}` : `📦 ${link.doc.id} · ${link.doc.vendor || ''} · ${link.doc.status || ''}`}
+                                                                    </span>
+                                                                ) : (
+                                                                    <button disabled={genBusy} onClick={() => generateOeLineOrder(so, l)} title="Generate the linked order for this line — in-house finish → finishing WO (parked in RTG); bought raw → vendor PO; outsourced finish → plating demand. The order carries this SO's link, need-by and notes." style={{ padding: '7px 14px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>⚙ Generate Order</button>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <div style={{ padding: '8px 18px', fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', letterSpacing: '.03em' }}>
+                                                        Completed work meets this SO at WMS pick/pack — typically PACK &amp; HOLD in a bin until every part arrives.
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )
+                                ) : salesHist.loading ? (
                                     <div style={{ padding: '48px', textAlign: 'center', fontFamily: 'var(--serif)', fontStyle: 'italic', color: 'var(--ink-soft)', fontSize: '1.2rem' }}>Querying NetSuite sales history…</div>
                                 ) : salesHist.error ? (
                                     <div style={{ padding: '32px', color: '#d9534f', fontFamily: 'var(--mono)', fontSize: '12px' }}>Failed: {salesHist.error}</div>

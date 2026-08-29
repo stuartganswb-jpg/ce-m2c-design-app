@@ -26,10 +26,19 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
 
     // Priced structure captured at TRANSACTION time; legacy orders (pushed before this
     // feature) fall back to an unpriced item list.
+    // THE FINISH IS PART OF THE ORDER (Stuart 2026-08-28: opened this document to answer "what
+    // color did they order?" and it wasn't anywhere). New orders carry finishCode/note on the
+    // invoice lines; legacy orders carried it only on the stored SO lines' note ("TO BE FINISHED ·
+    // CP …") — so resolve it from there when the invoice line lacks it.
+    const lineNoteOf = (l) => {
+        if (l.note || l.finishCode) return l.finishCode ? `TO BE FINISHED · ${l.finishCode}${l.note && !String(l.note).includes(l.finishCode) ? ` · ${l.note}` : ''}` : l.note;
+        const src = (order.lines || []).find(x => x.erp === (l.realErp || l.erp) && (x.note || x.finishCode));
+        return src ? (src.finishCode ? `TO BE FINISHED · ${src.finishCode}` : src.note) : '';
+    };
     const lines = Array.isArray(order.invoiceLines) && order.invoiceLines.length
         ? order.invoiceLines
         // Customer document → the alias code they ordered under, when the line carries one.
-        : (order.lines || []).map(l => ({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.qty, rate: null, total: null }));
+        : (order.lines || []).map(l => ({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.qty, rate: null, total: null, note: l.note || '', finishCode: l.finishCode || '' }));
     const total = typeof order.invoiceTotal === 'number'
         ? order.invoiceTotal
         : lines.reduce((s, l) => s + (l.type === 'KIT' ? (l.price || 0) : (l.total || 0)), 0);
@@ -80,8 +89,10 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                 <div style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#524e46' }}>
                     <div>Sales Order: {order.soId}</div>
                     {customer?.terms ? <div>Terms: {customer.terms}</div> : null}
+                    {order.needByDate ? <div style={{ fontWeight: 700 }}>Need by: {order.needByDate}</div> : null}
                 </div>
             </div>
+            {order.productionNotes ? <div style={{ padding: '8px 0', borderBottom: '1px solid #ddd8cf', fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#524e46' }}>📝 PRODUCTION: {order.productionNotes}</div> : null}
             <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
                 <thead>
                     <tr>
@@ -108,7 +119,7 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                         </React.Fragment>
                     ) : (
                         <tr key={i} style={{ borderTop: '1px solid #ddd8cf' }}>
-                            <td style={{ padding: '8px 6px' }}><span style={{ fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{l.erp}</span><span style={{ fontSize: '11px', color: '#524e46' }}> — {l.name}</span></td>
+                            <td style={{ padding: '8px 6px' }}><span style={{ fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{l.erp}</span><span style={{ fontSize: '11px', color: '#524e46' }}> — {l.name}</span>{lineNoteOf(l) ? <div style={{ fontSize: '10px', fontWeight: 700, color: '#8f6f3e', marginTop: '2px', letterSpacing: '.03em' }}>{lineNoteOf(l)}</div> : null}</td>
                             {/* Sold by the pack → bill in packs ("2 × 7 PACK"), with the each count
                                 underneath so the customer can reconcile against the shipment. */}
                             <td style={{ textAlign: 'center', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>
