@@ -1322,6 +1322,17 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         continue;
                     }
 
+                    // /P components short + the raw read down = routing undecidable (the 2026-08-29
+                    // TRAVLB trap: converts written against raw that did not exist, no milling WO,
+                    // production silently skipped). The SO stands; this line's WO is NOT created.
+                    // The retry surface is Stock View → 🧾 Order Entry Needs → ⚙ Generate — the
+                    // board shows the line as missing its order until the re-check succeeds.
+                    if (pre && pre.rawUnknown) {
+                        tbfMade.push(`⛔ ${finishedErp} ×${l.eachQty}: WO NOT created — raw availability read failed`);
+                        addLog(`⛔ ${finishedErp}: /P components short but the RAW availability read failed — WO NOT created. Generate it from Stock View → 🧾 Order Entry Needs (⚙ Generate re-checks live).`, 'error');
+                        continue;
+                    }
+
                     const woId = `WO-OE-${String(l.erp).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}-${x.key}`;
                     // The floor's pull lines from the plan — a self-pull (no /P record exists for
                     // the mill base) falls back to the RAW part, which is what the shelf holds.

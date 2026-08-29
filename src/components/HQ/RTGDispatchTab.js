@@ -7,7 +7,7 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines} fro
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
-import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, DELETION_LEDGER } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER } from '../Shared/orderLifecycle';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
@@ -1445,7 +1445,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // status-filtered screen; nothing is destroyed.
     const deleteOrder = async (collectionName, order) => {
         const id = order.id;
-        const reason = window.prompt(`Remove ${id} from the dispatch board?\n\nThe record is KEPT — stamped deleted, dated, with your name — and stays on the master Deletion Ledger.\n\nReason (optional):`);
+        const reason = window.prompt(`Remove ${id} from the dispatch board?\n\nThe record is KEPT — stamped deleted, dated, with your name — and stays on the master Deletion Ledger. Its floor documents close, and any open convert/plating demands raised for it are removed from the WMS (they gate nothing once the order is gone).\n\nReason (optional):`);
         if (reason === null) return;
         try {
             const res = await softDeleteOrder({ db, doc, updateDoc, setDoc }, {
@@ -1470,7 +1470,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     }
                 } catch (e) { console.warn('floor-doc close after delete failed:', e); }
             }
-            addLog(`🗑 ${id} deleted (record kept${res.ledger ? ', ledger indexed' : ' — LEDGER WRITE FAILED, tombstone only'}${floorClosed ? `, ${floorClosed} floor doc(s) closed` : ''}).`, "warn");
+            // STRANDED DEMAND CLEANUP (2026-08-29): a deleted WO's convert demands used to stay on
+            // the WMS Convert tab forever — every deleted ordering attempt left a duplicate wave.
+            let demandNote = '';
+            if (collectionName === 'hq_sales_orders' || collectionName === 'hq_work_orders') {
+                try {
+                    const rem = await deleteLinkedDemands({ db, doc, deleteDoc, getDocs, query, collection, where }, order, { includePlating: collectionName === 'hq_sales_orders' });
+                    if (rem.convert || rem.plating) demandNote = `, ${rem.convert + rem.plating} WMS demand(s) removed (${[...rem.convertIds, ...rem.platingIds].join(', ')})`;
+                } catch (e) { console.warn('linked demand cleanup after delete failed:', e); }
+            }
+            addLog(`🗑 ${id} deleted (record kept${res.ledger ? ', ledger indexed' : ' — LEDGER WRITE FAILED, tombstone only'}${floorClosed ? `, ${floorClosed} floor doc(s) closed` : ''}${demandNote}).`, "warn");
             loadRTGOrders();
         } catch (e) {
             console.error(e);
@@ -1509,7 +1518,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         } catch (e) { return alert('Could not look up the linked floor documents: ' + (e.message || e)); }
         const nsOpen = [...links.fin.values()].some(d => d.nsWoId && !d.nsWoClosed && !d.nsWoCompletionPosted) || (order.nsWoId && !order.nsWoClosed);
         const nsLine = nsOpen ? `\n• NetSuite work order → CLOSE queued (releases the component commitment)\n  ⚠ QUEUED, NOT DONE — NetSuite refuses the close on a non-WIP work order. Check the transmit log below; if it fails, the WO stays open in NetSuite.` : '';
-        if (!window.confirm(`✕ CLOSE ${ref} EVERYWHERE?\n\n• RTG record → Closed (leaves this board)\n• ${links.fin.size} finishing floor job(s) → Closed (leave the Setup Queue, Active Floor & WMS pick)\n• ${links.shop.size} shop floor job(s) → closed out of the shop queues${nsLine}\n\nDocuments are kept for history — nothing is deleted.`)) return;
+        if (!window.confirm(`✕ CLOSE ${ref} EVERYWHERE?\n\n• RTG record → Closed (leaves this board)\n• ${links.fin.size} finishing floor job(s) → Closed (leave the Setup Queue, Active Floor & WMS pick)\n• ${links.shop.size} shop floor job(s) → closed out of the shop queues\n• Open convert/plating demands raised for it → removed from the WMS (they gate nothing once the order is closed)${nsLine}\n\nDocuments are kept for history — nothing else is deleted.`)) return;
         try {
             // THE one closer, shared with the Setup Queue and Stock View so a close means the same
             // thing wherever it is pressed (Stuart 2026-08-19).
@@ -1517,7 +1526,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
                 { order, kind, by: currentUser || '', from: 'RTG', notify }
             );
-            addLog(`✕ ${ref} closed — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `. NetSuite close QUEUED for ${res.ns} — confirm it lands in the transmit log; a non-WIP work order will refuse it.` : ''}`, res.ns ? 'warn' : 'success');
+            // STRANDED DEMAND CLEANUP (2026-08-29): the same missing cascade the delete had — a
+            // closed order's open convert demands sat on the WMS Convert tab gating nothing.
+            let demandNote = '';
+            try {
+                const rem = await deleteLinkedDemands({ db, doc, deleteDoc, getDocs, query, collection, where }, order, { includePlating: isSales });
+                if (rem.convert || rem.plating) demandNote = `, ${rem.convert + rem.plating} open WMS demand(s) removed`;
+            } catch (e) { console.warn('linked demand cleanup after close failed:', e); }
+            addLog(`✕ ${ref} closed — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${demandNote}${res.ns ? `. NetSuite close QUEUED for ${res.ns} — confirm it lands in the transmit log; a non-WIP work order will refuse it.` : ''}`, res.ns ? 'warn' : 'success');
             loadRTGOrders();
         } catch (e) {
             alert('Close failed partway: ' + (e.message || e) + '\n\nRe-run Close — docs already closed are unaffected.');
@@ -1838,8 +1854,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // Deliberately conservative: dispatched stock WOs only, never a paint run (which correctly has
     // no assembly), and never one that already has or has queued an id. queueNsStockWorkOrder keeps
     // its own stop mechanism, so running this twice cannot double-post.
+    // Order Entry builds are NOT orphans: their NetSuite record is the SALES ORDER itself — an
+    // app-queued work order deliberately never exists for them (2026-08-29: the red banner was
+    // falsely accusing every dispatched WO-OE-* build; repair correctly skipped them, but the
+    // noise buried real orphans).
     const nsOrphans = [...woBoard.recent, ...woBoard.archived].filter(o =>
-        o.pushedToFinishing && o.paintOnly !== true && !o.nsWoId && !o.nsWoQueued);
+        o.pushedToFinishing && o.paintOnly !== true && !o.nsWoId && !o.nsWoQueued &&
+        o.orderClass !== 'ORDER_ENTRY' && (!o.finPayload || o.finPayload.orderType !== 'sales'));
     const repairMissingNsWos = async () => {
         if (!nsOrphans.length) return;
         const names = nsOrphans.slice(0, 12).map(o => `• ${o.woDisplayId || o.woId || o.id}${o.partErpId || o.rootItem ? ` — ${o.partErpId || o.rootItem}` : ''} ×${o.totalParts || 0}`).join('\n');

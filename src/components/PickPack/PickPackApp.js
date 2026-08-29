@@ -2789,6 +2789,30 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         return item ? { ...item, rowKey: x.id, countBin: '', binOnHand: 0, isExistingBin: false, isExtra: true } : null;
     }).filter(Boolean));
 
+    // DELETE a convert to-do (admin/superadmin ✕ on the Needs Phosphating list, 2026-08-29): the
+    // one affordance this tab never had — stray demands from deleted or re-run ordering attempts
+    // piled up here with no way to clear them. Deleting the LAST demand pointing at a still-live
+    // work order also lifts that WO's awaitingConvert gate, but deliberately does NOT auto-release
+    // it to the floor (a human deleting a demand is cleaning up, not saying "the phosphate is
+    // done" — release stays RTG's call).
+    const deleteConvertDemand = async (d) => {
+        if (!window.confirm(`✕ Delete convert to-do ${d.woNum || d.id}?\n\n${d.baseErpId} → ${d.targetErpId} · ${d.qty} pcs${d.finWoId ? `\nRaised for work order ${d.finWoErpId || d.finWoId}.` : ''}\n\nThe to-do is removed permanently. If it was the last one gating a live work order, that WO stops waiting on a convert (it still releases from RTG, not automatically).`)) return;
+        try {
+            await deleteDoc(doc(db, "convert_demand", d.id));
+            if (d.finWoId) {
+                try {
+                    const left = await getDocs(query(collection(db, "convert_demand"), where("finWoId", "==", d.finWoId)));
+                    if (left.docs.filter(x => x.id !== d.id).length === 0) {
+                        await updateDoc(doc(db, "hq_work_orders", d.finWoId), {
+                            awaitingConvert: false,
+                            convertGateNote: `convert to-do ${d.woNum || d.id} deleted by ${operator?.name || 'WMS'} — gate lifted, release from RTG`,
+                        }).catch(() => {});
+                    }
+                } catch (e) { console.warn('convert-gate lift after demand delete failed (delete stands):', e); }
+            }
+        } catch (e) { alert('Delete failed: ' + (e.message || e)); }
+    };
+
     // CONVERT derived: resolve target assembly (by /P convention or manual pick) + readiness gates
     const convTarget = (convertTargetId && hqParts.find(p => p.id === convertTargetId))
         || (convertBase && hqParts.find(p => erpOf(p) === `${convertBase.erpId}/P`))
@@ -4085,6 +4109,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     setConvertLot(new Date().toLocaleDateString('en-CA'));
                                                     setConvertDemandId(d.id);
                                                 }} disabled={isSyncing || onCart} style={{ padding: '10px 16px', background: onCart ? theme.paper2 : theme.brass, color: onCart ? theme.inkSoft : '#fff', border: onCart ? `1px solid ${theme.line}` : 'none', cursor: (isSyncing || onCart) ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>{onCart ? 'On cart' : 'Pull & Convert →'}</button>
+                                                {['admin', 'superadmin'].includes(safeUserRole) && (
+                                                    <button onClick={() => deleteConvertDemand(d)} disabled={isSyncing}
+                                                        title={`Delete this convert to-do (admin) — for strays left by deleted or re-run ordering attempts. If it's the last one gating ${d.finWoErpId || d.finWoId || 'a work order'}, the gate lifts (release stays in RTG).`}
+                                                        style={{ padding: '10px 12px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: isSyncing ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px' }}>✕</button>
+                                                )}
                                             </div>
                                         );
                                     })}

@@ -8,6 +8,7 @@ import { propagateFloorState } from '../Shared/orderLifecycle';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { pickGateOf } from '../Shared/orderStatus';
 import { isPoleCategory } from '../Shared/poleCut';
+import PullLinesLive from '../Shared/PullLinesLive';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
 // Source numbers first: the REAL NetSuite WO # leads wherever it exists; long app id is the fallback.
@@ -1470,6 +1471,10 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
                           {hasP && row('Poles coat', len ? (pIdx >= len ? `done (${len}/${len})` : `${pIdx + 1} of ${len}`) : '')}
                           {wo.convertSuggestion && row('⇄ Suggestion', `convert ${wo.convertSuggestion.qty} × ${wo.convertSuggestion.from} → ${wo.convertSuggestion.to} (Setup Queue converter)`)}
                           {row('Note', wo.note || '')}
+                          {/* LIVE ON-HAND + BIN per pull line (Stuart 2026-08-29): visual proof the
+                              components exist — and where — read live each time this popup opens;
+                              NetSuite down shows "unverified", never blocks. */}
+                          <div style={{ marginTop: '10px' }}><PullLinesLive wo={wo} /></div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '14px' }}>
                               {chip('Sled Setup', 'spinSetup')}
                               {chip('Sled Spray', 'spinSpray')}

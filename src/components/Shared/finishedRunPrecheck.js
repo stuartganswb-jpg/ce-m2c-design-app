@@ -33,9 +33,11 @@ import { withItemCode } from './workOrderContract';
 // ── PURE PLANNING ──────────────────────────────────────────────────────────────────────────────
 
 // One row's short pull lines → the make-up actions that cover them. `rawRemaining` is the live
-// raw availability MINUS what earlier rows in the same batch already claimed (the caller deducts);
-// pass rawKnown:false when the raw read failed — converts are still raised (the operator sees the
-// raw situation on the Convert tab), but no shop WO is invented off a number we do not have.
+// raw availability MINUS what earlier rows in the same batch already claimed (the caller deducts).
+// rawKnown:false (the raw read failed) once meant "converts anyway, just no shop WO" — that is the
+// exact state the 2026-08-29 TRAVLB test failed into: a WO gated on phosphating raw that did not
+// exist, with production silently skipped. runBatchPrecheck now refuses to plan such a row at all
+// (rawUnknown), so this function only ever sees rawKnown:false for a row with no /P shorts.
 export const planMakeupActions = ({ shortRows = [], rawRemaining = {}, rawKnown = true }) => {
     const actions = [];
     shortRows.forEach(r => {
@@ -60,9 +62,13 @@ export const planMakeupActions = ({ shortRows = [], rawRemaining = {}, rawKnown 
 // in the batch and consumed row by row, so two rows shorting the same component do not both read
 // the same shelf as covering them; the raw behind /P shorts is read the same way.
 //
-// Returns { results: [{ key, plan, check, actions }], nsError }. nsError set = NetSuite was
-// unreachable: checks are null and actions empty — callers proceed exactly as before the
-// pre-check existed, saying so.
+// Returns { results: [{ key, plan, check, actions, rawUnknown? }], nsError, rawError }. nsError
+// set = NetSuite was unreachable: checks are null and actions empty — callers proceed exactly as
+// before the pre-check existed, saying so. rawError set = the availability read succeeded but the
+// RAW read behind the /P shorts failed twice: every affected row comes back rawUnknown:true with
+// NO actions, and the caller MUST NOT create that row's work order — block it loudly and let the
+// operator retry Generate (writing converts against unverified raw is how production gets
+// silently skipped).
 export const runBatchPrecheck = async ({ rows = [], inventory = [], locationId }) => {
     const results = rows.map(row => {
         const plan = planFinishedRun({ part: row.part, qty: row.qty, pins: row.pins || [], inventory });
@@ -96,15 +102,29 @@ export const runBatchPrecheck = async ({ rows = [], inventory = [], locationId }
         const mill = millBaseOf(r.code);
         if (/\/P$/.test(String(r.code)) && mill && mill !== r.code) rawCodes.add(mill);
     }));
-    let rawRemaining = {}, rawKnown = true;
+    let rawRemaining = {}, rawKnown = true, rawError = null;
     if (rawCodes.size) {
-        try { rawRemaining = { ...(await fetchAvailability([...rawCodes], locationId)) }; }
-        catch (e) { rawKnown = false; }
+        // Two attempts: the first raw read failing is what silently skipped TRAVLB's production
+        // on 2026-08-29 — a transient NetSuite hiccup must not decide routing.
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try { rawRemaining = { ...(await fetchAvailability([...rawCodes], locationId)) }; rawKnown = true; rawError = null; break; }
+            catch (e) { rawKnown = false; rawError = e.message || String(e); }
+        }
     }
 
     return {
         nsError: null,
+        rawError,
         results: checked.map(x => {
+            // A /P short with the raw read down is UNDECIDABLE: raising the convert without knowing
+            // whether raw exists gates the WO on phosphating stock that may not be there, and the
+            // shop WO that would make it is never raised. Refuse to plan the row — the caller must
+            // block it loudly and offer a retry, never write the convert-only outcome.
+            const hasPhosShort = x.check.shortRows.some(r => {
+                const code = String(r.code || '').toUpperCase();
+                return /\/P$/.test(code) && millBaseOf(code) !== code;
+            });
+            if (!rawKnown && hasPhosShort) return { ...x, actions: [], rawUnknown: true };
             const actions = planMakeupActions({ shortRows: x.check.shortRows, rawRemaining, rawKnown });
             actions.forEach(a => {
                 if (a.kind === 'CONVERT') rawRemaining[a.base] = Math.max(0, (Number(rawRemaining[a.base]) || 0) - a.qty);

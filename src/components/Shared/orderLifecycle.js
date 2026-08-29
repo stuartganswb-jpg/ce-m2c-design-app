@@ -297,6 +297,34 @@ export async function hardDeleteWithLedger(ctx, { collection: coll, docId, recor
 }
 
 /**
+ * Delete the convert/plating demands raised FOR an order — the missing leg of the delete cascade
+ * (2026-08-29: deleting a WO left its convert demands standing, so every earlier ordering attempt
+ * piled a duplicate wave onto the WMS Convert tab, each gating a work order that no longer
+ * existed). Convert demands link back by finWoId and are matched against every identity the order
+ * is keyed under — precisely scoped to THIS order. Plating demands carry only soAppId (they never
+ * have a finishing WO), so they are matched ONLY when the caller says the record being removed IS
+ * the sales order itself (`includePlating`) — deleting one WO of an SO must not wipe the plating
+ * demands of its sibling lines. Requires ctx: db, doc, deleteDoc, getDocs, query, collection, where.
+ */
+export async function deleteLinkedDemands(ctx, order, { includePlating = false } = {}) {
+    const { db, doc, deleteDoc, getDocs, query, collection, where } = ctx;
+    const keys = identityKeysOf(order);
+    if (order && order.soAppId) keys.push(String(order.soAppId));
+    const uniq = [...new Set(keys)].filter(Boolean);
+    const removed = { convert: 0, plating: 0, convertIds: [], platingIds: [] };
+    for (let i = 0; i < uniq.length; i += 10) {
+        const slice = uniq.slice(i, i + 10);
+        const cv = await getDocs(query(collection(db, 'convert_demand'), where('finWoId', 'in', slice)));
+        for (const d of cv.docs) { await deleteDoc(doc(db, 'convert_demand', d.id)); removed.convert++; removed.convertIds.push((d.data() || {}).woNum || d.id); }
+        if (includePlating) {
+            const pl = await getDocs(query(collection(db, 'plating_demand'), where('soAppId', 'in', slice)));
+            for (const d of pl.docs) { await deleteDoc(doc(db, 'plating_demand', d.id)); removed.plating++; removed.platingIds.push((d.data() || {}).woNum || d.id); }
+        }
+    }
+    return removed;
+}
+
+/**
  * Someone closed the balance on the NetSuite transaction — record that it is done.
  *
  * This is the other half of Eric's Option 3. The app cannot perform the close, so the only honest

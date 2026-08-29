@@ -662,6 +662,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             for (let key = 0; key < prepped.length; key++) {
                 const { part, erpId, qty, pins } = prepped[key];
                 const pre = preByKey.get(key) || null;
+                // /P components short + the raw read down = routing undecidable (the 2026-08-29
+                // TRAVLB trap). This row's WO is NOT created — retry Generate when NetSuite answers.
+                if (pre && pre.rawUnknown) {
+                    addLog(`⛔ ${erpId}: /P components short but the RAW availability read failed — WO NOT created (a convert against unverified raw silently skips milling). Retry Generate.`, 'error');
+                    madeUp.push(`⛔ ${erpId}: SKIPPED — raw read failed, retry Generate`);
+                    continue;
+                }
 
                 const isPhosphate = erpId.toUpperCase().endsWith('/P');
                 const isPlating = /EP[1-6]$/i.test(erpId.toUpperCase());
@@ -1280,6 +1287,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             for (let key = 0; key < prepped.length; key++) {
                 const { r, info, qty, pins } = prepped[key];
                 const pre = preByKey.get(key) || null;
+                // /P components short + the raw read down = routing undecidable (the 2026-08-29
+                // TRAVLB trap). This row's WO is NOT created — retry Generate when NetSuite answers.
+                if (pre && pre.rawUnknown) {
+                    addLog(`⛔ ${r.itemid}: /P components short but the RAW availability read failed — WO NOT created (a convert against unverified raw silently skips milling). Retry Generate.`, 'error');
+                    made.push(`⛔ ${r.itemid}: SKIPPED — raw read failed, retry Generate`);
+                    continue;
+                }
                 // finishCodeFromErp, NOT the local suffix read: /P is a phosphated CORE, not a
                 // finish — the local reader minted recipe 'P' and batched cores under a spray
                 // recipe nobody wrote. Raw and /P codes come back '' here.
@@ -2121,6 +2135,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             try {
                 const preRun = await runBatchPrecheck({ rows: [{ key: 0, part: { ...part, legacyErpId: finishedErp }, qty, pins }], inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17' });
                 if (preRun.nsError) addLog(`⚠ Component pre-check skipped — NetSuite unreachable.`, 'warn'); else pre = preRun.results[0];
+                // RAW READ DOWN + /P SHORT = UNDECIDABLE ROUTING (the 2026-08-29 TRAVLB failure:
+                // converts were written against raw that did not exist and no milling WO was ever
+                // raised). Nothing is created; the retry is this same ⚙ Generate button.
+                if (pre && pre.rawUnknown) {
+                    const msg = `${finishedErp}: /P components are short but the RAW availability read failed (${String(preRun.rawError || 'NetSuite hiccup').slice(0, 120)}) — the system cannot tell whether milling is needed. NOTHING was created. Retry ⚙ Generate.`;
+                    addLog(`⛔ ${msg}`, 'error');
+                    alert(`⛔ ${msg}`);
+                    setGenBusy(false);
+                    return;
+                }
             } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
             const planLines = pre ? pre.plan.lines.map(pl => String(pl.legacyErpId || '').toUpperCase() === finishedErp
                 ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl) : [];

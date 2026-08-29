@@ -11,6 +11,7 @@ import { isPoleCategory, autoFinishStream } from '../Shared/poleCut';
 import { finishCodeFromErp, machineLoadPlan } from '../Shared/finishingTime';
 import { printMachineLoadLabels } from '../Shared/labelPrint';
 import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
+import PullLinesLive from '../Shared/PullLinesLive';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
@@ -450,6 +451,14 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               }
               const pre = await runBatchPrecheck({ rows: [{ key: 0, part, qty, pins }], inventory: inv, locationId: (BRAND_NETSUITE_MAP[String(part.brandId || 'ce')] || {}).location || '17' });
               const res = pre.results[0];
+              // /P components short + the raw read down = routing undecidable (the 2026-08-29
+              // TRAVLB trap). Abort before anything is written — the alert below tells the
+              // operator to simply retry the re-make.
+              if (res && res.rawUnknown) {
+                  alert(`⛔ Re-make blocked: ${code}'s /P components are short but the RAW availability read failed — the system cannot tell whether milling is needed.\n\nNOTHING was created. Retry the re-make (NetSuite was likely momentarily unreachable).`);
+                  setRmBusy(false);
+                  return;
+              }
               if (pre.nsError) console.warn('Re-make pre-check skipped — NetSuite unreachable:', pre.nsError);
               else if (res && res.actions.length) {
                   const exec = await executeMakeupActions({
@@ -909,6 +918,11 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                                   </div>
                               );
                           })()}
+
+                          {/* LIVE ON-HAND + BIN per pull line (Stuart 2026-08-29): visual proof the
+                              components exist — and where — before anyone starts. Read live per
+                              card open; NetSuite down shows "unverified", never blocks. */}
+                          <PullLinesLive wo={activeSpecs} />
 
                           {activeSpecs.cpqSpecs && Object.keys(activeSpecs.cpqSpecs).length > 0 && (
                               <div style={{ background: '#fff', padding: '24px', border: '1px solid var(--line)' }}>
