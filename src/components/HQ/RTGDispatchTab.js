@@ -593,12 +593,28 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     }
                 }
 
-                // Check for CPQ finish recipe
-                if (originalJob && originalJob.cpqData && originalJob.cpqData.configuration) {
+                // Check for CPQ finish recipe. THE BRIMAR PENDING-RECIPE BUG (Stuart 2026-08-29,
+                // SO60104/05): only the LEGACY single `configuration` field was ever read — a
+                // cart-based quote keeps each item's config in cpqData.cartItems[].config, so the
+                // finish existed on the quote and the floor card still said PENDING-RECIPE. Read
+                // every config the job carries, prefer the explicit `…__finish` step keys, and
+                // match master finishes by id OR code.
+                if (originalJob && originalJob.cpqData) {
                     const fSnap = await getDoc(doc(db, "system", "master_finishes"));
                     if (fSnap.exists() && fSnap.data().finishes) {
-                        const configVals = Object.values(originalJob.cpqData.configuration);
-                        const foundFin = fSnap.data().finishes.find(f => configVals.includes(f.id));
+                        const finishes = fSnap.data().finishes;
+                        const configs = [];
+                        if (originalJob.cpqData.configuration) configs.push(originalJob.cpqData.configuration);
+                        (originalJob.cpqData.cartItems || []).forEach(ci => { if (ci && ci.config) configs.push(ci.config); });
+                        const prim = (v) => (typeof v === 'string' || typeof v === 'number') ? [String(v)] : [];
+                        const allVals = configs.flatMap(c => Object.values(c || {})).flatMap(v =>
+                            (v && typeof v === 'object') ? Object.values(v).flatMap(prim) : prim(v));
+                        const finishVals = configs.flatMap(c => Object.entries(c || {})
+                            .filter(([k]) => /__finish$/i.test(k)).map(([, v]) => String(v)));
+                        const pool = finishVals.length ? finishVals : allVals;
+                        const poolUp = pool.map(x => x.toUpperCase());
+                        const foundFin = finishes.find(f => pool.includes(String(f.id)))
+                            || finishes.find(f => f.code && poolUp.includes(String(f.code).toUpperCase()));
                         if (foundFin) {
                             finishRecipe = foundFin.code ? `${foundFin.code} - ${foundFin.name}` : foundFin.name;
                         }
