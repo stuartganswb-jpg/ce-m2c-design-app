@@ -98,6 +98,10 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     <tr>
                         <th style={thS}>Item</th>
                         <th style={{ ...thS, textAlign: 'center', width: '60px' }}>Qty</th>
+                        {/* LINE ITEM DETAIL (Stuart 2026-08-30: "our customers want line item
+                            details — qty x unit = amount") — the rate was captured at transaction
+                            time and simply never printed. */}
+                        <th style={{ ...thS, textAlign: 'right', width: '90px' }}>Unit</th>
                         <th style={{ ...thS, textAlign: 'right', width: '110px' }}>Amount</th>
                     </tr>
                 </thead>
@@ -107,13 +111,14 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                             <tr style={{ borderTop: '1px solid #ddd8cf' }}>
                                 <td style={{ padding: '10px 6px 4px' }}><span style={{ fontFamily: 'var(--mono, monospace)', fontWeight: 700, fontSize: '13px' }}>{l.code}</span></td>
                                 <td style={{ textAlign: 'center', fontFamily: 'var(--mono, monospace)', fontSize: '12px', padding: '10px 6px 4px' }}>1</td>
+                                <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '12px', padding: '10px 6px 4px' }}>${(l.price || 0).toFixed(2)}</td>
                                 <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '13px', fontWeight: 700, padding: '10px 6px 4px' }}>${(l.price || 0).toFixed(2)}</td>
                             </tr>
                             {(l.components || []).map((c, ci) => (
                                 <tr key={`${i}-${ci}`}>
                                     {/* Packed components read in the unit the customer ordered; loose
                                         ones are unchanged. c.qty is always the each count. */}
-                                    <td colSpan={3} style={{ padding: '1px 6px 1px 26px', fontSize: '10.5px', color: '#8a857c' }}>{c.packs ? `${c.packs} × ${c.packUom} (${c.qty} ea) — ` : `${c.qty} × `}{c.erp} — {c.name}</td>
+                                    <td colSpan={4} style={{ padding: '1px 6px 1px 26px', fontSize: '10.5px', color: '#8a857c' }}>{c.packs ? `${c.packs} × ${c.packUom} (${c.qty} ea) — ` : `${c.qty} × `}{c.erp} — {c.name}</td>
                                 </tr>
                             ))}
                         </React.Fragment>
@@ -124,6 +129,11 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                                 underneath so the customer can reconcile against the shipment. */}
                             <td style={{ textAlign: 'center', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>
                                 {l.packs ? <>{l.packs} × {l.packUom}<div style={{ fontSize: '9px', color: '#8a857c' }}>{l.qty} ea</div></> : l.qty}
+                            </td>
+                            {/* Per-EACH rate; pack lines say so, so 2 x 7 PACK at $2.60/ea reconciles. */}
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>
+                                {l.rate != null ? <>{`$${Number(l.rate).toFixed(2)}`}{l.packs ? <span style={{ fontSize: '9px', color: '#8a857c' }}>/ea</span> : null}</>
+                                    : (l.total != null && Number(l.qty) > 0 ? `$${(l.total / Number(l.qty)).toFixed(2)}` : '—')}
                             </td>
                             <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{l.total != null ? `$${l.total.toFixed(2)}` : '—'}</td>
                         </tr>
