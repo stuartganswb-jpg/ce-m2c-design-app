@@ -173,11 +173,16 @@ export async function propagateFloorState(ctx, { finWo, phase, by }) {
  * The orphan audit. Given the board's records and the floor's, report every disagreement:
  *   ORPHAN_FLOOR   — a floor job with no RTG record at all
  *   FLOOR_CLOSED   — closed on the floor, still live on the board
+ *   FLOOR_DONE     — the floor finished it, the board still lists it as live work
  *   BOARD_CLOSED   — closed on the board, still live on the floor
- *   NS_UNCONFIRMED — the app closed it, NetSuite never confirmed
- * Pure, so the rules can be reasoned about without Firestore in the room.
+ *   NS_CLOSE_TODO  — the app closed it, a person still owes NetSuite the balance close
+ *   DEMAND_ORPHAN  — a convert/plating demand whose work order / sales order no longer lives
+ *   RODCUT_ORPHAN  — an open rod cut whose work order no longer lives
+ * v2 (Stuart 2026-08-29: "after this complete run we should eliminate all orphans everywhere")
+ * extends the reach to the demand documents — the exact class that piled up unfound on the WMS
+ * Convert tab. Pure, so the rules can be reasoned about without Firestore in the room.
  */
-export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [] }) {
+export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], convertDemands = [], platingDemands = [], rodCuts = [], salesOrders = [] }) {
     const byKey = new Map();
     hqOrders.forEach(o => identityKeysOf(o).forEach(k => byKey.set(k, o)));
     const parentOf = (d) => identityKeysOf(d).map(k => byKey.get(k)).find(Boolean) || null;
@@ -193,11 +198,37 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [] }) {
             return;
         }
         if (isClosedState(d) && !isClosedState(parent)) out.push({ type: 'FLOOR_CLOSED', coll, floor: d, parent });
+        // Finished (packed/complete/built) but the board still lists it as live work — the exact
+        // stale-dispatched problem propagateFloorState was written for, now audited too.
+        else if (isDoneState(d) && !isClosedState(parent) && !isDoneState(parent)) out.push({ type: 'FLOOR_DONE', coll, floor: d, parent });
         else if (isClosedState(parent) && !isDoneState(d)) out.push({ type: 'BOARD_CLOSED', coll, floor: d, parent });
     });
     hqOrders.forEach(o => {
         // Not an error — a job someone still has to do in NetSuite by hand (Eric's Option 3).
         if (o.nsWoCloseRequired && !o.nsWoClosed) out.push({ type: 'NS_CLOSE_TODO', coll: null, floor: null, parent: o });
+    });
+    // The fin doc is stamped first by closeOrderEverywhere — an hq-less close must still surface.
+    finWos.forEach(d => {
+        if (d.nsWoCloseRequired && !d.nsWoClosed && !parentOf(d)) out.push({ type: 'NS_CLOSE_TODO', coll: 'fin_workorders', floor: d, parent: null });
+    });
+    // Demands live only as long as the order they serve. finWoId points at hq_work_orders;
+    // a demand whose parent is gone, tombstoned, or closed gates NOTHING and must be named.
+    const liveWoById = new Map();
+    hqOrders.forEach(o => { if (!isClosedState(o)) { liveWoById.set(String(o.id), o); if (o.woId) liveWoById.set(String(o.woId), o); } });
+    convertDemands.forEach(d => {
+        if (d.finWoId && !liveWoById.has(String(d.finWoId))) out.push({ type: 'DEMAND_ORPHAN', coll: 'convert_demand', floor: d, parent: null });
+    });
+    // Plating demands carry only soAppId (they never have a finishing WO) — matched against the
+    // live sales orders, NEVER through identityKeysOf (soAppId is deliberately not an identity
+    // key: sibling lines share it, and linking through it would let one line's close take its
+    // siblings' documents down).
+    const liveSoIds = new Set(salesOrders.filter(o => !isClosedState(o)).map(o => String(o.id)));
+    platingDemands.forEach(d => {
+        if (d.soAppId && !liveSoIds.has(String(d.soAppId))) out.push({ type: 'DEMAND_ORPHAN', coll: 'plating_demand', floor: d, parent: null });
+    });
+    rodCuts.forEach(d => {
+        const open = !['DONE', 'CANCELLED'].includes(String(d.status || '').toUpperCase());
+        if (open && d.finWoId && !liveWoById.has(String(d.finWoId))) out.push({ type: 'RODCUT_ORPHAN', coll: 'rod_cut_orders', floor: d, parent: null });
     });
     return out;
 }

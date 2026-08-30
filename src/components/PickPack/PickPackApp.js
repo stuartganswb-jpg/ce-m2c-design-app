@@ -3,6 +3,7 @@ import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
+import { woRefOf } from '../Shared/woRef';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
@@ -15,7 +16,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf } from '../Shared/workOrderContract';
-import { hardDeleteWithLedger } from '../Shared/orderLifecycle';
+import { hardDeleteWithLedger, propagateFloorState } from '../Shared/orderLifecycle';
 import { clearConvertGate } from '../Shared/finishedRunPrecheck';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
@@ -726,7 +727,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         }
         return out.map(l => ({ ...l, cat: packCatOf(l) }));
     };
-    const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : (j.nsWoTran || j.displayId || j.woNum || j.id);
+    const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : woRefOf(j);
+    // Resolve a raw fin/hq WO id to the honest reference (NetSuite number first) via the
+    // unfiltered fin list this screen already holds; falls back to the id itself.
+    const finRefOf = (id) => { const f = id && finAll.find(x => x.id === id); return f ? woRefOf(f) : (id || ''); };
 
     // 🖨 PACK-LINE LABELS (Sandra + Eric 2026-08-12 App Imp): item labels for packed orders, and
     // rod labels for custom CPQ poles — Line Sidemark · Length · "1 of X" per piece (halves and
@@ -1219,6 +1223,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 ...(job.hasCustomSibling && !job.packCustomMatchedAt ? { packCustomMatchedAt: Date.now(), packCustomMatchedBy: operator?.name || '', packCustomMatchedScan: custMatch } : {}),
                 ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY' } : { packBoxes: packBoxSel }) });
             setPackCustomScan('');
+            // The board hears about packing/put-away like every other floor event (2026-08-29
+            // audit: WMS events never reported). Best-effort — the pack stands regardless.
+            try {
+                await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                    { finWo: job, phase: isStockPutaway ? 'Shelved' : 'Packed', by: operator?.name || '' });
+            } catch (e) { console.warn('RTG propagate failed (pack stands):', e); }
             writeLog(isStockPutaway ? `Put away ${packRef(job)} → bin ${bin} (${lines.length} lines)` : `Packed ${packRef(job)} (${lines.length} lines, ${(job.packPhotos || []).length} photos)`, 'packing');
             // PACKED → NETSUITE (Stuart 2026-07-18): transform the NetSuite SO into an Item
             // Fulfillment at status Packed (staged via the outbox — serial, retried, visible in
@@ -3304,7 +3314,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         </button>
                     ))}
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
-                    <WhereIsIt orders={finAll} compact />
+                    <WhereIsIt orders={finAll} compact extras={[
+                        ...convertDemands.map(d => ({ ...d, __kind: 'CONVERT' })),
+                        ...platingDemands.map(d => ({ ...d, __kind: 'PLATING' })),
+                        ...rodCutOrders.filter(o => o.status !== 'DONE' && o.status !== 'CANCELLED').map(o => ({ ...o, __kind: 'RODCUT' })),
+                    ]} />
                     <div style={{ width: '1px', background: theme.line, height: '20px', margin: '0 10px' }}></div>
                     {/* ES / EN — per device. The tooltip is honest about partial coverage rather
                         than claiming the whole app is translated. */}
@@ -4097,7 +4111,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         return (
                                             <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderBottom: `1px solid ${theme.line}`, paddingBottom: '8px' }}>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
-                                                    {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs{d.woNum ? ` · ${d.woNum}` : ''}{d.createdBy ? ` · ${d.createdBy}` : ''}
+                                                    {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs{d.woNum ? ` · ${d.woNum}` : ''}{d.finWoId ? ` · for ${d.finWoErpId || finRefOf(d.finWoId)}` : ''}{d.createdBy ? ` · ${d.createdBy}` : ''}
                                                     {rawPart && <span style={{ color: theme.inkSoft }}> · raw on hand {rawPart.onHand}</span>}
                                                     {onCart && <span style={{ color: '#2f7d3b' }}> · ON CART — convert it above</span>}
                                                 </div>
@@ -4836,7 +4850,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     {o.qtySource} × {o.sourceItemId} → {o.qtyTarget} × {o.targetItemId}
                                                 </div>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, marginTop: '5px' }}>
-                                                    for WO {o.finWoId} · {o.finWoQty} × {o.finWoErpId}{o.finWoRecipe ? ` · ${o.finWoRecipe}` : ''}{o.finWoReqDate ? ` · need by ${o.finWoReqDate}` : ''}
+                                                    for WO {finRefOf(o.finWoId)} · {o.finWoQty} × {o.finWoErpId}{o.finWoRecipe ? ` · ${o.finWoRecipe}` : ''}{o.finWoReqDate ? ` · need by ${o.finWoReqDate}` : ''}
                                                 </div>
                                                 {Number(o.overrun) > 0 && (
                                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.brass, marginTop: '4px' }}>

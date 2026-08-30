@@ -8,6 +8,7 @@ import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER } from '../Shared/orderLifecycle';
+import { woRefOf } from '../Shared/woRef';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
@@ -202,6 +203,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     const [liveWO, setLiveWO] = useState([]);
     const [liveShop, setLiveShop] = useState([]);
     const [liveFin, setLiveFin] = useState([]);
+    // Demand documents ride beside the orders and orphan just as easily (2026-08-29: eleven
+    // stray convert waves) — the audit needs them live too.
+    const [liveConvD, setLiveConvD] = useState([]);
+    const [livePlatD, setLivePlatD] = useState([]);
+    const [liveRodCuts, setLiveRodCuts] = useState([]);
     const [logTodayOnly, setLogTodayOnly] = useState(false);
     const [formTemplates, setFormTemplates] = useState({}); // hq_config/form_templates — header/footer/terms per doc type
     const [brandLogos, setBrandLogos] = useState({});       // hq_config/brand_logos — printed on the forms
@@ -317,6 +323,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             mk("hq_sales_orders", setLiveSO), mk("hq_work_orders", setLiveWO),
             mk("shop_custom_orders", setLiveShop), mk("fin_workorders", setLiveFin),
         ];
+        // Demand collections key brand as brandId (rod cuts as brand) — small open sets, cheap.
+        const mkB = (coll, field, setter) => onSnapshot(query(collection(db, coll), where(field, "==", activeBrand)),
+            s => setter(s.docs.map(d => ({ id: d.id, ...d.data() }))),
+            err => console.warn(`audit ${coll} listen failed`, err));
+        subs.push(mkB("convert_demand", "brandId", setLiveConvD));
+        subs.push(mkB("plating_demand", "brandId", setLivePlatD));
+        subs.push(mkB("rod_cut_orders", "brand", setLiveRodCuts));
         return () => subs.forEach(u => u && u());
     }, [activeBrand]);
 
@@ -625,7 +638,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // record's own facts via the same stock summary instead of spinning.
             setActiveJobDetails({
                 snapshotStock: true,
-                fp: { stockErpId: woItemCodeOf(order), type: order.type || 'Stock Build', woNum: order.woNo || order.woDisplayId || order.id, totalParts: order.totalParts || order.qty || 0, recipe: order.recipe || '', reqDate: order.reqDate || '', note: '' }
+                fp: { stockErpId: woItemCodeOf(order), type: order.type || 'Stock Build', woNum: woRefOf(order), totalParts: order.totalParts || order.qty || 0, recipe: order.recipe || '', reqDate: order.reqDate || '', note: '' }
             });
         }
     };
@@ -762,7 +775,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const on = !isUrgent(order);
         let needBy = order.needBy || '';
         if (on) {
-            const ans = window.prompt(`⚡ Flag ${order.woNo || order.soId || order.id} URGENT.\n\nNeed-by date (YYYY-MM-DD) — leave blank to keep ${order.reqDate || 'the existing req date'}:`, order.needBy || order.reqDate || '');
+            const ans = window.prompt(`⚡ Flag ${order.soId && !order.woId ? order.soId : woRefOf(order)} URGENT.\n\nNeed-by date (YYYY-MM-DD) — leave blank to keep ${order.reqDate || 'the existing req date'}:`, order.needBy || order.reqDate || '');
             if (ans === null) return;                       // cancelled — no change
             needBy = String(ans).trim();
             if (needBy && !/^\d{4}-\d{2}-\d{2}$/.test(needBy)) return alert(`"${needBy}" isn't a date in YYYY-MM-DD form. Nothing was changed.`);
@@ -771,7 +784,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             await updateDoc(doc(db, collectionName, order.id), on
                 ? { urgent: true, urgentAck: false, needBy: needBy || order.reqDate || '', urgentBy: currentUser || '', urgentAt: Date.now() }
                 : { urgent: false, urgentAck: false, urgentClearedBy: currentUser || '', urgentClearedAt: Date.now() });
-            addLog(`${on ? '⚡ URGENT' : 'Cleared urgent on'} ${order.woNo || order.soId || order.id}${on && needBy ? ` — need by ${needBy}` : ''}.`, on ? 'warn' : 'info');
+            addLog(`${on ? '⚡ URGENT' : 'Cleared urgent on'} ${order.soId && !order.woId ? order.soId : woRefOf(order)}${on && needBy ? ` — need by ${needBy}` : ''}.`, on ? 'warn' : 'info');
             loadRTGOrders();
         } catch (e) { alert(`Couldn't change the urgent flag: ${e.message || e}`); }
     };
@@ -1183,7 +1196,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
         // STOP MECHANISM (Stuart 2026-07-21): a second tap must never quietly duplicate the
         // floor card — an already-dispatched order needs an explicit, scary re-confirm.
-        if (!opts.auto && hqOrder.pushedToFinishing && !window.confirm(`⚠ ${hqOrder.woNo || hqOrder.id} was ALREADY dispatched to finishing.\n\nRelease it AGAIN anyway? Normally NO — this re-copies the floor card.`)) return;
+        if (!opts.auto && hqOrder.pushedToFinishing && !window.confirm(`⚠ ${woRefOf(hqOrder)} was ALREADY dispatched to finishing.\n\nRelease it AGAIN anyway? Normally NO — this re-copies the floor card.`)) return;
 
         // SALES-SNAPSHOT stock WOs (2026-07-16): the snapshot pre-builds the COMPLETE finishing
         // doc (pole rack info, paint sizes, stock ids) and parks the WO here for review —
@@ -1519,7 +1532,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
     const closeOrderEverywhere = async (order, kind) => {
         const isSales = kind === 'sales';
-        const ref = isSales ? `SO ${order.soId || order.id}` : `WO ${order.nsWoTran || order.woId || order.id}`;
+        const ref = isSales ? `SO ${order.soId || order.id}` : `WO ${woRefOf(order)}`;
         let links;
         try {
             links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, order, kind);
@@ -1735,14 +1748,30 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // The four live feeds it already subscribes to are exactly what the audit needs, so this costs
     // no extra reads. Every finding names the document and offers the close that settles it.
     const orphanFindings = useMemo(
-        () => auditOrphans({ hqOrders: [...liveWO, ...liveSO], finWos: liveFin, shopJobs: liveShop }),
-        [liveWO, liveSO, liveFin, liveShop]
+        () => auditOrphans({ hqOrders: [...liveWO, ...liveSO], finWos: liveFin, shopJobs: liveShop, convertDemands: liveConvD, platingDemands: livePlatD, rodCuts: liveRodCuts, salesOrders: liveSO }),
+        [liveWO, liveSO, liveFin, liveShop, liveConvD, livePlatD, liveRodCuts]
     );
     const ORPHAN_COPY = {
         ORPHAN_FLOOR:   { label: 'On the floor, not on this board', why: 'A live floor job with no RTG record — nothing here can dispatch, close or report it.' },
         FLOOR_CLOSED:   { label: 'Closed on the floor, open here',  why: 'The floor finished with it; the board still lists it as live work.' },
         BOARD_CLOSED:   { label: 'Closed here, still live on the floor', why: 'The board closed it; the floor never heard, so it is still queued or being worked.' },
         NS_CLOSE_TODO:  { label: 'Close the balance in NetSuite', why: 'Closed in the app. A non-WIP work order cannot be closed through the API — its Close button is a client-side call, not an endpoint — so the balance has to be closed on the NetSuite transaction, then confirmed here.' },
+        FLOOR_DONE:     { label: 'Finished on the floor, still live here', why: 'The floor completed or packed it; the board still lists it as live work. Close it everywhere to settle the record.' },
+        DEMAND_ORPHAN:  { label: 'Demand for an order that no longer lives', why: 'A convert/plating to-do whose work order or sales order is gone or closed — it gates nothing and sits on a WMS tab forever. Delete it.' },
+        RODCUT_ORPHAN:  { label: 'Open rod cut for a dead order', why: 'An open cut whose work order is gone or closed — cutting it would make pieces nothing is waiting for. Cancel it.' },
+    };
+    // The one-click fix for a stranded demand/rod cut: delete (ledgered) — it serves nothing.
+    const clearOrphanDemand = async (f) => {
+        const d = f.floor; if (!d) return;
+        const label = d.woNum || d.id;
+        if (!window.confirm(`🗑 Delete ${f.coll === 'rod_cut_orders' ? 'rod cut' : 'demand'} ${label}?\n\n${ORPHAN_COPY[f.type].why}\n\nA HARD delete with a full ledger record.`)) return;
+        try {
+            await hardDeleteWithLedger({ db, doc, setDoc, deleteDoc }, {
+                collection: f.coll, docId: d.id, record: d, kind: f.type,
+                by: currentUser || '', from: 'RTG_AUDIT', reason: 'orphan audit — parent order gone',
+            });
+            addLog(`🗑 ${label} (${f.coll}) deleted — orphaned demand, ledger indexed.`, 'warn');
+        } catch (e) { alert('Delete failed: ' + (e.message || e)); }
     };
     const reconcileOne = async (f) => {
         const target = f.parent || f.floor;
@@ -1792,10 +1821,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                             const code = woItemCodeOf(f.floor || f.parent);
                             return (
                                 <div key={(t && t.id) + i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '5px 0', fontSize: '0.85rem', flexWrap: 'wrap' }}>
-                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{(f.floor && (f.floor.nsWoTran || f.floor.displayId)) || (t && t.id)}</span>
+                                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>{(f.floor && woRefOf(f.floor)) || (t && woRefOf(t))}</span>
                                     {code && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{code}</span>}
-                                    {f.coll && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{f.coll === 'fin_workorders' ? 'FINISHING' : 'SHOP'}</span>}
-                                    {type !== 'NS_CLOSE_TODO' && (
+                                    {f.coll && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{({ fin_workorders: 'FINISHING', shop_custom_orders: 'SHOP', convert_demand: 'WMS CONVERT', plating_demand: 'WMS PLATING', rod_cut_orders: 'WMS ROD CUTS' })[f.coll] || f.coll}</span>}
+                                    {['DEMAND_ORPHAN', 'RODCUT_ORPHAN'].includes(type) && (
+                                        <>
+                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{f.floor?.qty || f.floor?.qtySource || ''} × {f.floor?.baseErpId || f.floor?.sourceItemId || ''}{f.floor?.targetErpId ? ` → ${f.floor.targetErpId}` : ''}{f.floor?.finWoId ? ` · for ${f.floor.finWoErpId || f.floor.finWoId}` : ''}</span>
+                                            <button onClick={() => clearOrphanDemand(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }}>🗑 Delete</button>
+                                        </>
+                                    )}
+                                    {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN'].includes(type) && (
                                         <button onClick={() => reconcileOne(f)} style={{ ...btnStyle, padding: '4px 10px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f' }}>⇄ Close everywhere</button>
                                     )}
                                     {type === 'NS_CLOSE_TODO' && (
@@ -1824,10 +1859,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             )}
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '0.9rem', color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={o.id}>
-                    {kind === 'sales' ? `SO: ${o.soId || o.id}${o.customer ? ` · ${o.customer}` : ''}` : `WO: ${o.nsWoTran || o.woId || o.id}`}
+                    {kind === 'sales' ? `SO: ${o.soId || o.id}${o.customer ? ` · ${o.customer}` : ''}` : `WO: ${woRefOf(o)}`}
                 </div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#5a8f5a', marginTop: '3px' }}>
                     Sent to floor · {dispatchedChip(o)} · {whenStr(o.dispatchedAt)}
+                    {/* The floor reporting back (2026-08-29 audit: floorPhase was written and read
+                        by NOTHING) — the board finally shows what the floor last said. */}
+                    {o.floorPhase && (
+                        <span style={{ marginLeft: '8px', color: o.floorPhase === 'Complete' || o.floorPhase === 'Packed' || o.floorPhase === 'Shelved' ? 'var(--brass)' : 'var(--ink-soft)' }}
+                            title={`Last floor report${o.floorCompletedBy || o.floorUpdatedAt ? ` · ${o.floorCompletedBy || ''}` : ''}`}>
+                            · floor: {o.floorPhase}{o.floorCompletedAt ? ` ${whenStr(o.floorCompletedAt)}` : ''}
+                        </span>
+                    )}
                 </div>
             </div>
             <button style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => handleViewOrder(o, kind)}>View</button>
@@ -2142,7 +2185,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                 <div key={wo.id} style={{ ...cardStyle, borderLeft: `4px solid ${isUrgent(wo) ? '#d9534f' : 'var(--brass)'}`, ...(isUrgent(wo) ? { background: '#fdf3f3' } : {}) }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
                                         <div>
-                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(wo) ? '#d9534f' : 'var(--ink)' }} title={`${wo.id}${wo.nsWoTran ? ` · NetSuite ${wo.nsWoTran}` : ''}`}>WO: {wo.nsWoTran || wo.woId || wo.id}</div>
+                                            <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(wo) ? '#d9534f' : 'var(--ink)' }} title={`${wo.id}${wo.nsWoTran ? ` · NetSuite ${wo.nsWoTran}` : ''}`}>WO: {woRefOf(wo)}</div>
                                             {/* WHAT THE ORDER IS, WITHOUT OPENING IT (Eric 2026-08-18: "they sit in RTG as
                                                 WO-STK-11941-1787076774248. You must click view to see what the order is.
                                                 Can it display the item, finish, quantity, and date"). Everything here was
@@ -2334,7 +2377,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 };
                 return (
                     <>
-                    <HeldOrdersBanner orders={heldOrders} onRelease={resumeHeld} refOf={(o) => o.nsWoTran || o.soId || o.woId || o.id} />
+                    <HeldOrdersBanner orders={heldOrders} onRelease={resumeHeld} refOf={(o) => o.soId && !o.woId ? o.soId : woRefOf(o)} />
                     {/* RECONCILIATION sits directly above the transmit log: together they are the
                         two ways this board can be contradicted — by the floor, and by NetSuite. */}
                     <div style={{ background: '#fff', border: `1px solid ${orphanFindings.length ? '#d9534f' : 'var(--line)'}`, borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', marginBottom: '24px' }}>

@@ -12,8 +12,9 @@ import { finishCodeFromErp, machineLoadPlan } from '../Shared/finishingTime';
 import { printMachineLoadLabels } from '../Shared/labelPrint';
 import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPrecheck';
 import PullLinesLive from '../Shared/PullLinesLive';
+import { woRefOf } from '../Shared/woRef';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
-import { closeOrderEverywhere } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere, propagateFloorState } from '../Shared/orderLifecycle';
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips from '../Shared/OrderStatusChips';
@@ -61,7 +62,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
   const ackUrgent = async (wo) => {
     try {
       await updateDoc(doc(db, "fin_workorders", wo.id), { urgentAck: true, urgentAckAt: Date.now(), urgentAckBy: currentUser || 'Floor' });
-      if (writeLog) writeLog(`Acknowledged URGENT ${wo.displayId || wo.id} (need by ${wo.needBy || wo.reqDate || 'ASAP'})`, 'setup');
+      if (writeLog) writeLog(`Acknowledged URGENT ${woRefOf(wo)} (need by ${wo.needBy || wo.reqDate || 'ASAP'})`, 'setup');
     } catch (e) { alert(`Couldn't acknowledge: ${e.message}`); }
   };
 
@@ -165,13 +166,23 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       return { patch: {}, note: ' — no small parts to pick (not sent to WMS)' };
   };
 
+  // Tell the RTG record what the floor just did (2026-08-29 audit: only final-coat completion
+  // ever reported; Setup Queue events never did). Best-effort — floor state stands regardless.
+  const tellRtg = async (wo, phase) => {
+      try {
+          await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+              { finWo: wo, phase, by: currentUser || '' });
+      } catch (e) { console.warn('RTG propagate failed (floor state stands):', e); }
+  };
+
   const startSetup = async (wo) => {
     try {
         // Start Setup RELEASES THE PARTS PICK (Stuart 2026-07-18): warehouse pulls the small
         // parts on the WMS pick app while setup runs — not just a button-status change.
         const { patch, note } = releasePickPatch(wo);
         await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Running", ...patch });
-        if (writeLog) writeLog(`Started Setup for ${wo.displayId || wo.id}${note}`, 'production');
+        if (writeLog) writeLog(`Started Setup for ${woRefOf(wo)}${note}`, 'production');
+        await tellRtg(wo, 'Setup');
         if (patch.sentToPickPack) alert(`📦 Parts pick released to the WMS pick app${note.replace(' — ', ': ')}.`);
         else if (note) alert(`Setup started${note}.`);
     } catch (err) {
@@ -187,7 +198,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
         // never released) still gets its parts pick sent to WMS at the latest possible gate.
         const { patch, note } = releasePickPatch(wo);
         await updateDoc(doc(db, "fin_workorders", wo.id), { stepStatus: "Staged", currentPhase: "Painting", currentStepIndex: 0, ...patch });
-        if (writeLog) writeLog(`Staged ${wo.displayId || wo.id} to Floor (${pieces} pcs; floor now ~${activeFloorLoad + pieces} pcs)${note}`, 'production');
+        if (writeLog) writeLog(`Staged ${woRefOf(wo)} to Floor (${pieces} pcs; floor now ~${activeFloorLoad + pieces} pcs)${note}`, 'production');
+        await tellRtg(wo, 'Painting');
         if (patch.sentToPickPack) alert(`📦 Parts pick released to the WMS pick app${note.replace(' — ', ': ')}.`);
     } catch (err) {
         console.error("Stage to Floor Error:", err);
@@ -238,7 +250,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       if (!by) return;
       try {
           await updateDoc(doc(db, 'fin_workorders', noteWo.id), { orderNotes: [...notesOf(noteWo), { text, by, at: Date.now() }] });
-          if (writeLog) writeLog(`📝 Note added to ${noteWo.nsWoTran || noteWo.woNum || noteWo.id} by ${by}: ${text.slice(0, 80)}`, 'info');
+          if (writeLog) writeLog(`📝 Note added to ${woRefOf(noteWo)} by ${by}: ${text.slice(0, 80)}`, 'info');
           setNoteDraft('');
       } catch (e) { alert('Could not save the note: ' + (e.message || e)); }
   };
@@ -260,25 +272,25 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
   // someone fixes the problem. Management sees it immediately rather than finding it in a list.
   const ctx = { db, doc, getDoc, getDocs, query, collection, where, updateDoc };
   const stopOrder = async (wo) => {
-      const reason = window.prompt(`🛑 STOP ${wo.displayId || wo.id}?\n\nUse this when the order cannot continue as it stands — parts short, damaged, wrong item finished.\n\nThe order pins to the top of finishing, the warehouse and RTG until it is resolved, and management is notified now.\n\nWhat is wrong?`, '');
+      const reason = window.prompt(`🛑 STOP ${woRefOf(wo)}?\n\nUse this when the order cannot continue as it stands — parts short, damaged, wrong item finished.\n\nThe order pins to the top of finishing, the warehouse and RTG until it is resolved, and management is notified now.\n\nWhat is wrong?`, '');
       if (reason === null) return;
       const r = String(reason).trim();
       if (!r) return alert('A reason is needed — it is what the next person acts on. Nothing was changed.');
       const detail = window.prompt('Which parts / how many? (optional, but it saves a trip to the bench)', '') || '';
       try {
           const res = await holdOrder(ctx, { order: wo, kind: wo.orderType === 'sales' ? 'sales' : 'stock', stage: 'FINISHING', reason: r, detail: detail.trim(), by: currentUser || 'Finishing', notify });
-          if (writeLog) writeLog(`🛑 STOPPED ${wo.displayId || wo.id} — ${r}${detail ? ` (${detail})` : ''}`, 'setup');
-          alert(`🛑 ${wo.displayId || wo.id} is stopped across ${res.docs} record(s).\n\nIt now pins to the top of this screen, the warehouse and RTG, and management has been notified. Nothing on this order moves until someone marks it resolved.`);
+          if (writeLog) writeLog(`🛑 STOPPED ${woRefOf(wo)} — ${r}${detail ? ` (${detail})` : ''}`, 'setup');
+          alert(`🛑 ${woRefOf(wo)} is stopped across ${res.docs} record(s).\n\nIt now pins to the top of this screen, the warehouse and RTG, and management has been notified. Nothing on this order moves until someone marks it resolved.`);
       } catch (e) { alert('Could not stop the order: ' + (e.message || e)); }
   };
   const resumeOrder = async (wo) => {
-      const note = window.prompt(`▶ Resume ${wo.displayId || wo.id}?\n\nStopped ${wo.heldReason ? `because: ${wo.heldReason}` : ''}\n\nWhat was done to fix it? (recorded on the order)`, '');
+      const note = window.prompt(`▶ Resume ${woRefOf(wo)}?\n\nStopped ${wo.heldReason ? `because: ${wo.heldReason}` : ''}\n\nWhat was done to fix it? (recorded on the order)`, '');
       if (note === null) return;
       const n = String(note).trim();
       if (!n) return alert('Say what was done — a hold lifted silently teaches nobody anything.');
       try {
           await releaseHold(ctx, { order: wo, kind: wo.orderType === 'sales' ? 'sales' : 'stock', note: n, by: currentUser || 'Finishing', notify });
-          if (writeLog) writeLog(`▶ RESUMED ${wo.displayId || wo.id} — ${n}`, 'setup');
+          if (writeLog) writeLog(`▶ RESUMED ${woRefOf(wo)} — ${n}`, 'setup');
       } catch (e) { alert('Could not resume: ' + (e.message || e)); }
   };
 
@@ -286,7 +298,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       const nsNote = wo.nsWoId
           ? `\n\nThis WO has a NetSuite work order (${wo.nsWoTran || wo.nsWoId}) — closing here ALSO queues the NetSuite WO close (watch 11.1 → NetSuite Sync Queue).`
           : '\n\n(App-side only — no NetSuite work order attached.)';
-      if (!window.confirm(`✕ CLOSE work order ${wo.displayId || wo.id}?\n\n${wo.recipe || 'no recipe'} · ${wo.totalParts || 0} pcs · ${wo.customer || wo.clientName || ''}\n\nIt leaves every queue (the record is kept for history). This does not undo picking/staging already done.${nsNote}`)) return;
+      if (!window.confirm(`✕ CLOSE work order ${woRefOf(wo)}?\n\n${wo.recipe || 'no recipe'} · ${wo.totalParts || 0} pcs · ${wo.customer || wo.clientName || ''}\n\nIt leaves every queue (the record is kept for history). This does not undo picking/staging already done.${nsNote}`)) return;
       try {
           // ONE CLOSER FOR EVERY SCREEN (Stuart 2026-08-19). This used to close the finishing job
           // and nothing else — not the shop sibling, and crucially not the RTG record, which went
@@ -296,9 +308,9 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
               { order: wo, kind: wo.orderType === 'sales' ? 'sales' : 'stock', by: currentUser || 'Setup Queue', from: 'SETUP_QUEUE', notify }
           );
-          if (writeLog) writeLog(`Closed WO ${wo.displayId || wo.id} from the Setup Queue — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `, NetSuite close queued (${res.ns})` : ''}`, 'setup');
-          if (!res.hqFound) alert(`✕ ${wo.displayId || wo.id} is closed on the floor.\n\n⚠ No RTG record was found for it, so there is nothing on the dispatch board to close. Tell Stuart — an order the board never knew about is worth understanding.`);
-          else if (res.ns) alert(`✕ ${wo.displayId || wo.id} closed — floor, shop and RTG.\n\nThe NetSuite close for ${res.ns} is QUEUED, not confirmed: NetSuite refuses the close on a non-WIP work order. Check HQ 11.1 → NetSuite Sync Queue; if it fails, the WO is still open in NetSuite.`);
+          if (writeLog) writeLog(`Closed WO ${woRefOf(wo)} from the Setup Queue — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${res.ns ? `, NetSuite close queued (${res.ns})` : ''}`, 'setup');
+          if (!res.hqFound) alert(`✕ ${woRefOf(wo)} is closed on the floor.\n\n⚠ No RTG record was found for it, so there is nothing on the dispatch board to close. Tell Stuart — an order the board never knew about is worth understanding.`);
+          else if (res.ns) alert(`✕ ${woRefOf(wo)} closed — floor, shop and RTG.\n\nThe NetSuite close for ${res.ns} is QUEUED, not confirmed: NetSuite refuses the close on a non-WIP work order. Check HQ 11.1 → NetSuite Sync Queue; if it fails, the WO is still open in NetSuite.`);
       } catch (err) { alert(`Close failed: ${err.message}`); }
   };
 
@@ -528,7 +540,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           below; this strip is the "did anyone see it" gate, not a second copy of the work. */}
       {/* STOPPED ORDERS OUTRANK EVERYTHING, including urgent — an urgent order is work to do
           sooner; a stopped one is work that cannot be done at all (Stuart 2026-08-21). */}
-      <HeldOrdersBanner orders={pendingOrders} onRelease={resumeOrder} refOf={(o) => o.nsWoTran || o.displayId || o.id} />
+      <HeldOrdersBanner orders={pendingOrders} onRelease={resumeOrder} refOf={(o) => woRefOf(o)} />
 
       {urgentPinned.length > 0 && (
         <div style={{ background: '#fdf3f3', border: '2px solid #d9534f', borderRadius: '2px', padding: '16px 20px', marginBottom: '24px' }}>
@@ -542,7 +554,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               return (
                 <div key={wo.id} style={{ background: '#fff', border: '1px solid #e2b8b8', borderLeft: '4px solid #d9534f', padding: '14px 16px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
-                    <strong style={{ fontSize: '1.05rem', color: 'var(--ink)', fontWeight: 500 }}>WO: {wo.nsWoTran || wo.woNum || wo.displayId || wo.id}</strong>
+                    <strong style={{ fontSize: '1.05rem', color: 'var(--ink)', fontWeight: 500 }}>WO: {woRefOf(wo)}</strong>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', padding: '3px 8px', border: '1px solid var(--line)', background: 'var(--paper)', color: 'var(--ink)' }}>{wo.recipe || wo.color || '—'}</span>
                   </div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: late ? '#d9534f' : 'var(--ink)', marginTop: '8px', fontWeight: late ? 700 : 500 }}>
@@ -571,7 +583,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
             const r = finishRouteOf(w);
             return (
               <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', borderTop: '1px solid var(--line)', padding: '7px 0', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)' }}>
-                <span>{w.displayId || w.id}{w.customer || w.clientName ? ` · ${w.customer || w.clientName}` : ''}</span>
+                <span>{woRefOf(w)}{w.customer || w.clientName ? ` · ${w.customer || w.clientName}` : ''}</span>
                 <span style={{ color: 'var(--ink-soft)' }}>
                   {r.codes.join(', ')} (by {r.via}) · {w.totalParts || 0} pcs · {w.sentToPickPack ? `pick: ${w.pickStatus || 'Pending'}` : 'not yet released to pick'}
                 </span>
@@ -695,7 +707,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
             <div key={wo.id} style={{...cardStyle, background: isMatched ? '#f6fbf7' : (cardStyle.background || '#fff'), borderLeft: isMatched ? '4px solid #3a7d44' : '4px solid var(--ink)'}}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
                     <strong style={{ fontSize: '1.1rem', color: 'var(--ink)', fontWeight: 500 }}>
-                        WO: {wo.nsWoTran || wo.woNum || wo.displayId || wo.id}
+                        WO: {woRefOf(wo)}
                         {(wo.type === 'sales' || wo.soNum) && <span style={{color:'var(--ink-soft)', fontSize:'0.85rem'}}> (SO: {wo.soId || wo.soNum})</span>}
                     </strong>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -825,7 +837,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                             </span>
                             <button onClick={() => printMachineLoadLabels({
                                 kind: 'SETUP · SMALL PARTS',
-                                woRef: wo.nsWoTran || wo.woNum || wo.displayId || wo.id,
+                                woRef: woRefOf(wo),
                                 orderKey: wo.orderKey || wo.salesOrderId || wo.soNum || wo.id,
                                 item: woItemCodeOf(wo) || wo.type || '',
                                 qty: wo.totalParts || '',
@@ -865,7 +877,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ background: '#fff', padding: '40px', borderRadius: '2px', width: '800px', maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--line)', boxShadow: '0 12px 48px rgba(0,0,0,0.1)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--line)', paddingBottom: '20px', marginBottom: '30px' }}>
-                      <h2 style={{ color: 'var(--ink)', margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>Job Specs: {activeSpecs.nsWoTran || activeSpecs.woNum || activeSpecs.displayId || activeSpecs.id}</h2>
+                      <h2 style={{ color: 'var(--ink)', margin: 0, fontFamily: 'var(--serif)', fontSize: '2rem', fontWeight: 500 }}>Job Specs: {woRefOf(activeSpecs)}</h2>
                       <button onClick={() => setActiveSpecs(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '2rem', cursor: 'pointer' }}>×</button>
                   </div>
                   
@@ -958,7 +970,7 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                           <div>
                               <div style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', color: 'var(--ink)' }}>Order notes</div>
                               <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: '3px', letterSpacing: '.06em' }}>
-                                  {wo.nsWoTran || wo.woNum || wo.displayId || wo.id} · {wo.customer || wo.clientName || 'N/A'}
+                                  {woRefOf(wo)} · {wo.customer || wo.clientName || 'N/A'}
                               </div>
                           </div>
                           <button onClick={() => setNoteWo(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.6rem', cursor: 'pointer', lineHeight: 1 }}>×</button>

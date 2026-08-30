@@ -9,10 +9,11 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { pickGateOf } from '../Shared/orderStatus';
 import { isPoleCategory } from '../Shared/poleCut';
 import PullLinesLive from '../Shared/PullLinesLive';
+import { woRefOf } from '../Shared/woRef';
 
 const cardStyle = { background: '#fff', padding: '24px', border: '1px solid var(--line)', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column' };
 // Source numbers first: the REAL NetSuite WO # leads wherever it exists; long app id is the fallback.
-const woRef = (wo) => (wo && (wo.nsWoTran || wo.displayId || wo.woNum || wo.id)) || '';
+const woRef = (wo) => woRefOf(wo);
 const inputStyle = { padding: '10px', border: '1px solid var(--line)', borderRadius: '2px', width: '100%', boxSizing: 'border-box', fontFamily: 'var(--sans)', fontSize: '0.95rem', outline: 'none', background: '#fff' };
 
 // What a sled is doing right now, derived from its WO's current-step task state (set by operator
@@ -417,6 +418,9 @@ const ActiveFloor = ({ workOrders, recipes, activePots, sysConfig, setMixModal, 
 
       try {
           await updateDoc(doc(db, "fin_workorders", wo.id), updates);
+          // The one completion path that skipped reporting (2026-08-29 audit) — the board hears
+          // about a force-complete exactly like a normal completion.
+          await tellRtg(wo, 'Complete');
           setViewWo(null);
           alert(`✅ ${woRef(wo)} marked COMPLETE — it is now in the WMS Packing queue.\n\n` +
               (isStockBuild

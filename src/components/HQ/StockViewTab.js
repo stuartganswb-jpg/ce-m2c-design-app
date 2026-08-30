@@ -10,6 +10,7 @@ import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/fini
 import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { realPartOf, isAliasDoc } from '../Shared/aliasIdentity';
+import { woRefOf } from '../Shared/woRef';
 import { poleCutPlan, poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -1484,7 +1485,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             setOpenWos({ loading: false, rows });
         } catch (e) { setOpenWos({ loading: false, rows: [], error: e.message || String(e) }); }
     };
-    const woRowRef = (row) => (row.fin && (row.fin.nsWoTran || row.fin.displayId || row.fin.id)) || (row.hq && (row.hq.nsWoTran || row.hq.woNo || row.hq.id)) || '';
+    const woRowRef = (row) => (row.fin && woRefOf(row.fin)) || (row.hq && woRefOf(row.hq)) || '';
     const resetWoToSetup = async (row) => {
         const fin = row.fin;
         if (!fin) return alert('This WO is still parked in RTG (never released to the floor) — nothing to reset.');
