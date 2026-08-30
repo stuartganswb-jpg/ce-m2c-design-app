@@ -2080,7 +2080,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // "does live work exist for this?" (2026-08-29: after the failed-test cleanup the
                 // closed TRAV WOs still read as linked, hiding the ⚙ Generate the re-trace needed).
                 ws.docs.forEach(d => { const w = { id: d.id, ...d.data() }; if (!w.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(w.status || ''))) (woBySo[w.soAppId] = woBySo[w.soAppId] || []).push(w); });
-                ps.docs.forEach(d => { const p = { id: d.id, ...d.data() }; (poBySo[p.soAppId] = poBySo[p.soAppId] || []).push(p); });
+                // Same rule as the WOs (2026-08-30: a DELETED PO still read as covering its line,
+                // hiding ⚙ Generate): only LIVE purchase orders cover a line.
+                ps.docs.forEach(d => { const p = { id: d.id, ...d.data() }; if (!p.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(p.status || ''))) (poBySo[p.soAppId] = poBySo[p.soAppId] || []).push(p); });
             }
             sos.sort((a, b) => String(a.needByDate || '9999').localeCompare(String(b.needByDate || '9999')) || (b.createdAt || 0) - (a.createdAt || 0));
             setOeNeeds({ loading: false, orders: sos.map(o => ({ so: o, wos: woBySo[o.id] || [], pos: poBySo[o.id] || [] })) });
