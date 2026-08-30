@@ -1243,7 +1243,16 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             const woWriteBacks = [];
             const tbfMade = [];
             const tbfLines = lines.filter(l => l.toBeFinished && l.finishCode);
-            if (tbfLines.length) {
+            // THE REVIEW GATE (Stuart 2026-08-29): SO save RECORDS the demand — it no longer
+            // fires work orders sight-unseen. Generation lives on Stock View → 🧾 Order Entry
+            // Needs, where the review modal shows live stock (with units), sourcing-resolved
+            // routing and the NetSuite work-order plan BEFORE anything writes. The auto-fire
+            // below is retired, kept for reference until the review gate has a full live run.
+            const OE_SAVE_AUTOFIRE_RETIRED = true;
+            if (tbfLines.length && OE_SAVE_AUTOFIRE_RETIRED) {
+                addLog(`📋 ${tbfLines.length} to-be-finished line(s) recorded — generate their orders from Stock View → 🧾 Order Entry Needs (review-gated: stock, units, sourcing and the NetSuite WO plan are shown for approval first).`, 'info');
+            }
+            if (tbfLines.length && !OE_SAVE_AUTOFIRE_RETIRED) {
                 const rows = [];
                 for (let ti = 0; ti < tbfLines.length; ti++) {
                     const l = tbfLines[ti];

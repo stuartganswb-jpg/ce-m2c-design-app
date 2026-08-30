@@ -330,7 +330,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // An app-created SO (CPQ save) waits for NetSuite to accept it (nsInternalId via
         // writeBack) before splitting to the floors, so a rejected order never becomes work.
         const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
-        const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && !o.awaitingRodCut && !o.awaitingConvert && !o.awaitingSoAccept && !o.pushedToFinishing
+        const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && !o.awaitingRodCut && !o.awaitingConvert && !o.awaitingSoAccept
+            && !(o.awaitingNsWo && !o.nsWoId) && !o.pushedToFinishing
             && (o.finPayload || o.routeTo === 'FINISHING' || o.routeTo === 'SHOP'));
         const target = so || wo;
         if (!target) return;
@@ -370,7 +371,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // orderClass ORDER_ENTRY counts as autoFlow even without the flag — heals the WOs
         // generated in the minutes before the flag shipped (2026-08-29 morning).
         const wo = liveWO.find(o => (o.autoFlow || o.orderClass === 'ORDER_ENTRY') && o.status === 'Approved' && o.finPayload && !o.pushedToFinishing
-            && !o.awaitingSoAccept && !o.awaitingConvert && !o.awaitingRodCut && !o.stopped && !autoTriedRef.current.has(`flow:${o.id}`));
+            // awaitingNsWo (Stuart 2026-08-29): the floor waits for the NetSuite work-order
+            // number — the outbox writeBack stamps nsWoId, and the next board refresh releases.
+            && !o.awaitingSoAccept && !o.awaitingConvert && !o.awaitingRodCut && !(o.awaitingNsWo && !o.nsWoId)
+            && !o.stopped && !autoTriedRef.current.has(`flow:${o.id}`));
         if (!wo) return;
         autoBusyRef.current = true;
         autoTriedRef.current.add(`flow:${wo.id}`);
@@ -1159,6 +1163,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             if (hqOrder.awaitingRodCut) { addLog(`⚡ auto: ${hqOrder.id} waiting on its rod cut — left parked.`, 'warn'); return; }
             if (hqOrder.awaitingConvert) { addLog(`⚡ auto: ${hqOrder.id} waiting on its phosphate convert — left parked.`, 'warn'); return; }
             if (hqOrder.awaitingSoAccept) { addLog(`⚡ auto: ${hqOrder.id} waiting for NetSuite to accept its sales order — left parked.`, 'warn'); return; }
+            if (hqOrder.awaitingNsWo && !hqOrder.nsWoId) { addLog(`⚡ auto: ${hqOrder.id} waiting for its NetSuite work-order number — left parked.`, 'warn'); return; }
             if (hqOrder.pushedToFinishing) { addLog(`⚡ auto: ${hqOrder.id} already dispatched — skipped.`, 'info'); return; }
         }
         // THE POLES DO NOT EXIST YET (Stuart 2026-08-19). A 4 ft order is cut from stocked 8 ft rods,
@@ -1172,6 +1177,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // ORDER-ENTRY WOs wait for their SALES ORDER (the CPQ rule: a rejected order never becomes
         // work). The outbox writeBack lifts this the moment NetSuite accepts the SO.
         if (!opts.auto && hqOrder.awaitingSoAccept && !window.confirm(`⏳ ${hqOrder.id} belongs to sales order ${hqOrder.soAppId || ''}, which NetSuite has not accepted yet.\n\nThe gate clears itself when the SO posts (watch the Transmit Log). If NetSuite REJECTED the order, fix and re-send it rather than releasing this work.\n\nRelease it to the floor anyway?`)) return;
+        // NOTHING GOES TO THE FLOOR WITHOUT ITS NETSUITE WORK ORDER (Stuart 2026-08-29) — the
+        // number is queued (11.1 → Sync Queue) and stamps back within about a minute.
+        if (!opts.auto && hqOrder.awaitingNsWo && !hqOrder.nsWoId && !window.confirm(`⏳ ${hqOrder.id} is waiting for its NETSUITE WORK ORDER number.\n\nThe WO is queued (11.1 → NetSuite Sync Queue) and its number stamps back automatically — the release then happens on its own. Releasing NOW puts unanchored paper on the floor.\n\nRelease it anyway?`)) return;
         if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
         // STOP MECHANISM (Stuart 2026-07-21): a second tap must never quietly duplicate the
         // floor card — an already-dispatched order needs an explicit, scary re-confirm.
@@ -2183,7 +2191,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                             itself the moment its gates open. */}
                                         {(wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') ? (
                                             <span title="Auto-flow: components in stock → straight to finishing; /P short → releases when the WMS convert posts; raw short → its milling WO is already on the shop floor." style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, color: 'var(--brass)', border: '1px dashed var(--brass)', background: '#fdf8ef' }}>
-                                                🔁 AUTO-FLOW · {wo.awaitingSoAccept ? 'awaiting SO accept' : wo.awaitingConvert ? 'awaiting phosphate convert' : wo.awaitingRodCut ? 'awaiting rod cut' : 'releasing…'}
+                                                🔁 AUTO-FLOW · {wo.awaitingSoAccept ? 'awaiting SO accept' : wo.awaitingConvert ? 'awaiting phosphate convert' : wo.awaitingRodCut ? 'awaiting rod cut' : (wo.awaitingNsWo && !wo.nsWoId) ? 'awaiting NetSuite WO #' : 'releasing…'}
                                             </span>
                                         ) : (<>
                                         <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>

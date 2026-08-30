@@ -225,7 +225,14 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
 export const releaseFinWoToFloor = async (hqWo, by = '') => {
     const fp = hqWo && hqWo.finPayload;
     if (!fp || !fp.id || hqWo.pushedToFinishing) return false;
-    await setDoc(doc(db, 'fin_workorders', fp.id), withItemCode({ ...fp, dispatchedAt: Date.now(), dispatchedBy: by || 'auto-flow' }));
+    // The NetSuite work-order stamp rides onto the floor card (Stuart 2026-08-29: every floor
+    // doc carries its NS WO number). The number lands on the hq record via the outbox writeBack,
+    // so at release time the hq doc is the source.
+    await setDoc(doc(db, 'fin_workorders', fp.id), withItemCode({
+        ...fp,
+        ...(hqWo.nsWoId ? { nsWoId: hqWo.nsWoId, nsWoTran: hqWo.nsWoTran || null } : {}),
+        dispatchedAt: Date.now(), dispatchedBy: by || 'auto-flow',
+    }));
     await updateDoc(doc(db, 'hq_work_orders', hqWo.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: Date.now(), dispatchedBy: by || 'auto-flow' });
     return true;
 };
@@ -246,7 +253,8 @@ export const clearConvertGate = async (demand, operatorName = '') => {
     try {
         const woSnap = await getDoc(doc(db, 'hq_work_orders', finWoId));
         const wo = woSnap.exists() ? { id: woSnap.id, ...woSnap.data() } : null;
-        if (wo && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && !wo.awaitingSoAccept && !wo.awaitingRodCut) {
+        if (wo && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && !wo.awaitingSoAccept && !wo.awaitingRodCut
+            && !(wo.awaitingNsWo && !wo.nsWoId)) {
             const released = await releaseFinWoToFloor(wo, operatorName || 'convert-complete');
             if (released) return 'released';
         }

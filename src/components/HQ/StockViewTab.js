@@ -15,6 +15,8 @@ import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { runBatchPrecheck, executeMakeupActions, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode } from '../Shared/finishRouting';
+import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
+import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -66,6 +68,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         s => setCapacityMatrix(s.exists() ? s.data() : { rules: {}, default: null }), () => { }), []);
     const [orderQty, setOrderQty] = useState({});   // per-row entered production amount (keyed by internalId)
     const [genBusy, setGenBusy] = useState(false);
+    // THE REVIEW GATE (Stuart 2026-08-29): every Order Entry generation shows its work in this
+    // modal — live stock with units, sourcing-resolved routing, the NetSuite work-order vehicle —
+    // and writes NOTHING until the operator approves. { jobs, nsError, unitsKnown, busy }
+    const [oeReview, setOeReview] = useState(null);
     const [onOrdModal, setOnOrdModal] = useState(null); // snapshot row → open PO/WO inbound detail popup
     const [cutModal, setCutModal] = useState(null);     // rod-cut order builder — see openCutModal
     // ── THE CUT TOOL OPENS ON ANY POLE (Stuart 2026-08-25) ──────────────────────────────────────
@@ -2034,8 +2040,23 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             if (!oeLinkFor({ wos, pos }, l)) work.push({ so, l });
         }));
         if (!work.length) return alert('Every made-to-order line already has a linked order — nothing to generate.');
-        if (!window.confirm(`Generate linked orders for ${work.length} line(s) with no order yet?\n\n${work.slice(0, 12).map(w => `• ${w.so.soId || w.so.id}: ${w.l.erp} ×${w.l.qty}`).join('\n')}${work.length > 12 ? `\n…and ${work.length - 12} more` : ''}\n\nEach routes itself: in stock → finishing floor now · /P short → convert then finishing · raw short → shop milling first.`)) return;
-        for (const w of work) { await generateOeLineOrder(w.so, w.l); }
+        // Outsourced-finish (plating) and bought-raw (PO) lines keep their existing per-line
+        // prompts; every MANUFACTURE line goes through the REVIEW GATE together — one modal,
+        // operator sees the whole batch's stock/units/routing/NS plan before anything writes.
+        const reviewable = [], direct = [];
+        work.forEach(w => {
+            const part = partByKey['erp:' + String(w.l.erp || '').toUpperCase()];
+            const finish = oeLineFinish(w.l);
+            const specs = part?.manufacturingSpecs || {};
+            const isBuy = !isOutsourcedFinishCode(finish || '') && specs.isInHouse === false && !!String(specs.vendorName || '').trim() && sourcingOf(specs) !== SOURCING.BOTH;
+            if (part && finish && !isOutsourcedFinishCode(finish) && !isBuy) reviewable.push(w); else direct.push(w);
+        });
+        for (const w of direct) {
+            // A BOTH-sourced line whose operator picks "make" defers into the same batch review.
+            const r = await generateOeLineOrder(w.so, w.l, { collectReview: true });
+            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line });
+        }
+        if (reviewable.length) await openOeReviewForLines(reviewable);
     };
     const oeIsTbf = (l) => !!(l.toBeFinished || /TO BE FINISHED/i.test(String(l.note || '')));
     const loadOeNeeds = async () => {
@@ -2073,7 +2094,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const po = entry.pos.find(p => (p.items || []).some(it => String(it.itemId || '').toUpperCase() === erp));
         return po ? { kind: 'PO', doc: po } : null;
     };
-    const generateOeLineOrder = async (so, line) => {
+    const generateOeLineOrder = async (so, line, opts = {}) => {
         const erp = String(line.erp || '').toUpperCase();
         const part = partByKey['erp:' + erp];
         if (!part) return alert(`${erp} is not in the Master Library — sync it first.`);
@@ -2122,92 +2143,193 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 addLog(`✅ PO ${poId} → ${rec.name} · ${qty} × ${erp} (linked to ${so.soId || so.id}) — push to NetSuite from RTG.`, 'success');
                 await loadOeNeeds(); setGenBusy(false); return;
             }
-            // IN-HOUSE → a linked finishing WO, same shape tab 7 fires at SO save (recipe = the
-            // finish, /P pulls via the planner, component pre-check with convert gates).
-            let pins = [];
-            if (isAssemblyPart(part)) {
-                try {
-                    const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
-                    pins = pinsSnap.docs.map(d => d.data());
-                    if (!pins.length) addLog(`⚠ ${erp} is an assembly with NO BOM pins — the pre-check cannot see its components.`, 'warn');
-                } catch (e) { console.warn('pins load failed', e); }
-            }
-            const finishedErp = `${erp}/${finish}`;
-            const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}`;
-            let pre = null;
-            try {
-                const preRun = await runBatchPrecheck({ rows: [{ key: 0, part: { ...part, legacyErpId: finishedErp }, qty, pins }], inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17' });
-                if (preRun.nsError) addLog(`⚠ Component pre-check skipped — NetSuite unreachable.`, 'warn'); else pre = preRun.results[0];
-                // RAW READ DOWN + /P SHORT = UNDECIDABLE ROUTING (the 2026-08-29 TRAVLB failure:
-                // converts were written against raw that did not exist and no milling WO was ever
-                // raised). Nothing is created; the retry is this same ⚙ Generate button.
-                if (pre && pre.rawUnknown) {
-                    const msg = `${finishedErp}: /P components are short but the RAW availability read failed (${String(preRun.rawError || 'NetSuite hiccup').slice(0, 120)}) — the system cannot tell whether milling is needed. NOTHING was created. Retry ⚙ Generate.`;
-                    addLog(`⛔ ${msg}`, 'error');
-                    alert(`⛔ ${msg}`);
-                    setGenBusy(false);
-                    return;
-                }
-            } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
-            const planLines = pre ? pre.plan.lines.map(pl => String(pl.legacyErpId || '').toUpperCase() === finishedErp
-                ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl) : [];
-            let gate = {};
-            if (pre && pre.actions.length) {
-                try {
-                    const exec = await executeMakeupActions({ actions: pre.actions, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp, createdBy: currentUser || '', inventory: hqParts, source: 'oe-needs-precheck', reqDate: needBy, dispatchShop: true, soRef: so.soId || so.id, customerName: so.customer || '' });
-                    gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
-                    addLog(`🧩 ${finishedErp} pre-check: ${exec.made.join(' · ')}`, 'warn');
-                } catch (e) { addLog(`⚠ ${finishedErp}: make-up orders failed (${e.message || e}) — WO created un-gated.`, 'error'); }
-            }
-            const ptype = String(specs.productType || '').toUpperCase();
-            const isPole = /POLE|ROD/.test(ptype);
-            const size = String(specs.paintSize || '').toUpperCase();
-            const finPayload = withItemCode({
-                id: woId, orderKey: so.id, quoteId: null, salesOrderId: so.id, estimateId: null,
-                orderType: 'sales', soId: so.soId || so.id, soNum: so.soId || so.id,
-                customerId: so.customerId || null, customerName: so.customer || '', customer: so.customer || '', clientName: so.customer || '',
-                recipe: finish, reqDate: needBy, type: finishedErp, totalParts: qty,
-                itemName: part.itemName || '',
-                stockErpId: finishedErp, stockInternalId: null,
-                paintSize: isPole ? null : (size || null), productType: ptype || null,
-                paintSizes: (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null,
-                ...(isPole ? { poles: { qty, type: ptype || 'POLE' }, totalPoles: qty } : {}),
-                ...(specs.finishStream ? { finishStream: String(specs.finishStream).toUpperCase() } : {}),
-                note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
-                cpqSpecs: {}, imageUrl: part.finalImageUrl || null,
-                dimensions: { length: 0, width: 0, height: 0 },
-                partsList: planLines, ...(pre && pre.plan.exploded ? { bomExploded: true } : {}),
-                currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
-                tasks: makeFullTasks(),
-                machineAssigned: null, redlineAlert: false, sentToPickPack: false, pickStatus: 'Pending',
-                shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
-                brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
-            });
-            // ORDER ENTRY AUTO-FLOW (Stuart 2026-08-28): the system has everything it needs to
-            // route this — no Push buttons. Components in stock → straight to the finishing
-            // floor NOW; /P short → the convert gate holds it and the WMS convert-complete
-            // releases it; raw short too → the component milling WO is already ON the shop floor
-            // and the chain is shop → phosphate (convert) → finishing → WMS.
-            await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
-                id: woId, woId, brand: activeBrand, type: finishedErp, status: 'Approved',
-                source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload, autoFlow: true,
-                orderClass: 'ORDER_ENTRY', soAppId: so.id, customerId: so.customerId || null,
-                customer: so.customer || '', recipe: finish, erpId: finishedErp, partErpId: finishedErp, rootItem: erp,
-                itemName: part.itemName || '',
-                qty, totalParts: qty, reqDate: needBy, ...(needBy ? { needBy } : {}),
-                soAccepted: !!so.nsInternalId,
-                ...gate,
-                createdAt: Date.now(), createdBy: currentUser || ''
-            }), { merge: true });
-            if (!gate.awaitingConvert) {
-                await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-needs');
-                addLog(`✅ ${qty} × ${finishedErp} for ${so.customer || ''} (SO ${so.soId || so.id}) — components in stock → RELEASED straight to the finishing floor (${woId}).`, 'success');
-            } else {
-                addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} for ${so.customer || ''} (SO ${so.soId || so.id}) — waiting on its phosphate convert; it auto-releases to finishing the moment the WMS posts it.`, 'success');
-            }
-            await loadOeNeeds();
+            // IN-HOUSE MANUFACTURE → THE REVIEW GATE (Stuart 2026-08-29: "the auto sequence …
+            // needs to open a pop up window and show its work — show stock check, let operator
+            // verify, then send on"). Nothing is written here; the plan modal decides.
+            setGenBusy(false);
+            if (opts.collectReview) return { review: { so, line } };
+            await openOeReviewForLines([{ so, l: line }]);
+            return;
         } catch (e) { addLog(`OE generate failed: ${e.message || e}`, 'error'); alert('Generate failed:\n\n' + (e.message || e)); }
         setGenBusy(false);
+    };
+
+    // ── THE ORDER ENTRY REVIEW GATE ────────────────────────────────────────────────────────────
+    // Build the plan (live NetSuite read WITH units, sourcing-resolved routing, NS work-order
+    // vehicle per line) and open the modal. Writes nothing.
+    const openOeReviewForLines = async (items) => {
+        setGenBusy(true);
+        try {
+            const jobs = [];
+            for (let i = 0; i < items.length; i++) {
+                const { so, l } = items[i];
+                const erp = String(l.erp || '').toUpperCase();
+                const part = partByKey['erp:' + erp];
+                const finish = oeLineFinish(l);
+                if (!part || !finish) continue;
+                let pins = [];
+                if (isAssemblyPart(part)) {
+                    try {
+                        const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
+                        pins = pinsSnap.docs.map(d => d.data());
+                        if (!pins.length) addLog(`⚠ ${erp} is an assembly with NO BOM pins — the plan cannot see its components.`, 'warn');
+                    } catch (e) { console.warn('pins load failed', e); }
+                }
+                jobs.push({ key: i, so, line: l, part, finish, qty: Number(l.qty) || 0, pins });
+            }
+            if (!jobs.length) { setGenBusy(false); return alert('No reviewable lines (missing part or finish).'); }
+            const res = await buildOeReviewPlan({ jobs, inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17' });
+            if (res.nsError) {
+                addLog(`⛔ Review plan blocked — NetSuite unreachable (${String(res.nsError).slice(0, 120)}). Nothing was created; retry Generate.`, 'error');
+                alert(`⛔ NetSuite unreachable — the plan cannot be built, so NOTHING was created.\n\nRetry ⚙ Generate in a moment.`);
+                setGenBusy(false); return;
+            }
+            setOeReview({ ...res, busy: false });
+        } catch (e) { addLog(`Review plan failed: ${e.message || e}`, 'error'); alert('Review plan failed:\n\n' + (e.message || e)); }
+        setGenBusy(false);
+    };
+
+    // Align one component's app unit to NetSuite's ("NetSuite shows PR — OK to update?").
+    const oeAlignUnit = async (jobKey, code) => {
+        const rev = oeReview; if (!rev) return;
+        const job = rev.jobs.find(j => j.key === jobKey); if (!job) return;
+        const comp = job.components.find(c => c.code === code); if (!comp || !comp.nsUnit) return;
+        if (!window.confirm(`NetSuite counts ${code} in ${comp.nsUnit} — the app has ${comp.appUnit}.\n\nOK aligns the app item to ${comp.nsUnit}. From then on EVERY quantity on ${code} (orders, BOM pulls, counts) means ${comp.nsUnit} — the numbers are not converted, the unit of meaning changes. Verify this line's need/on-hand comparison yourself after aligning.`)) return;
+        if (comp.partId) {
+            try { await updateDoc(doc(db, 'Approved_Designs', comp.partId), { 'manufacturingSpecs.stockUnit': comp.nsUnit }); }
+            catch (e) { return alert('Unit update failed: ' + (e.message || e)); }
+        }
+        setOeReview(prev => ({
+            ...prev,
+            jobs: prev.jobs.map(j => j.key !== jobKey ? j : {
+                ...j,
+                components: j.components.map(c => c.code !== code ? c : { ...c, appUnit: comp.nsUnit, unitMismatch: false, held: false, holdReason: '' }),
+            }),
+        }));
+        addLog(`📏 ${code}: app unit aligned to NetSuite's ${comp.nsUnit}.`, 'info');
+    };
+
+    // A job is blocked while a shortage sits behind an unresolved hold (unit mismatch, missing
+    // vendor, missing library part) the operator has neither fixed nor overridden.
+    const oeJobBlocked = (j) => (j.components || []).some(c =>
+        (c.held && !c.overrideProceed && c.short > 0) ||
+        ((!c.held || c.overrideProceed) && (c.actions || []).some(a => a.kind === 'HOLD')));
+
+    // EXECUTE the approved plan — the ONLY writer on this path. Per job: make-up (converts +
+    // sourcing-correct shop WOs), the WO doc with its gates, the NetSuite work order (FLOW2)
+    // with awaitingNsWo so the floor waits for the number; PO drafts group per vendor+SO.
+    const executeOeReview = async () => {
+        const rev = oeReview; if (!rev || rev.busy) return;
+        const runnable = rev.jobs.filter(j => !oeJobBlocked(j));
+        if (!runnable.length) return alert('Every line is blocked — resolve the flagged holds first.');
+        setOeReview(prev => ({ ...prev, busy: true }));
+        const poBuckets = {}; // `${vendor}|${soId}` → { vendorName, so, lines: [] }
+        try {
+            for (const job of runnable) {
+                const { so, part, finish, qty } = job;
+                const erp = String(part.legacyErpId || part.itemId || '').toUpperCase();
+                const finishedErp = job.finishedErp;
+                const specs = part.manufacturingSpecs || {};
+                const needBy = so.needByDate || '';
+                const prodNote = so.productionNotes || '';
+                const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}-${job.key}`;
+                const { makeup, poLines } = actionsOfReviewedJob(job);
+                poLines.forEach(pl => {
+                    const k = `${pl.vendorName}|${so.id}`;
+                    (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so, lines: [] }).lines.push(pl);
+                });
+                let gate = {};
+                if (makeup.length) {
+                    const exec = await executeMakeupActions({ actions: makeup, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp, createdBy: currentUser || '', inventory: hqParts, source: 'oe-review', reqDate: needBy, dispatchShop: true, soRef: so.soId || so.id, customerName: so.customer || '' });
+                    gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
+                    addLog(`🧩 ${finishedErp}: ${exec.made.join(' · ')}`, 'warn');
+                }
+                const flow2 = job.nsPlan && job.nsPlan.flow === 'FLOW2';
+                const planLines = (job.plan?.lines || []).map(pl => String(pl.legacyErpId || '').toUpperCase() === finishedErp
+                    ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
+                const ptype = String(specs.productType || '').toUpperCase();
+                const isPole = /POLE|ROD/.test(ptype);
+                const size = String(specs.paintSize || '').toUpperCase();
+                const finPayload = withItemCode({
+                    id: woId, orderKey: so.id, quoteId: null, salesOrderId: so.id, estimateId: null,
+                    orderType: 'sales', soId: so.soId || so.id, soNum: so.soId || so.id,
+                    customerId: so.customerId || null, customerName: so.customer || '', customer: so.customer || '', clientName: so.customer || '',
+                    recipe: finish, reqDate: needBy, type: finishedErp, totalParts: qty,
+                    itemName: part.itemName || '',
+                    stockErpId: finishedErp, stockInternalId: flow2 ? job.nsPlan.assemblyInternalId : null,
+                    paintSize: isPole ? null : (size || null), productType: ptype || null,
+                    paintSizes: (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null,
+                    ...(isPole ? { poles: { qty, type: ptype || 'POLE' }, totalPoles: qty } : {}),
+                    ...(specs.finishStream ? { finishStream: String(specs.finishStream).toUpperCase() } : {}),
+                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
+                    cpqSpecs: {}, imageUrl: part.finalImageUrl || null,
+                    dimensions: { length: 0, width: 0, height: 0 },
+                    partsList: planLines, ...(job.plan?.exploded ? { bomExploded: true } : {}),
+                    currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
+                    tasks: makeFullTasks(),
+                    machineAssigned: null, redlineAlert: false, sentToPickPack: false, pickStatus: 'Pending',
+                    shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
+                    brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
+                });
+                await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
+                    id: woId, woId, brand: activeBrand, type: finishedErp, status: 'Approved',
+                    source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload, autoFlow: true,
+                    orderClass: 'ORDER_ENTRY', soAppId: so.id, customerId: so.customerId || null,
+                    customer: so.customer || '', recipe: finish, erpId: finishedErp, partErpId: finishedErp, rootItem: erp,
+                    itemName: part.itemName || '',
+                    qty, totalParts: qty, reqDate: needBy, ...(needBy ? { needBy } : {}),
+                    soAccepted: !!so.nsInternalId,
+                    // FLOW2: the floor waits for the NetSuite work-order number (Stuart 2026-08-29:
+                    // "nothing should go to the floor until the NetSuite work orders are obtained").
+                    ...(flow2 ? { awaitingNsWo: true } : {}),
+                    ...gate,
+                    createdAt: Date.now(), createdBy: currentUser || ''
+                }), { merge: true });
+                if (flow2) {
+                    try {
+                        await queueNsAssemblyWorkOrder({
+                            brandId: activeBrand, assemblyInternalId: job.nsPlan.assemblyInternalId,
+                            erp: finishedErp, qty, reqDate: needBy,
+                            memo: `SO ${so.soId || so.id} · ${so.customer || ''} · ${finish}`,
+                            writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                            sourceApp: 'OE_REVIEW', createdBy: currentUser || '',
+                        });
+                        await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
+                        addLog(`📤 NetSuite work order queued for ${finishedErp} ×${qty} — the floor release waits for its number.`, 'success');
+                    } catch (e) { addLog(`⚠ ${finishedErp}: NetSuite WO queue failed (${e.message || e}) — WO parked awaiting it; retry from RTG.`, 'error'); }
+                } else if (!gate.awaitingConvert) {
+                    await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-review');
+                    addLog(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — approved in review → RELEASED to the finishing floor (${woId}).`, 'success');
+                } else {
+                    addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — waiting on its phosphate convert; auto-releases when the WMS posts it.`, 'success');
+                }
+            }
+            // PO drafts — one per vendor per SO, exactly as reviewed (qtys already MOQ-adjusted).
+            for (const bucket of Object.values(poBuckets)) {
+                const { vendorName, so, lines } = bucket;
+                const vendors = await loadNsVendors();
+                const rec = resolveVendorRec(vendors, vendorName) || resolveVendorByNsId(vendors, consensusVendorNsId(lines.map(l => l.part)));
+                if (!rec) { addLog(`⛔ PO skipped — no NetSuite-synced vendor matches "${vendorName}". Sync vendors (11.1), then Generate again.`, 'error'); continue; }
+                let poId; try { poId = await reserveShortNo('PO'); } catch (e) { poId = `PO-OE-${Date.now().toString().slice(-6)}`; }
+                await setDoc(doc(db, 'hq_purchase_orders', poId), {
+                    id: poId, poId, brand: activeBrand, status: 'Approved',
+                    vendor: rec.name || vendorName, nsVendorId: String(rec.id || '').replace(/^VEND-/, ''), vendorCrmId: rec.id,
+                    soAppId: so.id, soRef: so.soId || so.id, customer: so.customer || '',
+                    items: lines.map(l => ({ itemId: l.code, nsItemId: l.part?.netSuiteInternalId ? String(l.part.netSuiteInternalId) : null, vendorPart: l.part?.manufacturingSpecs?.vendorId || 'N/A', quantity: l.qty, rate: poRateOf(l.part), description: `${l.part?.manufacturingSpecs?.purchaseDescription || l.part?.itemName || l.code} — ${l.reason} · Order Entry ${so.soId || so.id}` })),
+                    reqDate: so.needByDate || new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · component make-up (review-approved)`,
+                    createdAt: Date.now(), createdBy: currentUser || '',
+                });
+                addLog(`✅ PO ${poId} → ${rec.name}: ${lines.map(l => `${l.qty} × ${l.code}`).join(', ')} (SO ${so.soId || so.id}) — on the vendor's CRM card; push to NetSuite from RTG.`, 'success');
+            }
+            setOeReview(null);
+            await loadOeNeeds();
+        } catch (e) {
+            addLog(`Review execute failed partway: ${e.message || e} — re-open Generate; existing links show on the board.`, 'error');
+            alert('Execute failed partway:\n\n' + (e.message || e) + '\n\nThe board shows what was created — Generate again covers only what is still missing.');
+            setOeReview(null);
+            await loadOeNeeds();
+        }
     };
 
     // ---- RAW CORES ORDERING (Stuart 2026-07-28) ----------------------------------------------
@@ -3707,6 +3829,116 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 </div>
 
             </div>
+
+            {/* ── ORDER ENTRY REVIEW GATE (Stuart 2026-08-29: "show its work … let operator
+                verify, then send on") — the plan, fully visible, before ONE document exists. */}
+            {oeReview && (() => {
+                const patchComp = (jobKey, code, patch) => setOeReview(prev => ({
+                    ...prev,
+                    jobs: prev.jobs.map(j => j.key !== jobKey ? j : ({
+                        ...j, components: j.components.map(c => c.code !== code ? c : ({ ...c, ...patch })),
+                    })),
+                }));
+                const patchAction = (jobKey, code, idx, patch) => setOeReview(prev => ({
+                    ...prev,
+                    jobs: prev.jobs.map(j => j.key !== jobKey ? j : ({
+                        ...j, components: j.components.map(c => c.code !== code ? c : ({
+                            ...c, actions: c.actions.map((a, i) => i !== idx ? a : ({ ...a, ...patch })),
+                        })),
+                    })),
+                }));
+                const actionText = (a) => a.kind === 'CONVERT' ? `⇄ CONVERT ${a.qty} × ${a.base} → ${a.target} (raw on hand ${a.rawHave})`
+                    : a.kind === 'SHOP' ? `🏭 SHOP WO — mill ${a.qty} × ${a.code} (${a.reason})`
+                    : a.kind === 'PO' ? `🧾 PO → ${a.vendorName}` : a.kind === 'HOLD' ? `⛔ ${a.holdReason}` : '';
+                const runnable = oeReview.jobs.filter(j => !oeJobBlocked(j));
+                const mono9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.78)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <div style={{ background: '#fff', width: '980px', maxWidth: '97vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 16px 60px rgba(0,0,0,.3)' }}>
+                            <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                                <div>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>Review &amp; Approve — Order Entry</div>
+                                    <div style={{ ...mono9, color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                        Live NetSuite stock · units verified · sourcing-routed · nothing is written until you approve
+                                        {!oeReview.unitsKnown && <span style={{ color: '#d9534f' }}> · ⚠ UNITS UNREADABLE THIS PULL — shorts are held</span>}
+                                    </div>
+                                </div>
+                                <button onClick={() => setOeReview(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.7rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ padding: '18px 26px', overflowY: 'auto', flex: 1 }}>
+                                {oeReview.jobs.map(j => {
+                                    const blocked = oeJobBlocked(j);
+                                    return (
+                                        <div key={j.key} style={{ border: `1px solid ${blocked ? '#d9534f' : 'var(--line)'}`, marginBottom: '16px' }}>
+                                            <div style={{ padding: '12px 16px', background: 'var(--paper)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+                                                <span>
+                                                    <b style={{ fontFamily: 'var(--mono)' }}>{j.finishedErp}</b> × {j.qty}
+                                                    <span style={{ color: 'var(--ink-soft)' }}> · SO {j.so.soId || j.so.id} · {j.so.customer || ''}</span>
+                                                </span>
+                                                <span style={{ ...mono9, color: j.nsPlan.flow === 'FLOW2' ? '#3a7d44' : 'var(--brass)' }}>
+                                                    {j.nsPlan.flow === 'FLOW2' ? '🏭 NS WORK ORDER OPENS FOR THE FINISHED ITEM' : 'SO = NETSUITE RECORD (no finished assembly)'}
+                                                </span>
+                                            </div>
+                                            <div style={{ padding: '4px 16px 10px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>{j.nsPlan.note}</div>
+                                            {blocked && <div style={{ margin: '0 16px 10px', padding: '8px 10px', background: '#fdf0ef', border: '1px solid #d9534f', color: '#d9534f', fontSize: '0.82rem' }}>⛔ LINE HELD — resolve the flagged rows below (align the unit, fix the vendor, or tick "proceed anyway"). Held lines are not executed.</div>}
+                                            {(j.components || []).map((c, ci) => (
+                                                <div key={c.code + ci} style={{ display: 'flex', gap: '14px', padding: '8px 16px', borderTop: '1px solid rgba(28,26,22,.06)', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                                                    <div style={{ minWidth: '210px' }}>
+                                                        <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{c.code}</span>
+                                                        <div style={{ fontSize: '0.75rem', color: 'var(--ink-soft)' }}>{c.name}</div>
+                                                    </div>
+                                                    <div style={{ ...mono9, paddingTop: '3px', color: 'var(--ink)' }}>need {c.need}</div>
+                                                    <div style={{ ...mono9, paddingTop: '3px', color: c.short > 0 ? '#d9534f' : '#3a7d44' }}>
+                                                        {c.noStockRecord ? 'no stock record' : `${c.have} avail`}{c.nsUnit ? ` (${c.nsUnit})` : ''}{c.short > 0 ? ` · short ${c.short}` : ' · ✓'}
+                                                    </div>
+                                                    <div style={{ flex: 1, minWidth: '260px' }}>
+                                                        {c.unitMismatch && (
+                                                            <div style={{ marginBottom: '6px' }}>
+                                                                <span style={{ ...mono9, color: '#d9534f' }}>⚠ NetSuite counts this in {c.nsUnit}; app has {c.appUnit}. </span>
+                                                                <button onClick={() => oeAlignUnit(j.key, c.code)} style={{ ...mono9, padding: '4px 8px', marginLeft: '6px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Align to {c.nsUnit}</button>
+                                                                <label style={{ ...mono9, marginLeft: '10px', color: 'var(--ink-soft)', cursor: 'pointer' }}>
+                                                                    <input type="checkbox" checked={!!c.overrideProceed} onChange={e => patchComp(j.key, c.code, { overrideProceed: e.target.checked })} /> proceed anyway
+                                                                </label>
+                                                            </div>
+                                                        )}
+                                                        {c.held && !c.unitMismatch && <div style={{ ...mono9, color: '#d9534f', marginBottom: '6px' }}>⚠ {c.holdReason}</div>}
+                                                        {(c.actions || []).length === 0 && <span style={{ ...mono9, color: 'var(--ink-soft)' }}>in stock — the pick pulls it</span>}
+                                                        {(c.actions || []).map((a, ai) => (
+                                                            <div key={ai} style={{ fontSize: '0.82rem', color: a.kind === 'HOLD' ? '#d9534f' : 'var(--ink)', marginBottom: '4px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                                                <span>{actionText(a)}</span>
+                                                                {a.kind === 'ASK' && (
+                                                                    <select value={a.chosen || 'SHOP'} onChange={e => patchAction(j.key, c.code, ai, { chosen: e.target.value })} style={{ ...mono9, padding: '3px' }}>
+                                                                        <option value="SHOP">⚒ make in-house ({a.qty} × {a.code})</option>
+                                                                        <option value="PO">🧾 PO → {a.vendorName || 'vendor'}</option>
+                                                                    </select>
+                                                                )}
+                                                                {(a.kind === 'PO' || (a.kind === 'ASK' && a.chosen === 'PO')) && (
+                                                                    <label style={{ ...mono9, color: 'var(--ink-soft)' }}>
+                                                                        qty <input type="number" min="1" value={a.editQty ?? a.qty} onChange={e => patchAction(j.key, c.code, ai, { editQty: e.target.value })} style={{ width: '76px', padding: '3px 6px', fontFamily: 'var(--mono)', border: '1px solid var(--line)' }} /> <span title="Vendors often have minimum order quantities — adjust before sending">MOQ?</span>
+                                                                    </label>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <div style={{ padding: '14px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                                <span style={{ ...mono9, color: 'var(--ink-soft)' }}>
+                                    {runnable.length} of {oeReview.jobs.length} line(s) will execute{oeReview.jobs.length - runnable.length ? ` · ${oeReview.jobs.length - runnable.length} held` : ''} · POs group per vendor and land on the vendor CRM card
+                                </span>
+                                <span style={{ display: 'flex', gap: '10px' }}>
+                                    <button onClick={() => setOeReview(null)} disabled={oeReview.busy} style={{ ...mono9, padding: '12px 18px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Cancel — write nothing</button>
+                                    <button onClick={executeOeReview} disabled={oeReview.busy || !runnable.length} style={{ ...mono9, padding: '12px 22px', background: oeReview.busy || !runnable.length ? 'var(--paper)' : '#3a7d44', color: oeReview.busy || !runnable.length ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: oeReview.busy ? 'wait' : 'pointer' }}>{oeReview.busy ? 'Executing…' : `✓ Approve & Execute (${runnable.length})`}</button>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
         </div>
     );
 };
