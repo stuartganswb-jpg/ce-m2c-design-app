@@ -22,8 +22,10 @@
 // The planning half is PURE (assertable in node --test); the executor and the gate-clearer touch
 // Firestore and live at the bottom.
 
-import { planFinishedRun, fetchAvailability, stockCheckReport } from './finishedGoodsRun.js';
+import { planFinishedRun, fetchAvailability, stockCheckReport, isAssemblyPart } from './finishedGoodsRun.js';
 import { millBaseOf } from './finishRouting.js';
+import { fetchAvailabilityUnits } from './oeReviewPlan.js';
+import { SOURCING, sourcingOf } from './sourcing.js';
 // The firebase imports serve only the executor/gate-clearer at the bottom — the planners above
 // never touch them, so node tests can import the planning half without dragging firebase in.
 import { db } from '../../firebase';
@@ -38,8 +40,27 @@ import { withItemCode } from './workOrderContract';
 // exact state the 2026-08-29 TRAVLB test failed into: a WO gated on phosphating raw that did not
 // exist, with production silently skipped. runBatchPrecheck now refuses to plan such a row at all
 // (rawUnknown), so this function only ever sees rawKnown:false for a row with no /P shorts.
-export const planMakeupActions = ({ shortRows = [], rawRemaining = {}, rawKnown = true }) => {
+// v2 (Stuart 2026-08-30, "1–5 tonight"): the same lessons the review gate learned, inherited by
+// EVERY caller of this planner — coverage and sourcing decided here, so no legacy path can invent
+// a milling WO for a bought part or re-order what is already inbound.
+//   onOrderLeft — NetSuite quantityonorder per code, consumed as it covers shorts.
+//   partOf      — resolve a component code to its library record (sourcing decisions).
+// A short that inbound covers → COVERED (a note, no document). A short on a BOUGHT part →
+// BUY_NOTE (a note naming the vendor — the PO decision belongs to a person, never invented here).
+export const planMakeupActions = ({ shortRows = [], rawRemaining = {}, rawKnown = true, onOrderLeft = {}, partOf = null }) => {
     const actions = [];
+    const acquire = (code, qty, reason) => {
+        const pool = Math.max(0, Number(onOrderLeft[code]) || 0);
+        if (pool >= qty) {
+            onOrderLeft[code] = pool - qty;
+            return { kind: 'COVERED', code, qty, reason, coveredBy: pool };
+        }
+        const p = partOf ? partOf(code) : null;
+        if (p && !isAssemblyPart(p) && sourcingOf(p.manufacturingSpecs || {}) === SOURCING.OUT) {
+            return { kind: 'BUY_NOTE', code, qty, reason, vendorName: String(p.manufacturingSpecs?.vendorName || '').trim(), onOrder: pool };
+        }
+        return { kind: 'SHOP', code, qty, reason };
+    };
     shortRows.forEach(r => {
         const code = String(r.code || '').toUpperCase();
         const mill = millBaseOf(code);
@@ -47,9 +68,9 @@ export const planMakeupActions = ({ shortRows = [], rawRemaining = {}, rawKnown 
         if (isPhos) {
             const rawHave = rawKnown ? Math.max(0, Number(rawRemaining[mill]) || 0) : null;
             actions.push({ kind: 'CONVERT', target: code, base: mill, qty: r.short, rawHave });
-            if (rawKnown && rawHave < r.short) actions.push({ kind: 'SHOP', code: mill, qty: r.short - rawHave, reason: `raw behind ${code}` });
+            if (rawKnown && rawHave < r.short) actions.push(acquire(mill, r.short - rawHave, `raw behind ${code}`));
         } else {
-            actions.push({ kind: 'SHOP', code, qty: r.short, reason: 'pull line short' });
+            actions.push(acquire(code, r.short, 'pull line short'));
         }
     });
     return actions;
@@ -81,9 +102,16 @@ export const runBatchPrecheck = async ({ rows = [], inventory = [], locationId }
     const pullCodes = [...new Set(results.flatMap(x => x.plan.lines.map(l => String(l.legacyErpId || '').toUpperCase()).filter(Boolean)))];
     if (!pullCodes.length) return { results: results.map(x => ({ ...x, check: null, actions: [] })), nsError: null };
 
-    let avail;
-    try { avail = await fetchAvailability(pullCodes, locationId); }
-    catch (e) { return { results: results.map(x => ({ ...x, check: null, actions: [] })), nsError: e.message || String(e) }; }
+    let avail, onOrderLeft = {};
+    try {
+        // Units read carries quantityonorder — coverage prevents re-ordering inbound stock
+        // (Stuart 2026-08-30). Falls back to the plain read if the units query is refused.
+        const res = await fetchAvailabilityUnits(pullCodes, locationId);
+        avail = {}; Object.entries(res.map).forEach(([c, v]) => { avail[c] = v.available; onOrderLeft[c] = v.onOrder || 0; });
+    } catch (e0) {
+        try { avail = await fetchAvailability(pullCodes, locationId); }
+        catch (e) { return { results: results.map(x => ({ ...x, check: null, actions: [] })), nsError: e.message || String(e) }; }
+    }
 
     // First pass: per-row shortages against the running remainder.
     const remaining = { ...avail };
@@ -107,7 +135,11 @@ export const runBatchPrecheck = async ({ rows = [], inventory = [], locationId }
         // Two attempts: the first raw read failing is what silently skipped TRAVLB's production
         // on 2026-08-29 — a transient NetSuite hiccup must not decide routing.
         for (let attempt = 0; attempt < 2; attempt++) {
-            try { rawRemaining = { ...(await fetchAvailability([...rawCodes], locationId)) }; rawKnown = true; rawError = null; break; }
+            try {
+                const rr = await fetchAvailabilityUnits([...rawCodes], locationId);
+                rawRemaining = {}; Object.entries(rr.map).forEach(([c, v]) => { rawRemaining[c] = v.available; if (onOrderLeft[c] == null) onOrderLeft[c] = v.onOrder || 0; });
+                rawKnown = true; rawError = null; break;
+            }
             catch (e) { rawKnown = false; rawError = e.message || String(e); }
         }
     }
@@ -125,7 +157,8 @@ export const runBatchPrecheck = async ({ rows = [], inventory = [], locationId }
                 return /\/P$/.test(code) && millBaseOf(code) !== code;
             });
             if (!rawKnown && hasPhosShort) return { ...x, actions: [], rawUnknown: true };
-            const actions = planMakeupActions({ shortRows: x.check.shortRows, rawRemaining, rawKnown });
+            const partOfInv = (c) => (inventory || []).find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(c).toUpperCase()) || null;
+            const actions = planMakeupActions({ shortRows: x.check.shortRows, rawRemaining, rawKnown, onOrderLeft, partOf: partOfInv });
             actions.forEach(a => {
                 if (a.kind === 'CONVERT') rawRemaining[a.base] = Math.max(0, (Number(rawRemaining[a.base]) || 0) - a.qty);
             });
@@ -166,6 +199,10 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             });
             convertDemandIds.push(demandId);
             made.push(`⇄ CONVERT ${a.qty} × ${a.base} → ${a.target} (WMS Convert tab)`);
+        } else if (a.kind === 'COVERED') {
+            made.push(`✔ ${a.qty} × ${a.code} already covered by ${a.coveredBy} on order (open PO/WO in NetSuite) — nothing raised`);
+        } else if (a.kind === 'BUY_NOTE') {
+            made.push(`🧾 ${a.code} short ${a.qty} — BOUGHT item${a.vendorName ? ` (vendor ${a.vendorName})` : ''}: raise the PO from Stock View / the review gate; no shop WO invented${a.onOrder ? ` (${a.onOrder} on order, not enough)` : ''}`);
         } else if (a.kind === 'SHOP') {
             const p = partOf(a.code);
             if (!p) { made.push(`⚠ ${a.code} not in the library — order it manually`); continue; }
@@ -254,7 +291,7 @@ export const clearConvertGate = async (demand, operatorName = '') => {
         const woSnap = await getDoc(doc(db, 'hq_work_orders', finWoId));
         const wo = woSnap.exists() ? { id: woSnap.id, ...woSnap.data() } : null;
         if (wo && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && !wo.awaitingSoAccept && !wo.awaitingRodCut
-            && !(wo.awaitingNsWo && !wo.nsWoId)) {
+            && !(wo.awaitingNsWo && !wo.nsWoId) && !(wo.awaitingComponents && !wo.componentsDone)) {
             const released = await releaseFinWoToFloor(wo, operatorName || 'convert-complete');
             if (released) return 'released';
         }

@@ -2266,7 +2266,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 let gate = {};
                 if (makeup.length) {
                     const exec = await executeMakeupActions({ actions: makeup, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp, createdBy: currentUser || '', inventory: hqParts, source: 'oe-review', reqDate: needBy, dispatchShop: true, soRef: so.soId || so.id, customerName: so.customer || '' });
-                    gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
+                    gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds, awaitingComponents: true } : {}) };
                     addLog(`🧩 ${finishedErp}: ${exec.made.join(' · ')}`, 'warn');
                 }
                 const flow2 = job.nsPlan && job.nsPlan.flow === 'FLOW2';
@@ -2310,6 +2310,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     // FLOW2: the floor waits for the NetSuite work-order number (Stuart 2026-08-29:
                     // "nothing should go to the floor until the NetSuite work orders are obtained").
                     ...(flow2 ? { awaitingNsWo: true } : {}),
+                    // Component shop WOs still milling → the floor waits for them too via
+                    // gate.awaitingComponents (Stuart 2026-08-30: "components in stock → RELEASED"
+                    // was a lie while the raw milled). RTG clears componentsDone when the shop
+                    // finishes and the release follows.
                     ...gate,
                     createdAt: Date.now(), createdBy: currentUser || ''
                 }), { merge: true });
@@ -2325,11 +2329,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
                         addLog(`📤 NetSuite work order queued for ${finishedErp} ×${qty} — the floor release waits for its number.`, 'success');
                     } catch (e) { addLog(`⚠ ${finishedErp}: NetSuite WO queue failed (${e.message || e}) — WO parked awaiting it; retry from RTG.`, 'error'); }
-                } else if (!gate.awaitingConvert) {
+                } else if (!gate.awaitingConvert && !gate.awaitingComponents) {
                     await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-review');
                     addLog(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — approved in review → RELEASED to the finishing floor (${woId}).`, 'success');
                 } else {
-                    addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — waiting on its phosphate convert; auto-releases when the WMS posts it.`, 'success');
+                    addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — waiting on ${gate.awaitingConvert ? 'its phosphate convert' : ''}${gate.awaitingConvert && gate.awaitingComponents ? ' + ' : ''}${gate.awaitingComponents ? 'its component shop WO(s)' : ''}; auto-releases when they post.`, 'success');
                 }
             }
             // PO drafts — one per vendor per SO, exactly as reviewed (qtys already MOQ-adjusted).

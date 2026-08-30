@@ -344,7 +344,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // writeBack) before splitting to the floors, so a rejected order never becomes work.
         const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
         const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && !o.awaitingRodCut && !o.awaitingConvert && !o.awaitingSoAccept
-            && !(o.awaitingNsWo && !o.nsWoId) && !o.pushedToFinishing
+            && !(o.awaitingNsWo && !o.nsWoId) && !(o.awaitingComponents && !o.componentsDone) && !o.pushedToFinishing
             && (o.finPayload || o.routeTo === 'FINISHING' || o.routeTo === 'SHOP'));
         const target = so || wo;
         if (!target) return;
@@ -374,6 +374,29 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     }, [autoRelease, liveSO, liveWO]);
 
 
+    // 🧩 COMPONENT GATE CLEARER (Stuart 2026-08-30): a WO waiting on its component shop WOs
+    // (awaitingComponents) watches them through the live mirrors — every component's shop job
+    // Completed/Closed (or its hq record closed/built) → componentsDone stamps and the auto-flow
+    // effect below releases it on the same render cycle. No polling, no human hop.
+    useEffect(() => {
+        const flagged = liveWO.filter(o => o.awaitingComponents && !o.componentsDone && (o.componentShopWoIds || []).length);
+        flagged.forEach(async (o) => {
+            const allDone = o.componentShopWoIds.every(cid => {
+                const shop = liveShop.find(x => x.id === `SHOP-${cid}` || x.orderKey === cid);
+                const hqc = liveWO.find(w => w.id === cid);
+                const shopSt = String((shop && shop.status) || '').toUpperCase();
+                const hqSt = String((hqc && hqc.status) || '');
+                return ['COMPLETED', 'CLOSED', 'BUILT'].includes(shopSt) || ['Closed', 'Completed', 'Built'].includes(hqSt) || (hqc && hqc.floorPhase === 'Complete');
+            });
+            if (!allDone) return;
+            try {
+                await updateDoc(doc(db, 'hq_work_orders', o.id), { componentsDone: true, componentsDoneAt: Date.now() });
+                addLog(`🧩 ${woRefOf(o)}: all ${o.componentShopWoIds.length} component shop WO(s) complete — component gate cleared${o.awaitingConvert ? ' (still waiting on its convert)' : ', releasing'}.`, 'success');
+            } catch (e) { console.warn('component gate clear failed', o.id, e); }
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [liveWO, liveShop]);
+
     // 🔁 ORDER ENTRY AUTO-FLOW — independent of the ⚡ per-brand toggle: these orders authorized
     // their own routing at creation (Stuart 2026-08-28: "the system should already have all the
     // information it needs"). RTG just executes the release the moment every gate — SO accept,
@@ -387,6 +410,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // awaitingNsWo (Stuart 2026-08-29): the floor waits for the NetSuite work-order
             // number — the outbox writeBack stamps nsWoId, and the next board refresh releases.
             && !o.awaitingSoAccept && !o.awaitingConvert && !o.awaitingRodCut && !(o.awaitingNsWo && !o.nsWoId)
+            && !(o.awaitingComponents && !o.componentsDone)
             && !o.stopped && !autoTriedRef.current.has(`flow:${o.id}`));
         if (!wo) return;
         autoBusyRef.current = true;
@@ -1213,6 +1237,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             if (hqOrder.awaitingConvert) { addLog(`⚡ auto: ${hqOrder.id} waiting on its phosphate convert — left parked.`, 'warn'); return; }
             if (hqOrder.awaitingSoAccept) { addLog(`⚡ auto: ${hqOrder.id} waiting for NetSuite to accept its sales order — left parked.`, 'warn'); return; }
             if (hqOrder.awaitingNsWo && !hqOrder.nsWoId) { addLog(`⚡ auto: ${hqOrder.id} waiting for its NetSuite work-order number — left parked.`, 'warn'); return; }
+            if (hqOrder.awaitingComponents && !hqOrder.componentsDone) { addLog(`⚡ auto: ${hqOrder.id} waiting on its component shop WO(s) — left parked.`, 'warn'); return; }
             if (hqOrder.pushedToFinishing) { addLog(`⚡ auto: ${hqOrder.id} already dispatched — skipped.`, 'info'); return; }
         }
         // THE POLES DO NOT EXIST YET (Stuart 2026-08-19). A 4 ft order is cut from stocked 8 ft rods,
@@ -1229,6 +1254,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // NOTHING GOES TO THE FLOOR WITHOUT ITS NETSUITE WORK ORDER (Stuart 2026-08-29) — the
         // number is queued (11.1 → Sync Queue) and stamps back within about a minute.
         if (!opts.auto && hqOrder.awaitingNsWo && !hqOrder.nsWoId && !window.confirm(`⏳ ${hqOrder.id} is waiting for its NETSUITE WORK ORDER number.\n\nThe WO is queued (11.1 → NetSuite Sync Queue) and its number stamps back automatically — the release then happens on its own. Releasing NOW puts unanchored paper on the floor.\n\nRelease it anyway?`)) return;
+        if (!opts.auto && hqOrder.awaitingComponents && !hqOrder.componentsDone && !window.confirm(`⏳ ${hqOrder.id} is waiting on ${(hqOrder.componentShopWoIds || []).length} component shop WO(s) still in milling.\n\nThe pulls do not exist yet — the gate clears itself the moment the shop completes them. Releasing NOW sends the floor a job it cannot pick.\n\nRelease it anyway?`)) return;
         if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
         // STOP MECHANISM (Stuart 2026-07-21): a second tap must never quietly duplicate the
         // floor card — an already-dispatched order needs an explicit, scary re-confirm.
@@ -1836,6 +1862,36 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             loadRTGOrders();
         } catch (e) { alert('Reconcile failed: ' + (e.message || e)); }
     };
+    // BULK RECONCILE (Stuart 2026-08-30: 136 finished-on-the-floor findings — one confirm, one
+    // sweep, progress in the log). Same closer per finding as the single button; a failure skips
+    // and is named, never aborts the sweep.
+    const [bulkClosing, setBulkClosing] = useState(false);
+    const reconcileAll = async (type, list) => {
+        if (bulkClosing) return;
+        if (!window.confirm(`⇄ CLOSE ALL ${list.length} — ${ORPHAN_COPY[type].label}?
+
+${ORPHAN_COPY[type].why}
+
+Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue where a WO is open). Documents are kept. Progress lands in the log.`)) return;
+        setBulkClosing(true);
+        let ok = 0, fail = 0;
+        for (let i = 0; i < list.length; i++) {
+            const f = list[i];
+            const target = f.parent || f.floor;
+            if (!target) { fail++; continue; }
+            try {
+                await closeEverywhere(
+                    { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                    { order: target, kind: (target.soId && !target.woId) ? 'sales' : 'stock', by: currentUser || '', from: 'RTG_RECONCILE_ALL', reason: f.type, notify }
+                );
+                ok++;
+            } catch (e) { fail++; addLog(`✗ ${woRefOf(target)}: ${e.message || e}`, 'error'); }
+            if ((i + 1) % 10 === 0) addLog(`⇄ Bulk close: ${i + 1}/${list.length}…`, 'info');
+        }
+        addLog(`⇄ Bulk close done — ${ok} closed, ${fail} skipped.`, fail ? 'warn' : 'success');
+        setBulkClosing(false);
+        loadRTGOrders();
+    };
     // The only honest way nsWoClosed becomes true: a person says they did it, with their name on it.
     const markNsClosed = async (f) => {
         const target = f.parent || f.floor;
@@ -1861,8 +1917,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             <div style={{ padding: '4px 0 10px' }}>
                 {Object.entries(byType).map(([type, list]) => (
                     <div key={type} style={{ padding: '10px 24px', borderTop: '1px solid var(--paper-2)' }}>
-                        <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>
-                            {ORPHAN_COPY[type].label} · {list.length}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>
+                                {ORPHAN_COPY[type].label} · {list.length}
+                            </span>
+                            {!['NS_CLOSE_TODO', 'DEMAND_ORPHAN', 'RODCUT_ORPHAN'].includes(type) && list.length > 1 && (
+                                <button onClick={() => reconcileAll(type, list)} disabled={bulkClosing}
+                                    style={{ ...btnStyle, padding: '4px 12px', fontSize: '9px', color: '#d9534f', borderColor: '#d9534f', cursor: bulkClosing ? 'wait' : 'pointer' }}>
+                                    {bulkClosing ? 'Closing…' : `⇄ Close all ${list.length}`}
+                                </button>
+                            )}
                         </div>
                         <div style={{ fontSize: '11px', color: 'var(--ink-soft)', margin: '4px 0 8px', lineHeight: 1.5 }}>{ORPHAN_COPY[type].why}</div>
                         {list.slice(0, 12).map((f, i) => {
@@ -1986,15 +2050,39 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         loadRTGOrders();
     };
 
+    // COMPONENTS NEST UNDER THEIR PARENT (Stuart 2026-08-30: the strip "looks duplicated" — a
+    // parent order and its WO-CMP milling orders read as unrelated rows). A component whose parent
+    // is on the list renders indented beneath it; a component whose parent is gone stands alone.
+    const groupDispatched = (rows) => {
+        const compParent = new Map();
+        rows.forEach(o => (o.componentShopWoIds || []).forEach(cid => compParent.set(cid, o.id)));
+        const tops = rows.filter(o => !compParent.has(o.id) || !rows.some(r => r.id === compParent.get(o.id)));
+        const childrenOf = (o) => rows.filter(r => (o.componentShopWoIds || []).includes(r.id));
+        return { tops, childrenOf };
+    };
     const dispatchedSection = (board, kind) => {
         if (!board.recent.length && !board.archived.length) return null;
+        const { tops, childrenOf } = groupDispatched(board.recent);
         return (
             <div style={{ marginTop: board.pending.length ? '18px' : '12px', paddingTop: '14px', borderTop: '1px dashed var(--line)' }}>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)', marginBottom: '10px' }}>
                     Dispatched this week ({board.recent.length})
                 </div>
                 {board.recent.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.8rem', margin: '0 0 8px' }}>Nothing dispatched in the last 7 days.</p>}
-                {board.recent.map(o => dispatchedRow(o, kind))}
+                {tops.map(o => {
+                    const kids = childrenOf(o);
+                    return (
+                        <React.Fragment key={`grp-${o.id}`}>
+                            {dispatchedRow(o, kind)}
+                            {kids.length > 0 && (
+                                <div style={{ marginLeft: '26px', borderLeft: '2px solid var(--paper-2)', paddingLeft: '10px' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', margin: '2px 0 4px' }}>↳ component milling for {woRefOf(o)}</div>
+                                    {kids.map(c => dispatchedRow(c, kind))}
+                                </div>
+                            )}
+                        </React.Fragment>
+                    );
+                })}
                 {board.archived.length > 0 && (
                     <>
                         <button onClick={() => setShowArchive(v => !v)} style={{ ...btnStyle, width: '100%', marginTop: '4px', fontSize: '9px', borderStyle: 'dashed' }}>
@@ -2285,7 +2373,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                             itself the moment its gates open. */}
                                         {(wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') ? (
                                             <span title="Auto-flow: components in stock → straight to finishing; /P short → releases when the WMS convert posts; raw short → its milling WO is already on the shop floor." style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, color: 'var(--brass)', border: '1px dashed var(--brass)', background: '#fdf8ef' }}>
-                                                🔁 AUTO-FLOW · {wo.awaitingSoAccept ? 'awaiting SO accept' : wo.awaitingConvert ? 'awaiting phosphate convert' : wo.awaitingRodCut ? 'awaiting rod cut' : (wo.awaitingNsWo && !wo.nsWoId) ? 'awaiting NetSuite WO #' : 'releasing…'}
+                                                🔁 AUTO-FLOW · {wo.awaitingSoAccept ? 'awaiting SO accept' : wo.awaitingConvert ? 'awaiting phosphate convert' : (wo.awaitingComponents && !wo.componentsDone) ? 'awaiting component milling' : wo.awaitingRodCut ? 'awaiting rod cut' : (wo.awaitingNsWo && !wo.nsWoId) ? 'awaiting NetSuite WO #' : 'releasing…'}
                                             </span>
                                         ) : (<>
                                         <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>

@@ -3573,6 +3573,21 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     };
                     const setQSStatus = async (o, status) => {
                         // Flow discipline: Pick (here) → Pack (PACKING tab, photo required) → Ship.
+                        // TO-BE-FINISHED LINES HOLD (Stuart 2026-08-30): production may still be
+                        // running — this SO's completed work MEETS it here; marking it moved with
+                        // made-to-order lines outstanding ships a box missing its parts. The linked
+                        // work orders are checked LIVE, not assumed.
+                        const tbf = (o.lines || []).filter(l => l.toBeFinished);
+                        if (tbf.length) {
+                            let openWos = [];
+                            try {
+                                const ws = await getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', '==', o.id)));
+                                openWos = ws.docs.map(d => ({ id: d.id, ...d.data() }))
+                                    .filter(w => !w.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(w.status || '')))
+                                    .filter(w => w.floorPhase !== 'Complete' && String(w.status) !== 'Completed' && String(w.status) !== 'Built');
+                            } catch (e) { console.warn('TBF production check failed', e); }
+                            if (openWos.length && !window.confirm(`⏳ SO ${o.soId || o.id} has ${tbf.length} TO-BE-FINISHED line(s) and ${openWos.length} work order(s) STILL IN PRODUCTION:\n\n${openWos.slice(0, 6).map(w => `• ${w.nsWoTran || w.woDisplayId || w.id} — ${w.rootItem || ''} (${(w.awaitingConvert && 'awaiting convert') || (w.awaitingComponents && !w.componentsDone && 'awaiting milling') || w.floorPhase || w.status})`).join('\n')}${openWos.length > 6 ? `\n…and ${openWos.length - 6} more` : ''}\n\nPACK & HOLD until every part arrives is the model. Mark it ${status} anyway?`)) return;
+                        }
                         if (status === 'Shipped' && o.packStatus !== 'Packed' && !window.confirm(`SO ${o.soId || o.id} has NOT been packed on the PACKING tab (piece-by-piece confirm + photo).\n\nShip anyway?`)) return;
                         try {
                             await updateDoc(doc(db, "hq_sales_orders", o.id), { status, pickStatus: status });
