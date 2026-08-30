@@ -46,8 +46,15 @@ export const fetchLiveBins = async (codes, locationId) => {
 // planner's /P substitutions), else the item itself — which is what the pick would pull.
 const pullLinesOf = (wo) => {
     const fromList = (wo && wo.partsList) || [];
+    // Two partsList dialects (2026-08-30, WO-SO59752 showed every pull ×0): the OE planner's
+    // lines say `quantity`, the CPQ split's say `qty`. Read both; name fields differ the same way.
     if (fromList.length) return fromList
-        .map(l => ({ code: String(l.legacyErpId || l.partId || '').toUpperCase(), name: l.partName || '', qty: Number(l.quantity) || 0 }))
+        .map(l => ({
+            code: String(l.legacyErpId || l.partId || '').toUpperCase(),
+            name: l.partName || l.name || '',
+            qty: Number(l.quantity != null ? l.quantity : l.qty) || 0,
+            finish: l.finishLabel || l.finishCode || '',
+        }))
         .filter(l => l.code);
     const own = String((wo && (wo.stockErpId || wo.type)) || '').toUpperCase();
     return own && own.includes('-') ? [{ code: own, name: wo.itemName || '', qty: Number(wo.totalParts || wo.qty) || 0 }] : [];
@@ -55,7 +62,17 @@ const pullLinesOf = (wo) => {
 
 const PullLinesLive = ({ wo }) => {
     const [state, setState] = useState({ loading: true, stock: null, error: null });
-    const lines = pullLinesOf(wo);
+    // One row per code, need summed across configurations (2026-08-30: a 3-room order rendered
+    // HCUMB410 three times, each row comparing its slice against the SAME shelf — the honest
+    // question is total need vs on hand). Finishes collect; rooms stay on the pick ticket.
+    const rawLines = pullLinesOf(wo);
+    const byCode = new Map();
+    rawLines.forEach(l => {
+        const cur = byCode.get(l.code);
+        if (cur) { cur.qty += l.qty; if (l.finish && !cur.finishes.includes(l.finish)) cur.finishes.push(l.finish); }
+        else byCode.set(l.code, { ...l, finishes: l.finish ? [l.finish] : [] });
+    });
+    const lines = [...byCode.values()];
     const codes = [...new Set(lines.map(l => l.code))];
     const codesKey = codes.join('|');
     const locationId = (BRAND_NETSUITE_MAP[String((wo && (wo.brand || wo.brandId)) || 'ce').toLowerCase()] || {}).location || '17';
@@ -90,6 +107,7 @@ const PullLinesLive = ({ wo }) => {
                         <span style={{ minWidth: '180px' }}>
                             <span style={{ ...mono, fontWeight: 600, color: 'var(--ink)' }}>{l.code}</span>
                             <span style={{ color: 'var(--ink-soft)' }}> × {l.qty}</span>
+                            {(l.finishes || []).length > 0 && <span style={{ ...mono, fontSize: '10px', color: 'var(--brass)' }}> · {l.finishes.join(', ')}</span>}
                             {l.name && <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{l.name}</div>}
                         </span>
                         <span style={{ ...mono, fontSize: '11px', textAlign: 'right', color: stockColor, alignSelf: 'center' }}>
