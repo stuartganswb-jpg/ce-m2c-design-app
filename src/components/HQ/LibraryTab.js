@@ -1715,6 +1715,23 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   </div>
               )}
 
+              {/* AN ALIAS ANNOUNCES ITSELF FIRST (Stuart 2026-08-30: "looking at the alias record
+                  there is no mention that it is just an alias … it appears as if it is an
+                  inventory item"). The full panel with the Open button lives below with the alias
+                  tools; this banner makes the identity unmissable before any field is touched. */}
+              {(() => {
+                  const topAliasOf = activePart?.manufacturingSpecs?.aliasOf || activePart?.aliasOf || '';
+                  if (!topAliasOf) return null;
+                  return (
+                      <div style={{ background: '#fff8ec', padding: '14px 24px', border: '2px solid var(--brass)', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                          <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', fontWeight: 700 }}>🔗 ALIAS RECORD</span>
+                          <span style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>
+                              This is an alternate identity of <b>{topAliasOf}</b>. Name &amp; price HERE drive quotes; stock, BOM, NetSuite and all demand land on the main item. Do not give this record a BOM or class it as an Assembly.
+                          </span>
+                      </div>
+                  );
+              })()}
+
               <div style={{ background: 'var(--paper-2)', padding: '24px', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <label style={{ fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>
                       Clone CPQ Attributes & Specs

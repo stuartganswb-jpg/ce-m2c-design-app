@@ -17,7 +17,7 @@ import { customerPriceLevel } from '../Shared/priceLevels';
 import TraverseConfiguratorModal from '../Shared/TraverseConfiguratorModal';
 import { sizeKeyOf, SIZE_FAMILIES } from "../Shared/sizeMatrix";
 import { packSizeOf, packLabelOf, packUnitFor, isRealPack, rushFeeAmountOf, rushFeeLabelOf } from "../Shared/quickShipUom";
-import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode } from "../Shared/aliasIdentity";
+import { buildAliasIndex, aliasCodesOf as aliasCodesIn, effectiveCollectionsOf as effCollectionsIn, customerFaceOf, faceCodeFor, bareCode, isAliasDoc, realPartOf, aliasTargetIdOf } from "../Shared/aliasIdentity";
 
 // Stocked / pre-finished items are sold flat — each line goes to NetSuite as its own sales-order
 // line (NO assembly/BOM rollup like the CPQ does). Quick Ship is the fast counter for that stock.
@@ -743,7 +743,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             // above is what we stock, pick, barcode and send to NetSuite.
             // opts.aliasErp: the customer's part# straight from a clientPricing row (traverse
             // components) — alias DOCS are a different mechanism and most components have none.
-            aliasErp: (opts && opts.aliasErp) || (face ? aliasCodeFor(face, it) : ''), aliasItemId: face ? face.id : null,
+            aliasErp: (opts && opts.aliasErp) || (face ? aliasCodeFor(face, it) : ''), aliasItemId: (opts && opts.aliasItemId) || (face ? face.id : null),
             qty: Math.max(1, parseInt(qty) || 1), note: note || '',
             bin: it.manufacturingSpecs?.homeBin || it.binLocation || '',
             // SELLING unit. qty means packs; packSize converts to the each count we stock, pick and
@@ -773,13 +773,28 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // The RAW item — the code before the "/" — because that is what the floor takes off the shelf
     // and paints. Deliberately NOT scoped to the collection selector: a mill part is often tagged
     // for nothing, and a picker that hides the item you are trying to order reads as broken.
-    const rawItems = useMemo(() => allItems.filter(it =>
-        !isFinished(it)                                   // no /SUFFIX — this is the mill part
-        && !isFeeItemRecord(it)
-        && it.partClass !== 'Kit' && it.partClass !== 'Alias'
-        && !it.aliasOf && !it.manufacturingSpecs?.aliasOf
-        && it.manufacturingSpecs?.isRetired !== true
-        && !!erpOf(it)), [allItems]);
+    // ALIAS DOCS BELONG IN THIS POOL (Stuart 2026-08-30: typed the alias he built for READ and
+    // got "No matches" — the old filter excluded alias records outright). The alias appears under
+    // ITS code and name; adding it dereferences to the real item for stock/BOM/NetSuite while the
+    // line prices from the alias and prints its code — the app-wide alias rule.
+    const rawFindReal = (t) => allItems.find(p => [p.id, p.itemId, p.legacyErpId].map(x => String(x || '').toUpperCase()).includes(String(t || '').toUpperCase())) || null;
+    const rawItems = useMemo(() => {
+        const rawOk = (it) => !!it
+            && !isFinished(it)                            // no /SUFFIX — this is the mill part
+            && !isFeeItemRecord(it)
+            && it.partClass !== 'Kit'
+            && it.manufacturingSpecs?.isRetired !== true
+            && !!erpOf(it);
+        return allItems.filter(it => {
+            if (isAliasDoc(it)) {
+                if (it.manufacturingSpecs?.isRetired === true || !erpOf(it)) return false;
+                const real = realPartOf(it, rawFindReal);
+                return real !== it && rawOk(real);        // alias of a valid raw item → offered
+            }
+            return rawOk(it);
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allItems]);
     // Every fee record in the brand — the same identity test 4.6 and CPQ use, so a record that
     // reads as a fee there reads as one here. (`feeItems(kw)` above is a different thing: the
     // kit builder's keyword pick of cut / splice / rush.)
@@ -816,17 +831,24 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         if (!it) return alert('Pick the raw item — the code before the "/".');
         if (!tbfFinish) return alert('Pick the finish. A part cannot go to the floor as "painted" without saying which paint.');
         if (!(parseInt(tbfQty) > 0)) return alert('Enter a quantity.');
+        // An ALIAS pick dereferences here: the LINE is the real item (stock, BOM, NetSuite, the
+        // floor); the alias rides as the customer-facing code and the line PRICES from it
+        // (rateForLine reads aliasItemId first). The price shown above already came from the alias.
+        const isAl = isAliasDoc(it);
+        const real = isAl ? realPartOf(it, rawFindReal) : it;
+        if (isAl && (!real || real === it)) return alert(`${erpOf(it)} is an alias but its main item (${aliasTargetIdOf(it)}) is not in this brand's library — fix the alias link first.`);
         const typed = parseFloat(tbfPrice);
         const priced = Number.isFinite(typed) ? typed : tbfResolved;
         const fin = finishList.find(f => f.code === tbfFinish);
-        pushLine(it, tbfQty, `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}`, null, {
+        pushLine(real, tbfQty, `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}`, null, {
             noPack: true,                                  // a made-to-order part is not a pack
             // Only override when the operator actually changed the number — otherwise the line
             // keeps repricing live, which is how every other line on this tab behaves.
             rateOverride: Math.abs(priced - tbfResolved) > 0.004 ? priced : null,
             finishCode: tbfFinish, toBeFinished: true,
+            ...(isAl ? { aliasErp: erpOf(it), aliasItemId: it.id } : {}),
         });
-        addLog(`To be finished: ${erpOf(it)} ×${tbfQty} in ${tbfFinish}`, 'success');
+        addLog(`To be finished: ${isAl ? `${erpOf(it)} (= ${erpOf(real)})` : erpOf(it)} ×${tbfQty} in ${tbfFinish}`, 'success');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setTbfPrice('');
     };
 
