@@ -175,6 +175,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [tbfQty, setTbfQty] = useState('');
     const [tbfPrice, setTbfPrice] = useState('');   // prefilled from the customer's price; editable
     const [tbfFeet, setTbfFeet] = useState('');     // per-foot items: feet per piece (cut length)
+    const [lastCreated, setLastCreated] = useState(null); // { kind, id } — the visible confirmation the button never gave (Stuart 2026-08-30)
     // FEES as their own entry line — rush, freight, packaging, coatings. Priced the same way every
     // fee is priced everywhere else (Shared/feeRules), so tab 7 and CPQ can never disagree.
     const [feeItemId, setFeeItemId] = useState('');
@@ -738,6 +739,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         // Captured at ADD time so the line keeps the identity it was sold under even if the
         // operator changes the collection scope afterwards.
         const face = aliasFaceOf(it);
+        setLastCreated(null);
         setCart(prev => [...prev, {
             key: `${it.id}-${Date.now()}-${Math.round(prev.length)}`,
             // noNs: a line with NO NetSuite identity BY DESIGN (traverse kit + per-foot lines —
@@ -1252,6 +1254,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 });
                 addLog(`✅ Quote saved (${qJobId}) and queued to NetSuite (outbox ${obId}).`, 'success');
                 alert(`✅ Quote saved on ${selectedCustomer?.name || customerId}'s pipeline (Tab 10) and queued to NetSuite — the estimate # lands on it in ~1 minute.`);
+                setLastCreated({ kind: 'QUOTE', id: qJobId });
                 setCart([]); setJobName('');
                 setPushing(false); return;
             }
@@ -1274,6 +1277,18 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 brand: activeBrand,
                 customer: selectedCustomer?.name || nsCustomerId, customerId,
                 jobName: jobName || '', memo: memoText,
+                // THE DOCUMENTS NEED THESE (Stuart 2026-08-30: "the sales order forms … must show
+                // the bill to address, the ship to address, the sidemark and the customer po").
+                customerPo: String(soExtras.po || '').trim(),
+                sidemark: String(soExtras.sidemark || '').trim(),
+                shipTo: (() => {
+                    if (ship.method === 'CUSTOM' && ship.custom.addr1) {
+                        const c = ship.custom;
+                        return [c.attention, c.addressee, c.addr1, c.addr2, [c.city, String(c.state || '').toUpperCase(), c.zip].filter(Boolean).join(', ')].filter(Boolean);
+                    }
+                    const a = (selectedCustomer?.shippingAddresses || []).find(x => String(x.addressBookId) === String(ship.addressId)) || (selectedCustomer?.shippingAddresses || [])[0] || null;
+                    return a ? [a.label, a.addr1, a.addr2, [a.city, a.state, a.zip].filter(Boolean).join(', ')].filter(Boolean).filter(x => x !== a.label || !a.addr1) : [];
+                })(),
                 needByDate: String(soExtras.needBy || '').trim(), productionNotes: String(soExtras.prodNotes || '').trim(),
                 // NS_QUEUED until NetSuite accepts — the writeBack flips it to 'Pending' and the real
                 // SO number replaces the app id, and only then does WMS list it (uniform 2026-08-25).
@@ -1511,6 +1526,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 setEditingSo(null);
             }
 
+            setLastCreated({ kind: 'SALES ORDER', id: hqId });
             setCart([]); setJobName('');
         } catch (e) {
             console.error('Quick Ship push error', e);
@@ -2148,6 +2164,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         </div>
                     </div>
                     <div style={{ borderTop: '1px solid var(--line)', padding: '16px 20px', background: 'var(--paper)' }}>
+                        {/* THE CONFIRMATION (Stuart 2026-08-30: the button stayed lit "like you
+                            need to push it again"). Unmissable, and it clears on the next add. */}
+                        {lastCreated && cart.length === 0 && (
+                            <div style={{ marginBottom: '14px', padding: '12px 14px', background: '#eaf5ec', border: '2px solid #3a7d44', fontFamily: 'var(--mono)', fontSize: '11px', color: '#2f7d3b', letterSpacing: '.04em' }}>
+                                ✅ {lastCreated.kind} <b>{lastCreated.id}</b> CREATED — queued to NetSuite (number stamps back on accept). It is on the customer's CRM card now{lastCreated.kind === 'SALES ORDER' ? '; generate its production from Stock View → 🧾 Order Entry Needs' : ''}.
+                            </div>
+                        )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Est. Total</span>
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>${cartTotal.toFixed(2)}</span>

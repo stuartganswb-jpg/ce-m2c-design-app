@@ -80,14 +80,27 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#8a857c', marginTop: '2px' }}>{new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
                 </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid #ddd8cf' }}>
-                <div>
+            {/* THE DOCUMENT SAYS WHO, WHERE AND AGAINST WHAT (Stuart 2026-08-30: bill-to address,
+                ship-to address, sidemark and customer PO were all missing). */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px', padding: '14px 0', borderBottom: '1px solid #ddd8cf', flexWrap: 'wrap' }}>
+                <div style={{ minWidth: '180px' }}>
                     <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.14em', color: '#8a857c' }}>Bill To</div>
                     <div style={{ fontSize: '15px', fontWeight: 600, marginTop: '4px' }}>{customer?.name || order.customer || ''}</div>
+                    {String(customer?.billingAddress || '').split('\n').map(x => x.trim()).filter(Boolean).map((ln, i) => (
+                        <div key={i} style={{ fontSize: '11px', color: '#524e46' }}>{ln}</div>
+                    ))}
                     {order.jobName ? <div style={{ fontSize: '12px', color: '#524e46', marginTop: '2px' }}>Job: {order.jobName}</div> : null}
+                </div>
+                <div style={{ minWidth: '180px' }}>
+                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.14em', color: '#8a857c' }}>Ship To</div>
+                    {(order.shipTo || []).length
+                        ? order.shipTo.map((ln, i) => <div key={i} style={{ fontSize: i === 0 ? '13px' : '11px', fontWeight: i === 0 ? 600 : 400, color: i === 0 ? '#1c1a16' : '#524e46', marginTop: i === 0 ? '4px' : 0 }}>{ln}</div>)
+                        : <div style={{ fontSize: '11px', color: '#8a857c', marginTop: '4px', fontStyle: 'italic' }}>Customer default address</div>}
                 </div>
                 <div style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#524e46' }}>
                     <div>Sales Order: {order.soId}</div>
+                    {order.customerPo ? <div style={{ fontWeight: 700 }}>P.O.: {order.customerPo}</div> : null}
+                    {order.sidemark ? <div>Sidemark: {order.sidemark}</div> : null}
                     {customer?.terms ? <div>Terms: {customer.terms}</div> : null}
                     {order.needByDate ? <div style={{ fontWeight: 700 }}>Need by: {order.needByDate}</div> : null}
                 </div>

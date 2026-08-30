@@ -1590,6 +1590,19 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 const rem = await deleteLinkedDemands({ db, doc, deleteDoc, getDocs, query, collection, where }, order, { includePlating: isSales });
                 if (rem.convert || rem.plating) demandNote = `, ${rem.convert + rem.plating} open WMS demand(s) removed`;
             } catch (e) { console.warn('linked demand cleanup after close failed:', e); }
+            // COMPONENT MAKE-UP WOs CASCADE TOO (Stuart 2026-08-30): the WO-CMP milling orders
+            // this parent raised carry no soAppId — close them with it or they strand on the shop.
+            for (const cid of (order.componentShopWoIds || [])) {
+                try {
+                    const cs = await getDoc(doc(db, 'hq_work_orders', cid));
+                    if (!cs.exists()) continue;
+                    const c = { id: cs.id, ...cs.data() };
+                    if (c.deleted || ['Closed', 'Deleted', 'CANCELLED'].includes(String(c.status || ''))) continue;
+                    await closeEverywhere({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                        { order: c, kind: 'stock', by: currentUser || '', from: 'RTG_PARENT_CLOSE', reason: `parent ${order.id} closed` });
+                    demandNote += `, component ${c.woDisplayId || c.id} closed`;
+                } catch (e) { console.warn('component WO cascade failed', cid, e); }
+            }
             addLog(`✕ ${ref} closed — ${res.fin} finishing, ${res.shop} shop, ${res.hq} RTG${demandNote}${res.ns ? `. NetSuite close QUEUED for ${res.ns} — confirm it lands in the transmit log; a non-WIP work order will refuse it.` : ''}`, res.ns ? 'warn' : 'success');
             loadRTGOrders();
         } catch (e) {

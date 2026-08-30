@@ -610,8 +610,22 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
   const oeIsManager = OE_MANAGER_ROLES.includes(String(userRole || '').toLowerCase());
   const oeLiveWosOf = async (so) => {
       const snap = await getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', '==', so.id)));
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      const wos = snap.docs.map(d => ({ id: d.id, ...d.data() }))
           .filter(w => !w.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(w.status || '')));
+      // THE COMPONENT MAKE-UP WOs RIDE THE CASCADE (Stuart 2026-08-30: the CRM close "only closed
+      // the top assembly line" — WO-CMP milling orders carry no soAppId, they hang off the parent
+      // WO's componentShopWoIds, and they were left open on RTG and the shop).
+      const compIds = [...new Set(wos.flatMap(w => w.componentShopWoIds || []))].filter(id => !wos.some(w => w.id === id));
+      for (const cid of compIds) {
+          try {
+              const cs = await getDoc(doc(db, 'hq_work_orders', cid));
+              if (cs.exists()) {
+                  const c = { id: cs.id, ...cs.data() };
+                  if (!c.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(c.status || ''))) wos.push(c);
+              }
+          } catch (e) { console.warn('component WO fetch failed', cid, e); }
+      }
+      return wos;
   };
   const oeWoList = (wos) => wos.slice(0, 8).map(w => `• ${w.nsWoTran || w.woDisplayId || w.id} — ${w.rootItem || w.erpId || ''} ×${w.totalParts || w.qty || 0} (${w.status}${w.pushedToFinishing ? ', on the floor' : ''})`).join('\n') + (wos.length > 8 ? `\n…and ${wos.length - 8} more` : '');
   const editOeSo = async (so) => {
