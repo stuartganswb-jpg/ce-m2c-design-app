@@ -1722,12 +1722,33 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               {(() => {
                   const topAliasOf = activePart?.manufacturingSpecs?.aliasOf || activePart?.aliasOf || '';
                   if (!topAliasOf) return null;
+                  const mainPart = inventory.find(p => [p.id, p.itemId, p.legacyErpId].filter(Boolean).map(x => String(x).toUpperCase()).includes(String(topAliasOf).toUpperCase()));
+                  // THE UOM GUARD (Stuart 2026-08-30: HRW-138TRAV12 was accidentally EACH while
+                  // H1-138TRV sells by the FOOT — the order shape depends on it). An alias MUST
+                  // count in its main item's unit; ordering already trusts the main's UOM, this
+                  // makes the drift visible and one click fixes it.
+                  const mainUom = String(mainPart?.manufacturingSpecs?.uom || 'EA').toUpperCase();
+                  const aliasUom = String(activePart?.manufacturingSpecs?.uom || 'EA').toUpperCase();
+                  const uomMismatch = mainPart && mainUom !== aliasUom;
                   return (
-                      <div style={{ background: '#fff8ec', padding: '14px 24px', border: '2px solid var(--brass)', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                      <div style={{ background: '#fff8ec', padding: '14px 24px', border: `2px solid ${uomMismatch ? '#d9534f' : 'var(--brass)'}`, display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
                           <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)', fontWeight: 700 }}>🔗 ALIAS RECORD</span>
                           <span style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>
                               This is an alternate identity of <b>{topAliasOf}</b>. Name &amp; price HERE drive quotes; stock, BOM, NetSuite and all demand land on the main item. Do not give this record a BOM or class it as an Assembly.
                           </span>
+                          {uomMismatch && (
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f', fontWeight: 700 }}>
+                                      ⚠ UOM MISMATCH — this alias says {aliasUom}, {topAliasOf} sells by the {mainUom}. Orders use the main item's unit; align this record so the paper agrees.
+                                  </span>
+                                  <button onClick={async () => {
+                                      try {
+                                          await updateDoc(doc(db, 'Approved_Designs', activePart.id), { 'manufacturingSpecs.uom': mainUom });
+                                          alert(`✅ ${codeOfPart(activePart)} UOM aligned to ${mainUom} (matching ${topAliasOf}).`);
+                                      } catch (e) { alert('Align failed: ' + (e.message || e)); }
+                                  }} style={{ padding: '6px 12px', background: '#d9534f', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase' }}>Align to {mainUom}</button>
+                              </span>
+                          )}
                       </div>
                   );
               })()}

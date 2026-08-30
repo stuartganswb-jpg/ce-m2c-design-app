@@ -2190,7 +2190,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         if (!pins.length) addLog(`⚠ ${erp} is an assembly with NO BOM pins — the plan cannot see its components.`, 'warn');
                     } catch (e) { console.warn('pins load failed', e); }
                 }
-                jobs.push({ key: i, so, line: l, part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy });
+                jobs.push({
+                    key: i, so, line: l, part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy,
+                    // A per-foot line NEEDS feet from the vendor (the SO stored pieces + billedFeet).
+                    ...(l.perFoot ? { buyQty: Number(l.billedFeet) || (Number(l.qty) || 0) * (Number(l.feetPer) || 1) } : {}),
+                });
             }
             if (!jobs.length) { setGenBusy(false); return alert('No reviewable lines (missing part or finish).'); }
             const res = await buildOeReviewPlan({ jobs, inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17' });

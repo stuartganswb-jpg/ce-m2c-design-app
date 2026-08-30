@@ -174,6 +174,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const [tbfFinish, setTbfFinish] = useState('');
     const [tbfQty, setTbfQty] = useState('');
     const [tbfPrice, setTbfPrice] = useState('');   // prefilled from the customer's price; editable
+    const [tbfFeet, setTbfFeet] = useState('');     // per-foot items: feet per piece (cut length)
     // FEES as their own entry line — rush, freight, packaging, coatings. Priced the same way every
     // fee is priced everywhere else (Shared/feeRules), so tab 7 and CPQ can never disagree.
     const [feeItemId, setFeeItemId] = useState('');
@@ -584,7 +585,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     const rateFor = (it) => (it ? (priceChoice({ partId: it.id }, it, priceCtx).price || 0) : 0);
 
     // qty is counted in PACKS; this is what the warehouse and NetSuite actually see.
-    const eachQtyOf = (l) => (parseInt(l.qty) || 0) * (l.packSize || 1);
+    // Billing quantity: packs convert to eaches; a PER-FOOT line bills qty(pieces) × feet each
+    // (Stuart 2026-08-30: H1-138TRV sells by the FOOT — the order asks feet per piece × pieces,
+    // NetSuite bills and relieves stock in feet, the floor makes PIECES at the cut length).
+    const eachQtyOf = (l) => l.perFoot
+        ? (parseInt(l.qty) || 0) * (parseFloat(l.feetPer) || 1)
+        : (parseInt(l.qty) || 0) * (l.packSize || 1);
 
     // ── TRAVERSE KITS ────────────────────────────────────────────────────────────────────────────
     // A kit the customer is entitled to = a Kit-class record carrying kitAlign AND a pricing row
@@ -755,6 +761,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             ...(opts && opts.finishCode ? { finishCode: opts.finishCode } : {}),
             ...(opts && opts.toBeFinished ? { toBeFinished: true } : {}),
             ...(opts && opts.feeRule ? { feeRule: opts.feeRule } : {}),
+            ...(opts && opts.perFoot ? { perFoot: true, feetPer: parseFloat(opts.feetPer) || 1 } : {}),
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
             kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
         }]);
@@ -820,6 +827,11 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     };
 
     const tbfItem = itemById(tbfItemId) || null;
+    // Sold by the FOOT? The REAL item's UOM governs — an alias whose UOM drifted from its main
+    // cannot mis-shape the order (the Library banner offers the align; ordering never trusts it).
+    const FOOT_UOMS = ['FT', 'FOOT', 'FEET'];
+    const tbfReal = tbfItem ? (isAliasDoc(tbfItem) ? (realPartOf(tbfItem, rawFindReal) || tbfItem) : tbfItem) : null;
+    const tbfPerFoot = !!tbfReal && FOOT_UOMS.includes(String(tbfReal.manufacturingSpecs?.uom || '').toUpperCase());
     // What this customer pays for it — their 4.6 row, else our base price. Shown rather than
     // assumed, and editable: an order taken over the phone sometimes carries a number that was
     // agreed before the row existed.
@@ -837,19 +849,25 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         const isAl = isAliasDoc(it);
         const real = isAl ? realPartOf(it, rawFindReal) : it;
         if (isAl && (!real || real === it)) return alert(`${erpOf(it)} is an alias but its main item (${aliasTargetIdOf(it)}) is not in this brand's library — fix the alias link first.`);
+        const feetPer = parseFloat(tbfFeet);
+        if (tbfPerFoot && !(feetPer > 0)) return alert(`${erpOf(real)} sells by the FOOT — enter the feet per piece (the cut length), then how many pieces.`);
+        if (isAl && String(it.manufacturingSpecs?.uom || 'EA').toUpperCase() !== String(real.manufacturingSpecs?.uom || 'EA').toUpperCase()) {
+            addLog(`⚠ Alias ${erpOf(it)} UOM (${it.manufacturingSpecs?.uom || 'EA'}) disagrees with ${erpOf(real)} (${real.manufacturingSpecs?.uom || 'EA'}) — the REAL item's UOM was used. Align the alias in the Library.`, 'warn');
+        }
         const typed = parseFloat(tbfPrice);
         const priced = Number.isFinite(typed) ? typed : tbfResolved;
         const fin = finishList.find(f => f.code === tbfFinish);
-        pushLine(real, tbfQty, `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}`, null, {
+        pushLine(real, tbfQty, `TO BE FINISHED · ${tbfFinish}${fin?.name && fin.name !== tbfFinish ? ` (${fin.name})` : ''}${tbfPerFoot ? ` · Cut ${feetPer} ft` : ''}`, null, {
             noPack: true,                                  // a made-to-order part is not a pack
             // Only override when the operator actually changed the number — otherwise the line
             // keeps repricing live, which is how every other line on this tab behaves.
             rateOverride: Math.abs(priced - tbfResolved) > 0.004 ? priced : null,
             finishCode: tbfFinish, toBeFinished: true,
             ...(isAl ? { aliasErp: erpOf(it), aliasItemId: it.id } : {}),
+            ...(tbfPerFoot ? { perFoot: true, feetPer } : {}),
         });
-        addLog(`To be finished: ${isAl ? `${erpOf(it)} (= ${erpOf(real)})` : erpOf(it)} ×${tbfQty} in ${tbfFinish}`, 'success');
-        setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setTbfPrice('');
+        addLog(`To be finished: ${isAl ? `${erpOf(it)} (= ${erpOf(real)})` : erpOf(it)} ×${tbfQty}${tbfPerFoot ? ` pcs @ ${feetPer} ft (${(feetPer * (parseInt(tbfQty) || 0)).toFixed(0)} ft billed)` : ''} in ${tbfFinish}`, 'success');
+        setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setTbfPrice(''); setTbfFeet('');
     };
 
     // ── FEES ─────────────────────────────────────────────────────────────────────────────────
@@ -1221,7 +1239,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     createdBy: { name: currentUser || '', via: 'QUICKSHIP' },
                     cpqData: {
                         totalPrice: lines.reduce((sum, l) => sum + l.rate * l.eachQty, 0) + trvPushLines.reduce((sum, t) => sum + ((t.rate || 0) * (t.quantity || 1)), 0),
-                        breakdown: lines.map(l => ({ name: `${l.aliasErp || l.erp} — ${l.name}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}`, qty: l.eachQty, price: l.rate, legacyErpId: l.erp, ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) })),
+                        breakdown: lines.map(l => ({ name: `${l.aliasErp || l.erp} — ${l.name}${l.perFoot ? ` [${l.qty} pc × ${l.feetPer} ft]` : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}`, qty: l.eachQty, price: l.rate, legacyErpId: l.erp, ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) })),
                         cartItems: [],
                     },
                     dateSaved: new Date().toISOString().split('T')[0], author: currentUser || '', createdAt: serverTimestamp(),
@@ -1269,7 +1287,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // toBeFinished/finishCode ride the stored line (they were dropped here until
                 // 2026-08-27, which left the WMS reading a made-to-order line as a shelf pull).
                 // finishOutsourced routes the WMS label: FROM PLATING vs FROM FINISHING.
-                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })),
+                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })),
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1287,7 +1305,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // Loose lines invoice in the unit the customer BUYS: "2 × 7 PACK" at the pack
                     // price, with the each count kept for reference. qty stays the each count so an
                     // older invoice reader (which knows nothing about packs) still totals correctly.
-                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty, note: l.note || '', ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) }));
+                    lines.filter(l => !l.kitKey).forEach(l => out.push({ type: 'ITEM', erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', packSize: l.packSize || 1, rate: l.rate, total: l.rate * l.eachQty, note: l.note || '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) }));
                     return out;
                 })(),
                 invoiceTotal: lines.reduce((s, l) => s + l.rate * l.eachQty, 0),
@@ -1755,7 +1773,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             {/* 2 — TO BE FINISHED. The raw mill part plus the colour it is going to
                                 wear. Every other tab calls this a made-to-order line; here it is one
                                 row, because nothing about it needs configuring. */}
-                            <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '14px', display: 'grid', gridTemplateColumns: '1fr 150px 62px 82px auto', gap: '10px', alignItems: 'end' }}>
+                            <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '14px', display: 'grid', gridTemplateColumns: tbfPerFoot ? '1fr 150px 76px 62px 82px auto' : '1fr 150px 62px 82px auto', gap: '10px', alignItems: 'end' }}>
                                 <div>
                                     <span style={lbl}>To Be Finished item # — raw part, before the “/”</span>
                                     <ItemSelect value={tbfItemId} onChange={setTbfItemId} items={rawItems} placeholder="Search raw item #…" />
@@ -1769,9 +1787,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                             .map(f => <option key={f.code} value={f.code}>{f.code}{f.name && f.name !== f.code ? ` — ${f.name}` : ''}{f.outsourced ? ' · outsourced' : ''}</option>)}
                                     </select>
                                 </div>
-                                <div><span style={lbl}>Qty</span><input type="number" min="1" value={tbfQty} onChange={e => setTbfQty(e.target.value)} style={qtyInp} /></div>
+                                {tbfPerFoot && (
+                                    <div>
+                                        <span style={{ ...lbl, color: 'var(--brass)' }}>Ft / piece</span>
+                                        <input type="number" min="0" step="0.5" value={tbfFeet} onChange={e => setTbfFeet(e.target.value)} placeholder="ft" style={{ ...qtyInp, width: '72px' }} title="Sold by the FOOT: the cut length in feet for EACH piece. Billing = pieces × feet × $/ft; the floor makes pieces at this cut." />
+                                    </div>
+                                )}
+                                <div><span style={lbl}>{tbfPerFoot ? 'Pieces' : 'Qty'}</span><input type="number" min="1" value={tbfQty} onChange={e => setTbfQty(e.target.value)} style={qtyInp} /></div>
                                 <div>
-                                    <span style={lbl}>Price</span>
+                                    <span style={lbl}>{tbfPerFoot ? '$ / ft' : 'Price'}</span>
                                     <input type="number" min="0" step="0.01" value={tbfPrice} onChange={e => setTbfPrice(e.target.value)} placeholder="—" style={{ ...qtyInp, width: '82px', textAlign: 'right' }} />
                                 </div>
                                 <button onClick={addToBeFinished} style={btn('var(--ink)', '#fff')}>Add</button>

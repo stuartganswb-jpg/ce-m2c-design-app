@@ -128,11 +128,13 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                             {/* Sold by the pack → bill in packs ("2 × 7 PACK"), with the each count
                                 underneath so the customer can reconcile against the shipment. */}
                             <td style={{ textAlign: 'center', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>
-                                {l.packs ? <>{l.packs} × {l.packUom}<div style={{ fontSize: '9px', color: '#8a857c' }}>{l.qty} ea</div></> : l.qty}
+                                {/* Per-foot: pieces on the line, the cut + billed feet underneath. */}
+                                {l.perFoot ? <>{l.qty}<div style={{ fontSize: '9px', color: '#8a857c' }}>× {l.feetPer} ft = {l.billedFeet} ft</div></>
+                                    : l.packs ? <>{l.packs} × {l.packUom}<div style={{ fontSize: '9px', color: '#8a857c' }}>{l.qty} ea</div></> : l.qty}
                             </td>
                             {/* Per-EACH rate; pack lines say so, so 2 x 7 PACK at $2.60/ea reconciles. */}
                             <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>
-                                {l.rate != null ? <>{`$${Number(l.rate).toFixed(2)}`}{l.packs ? <span style={{ fontSize: '9px', color: '#8a857c' }}>/ea</span> : null}</>
+                                {l.rate != null ? <>{`$${Number(l.rate).toFixed(2)}`}{l.perFoot ? <span style={{ fontSize: '9px', color: '#8a857c' }}>/ft</span> : l.packs ? <span style={{ fontSize: '9px', color: '#8a857c' }}>/ea</span> : null}</>
                                     : (l.total != null && Number(l.qty) > 0 ? `$${(l.total / Number(l.qty)).toFixed(2)}` : '—')}
                             </td>
                             <td style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>{l.total != null ? `$${l.total.toFixed(2)}` : '—'}</td>

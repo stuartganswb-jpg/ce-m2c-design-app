@@ -135,7 +135,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         if (j.buy) {
             return {
                 ...j, finishedErp: erp,
-                plan: { erp, exploded: false, lines: [{ legacyErpId: erp, partName: j.part.itemName || '', quantity: j.qty }] },
+                // buyQty: a per-foot line buys FEET (pieces × cut) — the vendor and NetSuite both
+                // count that item in feet; production still counts pieces.
+                plan: { erp, exploded: false, lines: [{ legacyErpId: erp, partName: j.part.itemName || '', quantity: j.buyQty || j.qty }] },
             };
         }
         const finishedErp = `${erp}/${j.finish}`;
