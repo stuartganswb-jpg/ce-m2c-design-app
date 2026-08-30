@@ -198,10 +198,20 @@ function HQ() {
       localStorage.setItem('hq_vision_reopen', JSON.stringify(s));
       setActiveTab('9. Client Vision');
     };
+    // Reopen an Order Entry SALES ORDER for editing (CRM ✎ Edit, 2026-08-30): tab 7 rebuilds
+    // the cart from the SO's lines; pushing the edited cart supersedes (closes) the original.
+    const handleReopenSo = (e) => {
+      const soId = e.detail?.soId;
+      if (!soId) return;
+      localStorage.setItem('hq_reopen_qs_so', JSON.stringify({ soId, at: Date.now() }));
+      setActiveTab('7. Quick Ship');
+    };
+    window.addEventListener('REOPEN_SO_IN_ORDERENTRY', handleReopenSo);
     window.addEventListener('NAVIGATE_TAB', handleTabNavigation);
     window.addEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
     window.addEventListener('REOPEN_QUOTE_IN_VISION', handleReopenVision);
     return () => {
+      window.removeEventListener('REOPEN_SO_IN_ORDERENTRY', handleReopenSo);
       window.removeEventListener('NAVIGATE_TAB', handleTabNavigation);
       window.removeEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
       window.removeEventListener('REOPEN_QUOTE_IN_VISION', handleReopenVision);
@@ -435,7 +445,7 @@ function HQ() {
             {activeTab === '8. CPQ Configurator' && <CPQTab currentUser={user.name} activeBrand={activeBrand.id} cart={globalCart} setCart={setGlobalCart} isSuperAdmin={user?.superAdmin === true || safeUserRole === 'superadmin'} />}
             {activeTab === '9. Client Vision' && <ClientVisionTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '9.5 UPS Shipping' && <UPSShippingCalculator currentUser={user.name} activeBrand={activeBrand.id} />}
-            {activeTab === '10. External Co-Op' && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} />}
+            {activeTab === '10. External Co-Op' && <ExternalCoopTab currentUser={user.name} activeBrand={activeBrand.id} userRole={safeUserRole} />}
             {activeTab === '10.5 Project Mgmt' && <ProjectManagementTab currentUser={user.name} activeBrand={activeBrand.id} />}
             {activeTab === '10.7 OS Comms' && <SharedMessaging currentUser={user.name} currentApp="HQ" writeLog={logHqAction} />}
             {activeTab === '11. System Admin' && <AdminTab currentUser={user.name} activeBrand={activeBrand.id} perms={perms} setPerms={setPerms} TABS={TABS} writeLog={logHqAction} />}

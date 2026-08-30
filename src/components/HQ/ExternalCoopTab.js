@@ -15,7 +15,7 @@ import { reopenQuoteInCpq, reopenQuoteInVision } from '../Shared/reopenQuote';
 import { PACK_PREF_FIELDS, packSizeOf, packLabelOf } from '../Shared/quickShipUom';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
-import { softDeleteOrder } from '../Shared/orderLifecycle';
+import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 
 const printStyles = `
@@ -602,7 +602,50 @@ const PortalAccessPanel = ({ customer, activeBrand }) => {
   );
 };
 
-const ExternalCoopTab = ({ currentUser, activeBrand }) => {
+const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
+  // ── ORDER ENTRY SO: EDIT / CLOSE FROM THE CRM (Stuart 2026-08-30: "no way to edit or close a
+  // sales order … once a work order is issued it should block us and bring up an additional
+  // warning that work orders exist and only manager can close at this point") ──────────────────
+  const OE_MANAGER_ROLES = ['admin', 'superadmin', 'manager', 'executive'];
+  const oeIsManager = OE_MANAGER_ROLES.includes(String(userRole || '').toLowerCase());
+  const oeLiveWosOf = async (so) => {
+      const snap = await getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', '==', so.id)));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .filter(w => !w.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(w.status || '')));
+  };
+  const oeWoList = (wos) => wos.slice(0, 8).map(w => `• ${w.nsWoTran || w.woDisplayId || w.id} — ${w.rootItem || w.erpId || ''} ×${w.totalParts || w.qty || 0} (${w.status}${w.pushedToFinishing ? ', on the floor' : ''})`).join('\n') + (wos.length > 8 ? `\n…and ${wos.length - 8} more` : '');
+  const editOeSo = async (so) => {
+      const wos = await oeLiveWosOf(so);
+      if (wos.length) {
+          return alert(`⛔ EDIT BLOCKED — ${wos.length} work order(s) already exist for SO ${so.soId || so.id}:\n\n${oeWoList(wos)}\n\nEditing an order mid-production would detach the paper from the work. A manager can ✕ Close it here (which closes every work order and floor document too), then re-enter it.`);
+      }
+      window.dispatchEvent(new CustomEvent('REOPEN_SO_IN_ORDERENTRY', { detail: { soId: so.id } }));
+  };
+  const closeOeSo = async (so) => {
+      const wos = await oeLiveWosOf(so);
+      if (wos.length) {
+          if (!oeIsManager) return alert(`⛔ ${wos.length} WORK ORDER(S) EXIST for SO ${so.soId || so.id}:\n\n${oeWoList(wos)}\n\nOnly a MANAGER can close a sales order once work orders are issued. Ask a manager, or close the work orders from RTG first.`);
+          if (!window.confirm(`⚠ MANAGER CLOSE — ${wos.length} WORK ORDER(S) EXIST\n\nSO ${so.soId || so.id} · ${so.customer || ''}\n${oeWoList(wos)}\n\nClosing cascades: every work order closes EVERYWHERE (RTG, finishing floor, shop, WMS demands). Documents are kept.\n\nNetSuite: the sales order must be closed/cancelled IN NETSUITE by hand — the app cannot do it.\n\nProceed?`)) return;
+          for (const wo of wos) {
+              try {
+                  await closeOrderEverywhere({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                      { order: wo, kind: 'stock', by: currentUser || '', from: 'CRM_SO_CLOSE', reason: `SO ${so.soId || so.id} closed from CRM` });
+              } catch (e) { console.warn('WO cascade close failed', wo.id, e); }
+          }
+      } else {
+          if (!window.confirm(`✕ Close sales order ${so.soId || so.id}?\n\nNo work orders exist — nothing on the floor is affected. If the SO posted to NetSuite it must be closed/cancelled there by hand.`)) return;
+      }
+      try {
+          await deleteLinkedDemands({ db, doc, deleteDoc, getDocs, query, collection, where }, so, { includePlating: true });
+      } catch (e) { console.warn('linked demand cleanup failed', e); }
+      await updateDoc(doc(db, 'hq_sales_orders', so.id), {
+          status: 'Closed', closedAt: Date.now(), closedBy: currentUser || '', closedFrom: 'CRM',
+          ...(wos.length ? { closeReason: `manager close with ${wos.length} open work order(s)` } : { closeReason: 'closed from CRM (no work orders)' }),
+      });
+      alert(`✕ SO ${so.soId || so.id} closed${wos.length ? ` — ${wos.length} work order(s) cascaded (floor, shop, WMS demands)` : ''}.${so.nsInternalId ? '\n\n⚠ Close/cancel it in NETSUITE too — the app cannot.' : ''}`);
+  };
+
+
   const [activeSubTab, setActiveSubTab] = useState('CUSTOMERS'); 
   const [inceptionJobs, setInceptionJobs] = useState([]);
   const [configuredJobs, setConfiguredJobs] = useState([]);
@@ -1802,6 +1845,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand }) => {
                                                           <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid var(--line)', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{state}</span>
                                                           {fulfilled && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid', borderColor: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', color: o.nsInvoiceNo ? '#3a7d44' : 'var(--brass)', whiteSpace: 'nowrap' }}>{o.nsInvoiceNo ? `INV ${o.nsInvoiceNo}` : 'NO NS INV #'}</span>}
                                                           <button onClick={() => setQsInvoice(o)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>{fulfilled ? '🧾 Invoice' : '📄 Order'}</button>
+                                                          {!fulfilled && String(o.status || '') !== 'Closed' && (
+                                                              <>
+                                                                  <button onClick={() => editOeSo(o)} title="Reopen this order's lines in Order Entry (tab 7) for editing — pushing the edited cart supersedes this SO. Blocked once work orders exist." style={{ padding: '8px 12px', background: 'transparent', color: 'var(--brass)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>✎ Edit</button>
+                                                                  <button onClick={() => closeOeSo(o)} title="Close this sales order. If work orders exist, a manager confirm cascades the close to every work order, floor document and WMS demand." style={{ padding: '8px 12px', background: 'transparent', color: '#d9534f', border: '1px solid #d9534f', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>✕ Close</button>
+                                                              </>
+                                                          )}
                                                       </div>
                                                       );
                                                   })}

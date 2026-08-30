@@ -366,6 +366,47 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // then the SO pushes exactly like a counter-built cart (rates re-resolve LIVE via pricedCart,
     // so a price that changed since the customer submitted resolves to today's truth).
     const [portalReqs, setPortalReqs] = useState([]);
+    // ── EDIT AN EXISTING SO (CRM ✎ Edit, Stuart 2026-08-30) ─────────────────────────────────
+    // The CRM hands over an SO id (only when NO work orders exist — the CRM gate enforces it);
+    // the cart rebuilds from the SO's lines, rates re-resolve LIVE, and pushing the edited cart
+    // SUPERSEDES the original: the old SO closes with a pointer to the new one.
+    const [editingSo, setEditingSo] = useState(null);
+    useEffect(() => {
+        if (!allItems.length) return;
+        let handoff = null;
+        try { handoff = JSON.parse(localStorage.getItem('hq_reopen_qs_so') || 'null'); } catch (e) { handoff = null; }
+        if (!handoff || !handoff.soId) return;
+        localStorage.removeItem('hq_reopen_qs_so');
+        (async () => {
+            try {
+                const snap = await getDoc(doc(db, 'hq_sales_orders', handoff.soId));
+                if (!snap.exists()) return alert('That sales order no longer exists.');
+                const so = { id: snap.id, ...snap.data() };
+                setCustomerId(so.customerId || '');
+                setCustSearch(so.customer ? `${so.customer} (${so.customerId || ''})` : '');
+                setJobName(so.jobName || '');
+                setCart((so.lines || []).map((l, i) => {
+                    const erp = String(l.erp || '').toUpperCase();
+                    const it = allItems.find(x => erpOf(x) === erp) || null;
+                    return {
+                        key: `${erp}-${Date.now()}-${i}`,
+                        itemId: it?.itemId || it?.id || '', erp, nsId: it ? nsIdOf(it) : '',
+                        name: l.name || it?.itemName || erp,
+                        aliasErp: l.aliasErp || '', aliasItemId: null,
+                        qty: Math.max(1, parseInt(l.packs != null && l.packUom ? l.packs : l.qty) || 1),
+                        note: l.note || '',
+                        bin: l.bin || it?.manufacturingSpecs?.homeBin || '',
+                        packUom: l.packUom || '', packSize: l.packSize || 1,
+                        rateOverride: null, kitKey: null, kitName: null, kitBrand: null, kitFinish: '',
+                        ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}),
+                    };
+                }));
+                setEditingSo({ id: so.id, soId: so.soId || so.id, customer: so.customer || '' });
+                addLog(`✎ Editing SO ${so.soId || so.id} — pushing this cart SUPERSEDES the original (it closes with a pointer here).`, 'warn');
+            } catch (e) { alert('Could not load the sales order for editing: ' + (e.message || e)); }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allItems.length]);
     useEffect(() => {
         if (!activeBrand) { setPortalReqs([]); return; }
         const unsub = onSnapshot(query(collection(db, 'jobs'), where('brandId', '==', activeBrand), where('status', '==', 'PORTAL_REQUEST')),
@@ -1417,6 +1458,19 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             });
             addLog(`✅ ${hqId} recorded and queued to NetSuite (outbox ${obId}) — enters the WMS Stock tab when NetSuite accepts.${tbfMade.length ? ` To-be-finished lines routed: in-house → RTG work orders (released once NetSuite accepts the SO); outsourced → WMS Plating.` : ''}`, 'success');
 
+            // SUPERSEDE (CRM ✎ Edit): the edited cart just became the real order — the original
+            // closes with a pointer, so two live SOs can never both claim the same sale.
+            if (editingSo) {
+                try {
+                    await updateDoc(doc(db, 'hq_sales_orders', editingSo.id), {
+                        status: 'Closed', closedAt: Date.now(), closedBy: currentUser || '', closedFrom: 'ORDER_ENTRY_EDIT',
+                        closeReason: `superseded by ${hqId}`, supersededBy: hqId,
+                    });
+                    addLog(`✎ Original SO ${editingSo.soId} closed — superseded by ${hqId}.${editingSo.soId && String(editingSo.soId).match(/^\d/) ? ' ⚠ Close/cancel the OLD SO in NetSuite too.' : ''}`, 'warn');
+                } catch (e) { addLog(`⚠ Could not close the superseded SO ${editingSo.soId}: ${e.message || e} — close it from the CRM.`, 'error'); }
+                setEditingSo(null);
+            }
+
             setCart([]); setJobName('');
         } catch (e) {
             console.error('Quick Ship push error', e);
@@ -1469,6 +1523,17 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     Flat lines → NetSuite Sales Order<br />No BOM build · {stocked.length} stocked items
                 </div>
             </div>
+
+            {/* ✎ EDITING AN EXISTING SO (CRM handoff) — pushing supersedes the original */}
+            {editingSo && (
+                <div style={{ ...card, padding: '14px 24px', border: '2px solid var(--brass)', background: '#fdf8ef', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', letterSpacing: '.04em' }}>
+                        ✎ EDITING SO <b>{editingSo.soId}</b> · {editingSo.customer} — pushing this cart creates the corrected order and CLOSES the original (superseded, pointer kept).
+                    </span>
+                    <button onClick={() => { setEditingSo(null); setCart([]); setJobName(''); addLog('✎ Edit cancelled — original SO untouched.', 'info'); }}
+                        style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Cancel edit</button>
+                </div>
+            )}
 
             {/* PORTAL QUOTE REQUESTS — customer-built stock quotes awaiting review */}
             {portalReqs.length > 0 && (
