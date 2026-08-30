@@ -48,9 +48,29 @@ export function isDisplayOnlyLine(line) {
 // and only the MONEY documents — the sales order, the invoice, the quote — drop the hidden ones.
 export const MONEY_DOC_TYPES = ['SALES_ORDER', 'INVOICE', 'QUOTE'];
 
-/** Lines a customer may read on a money document: no BOM-only parts, no shop-only rows. */
-export const customerDocLines = (lines = [], docType = '') => {
-    const real = (lines || []).filter(l => !isDisplayOnlyLine(l));
+// ── THE FINISH IS SAID ON EVERY LINE (Stuart 2026-08-30: "the sales order, the packing slip …
+// everywhere they do not show the finish, the finish code needs to be applied to each line") ────
+// The line's own stamp wins (per-part exceptions); the configuration-level finishLabel covers
+// lines saved before per-line stamping. Headers, fees, discounts and kit-included rows carry
+// nothing — a fee has no finish, and stamping the fallback on it would be a lie.
+export const cartFinishLabelOf = (cpqData) =>
+    ((cpqData && cpqData.cartItems) || []).map(ci => ci && String(ci.finishLabel || '').trim()).find(Boolean) || '';
+
+const withLineFinish = (l, fallback) => {
+    if (!l || l.isHeader || l.isDiscount || l.isNetLine || l.isFee || l.inKit) return l;
+    const fin = l.finishLabel || l.finishCode || fallback || '';
+    if (!fin || String(l.name || '').includes(fin)) return l;
+    return { ...l, name: `${l.name} — Finish: ${fin}`, finishText: fin };
+};
+
+/**
+ * Lines a customer may read on a money document: no BOM-only parts, no shop-only rows.
+ * `finishFallback` (optional): the configuration-level finish label, stamped onto physical lines
+ * that carry no per-line finish of their own — so EVERY document says what each line is finished
+ * in, from one place, and no two forms can disagree about it.
+ */
+export const customerDocLines = (lines = [], docType = '', finishFallback = '') => {
+    const real = (lines || []).filter(l => !isDisplayOnlyLine(l)).map(l => withLineFinish(l, finishFallback));
     if (!MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase())) return real;
     // ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25) ──────────────
     // The engine pins a per-foot line's qty at 1 (one pole on the router) and multiplies the money

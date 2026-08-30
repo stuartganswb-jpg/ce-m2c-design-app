@@ -3,7 +3,7 @@ import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import { db } from '../../firebase';
 import { collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, deleteDoc, onSnapshot, orderBy, limit, addDoc, serverTimestamp } from 'firebase/firestore';
-import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines} from '../Shared/lineClassification';
+import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
@@ -2022,17 +2022,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const custName = job?.customer?.name || (typeof order?.customer === 'string' ? order.customer : '') || '';
         // ⚠ THE MONEY DOCUMENTS DROP BOM-ONLY PARTS (Stuart 2026-08-22: "hidden go to all shop
         // doc's just not customer docs"). A packing slip keeps them — the standoff is in the box.
-        // The document SAYS each line's finish (Stuart 2026-08-30, SO60104/05: the printed SO was
-        // silent about the finish). Per-line finishLabel/finishCode wins; the configuration-level
-        // finishLabel on the cart item covers older lines that never stamped one.
-        const cartFinish = (job?.cpqData?.cartItems || []).map(ci => ci && String(ci.finishLabel || '').trim()).find(Boolean) || '';
-        const lines = customerDocLines(job?.cpqData?.breakdown || [], formType).map(l => ({
+        // The finish is stamped into each line's name by customerDocLines itself (per-line stamp
+        // first, configuration-level fallback) — ONE place, so no form can disagree.
+        const lines = customerDocLines(job?.cpqData?.breakdown || [], formType, cartFinishLabelOf(job?.cpqData)).map(l => ({
             item: l.legacyErpId || l.partId || '',
-            desc: (() => {
-                const base = String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim();
-                const fin = l.finishLabel || l.finishCode || (l.isFee || l.hidden || l.inKit ? '' : cartFinish);
-                return fin ? `${base} — Finish: ${fin}` : base;
-            })(),
+            desc: String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim(),
             qty: l.qty,
             cut: l.cutLength || null,
             price: (l.price != null) ? l.price : ((l.total != null && l.qty) ? l.total / l.qty : 0),
