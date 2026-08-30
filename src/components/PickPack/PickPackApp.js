@@ -102,10 +102,12 @@ const convertRestletConfigured = () => !!NS_CONVERT_RESTLET.scriptId;
 
 // Build a phosphated /P assembly via the RESTlet: it consumes the bin-tracked raw from `bin` and
 // produces the /P (bin-untracked). Returns { success, id, componentsDetailed } or throws.
-const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, toBin, memo, diag, mode }) => {
+const postConvertBuild = async ({ itemId, quantity, subsidiary, location, bin, toBin, memo, diag, mode, workOrderId }) => {
     if (!convertRestletConfigured()) throw new Error("The Convert RESTlet isn't configured yet. Deploy netsuite/ce_convert_build_restlet.js in NetSuite and give me its Script + Deploy ids.");
     const url = `${NS_RESTLET_HOST}/app/site/hosting/restlet.nl?script=${NS_CONVERT_RESTLET.scriptId}&deploy=${NS_CONVERT_RESTLET.deployId}`;
-    const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo, ...(diag ? { diag: true } : {}), ...(mode ? { mode } : {}) } });
+    // workOrderId (2026-08-30): the demand's open NetSuite /P work order — the build posts AGAINST
+    // it (createdfrom), consuming its commitment, instead of a standalone build leaving it open.
+    const r = await nsProxyFetch({ targetUrl: url, method: 'POST', payload: { itemId, quantity, subsidiary, location, bin, toBin, memo, ...(diag ? { diag: true } : {}), ...(mode ? { mode } : {}), ...(workOrderId ? { workOrderId: String(workOrderId) } : {}) } });
     const b = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
     if (b && b.success === false) {
@@ -1711,7 +1713,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const consumeBin = String(srcBin).trim().toUpperCase();
             const receiveBin = String(destBin || '').trim().toUpperCase();
             if (!receiveBin) { setIsSyncing(false); return alert(`${erpOf(target)} has no destination bin — set its home bin (or use the Convert cart, which takes a put-away bin per line). The /P is bin-tracked, so NetSuite needs a receive bin.`); }
-            const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: nsMemo(memoText) });
+            const demandWo = convertDemandId ? (convertDemands.find(d => d.id === convertDemandId) || {}).nsWoId : null;
+            const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: nsMemo(memoText), workOrderId: demandWo || undefined });
 
             alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}, received into ${receiveBin}).`);
             writeLog(`Assembly Build (phosphate): +${qty} ${erpOf(target)} / -${qty} ${base.erpId}.${convertMemo.trim() ? ` Memo: ${convertMemo.trim()}` : ''}`, 'wms');
@@ -1950,7 +1953,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // Build via the RESTlet — it sources the BOM and sets the raw component's consume bin server-side,
             // and receives the finished /P into the operator's put-away bin. Raw is consumed from the CART bin.
             const consumeBin = (convBatch.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
-            await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: newBin, memo: nsMemo(`Phos convert ${convBatch.cartBin || ''}`) });
+            const lineDemandWo = line.demandId ? (convertDemands.find(d => d.id === line.demandId) || {}).nsWoId : null;
+            await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: newBin, memo: nsMemo(`Phos convert ${convBatch.cartBin || ''}`), workOrderId: lineDemandWo || undefined });
             const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
             // The HQ to-do is satisfied only now, once the /P actually exists in NetSuite.
@@ -4126,7 +4130,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         return (
                                             <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderBottom: `1px solid ${theme.line}`, paddingBottom: '8px' }}>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
-                                                    {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs{d.woNum ? ` · ${d.woNum}` : ''}{d.finWoId ? ` · for ${d.finWoErpId || finRefOf(d.finWoId)}` : ''}{d.createdBy ? ` · ${d.createdBy}` : ''}
+                                                    {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs{d.woNum ? ` · ${d.woNum}` : ''}{d.finWoId ? ` · for ${d.finWoErpId || finRefOf(d.finWoId)}` : ''}{d.nsWoTran ? <span style={{ color: '#3a7d33' }}>{` · NS WO ${d.nsWoTran}`}</span> : ''}{d.createdBy ? ` · ${d.createdBy}` : ''}
                                                     {rawPart && <span style={{ color: theme.inkSoft }}> · raw on hand {rawPart.onHand}</span>}
                                                     {onCart && <span style={{ color: '#2f7d3b' }}> · ON CART — convert it above</span>}
                                                 </div>

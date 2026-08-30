@@ -26,6 +26,7 @@ import { planFinishedRun, fetchAvailability, stockCheckReport, isAssemblyPart } 
 import { millBaseOf } from './finishRouting.js';
 import { fetchAvailabilityUnits } from './oeReviewPlan.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
+import { queueNsAssemblyWorkOrder } from './nsWorkOrder';
 // The firebase imports serve only the executor/gate-clearer at the bottom — the planners above
 // never touch them, so node tests can import the planning half without dragging firebase in.
 import { db } from '../../firebase';
@@ -199,6 +200,28 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             });
             convertDemandIds.push(demandId);
             made.push(`⇄ CONVERT ${a.qty} × ${a.base} → ${a.target} (WMS Convert tab)`);
+            // THE NETSUITE ANCHOR (Stuart 2026-08-30: "RTG is king, anchored to NetSuite" — the
+            // /P assembly IS the work-order vehicle for a raw-consuming convert). An open NS WO
+            // is queued for the /P; the number stamps back onto the DEMAND, and the WMS convert
+            // then builds AGAINST it (createdfrom) so NetSuite closes it as the build posts.
+            // No NS assembly for the /P → said out loud, never guessed.
+            if (targetPart && targetPart.netSuiteInternalId &&
+                (targetPart.partClass === 'Assembly' || targetPart.partClass === 'Master Assembly' || targetPart.netSuiteRecordType === 'assemblyitem')) {
+                try {
+                    await queueNsAssemblyWorkOrder({
+                        brandId, assemblyInternalId: String(targetPart.netSuiteInternalId),
+                        erp: a.target, qty: a.qty, reqDate,
+                        memo: `${soRef ? `SO ${soRef} · ` : ''}convert ${a.base} → ${a.target}${finWoErpId ? ` · for ${finWoErpId}` : ''}`,
+                        writeBacks: [{ collection: 'convert_demand', docId: demandId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                        sourceApp: source || 'precheck', createdBy,
+                    });
+                    made.push(`📤 NS work order queued for ${a.target} ×${a.qty} — the convert builds against it`);
+                } catch (nsErr) {
+                    made.push(`⚠ ${a.target}: NetSuite WO queue failed (${nsErr.message || nsErr}) — convert will post standalone`);
+                }
+            } else {
+                made.push(`⚠ ${a.target} is not a synced NetSuite ASSEMBLY — no work-order anchor; convert posts standalone (fix the item with Eric)`);
+            }
         } else if (a.kind === 'COVERED') {
             made.push(`✔ ${a.qty} × ${a.code} already covered by ${a.coveredBy} on order (open PO/WO in NetSuite) — nothing raised`);
         } else if (a.kind === 'BUY_NOTE') {

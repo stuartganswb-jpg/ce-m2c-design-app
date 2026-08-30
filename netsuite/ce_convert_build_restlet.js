@@ -19,10 +19,21 @@
  *        https://<ACCT>.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=<SCRIPT_INT_ID>&deploy=<DEPLOY_ID>
  *      Give me those two ids and I'll point the app at it.
  *
- * REQUEST body (JSON): { itemId, quantity, subsidiary, location, bin, toBin, [binId], [statusId], [memo], [diag] }
+ * REQUEST body (JSON): { itemId, quantity, subsidiary, location, bin, toBin, [binId], [statusId], [memo], [diag], [workOrderId] }
  *   mode:'unbuild' takes an assembly APART instead: `bin` is where the assemblies come from and
  *   `toBin` is where the returned components are put away (WMS Ring Packs "break apart").
+ *   workOrderId (2026-08-30, "RTG is king, anchored to NetSuite"): the internal id of an OPEN
+ *     NetSuite WORK ORDER on the same assembly. When present the build is TRANSFORMED FROM that
+ *     work order (createdfrom), so the WO's commitment is consumed and NetSuite closes it as its
+ *     quantity completes — instead of a standalone build leaving the WO open forever. The item is
+ *     verified against the WO's assembly; a mismatch or an unbuildable WO fails LOUDLY (no silent
+ *     fallback to a standalone build — retry without workOrderId only as a deliberate choice).
  * RESPONSE: { success:true, id:<recordId>, componentsDetailed:n } | { success:false, error, name }
+ *
+ * UPDATE DEPLOY (this revision): Documents -> Files -> File Cabinet -> SuiteScripts -> find
+ * ce_convert_build_restlet.js -> Edit -> upload this file as the new version. The existing script
+ * record (CE Convert Build, script 2848 / customdeploy1) picks the new content up immediately —
+ * no new script record, no new deployment.
  */
 define(['N/record', 'N/query'], function (record, query) {
 
@@ -178,7 +189,33 @@ define(['N/record', 'N/query'], function (record, query) {
         var step = 'init';
         var b = null;
         var diag = [];
+        var fromWo = body && body.workOrderId ? parseInt(body.workOrderId, 10) : null;
         try {
+            if (fromWo) {
+                // ── BUILD AGAINST THE OPEN WORK ORDER (createdfrom) ──────────────────────────
+                // The WO carries assembly/subsidiary/location; the transform sources everything.
+                // Partial quantities are fine — the WO stays open for the remainder and NetSuite
+                // closes it when the built total reaches the ordered quantity.
+                step = 'transform-wo';
+                try {
+                    b = record.transform({ fromType: record.Type.WORK_ORDER, fromId: fromWo, toType: record.Type.ASSEMBLY_BUILD, isDynamic: true });
+                } catch (twErr) {
+                    return { success: false, step: step, workOrderId: fromWo,
+                        error: 'Work order ' + fromWo + ' could not be transformed to a build (' + ((twErr && twErr.message) || twErr) + '). It may be closed, fully built, or not yet released. Fix the work order — or retry WITHOUT workOrderId to post a standalone build (that leaves the WO open and must be a deliberate choice).',
+                        name: (twErr && twErr.name) || '' };
+                }
+                // Guard: the WO must be for the assembly the app thinks it is converting.
+                step = 'verify-item';
+                var woItem = String(b.getValue({ fieldId: 'item' }) || '');
+                if (body.itemId && woItem && String(parseInt(body.itemId, 10)) !== woItem) {
+                    return { success: false, step: step, workOrderId: fromWo,
+                        error: 'Work order ' + fromWo + ' builds item ' + woItem + ', not ' + body.itemId + ' — wrong work order for this convert.', name: 'WO_ITEM_MISMATCH' };
+                }
+                step = 'quantity';
+                b.setValue({ fieldId: 'quantity', value: Number(body.quantity) });
+                if (body.memo) { step = 'memo'; try { b.setValue({ fieldId: 'memo', value: String(body.memo).slice(0, 40) }); } catch (mErr) { /* best-effort */ } }
+                diag.push({ createdFromWorkOrder: fromWo });
+            } else {
             step = 'create';
             b = record.create({ type: record.Type.ASSEMBLY_BUILD, isDynamic: true });
 
@@ -205,8 +242,9 @@ define(['N/record', 'N/query'], function (record, query) {
             step = 'quantity';
             b.setValue({ fieldId: 'quantity', value: Number(body.quantity) });
             if (body.memo) { step = 'memo'; b.setValue({ fieldId: 'memo', value: String(body.memo).slice(0, 40) }); }
+            }
 
-            // Component list auto-sources from the BOM once item + quantity are set. Set the consume-from
+            // Component list auto-sources from the BOM (or the work order) once quantity is set. Set the consume-from
             // bin on every bin/lot-tracked component (the raw). The `inventorydetailreq` flag is UNRELIABLE
             // in dynamic mode right after sourcing, and the per-line `quantity` field can read 0 before the
             // line is touched -- either made the old code skip line 1, so the raw had no inventory detail and
@@ -338,7 +376,7 @@ define(['N/record', 'N/query'], function (record, query) {
 
             step = 'save';
             var id = b.save({ enableSourcing: true, ignoreMandatoryFields: false });
-            return { success: true, id: id, componentsDetailed: detailed, diag: diag };
+            return { success: true, id: id, componentsDetailed: detailed, workOrderId: fromWo || null, diag: diag };
         } catch (e) {
             // Capture the record's context at the point of failure so a bad subsidiary/location/item is
             // obvious from the app's error alert without needing the NetSuite Execution Log.
