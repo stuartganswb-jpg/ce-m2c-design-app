@@ -2047,16 +2047,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         // operator sees the whole batch's stock/units/routing/NS plan before anything writes.
         const reviewable = [], direct = [];
         work.forEach(w => {
-            const part = partByKey['erp:' + String(w.l.erp || '').toUpperCase()];
+            const { part } = resolveOePart(String(w.l.erp || '').toUpperCase());
             const finish = oeLineFinish(w.l);
             const specs = part?.manufacturingSpecs || {};
             const isBuy = !isOutsourcedFinishCode(finish || '') && specs.isInHouse === false && !!String(specs.vendorName || '').trim() && sourcingOf(specs) !== SOURCING.BOTH;
-            if (part && finish && !isOutsourcedFinishCode(finish) && !isBuy) reviewable.push(w); else direct.push(w);
+            if (part && finish && !isOutsourcedFinishCode(finish)) reviewable.push({ ...w, buy: isBuy }); else direct.push(w);
         });
         for (const w of direct) {
             // A BOTH-sourced line whose operator picks "make" defers into the same batch review.
             const r = await generateOeLineOrder(w.so, w.l, { collectReview: true });
-            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line });
+            if (r && r.review) reviewable.push({ so: r.review.so, l: r.review.line, buy: !!r.review.buy });
         }
         if (reviewable.length) await openOeReviewForLines(reviewable);
     };
@@ -2148,21 +2148,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             let wantPo = specs.isInHouse === false && !!vendorName;
             if (sourcingOf(specs) === SOURCING.BOTH) wantPo = window.confirm(`${erp} is flagged ⚖ BOTH (make and buy).\n\nOK = vendor PO to ${vendorName || 'its vendor'} · Cancel = finishing work order.`);
             if (wantPo) {
-                const vendors = await loadNsVendors();
-                const rec = resolveVendorRec(vendors, vendorName) || resolveVendorByNsId(vendors, specs.vendorNsId || consensusVendorNsId([part]));
-                if (!rec) { alert(`No NetSuite-synced vendor matches "${vendorName || '(none stored)'}" — sync vendors (11.1) or fix the item's vendor, then retry.`); setGenBusy(false); return; }
-                let poId; try { poId = await reserveShortNo('PO'); } catch (e) { poId = `PO-OE-${Date.now().toString().slice(-6)}`; }
-                await setDoc(doc(db, 'hq_purchase_orders', poId), {
-                    id: poId, poId, brand: activeBrand, status: 'Approved',
-                    vendor: rec.name || vendorName, nsVendorId: String(rec.id || '').replace(/^VEND-/, ''), vendorCrmId: rec.id,
-                    soAppId: so.id, soRef: so.soId || so.id, customer: so.customer || '',
-                    items: [{ itemId: erp, nsItemId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null, vendorPart: specs.vendorId || 'N/A', quantity: qty, rate: poRateOf(part), description: `${specs.purchaseDescription || part.itemName || erp} — Order Entry ${so.soId || so.id}${prodNote ? ` · ${prodNote}` : ''}` }],
-                    reqDate: needBy || new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''}`,
-                    createdAt: Date.now(), createdBy: currentUser || '',
-                });
-                addLog(`✅ PO ${poId} → ${rec.name} · ${qty} × ${erp} (linked to ${so.soId || so.id}) — push to NetSuite from RTG.`, 'success');
-                await loadOeNeeds(); setGenBusy(false); return;
+                // THROUGH THE REVIEW GATE like everything else (Stuart 2026-08-30: this branch
+                // created PO-1013 for a line with plenty already on order — no stock read, no
+                // review). The plan shows avail + on-order; a covered short defaults to skip.
+                setGenBusy(false);
+                if (opts.collectReview) return { review: { so, line, buy: true } };
+                await openOeReviewForLines([{ so, l: line, buy: true }]);
+                return;
             }
             // IN-HOUSE MANUFACTURE → THE REVIEW GATE (Stuart 2026-08-29: "the auto sequence …
             // needs to open a pop up window and show its work — show stock check, let operator
@@ -2183,20 +2175,20 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         try {
             const jobs = [];
             for (let i = 0; i < items.length; i++) {
-                const { so, l } = items[i];
+                const { so, l, buy } = items[i];
                 const erp = String(l.erp || '').toUpperCase();
                 const { part, aliasNote } = resolveOePart(erp);
                 const finish = oeLineFinish(l);
                 if (!part || !finish) continue;
                 let pins = [];
-                if (isAssemblyPart(part)) {
+                if (!buy && isAssemblyPart(part)) {
                     try {
                         const pinsSnap = await getDocs(query(collection(db, 'assembly_pins'), where('assemblyId', '==', part.itemId)));
                         pins = pinsSnap.docs.map(d => d.data());
                         if (!pins.length) addLog(`⚠ ${erp} is an assembly with NO BOM pins — the plan cannot see its components.`, 'warn');
                     } catch (e) { console.warn('pins load failed', e); }
                 }
-                jobs.push({ key: i, so, line: l, part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp });
+                jobs.push({ key: i, so, line: l, part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp, buy: !!buy });
             }
             if (!jobs.length) { setGenBusy(false); return alert('No reviewable lines (missing part or finish).'); }
             const res = await buildOeReviewPlan({ jobs, inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17' });
@@ -2259,6 +2251,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     const k = `${pl.vendorName}|${so.id}`;
                     (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so, lines: [] }).lines.push(pl);
                 });
+                // A BOUGHT line makes no work order — the PO (below) or existing stock/on-order
+                // covers it, exactly as the review showed.
+                if (job.buy) {
+                    if (!poLines.length) addLog(`✔ ${erp} ×${qty} (SO ${so.soId || so.id}) — covered by stock/on-order as reviewed; nothing ordered.`, 'success');
+                    continue;
+                }
                 let gate = {};
                 if (makeup.length) {
                     const exec = await executeMakeupActions({ actions: makeup, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp, createdBy: currentUser || '', inventory: hqParts, source: 'oe-review', reqDate: needBy, dispatchShop: true, soRef: so.soId || so.id, customerName: so.customer || '' });
@@ -3901,7 +3899,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     {j.aliasNote && <span style={{ ...mono9, color: 'var(--brass)', marginLeft: '8px' }}>🔗 {j.aliasNote}</span>}
                                                 </span>
                                                 <span style={{ ...mono9, color: j.nsPlan.flow === 'FLOW2' ? '#3a7d44' : 'var(--brass)' }}>
-                                                    {j.nsPlan.flow === 'FLOW2' ? '🏭 NS WORK ORDER OPENS FOR THE FINISHED ITEM' : 'SO = NETSUITE RECORD (no finished assembly)'}
+                                                    {j.nsPlan.flow === 'FLOW2' ? '🏭 NS WORK ORDER OPENS FOR THE FINISHED ITEM' : j.nsPlan.flow === 'PO' ? '🧾 BOUGHT — VENDOR PO IS THE RECORD' : 'SO = NETSUITE RECORD (no finished assembly)'}
                                                 </span>
                                             </div>
                                             <div style={{ padding: '4px 16px 10px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>{j.nsPlan.note}</div>

@@ -127,8 +127,18 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
     const partOf = (c) => inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(c).toUpperCase()) || null;
 
     // Plan every line first, so ONE availability read covers every pull code + every mill base.
+    // A BOUGHT line (job.buy — Stuart 2026-08-30: the old direct-PO path re-ordered H1-138TRV
+    // with plenty already inbound, no stock read, no review) plans as ONE pull of the item
+    // itself: stock first, on-order coverage on the shortfall, PO only for what remains.
     const planned = jobs.map(j => {
-        const finishedErp = `${String(j.part.legacyErpId || j.part.itemId || '').toUpperCase()}/${j.finish}`;
+        const erp = String(j.part.legacyErpId || j.part.itemId || '').toUpperCase();
+        if (j.buy) {
+            return {
+                ...j, finishedErp: erp,
+                plan: { erp, exploded: false, lines: [{ legacyErpId: erp, partName: j.part.itemName || '', quantity: j.qty }] },
+            };
+        }
+        const finishedErp = `${erp}/${j.finish}`;
         const plan = planFinishedRun({ part: { ...j.part, legacyErpId: finishedErp }, qty: j.qty, pins: j.pins || [], inventory });
         const lines = plan.exploded ? plan.lines : plan.lines.filter(l => String(l.legacyErpId || '').toUpperCase() !== plan.erp);
         return { ...j, finishedErp, plan: { ...plan, lines } };
@@ -194,7 +204,14 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
                 noStockRecord: !(code in avail),
                 actions: [],
             };
-            if (short > 0) {
+            if (short > 0 && p.buy) {
+                // Bought line: the vendor covers what stock + inbound do not. The operator chose
+                // PO (or the item is flagged bought) — never invent a shop WO here.
+                const vendorName = String(compPart?.manufacturingSpecs?.vendorName || '').trim();
+                comp.actions.push(applyCoverage(vendorName
+                    ? { kind: 'PO', code, qty: short, reason: 'ordered line (bought)', vendorName, part: compPart }
+                    : { kind: 'HOLD', code, qty: short, reason: 'ordered line (bought)', holdReason: `${code} is bought but has NO vendor on the item — set it in the Library, then retry` }));
+            } else if (short > 0) {
                 const mill = millBaseOf(code);
                 if (/\/P$/.test(code) && mill !== code) {
                     const rawHave = Math.max(0, Number(remaining[mill]) || 0);
@@ -221,6 +238,9 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             components.push(comp);
         });
 
+        if (p.buy) {
+            return { ...p, components, holds, nsPlan: { flow: 'PO', note: 'Bought item — the vendor PO is the NetSuite record; no work order opens.' } };
+        }
         // NetSuite vehicle: finished variant present as a synced NetSuite assembly → FLOW2.
         const finPart = partOf(p.finishedErp);
         const isNsAssembly = finPart && finPart.netSuiteInternalId &&
