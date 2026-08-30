@@ -37,10 +37,13 @@ import { SOURCING, sourcingOf } from './sourcing.js';
 // One SuiteQL read: per-item available qty AND the item's stock unit label. BUILTIN.DF on the
 // unit reference is the only way SuiteQL yields the label; if NetSuite refuses the expression
 // the plain query runs instead and units come back unknown (flagged, not guessed).
+// quantityonorder = open POs + open WOs in NetSuite (the same aggregate the Stock View On-Ord
+// column trusts) — Stuart 2026-08-29: a short already covered by inbound must not be re-ordered.
 const unitsQuery = (codes, locationId) => {
     const idList = codes.map(c => `'${String(c).toUpperCase().replace(/'/g, "''")}'`).join(',');
     return `SELECT Item.itemid AS itemid, BUILTIN.DF(Item.stockunit) AS unitname, ` +
-        `SUM(AggregateItemLocation.quantityavailable) AS available ` +
+        `SUM(AggregateItemLocation.quantityavailable) AS available, ` +
+        `SUM(AggregateItemLocation.quantityonorder) AS onorder ` +
         `FROM Item LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id ` +
         `WHERE UPPER(Item.itemid) IN (${idList})` +
         (locationId ? ` AND AggregateItemLocation.location = ${parseInt(locationId, 10)}` : '') +
@@ -48,7 +51,8 @@ const unitsQuery = (codes, locationId) => {
 };
 const plainQuery = (codes, locationId) => {
     const idList = codes.map(c => `'${String(c).toUpperCase().replace(/'/g, "''")}'`).join(',');
-    return `SELECT Item.itemid AS itemid, SUM(AggregateItemLocation.quantityavailable) AS available ` +
+    return `SELECT Item.itemid AS itemid, SUM(AggregateItemLocation.quantityavailable) AS available, ` +
+        `SUM(AggregateItemLocation.quantityonorder) AS onorder ` +
         `FROM Item LEFT JOIN AggregateItemLocation ON AggregateItemLocation.item = Item.id ` +
         `WHERE UPPER(Item.itemid) IN (${idList})` +
         (locationId ? ` AND AggregateItemLocation.location = ${parseInt(locationId, 10)}` : '') +
@@ -73,6 +77,7 @@ export const fetchAvailabilityUnits = async (codes, locationId) => {
         rows.forEach(r => {
             map[String(r.itemid || '').toUpperCase()] = {
                 available: Number(r.available) || 0,
+                onOrder: Number(r.onorder) || 0,
                 unit: String(r.unitname || '').trim().toUpperCase() || null,
             };
         });
@@ -81,7 +86,7 @@ export const fetchAvailabilityUnits = async (codes, locationId) => {
         const rows = await run(plainQuery(codes, locationId));
         const map = {};
         rows.forEach(r => {
-            map[String(r.itemid || '').toUpperCase()] = { available: Number(r.available) || 0, unit: null };
+            map[String(r.itemid || '').toUpperCase()] = { available: Number(r.available) || 0, onOrder: Number(r.onorder) || 0, unit: null };
         });
         return { map, unitsKnown: false };
     }
@@ -148,8 +153,25 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
     }
 
     // Walk lines against a running remainder so two lines shorting one shelf don't both claim it.
+    // On-order gets its own remainder: inbound that "covers" one line's short must not also cover
+    // the next line's.
     const remaining = {};
-    Object.entries(avail).forEach(([c, v]) => { remaining[c] = v.available; });
+    const onOrderLeft = {};
+    Object.entries(avail).forEach(([c, v]) => { remaining[c] = v.available; onOrderLeft[c] = v.onOrder || 0; });
+
+    // A short already covered by inbound (open PO/WO in NetSuite) defaults to SKIP — shown with
+    // "N on order" and a tick the operator can clear to order anyway (Stuart 2026-08-29: the app
+    // "missed the fact that the component is already on order for sufficient qty").
+    const applyCoverage = (action) => {
+        if (!['SHOP', 'PO', 'ASK'].includes(action.kind)) return action;
+        const pool = Math.max(0, Number(onOrderLeft[action.code]) || 0);
+        if (pool >= action.qty) {
+            onOrderLeft[action.code] = pool - action.qty;
+            return { ...action, skip: true, coveredBy: pool };
+        }
+        if (pool > 0) return { ...action, coveredBy: pool }; // partial — shown, not auto-skipped
+        return action;
+    };
 
     const out = planned.map(p => {
         const components = [];
@@ -167,6 +189,7 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             const mismatch = unitsDisagree(nsUnit, appUnit);
             const comp = {
                 code, name: l.partName || compPart?.itemName || '', need, have, short,
+                onOrder: (avail[code] || {}).onOrder || 0,
                 nsUnit, appUnit, unitMismatch: mismatch, partId: compPart?.id || null,
                 noStockRecord: !(code in avail),
                 actions: [],
@@ -177,10 +200,13 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
                     const rawHave = Math.max(0, Number(remaining[mill]) || 0);
                     const claimed = Math.min(rawHave, short);
                     remaining[mill] = Math.max(0, (Number(remaining[mill]) || 0) - short);
+                    // The convert itself always stands (phosphating must still happen — it waits
+                    // on the WMS tab for raw, inbound or milled); coverage applies to ACQUIRING
+                    // the raw behind it.
                     comp.actions.push({ kind: 'CONVERT', target: code, base: mill, qty: short, rawHave });
-                    if (rawHave < short) comp.actions.push(routeShort(partOf(mill), mill, short - claimed, `raw behind ${code}`));
+                    if (rawHave < short) comp.actions.push(applyCoverage(routeShort(partOf(mill), mill, short - claimed, `raw behind ${code}`)));
                 } else {
-                    comp.actions.push(routeShort(compPart, code, short, 'pull line short'));
+                    comp.actions.push(applyCoverage(routeShort(compPart, code, short, 'pull line short')));
                 }
             }
             // A unit disagreement makes every number on this row unreliable — hold its actions
@@ -210,12 +236,14 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
 };
 
 // Flatten a reviewed job's component actions into the executor's shapes, honoring operator
-// choices: ASK components carry `chosen` (SHOP or PO); held/HOLD rows contribute nothing.
+// choices: ASK components carry `chosen` (SHOP or PO); held/HOLD rows contribute nothing;
+// skipped rows (covered by inbound, or the operator's soft-out) contribute nothing.
 export const actionsOfReviewedJob = (job) => {
     const makeup = [], poLines = [];
     (job.components || []).forEach(c => {
         if (c.held && !c.overrideProceed) return;
         (c.actions || []).forEach(a => {
+            if (a.skip) return;
             const kind = a.kind === 'ASK' ? (a.chosen || 'SHOP') : a.kind;
             if (kind === 'CONVERT') makeup.push({ kind: 'CONVERT', target: a.target, base: a.base, qty: a.qty, rawHave: a.rawHave });
             else if (kind === 'SHOP') makeup.push({ kind: 'SHOP', code: a.code, qty: a.qty, reason: a.reason });

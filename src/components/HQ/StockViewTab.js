@@ -8,7 +8,8 @@ import { SOURCING, sourcingOf } from '../Shared/sourcing';
 import { makeFullTasks, withItemCode, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifecycle';
-import { matchesCustomerCode } from '../Shared/aliasSearch';
+import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
+import { realPartOf, isAliasDoc } from '../Shared/aliasIdentity';
 import { poleCutPlan, poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
@@ -2085,19 +2086,38 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         } catch (e) { setOeNeeds({ loading: false, orders: [], error: e.message || String(e) }); }
     };
     // The order already covering a line: a WO whose rootItem is the line's raw code (recipe
-    // matching when the line knows its finish), or a PO carrying the code on a line.
+    // matching when the line knows its finish), or a PO carrying the code on a line. A line
+    // entered under an ALIAS matches the WO by aliasErp too — the WO's rootItem is the REAL item
+    // (Stuart 2026-08-29: "we need to cover both scenarios").
     const oeLinkFor = (entry, line) => {
         const erp = String(line.erp || '').toUpperCase();
         const fin = oeLineFinish(line);
-        const wo = entry.wos.find(w => String(w.rootItem || '').toUpperCase() === erp && (!fin || String(w.recipe || '').toUpperCase() === fin.toUpperCase()));
+        const wo = entry.wos.find(w => (String(w.rootItem || '').toUpperCase() === erp || String(w.aliasErp || '').toUpperCase() === erp)
+            && (!fin || String(w.recipe || '').toUpperCase() === fin.toUpperCase()));
         if (wo) return { kind: 'WO', doc: wo };
         const po = entry.pos.find(p => (p.items || []).some(it => String(it.itemId || '').toUpperCase() === erp));
         return po ? { kind: 'PO', doc: po } : null;
     };
+
+    // Resolve an ordered code to the part production plans against — direct record first, then a
+    // customer code carried ON a real record (clientPricing / fabricut aliases), then an Alias
+    // doc dereferenced to its real item. The alias stays for display; stock, BOM and the WO
+    // identity are always the REAL item (the app-wide alias rule, Shared/aliasIdentity).
+    const resolveOePart = (erp) => {
+        const direct = partByKey['erp:' + erp];
+        let part = direct || hqParts.find(it => customerCodesOf(it).some(c => String(c).toUpperCase() === erp)) || null;
+        let aliasNote = (part && !direct) ? `${erp} = customer code on ${part.legacyErpId || part.itemId}` : '';
+        if (part && isAliasDoc(part)) {
+            const real = realPartOf(part, (t) => hqParts.find(p => [p.id, p.itemId, p.legacyErpId].map(x => String(x || '').toUpperCase()).includes(String(t).toUpperCase())));
+            if (real && real !== part) { aliasNote = `${erp} is an ALIAS of ${real.legacyErpId || real.itemId}`; part = real; }
+        }
+        return { part, aliasNote };
+    };
     const generateOeLineOrder = async (so, line, opts = {}) => {
         const erp = String(line.erp || '').toUpperCase();
-        const part = partByKey['erp:' + erp];
-        if (!part) return alert(`${erp} is not in the Master Library — sync it first.`);
+        const { part, aliasNote } = resolveOePart(erp);
+        if (!part) return alert(`${erp} is not in the Master Library (searched real codes, customer codes and aliases) — sync or alias it first.`);
+        if (aliasNote) addLog(`🔗 ${aliasNote} — planning the real item.`, 'info');
         const finish = oeLineFinish(line);
         if (!finish) return alert(`${erp}: no finish recorded on this line — the order predates finish capture. Add it to the line note in the form "TO BE FINISHED · CODE", or re-enter the line on tab 7.`);
         const qty = Number(line.qty) || 0;
@@ -2164,7 +2184,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             for (let i = 0; i < items.length; i++) {
                 const { so, l } = items[i];
                 const erp = String(l.erp || '').toUpperCase();
-                const part = partByKey['erp:' + erp];
+                const { part, aliasNote } = resolveOePart(erp);
                 const finish = oeLineFinish(l);
                 if (!part || !finish) continue;
                 let pins = [];
@@ -2175,7 +2195,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         if (!pins.length) addLog(`⚠ ${erp} is an assembly with NO BOM pins — the plan cannot see its components.`, 'warn');
                     } catch (e) { console.warn('pins load failed', e); }
                 }
-                jobs.push({ key: i, so, line: l, part, finish, qty: Number(l.qty) || 0, pins });
+                jobs.push({ key: i, so, line: l, part, finish, qty: Number(l.qty) || 0, pins, aliasNote, lineErp: erp });
             }
             if (!jobs.length) { setGenBusy(false); return alert('No reviewable lines (missing part or finish).'); }
             const res = await buildOeReviewPlan({ jobs, inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17' });
@@ -2261,7 +2281,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     paintSizes: (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null,
                     ...(isPole ? { poles: { qty, type: ptype || 'POLE' }, totalPoles: qty } : {}),
                     ...(specs.finishStream ? { finishStream: String(specs.finishStream).toUpperCase() } : {}),
-                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
+                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${job.aliasNote ? ` · 🔗 ${job.aliasNote}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
                     cpqSpecs: {}, imageUrl: part.finalImageUrl || null,
                     dimensions: { length: 0, width: 0, height: 0 },
                     partsList: planLines, ...(job.plan?.exploded ? { bomExploded: true } : {}),
@@ -2276,6 +2296,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload, autoFlow: true,
                     orderClass: 'ORDER_ENTRY', soAppId: so.id, customerId: so.customerId || null,
                     customer: so.customer || '', recipe: finish, erpId: finishedErp, partErpId: finishedErp, rootItem: erp,
+                    // The customer's code when the line came in under an alias — the Needs board
+                    // matches the line back to this WO through it (rootItem is the REAL item).
+                    ...(job.aliasNote ? { aliasErp: job.lineErp } : {}),
                     itemName: part.itemName || '',
                     qty, totalParts: qty, reqDate: needBy, ...(needBy ? { needBy } : {}),
                     soAccepted: !!so.nsInternalId,
@@ -3874,6 +3897,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <span>
                                                     <b style={{ fontFamily: 'var(--mono)' }}>{j.finishedErp}</b> × {j.qty}
                                                     <span style={{ color: 'var(--ink-soft)' }}> · SO {j.so.soId || j.so.id} · {j.so.customer || ''}</span>
+                                                    {j.aliasNote && <span style={{ ...mono9, color: 'var(--brass)', marginLeft: '8px' }}>🔗 {j.aliasNote}</span>}
                                                 </span>
                                                 <span style={{ ...mono9, color: j.nsPlan.flow === 'FLOW2' ? '#3a7d44' : 'var(--brass)' }}>
                                                     {j.nsPlan.flow === 'FLOW2' ? '🏭 NS WORK ORDER OPENS FOR THE FINISHED ITEM' : 'SO = NETSUITE RECORD (no finished assembly)'}
@@ -3889,7 +3913,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     </div>
                                                     <div style={{ ...mono9, paddingTop: '3px', color: 'var(--ink)' }}>need {c.need}</div>
                                                     <div style={{ ...mono9, paddingTop: '3px', color: c.short > 0 ? '#d9534f' : '#3a7d44' }}>
-                                                        {c.noStockRecord ? 'no stock record' : `${c.have} avail`}{c.nsUnit ? ` (${c.nsUnit})` : ''}{c.short > 0 ? ` · short ${c.short}` : ' · ✓'}
+                                                        {c.noStockRecord ? 'no stock record' : `${c.have} avail`}{c.nsUnit ? ` (${c.nsUnit})` : ''}
+                                                        {c.onOrder > 0 && <span style={{ color: 'var(--brass)' }}> · {c.onOrder} on ord</span>}
+                                                        {c.short > 0 ? ` · short ${c.short}` : ' · ✓'}
                                                     </div>
                                                     <div style={{ flex: 1, minWidth: '260px' }}>
                                                         {c.unitMismatch && (
@@ -3904,8 +3930,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                         {c.held && !c.unitMismatch && <div style={{ ...mono9, color: '#d9534f', marginBottom: '6px' }}>⚠ {c.holdReason}</div>}
                                                         {(c.actions || []).length === 0 && <span style={{ ...mono9, color: 'var(--ink-soft)' }}>in stock — the pick pulls it</span>}
                                                         {(c.actions || []).map((a, ai) => (
-                                                            <div key={ai} style={{ fontSize: '0.82rem', color: a.kind === 'HOLD' ? '#d9534f' : 'var(--ink)', marginBottom: '4px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                                            <div key={ai} style={{ fontSize: '0.82rem', color: a.kind === 'HOLD' ? '#d9534f' : (a.skip ? 'var(--ink-soft)' : 'var(--ink)'), marginBottom: '4px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', textDecoration: a.skip ? 'line-through' : 'none' }}>
                                                                 <span>{actionText(a)}</span>
+                                                                {['SHOP', 'PO', 'ASK'].includes(a.kind) && (
+                                                                    <label title={a.coveredBy ? `${a.coveredBy} already on order (open PO/WO in NetSuite) — skipping avoids double-ordering. Untick to order anyway.` : 'Skip this action — covered by an existing order or handled outside the app.'}
+                                                                        style={{ ...mono9, color: a.coveredBy ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', textDecoration: 'none' }}>
+                                                                        <input type="checkbox" checked={!!a.skip} onChange={e => patchAction(j.key, c.code, ai, { skip: e.target.checked })} />
+                                                                        {' '}skip{a.coveredBy ? ` — ${a.coveredBy} on order` : ''}
+                                                                    </label>
+                                                                )}
                                                                 {a.kind === 'ASK' && (
                                                                     <select value={a.chosen || 'SHOP'} onChange={e => patchAction(j.key, c.code, ai, { chosen: e.target.value })} style={{ ...mono9, padding: '3px' }}>
                                                                         <option value="SHOP">⚒ make in-house ({a.qty} × {a.code})</option>
