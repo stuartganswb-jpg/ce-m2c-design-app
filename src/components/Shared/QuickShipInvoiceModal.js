@@ -80,31 +80,52 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                     <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#8a857c', marginTop: '2px' }}>{new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
                 </div>
             </div>
-            {/* THE DOCUMENT SAYS WHO, WHERE AND AGAINST WHAT (Stuart 2026-08-30: bill-to address,
-                ship-to address, sidemark and customer PO were all missing). */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '14px', padding: '14px 0', borderBottom: '1px solid #ddd8cf', flexWrap: 'wrap' }}>
-                <div style={{ minWidth: '180px' }}>
-                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.14em', color: '#8a857c' }}>Bill To</div>
-                    <div style={{ fontSize: '15px', fontWeight: 600, marginTop: '4px' }}>{customer?.name || order.customer || ''}</div>
-                    {String(customer?.billingAddress || '').split('\n').map(x => x.trim()).filter(Boolean).map((ln, i) => (
-                        <div key={i} style={{ fontSize: '11px', color: '#524e46' }}>{ln}</div>
-                    ))}
-                    {order.jobName ? <div style={{ fontSize: '12px', color: '#524e46', marginTop: '2px' }}>Job: {order.jobName}</div> : null}
-                </div>
-                <div style={{ minWidth: '180px' }}>
-                    <div style={{ fontFamily: 'var(--mono, monospace)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.14em', color: '#8a857c' }}>Ship To</div>
-                    {(order.shipTo || []).length
-                        ? order.shipTo.map((ln, i) => <div key={i} style={{ fontSize: i === 0 ? '13px' : '11px', fontWeight: i === 0 ? 600 : 400, color: i === 0 ? '#1c1a16' : '#524e46', marginTop: i === 0 ? '4px' : 0 }}>{ln}</div>)
-                        : <div style={{ fontSize: '11px', color: '#8a857c', marginTop: '4px', fontStyle: 'italic' }}>Customer default address</div>}
-                </div>
-                <div style={{ textAlign: 'right', fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#524e46' }}>
-                    <div>Sales Order: {order.soId}</div>
-                    {order.customerPo ? <div style={{ fontWeight: 700 }}>P.O.: {order.customerPo}</div> : null}
-                    {order.sidemark ? <div>Sidemark: {order.sidemark}</div> : null}
-                    {customer?.terms ? <div>Terms: {customer.terms}</div> : null}
-                    {order.needByDate ? <div style={{ fontWeight: 700 }}>Need by: {order.needByDate}</div> : null}
-                </div>
-            </div>
+            {/* THE DOCUMENT SAYS WHO, WHERE AND AGAINST WHAT (Stuart 2026-08-30) — the same
+                three-box header the CPQ forms print, so every customer paper reads alike. Orders
+                saved before shipTo/customerPo were stored fall back: memo carried the sidemark,
+                and the customer's first saved address stands in for the ship-to. */}
+            {(() => {
+                const boxLabel = { fontFamily: 'var(--mono, monospace)', fontSize: '8px', letterSpacing: '.12em', textTransform: 'uppercase', color: '#8a857c', display: 'block', marginBottom: '4px' };
+                const shaded = { background: '#f4f1ea', border: '1px solid #ddd8cf', borderRadius: '2px', padding: '12px 14px', flex: 1, minWidth: '180px' };
+                const billLines = String(customer?.billingAddress || '').split('\n').map(x => x.trim()).filter(Boolean);
+                const fallbackShip = (() => {
+                    const a = (customer?.shippingAddresses || [])[0];
+                    return a ? [a.label, a.addr1, a.addr2, [a.city, a.state, a.zip].filter(Boolean).join(', ')].filter(Boolean) : [];
+                })();
+                const shipLines = (order.shipTo || []).length ? order.shipTo : fallbackShip;
+                const sidemark = order.sidemark || (order.memo && order.memo !== 'Quick Ship' && order.memo !== order.jobName ? order.memo : '');
+                return (
+                    <div style={{ display: 'flex', gap: '12px', padding: '14px 0', borderBottom: '1px solid #ddd8cf', flexWrap: 'wrap' }}>
+                        <div style={shaded}>
+                            <span style={boxLabel}>Bill To</span>
+                            <div style={{ fontSize: '12px', lineHeight: 1.5 }}>
+                                <div style={{ fontWeight: 600 }}>{customer?.name || order.customer || ''}</div>
+                                {billLines.map((ln, i) => <div key={i}>{ln}</div>)}
+                                {order.jobName ? <div style={{ color: '#524e46' }}>Job: {order.jobName}</div> : null}
+                            </div>
+                        </div>
+                        <div style={shaded}>
+                            <span style={boxLabel}>Ship To</span>
+                            <div style={{ fontSize: '12px', lineHeight: 1.5 }}>
+                                {shipLines.length
+                                    ? shipLines.map((ln, i) => <div key={i} style={i === 0 ? { fontWeight: 600 } : undefined}>{ln}</div>)
+                                    : <div style={{ color: '#8a857c', fontStyle: 'italic' }}>Customer default address</div>}
+                            </div>
+                        </div>
+                        <div style={shaded}>
+                            <span style={boxLabel}>Order Details</span>
+                            <div style={{ fontSize: '11px', fontFamily: 'var(--mono, monospace)', lineHeight: 1.7 }}>
+                                <div><span style={{ color: '#8a857c' }}>NO.</span> {order.soId}</div>
+                                <div><span style={{ color: '#8a857c' }}>DATE</span> {new Date(order.createdAt || Date.now()).toLocaleDateString()}</div>
+                                {order.customerPo ? <div><span style={{ color: '#8a857c' }}>P.O.</span> {order.customerPo}</div> : null}
+                                {sidemark ? <div><span style={{ color: '#8a857c' }}>SIDEMARK</span> {sidemark}</div> : null}
+                                {customer?.terms ? <div><span style={{ color: '#8a857c' }}>TERMS</span> {customer.terms}</div> : null}
+                                {order.needByDate ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>NEED BY</span> {order.needByDate}</div> : null}
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
             {order.productionNotes ? <div style={{ padding: '8px 0', borderBottom: '1px solid #ddd8cf', fontFamily: 'var(--mono, monospace)', fontSize: '10px', color: '#524e46' }}>📝 PRODUCTION: {order.productionNotes}</div> : null}
             <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
                 <thead>
