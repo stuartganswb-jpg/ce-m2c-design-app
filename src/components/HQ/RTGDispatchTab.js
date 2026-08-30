@@ -600,23 +600,40 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // every config the job carries, prefer the explicit `…__finish` step keys, and
                 // match master finishes by id OR code.
                 if (originalJob && originalJob.cpqData) {
-                    const fSnap = await getDoc(doc(db, "system", "master_finishes"));
-                    if (fSnap.exists() && fSnap.data().finishes) {
-                        const finishes = fSnap.data().finishes;
-                        const configs = [];
-                        if (originalJob.cpqData.configuration) configs.push(originalJob.cpqData.configuration);
-                        (originalJob.cpqData.cartItems || []).forEach(ci => { if (ci && ci.config) configs.push(ci.config); });
-                        const prim = (v) => (typeof v === 'string' || typeof v === 'number') ? [String(v)] : [];
-                        const allVals = configs.flatMap(c => Object.values(c || {})).flatMap(v =>
-                            (v && typeof v === 'object') ? Object.values(v).flatMap(prim) : prim(v));
-                        const finishVals = configs.flatMap(c => Object.entries(c || {})
-                            .filter(([k]) => /__finish$/i.test(k)).map(([, v]) => String(v)));
-                        const pool = finishVals.length ? finishVals : allVals;
-                        const poolUp = pool.map(x => x.toUpperCase());
-                        const foundFin = finishes.find(f => pool.includes(String(f.id)))
-                            || finishes.find(f => f.code && poolUp.includes(String(f.code).toUpperCase()));
-                        if (foundFin) {
-                            finishRecipe = foundFin.code ? `${foundFin.code} - ${foundFin.name}` : foundFin.name;
+                    const carts = originalJob.cpqData.cartItems || [];
+                    // THE TAGS ENGINE SAYS IT OUTRIGHT (Stuart 2026-08-30, SO60104/05 second pass):
+                    // hardware-engine items carry finishes[]/finishLabel ON the item — they never
+                    // write config __finish keys, so the config scan below finds nothing for them.
+                    const tagLabel = carts.map(ci => ci && String(ci.finishLabel || '').trim()).find(Boolean)
+                        || carts.flatMap(ci => (ci && ci.finishes) || []).map(f => f && (f.code ? `${f.code} - ${f.name || f.code}` : f.name)).find(Boolean);
+                    if (tagLabel) {
+                        finishRecipe = tagLabel;
+                    } else {
+                        const fSnap = await getDoc(doc(db, "system", "master_finishes"));
+                        if (fSnap.exists() && fSnap.data().finishes) {
+                            const finishes = fSnap.data().finishes;
+                            const configs = [];
+                            if (originalJob.cpqData.configuration) configs.push(originalJob.cpqData.configuration);
+                            carts.forEach(ci => { if (ci && ci.config) configs.push(ci.config); });
+                            const prim = (v) => (typeof v === 'string' || typeof v === 'number') ? [String(v)] : [];
+                            const allVals = configs.flatMap(c => Object.values(c || {})).flatMap(v =>
+                                (v && typeof v === 'object') ? Object.values(v).flatMap(prim) : prim(v));
+                            const finishVals = configs.flatMap(c => Object.entries(c || {})
+                                .filter(([k]) => /__finish$/i.test(k)).map(([, v]) => String(v)));
+                            // TAGS engineConfig.globalFinish and per-line finishCodes are CODES —
+                            // they join the pool and resolve through the code branch.
+                            const tagCodes = [
+                                ...carts.map(ci => ci && ci.engineConfig && ci.engineConfig.globalFinish).filter(Boolean),
+                                ...carts.flatMap(ci => (ci && ci.pricingBreakdown) || []).map(l => l && l.finishCode).filter(Boolean),
+                                ...(originalJob.cpqData.breakdown || []).map(l => l && l.finishCode).filter(Boolean),
+                            ].map(String);
+                            const pool = finishVals.length ? [...finishVals, ...tagCodes] : [...allVals, ...tagCodes];
+                            const poolUp = pool.map(x => x.toUpperCase());
+                            const foundFin = finishes.find(f => pool.includes(String(f.id)))
+                                || finishes.find(f => f.code && poolUp.includes(String(f.code).toUpperCase()));
+                            if (foundFin) {
+                                finishRecipe = foundFin.code ? `${foundFin.code} - ${foundFin.name}` : foundFin.name;
+                            }
                         }
                     }
                 }
@@ -725,6 +742,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // builds, not a miscount.
             qtyEach: line.qtyEach != null ? Number(line.qtyEach) : null,
             configQty: line.configQty != null ? Number(line.configQty) : null,
+            // The line's own finish rides to the floor (Stuart 2026-08-30: the BOM said nothing
+            // about the finish) — per-part exceptions included; blank = the WO recipe applies.
+            ...(line.finishCode ? { finishCode: line.finishCode, finishLabel: line.finishLabel || line.finishCode } : {}),
             binLocation: part?.manufacturingSpecs?.binLocation || 'UNASSIGNED',
             // Scheduler keys (recipe lives on the WO; size + type live per part). The finishing
             // time matrix resolves minutes-per-part from (recipe × paintSize × productType).
@@ -2002,9 +2022,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         const custName = job?.customer?.name || (typeof order?.customer === 'string' ? order.customer : '') || '';
         // ⚠ THE MONEY DOCUMENTS DROP BOM-ONLY PARTS (Stuart 2026-08-22: "hidden go to all shop
         // doc's just not customer docs"). A packing slip keeps them — the standoff is in the box.
+        // The document SAYS each line's finish (Stuart 2026-08-30, SO60104/05: the printed SO was
+        // silent about the finish). Per-line finishLabel/finishCode wins; the configuration-level
+        // finishLabel on the cart item covers older lines that never stamped one.
+        const cartFinish = (job?.cpqData?.cartItems || []).map(ci => ci && String(ci.finishLabel || '').trim()).find(Boolean) || '';
         const lines = customerDocLines(job?.cpqData?.breakdown || [], formType).map(l => ({
             item: l.legacyErpId || l.partId || '',
-            desc: String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim(),
+            desc: (() => {
+                const base = String(l.name || '').replace(/^\s*[-▶]\s*/, '').trim();
+                const fin = l.finishLabel || l.finishCode || (l.isFee || l.hidden || l.inKit ? '' : cartFinish);
+                return fin ? `${base} — Finish: ${fin}` : base;
+            })(),
             qty: l.qty,
             cut: l.cutLength || null,
             price: (l.price != null) ? l.price : ((l.total != null && l.qty) ? l.total / l.qty : 0),
@@ -2765,6 +2793,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                                                         <td style={{ padding: '16px 0', color: 'var(--ink)' }}>
                                                             {!item.isHeader && (item.legacyErpId || item.partId) && <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginRight: '10px' }}>{item.legacyErpId || item.partId}</span>}
                                                             {item.name}
+                                                            {/* The line's finish, said on the BOM (Stuart 2026-08-30). */}
+                                                            {(item.finishLabel || item.finishCode) && <span style={{ fontFamily: 'var(--mono)', fontSize: '0.75rem', color: 'var(--brass)', marginLeft: '10px' }}>· {item.finishLabel || item.finishCode}</span>}
                                                         </td>
                                                         <td style={{ padding: '16px 0', textAlign: 'right', color: 'var(--ink-soft)' }}>Qty: {item.qty}</td>
                                                     </tr>

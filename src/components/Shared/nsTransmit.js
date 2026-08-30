@@ -218,6 +218,10 @@ export function resolveJobLines(job, data) {
                       nsId,
                       finishedErpId,
                       finishUnmapped,
+                      // The finish IN WORDS on the pushed line (Stuart 2026-08-30, SO60104/05: an
+                      // in-house finish-to-order line bills the BASE item by design, and the
+                      // NetSuite document then said nothing about the finish at all).
+                      finishNote: (!finishedErpId && code) ? code : '',
                       // The ITEM's handling is the routing signal, exactly as it is on the floors;
                       // the line already carries it, resolved from the same place.
                       partCategory: l.partHandling || masterPart.manufacturingSpecs?.partHandling || '',
@@ -327,6 +331,8 @@ export function resolveJobLines(job, data) {
                   if (sp) masterPart = sp;
               }
               const { nsId, finishedErpId, finishUnmapped } = routeFinishedItem(masterPart, finishId ? finishObj : null, !!outFinish);
+              // Same rule as the TAGS path: a base-billed line still SAYS its finish on the document.
+              const stepFinishNote = (!finishedErpId && finishId && finishObj) ? finishCodeOf(finishObj) : '';
               // MULTI-MATERIAL POLE: the material step carries the pole ITEM; the Length/calculator
               // step carries the FOOTAGE (its per-foot qty) — push the pole line at the feet, and
               // take the cut length from the calculator step's dimensions.
@@ -345,6 +351,7 @@ export function resolveJobLines(job, data) {
                   nsId,
                   finishedErpId,   // non-empty when this line pushes a finished assembly (outsourced or stocked in-house)
                   finishUnmapped,  // non-empty when a finished SKU couldn't be NS-resolved (fell back to base)
+                  finishNote: stepFinishNote,
                   partCategory: masterPart.manufacturingSpecs?.partHandling || '',
                   projection: cart.dimensions?.[dimStepId]?.length || '',
                   sidemark: cart.sidemark || ''
@@ -421,7 +428,7 @@ export function resolveJobLines(job, data) {
           const unmapped = (l.nsId === 'UNMAPPED' || l.nsId === 'PENDING');
           // Sidemark is part of line identity: two rooms ordering the same pole stay TWO lines,
           // each carrying its own Tag (custcol3) — merging them would blank the room attribution.
-          const key = `${l.nsId}|${l.finishedErpId}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}`;
+          const key = `${l.nsId}|${l.finishedErpId}|${l.finishNote || ''}|${l.projection}|${l.sidemark || ''}|${unmapped ? (l.masterPart?.id || l.stepId) : ''}`;
           const cur = agg.get(key);
           if (cur) cur.qty += l.qty;
           else agg.set(key, { ...l });
@@ -490,9 +497,11 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
                 price: { id: "-1" },
                 description: (() => {
                     const face = line.aliasFace ? `${line.aliasFace.legacyErpId || line.aliasFace.itemId || line.aliasFace.itemName} — ` : '';
+                    // A base-billed finish-to-order line SAYS its finish (Stuart 2026-08-30,
+                    // SO60104/05: the NetSuite document was silent about the finish entirely).
                     return line.finishedErpId
                         ? `${face}${line.masterPart.itemName} → ${line.finishedErpId} (finished assembly, CPQ)`
-                        : `${face}${line.masterPart.itemName} (Mapped from CPQ)`;
+                        : `${face}${line.masterPart.itemName}${line.finishNote ? ` — TO BE FINISHED · ${line.finishNote}` : ''} (Mapped from CPQ)`;
                 })(),
                 custcol_part_category: line.partCategory
             };
