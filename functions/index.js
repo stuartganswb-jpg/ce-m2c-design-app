@@ -584,8 +584,12 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
 
     const fdb = admin.firestore();
     const woDocId = event.params.woId;
-    // Idempotency stamp FIRST — this trigger re-fires on our own writes.
-    await fdb.doc(`fin_workorders/${woDocId}`).set({ nsCompletionQueued: true }, { merge: true });
+    // Idempotency by DETERMINISTIC ENTRY ID (2026-08-31, the WO11453 lesson): the old order —
+    // stamp nsCompletionQueued, THEN create the entry — left a crash window where the doc was
+    // stamped forever but no build ever queued. Now the outbox entry id derives from the doc id
+    // (create() refuses a second), the entry is written FIRST, and the stamp follows. A re-fire
+    // between the two steps just fails create() and stamps again — never a duplicate, never a
+    // silent skip.
 
     const qty = Number(after.completedParts) > 0 ? Number(after.completedParts) : (Number(after.totalParts) || 1);
     // The bin the packer actually scanned is the truth. The library lookup below survives only as
@@ -602,8 +606,9 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
         }
     } catch (e) { /* bin optional — the queue entry fails visibly if NetSuite insists */ }
 
-    const obRef = fdb.collection('ns_outbox').doc();
-    await obRef.set({
+    const obRef = fdb.collection('ns_outbox').doc(`wocmpl-${woDocId.replace(/[^A-Za-z0-9_-]/g, '_')}`);
+    try {
+        await obRef.create({
         // NON-WIP work orders (CE's are) complete via a WO-LINKED ASSEMBLY BUILD — the record
         // the UI's "Create Build" button makes. workordercompletion is WIP-only and 400s with
         // "invalid work order" on these (learned 2026-07-21, WO11308-12).
@@ -620,7 +625,9 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
         writeBack: { collection: 'fin_workorders', docId: woDocId, patch: { nsWoCompletionPosted: true }, idField: 'nsWoCompletionId', tranField: 'nsWoCompletionTran' },
         status: 'PENDING', attempts: 0, lastError: null, nsId: null, nsTran: null,
         createdAt: Date.now(), nextAttemptAt: Date.now(), leasedAt: null, postedAt: null
-    });
+        });
+    } catch (dupErr) { /* entry already exists — another fire won the race; nothing to do */ }
+    await fdb.doc(`fin_workorders/${woDocId}`).set({ nsCompletionQueued: true }, { merge: true });
 });
 
 

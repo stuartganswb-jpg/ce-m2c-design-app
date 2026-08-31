@@ -2139,10 +2139,42 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     const fin = liveFin.find(f => f.id === (o.finPayload && o.finPayload.id) || f.id === o.id || f.orderKey === o.id || (o.orderKey && f.orderKey === o.orderKey));
                     if (!fin) return null;
                     const place = physicalPlaceOf(fin);
+                    // BUILD-NEVER-POSTED (found live 2026-08-31, WO11453): put away on the shelf,
+                    // NetSuite never got the assembly build — the onStockBuildDone trigger has
+                    // narrow skip paths (stamp-then-crash, a consumed earlier fire). Say it in
+                    // red and offer the posting right here; the outbox dedupeKey refuses a
+                    // duplicate if an entry is actually in flight.
+                    const buildMissing = fin.orderType === 'stock' && fin.packStatus === 'Packed' && fin.nsWoId && !fin.nsWoCompletionPosted;
                     return (
                         <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                             <OrderStatusChips wo={fin} showWho={false} />
                             {place && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink)', letterSpacing: '.03em' }}>📍 {place}</span>}
+                            {buildMissing && (
+                                <button onClick={async () => {
+                                    const qty = Number(fin.completedParts) > 0 ? Number(fin.completedParts) : (Number(fin.totalParts) || 1);
+                                    const bin = String(fin.putawayBin || '').trim().toUpperCase();
+                                    if (!window.confirm(`🔨 Post the NetSuite assembly build for ${woRefOf(fin)}?\n\nBuild ${qty} × ${fin.stockErpId || ''} AGAINST ${fin.nsWoTran || fin.nsWoId}${bin ? `, receiving into ${bin}` : ''}.\n\nThe pieces are on the shelf but NetSuite shows nothing — the automatic build at put-away never posted. Check 11.1 first if unsure; a duplicate in flight is refused by the queue itself. Continue?`)) return;
+                                    try {
+                                        await enqueueNsWrite({
+                                            kind: 'workordercompletion',
+                                            dedupeKey: `wocmpl:${fin.id}`,
+                                            label: `Build NS WO ${fin.nsWoTran || fin.nsWoId} — ${fin.stockErpId || fin.id} ×${qty}`,
+                                            sourceApp: 'RTG', createdBy: currentUser || '',
+                                            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${fin.nsWoId}/!transform/assemblyBuild`,
+                                            method: 'POST',
+                                            payload: {
+                                                quantity: qty,
+                                                memo: `Stock build ${fin.id} put away${bin ? ` ${bin}` : ''} — posted from RTG (auto build never fired)`,
+                                                ...(bin ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: qty }] } } } : {}),
+                                            },
+                                            writeBack: { collection: 'fin_workorders', docId: fin.id, patch: { nsWoCompletionPosted: true }, idField: 'nsWoCompletionId', tranField: 'nsWoCompletionTran' },
+                                        });
+                                        await updateDoc(doc(db, 'fin_workorders', fin.id), { nsCompletionQueued: true });
+                                        addLog(`🔨 Assembly build queued for ${woRefOf(fin)} ×${qty}${bin ? ` → ${bin}` : ''} — lands in ~1 min (11.1).`, 'success');
+                                    } catch (e) { addLog(`🔨 Build queue failed for ${woRefOf(fin)}: ${e.message || e}`, 'error'); alert('Build queue failed: ' + (e.message || e)); }
+                                }} title="The pieces are on the shelf but NetSuite never received the assembly build — post it now against the same work order, into the scanned bin."
+                                    style={{ padding: '4px 10px', fontFamily: 'var(--mono)', fontSize: '9px', color: '#d9534f', background: 'transparent', border: '1px solid #d9534f', cursor: 'pointer', textTransform: 'uppercase' }}>⚠ NS build never posted — 🔨 post now</button>
+                            )}
                         </div>
                     );
                 })()}
