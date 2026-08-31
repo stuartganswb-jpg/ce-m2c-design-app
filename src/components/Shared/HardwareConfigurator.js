@@ -55,13 +55,15 @@ import { captureTransparentPng, saveGuideCapture } from './guideCapture';
 
 const mono = { fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' };
 
-const AXIS_LABEL = { rodKind: 'Rod Type', setup: 'Single or Double', drive: 'Drive', mount: 'Mount', proj: 'Bracket Projection' };
+const AXIS_LABEL = { rodKind: 'Rod Type', setup: 'Single or Double', drive: 'Drive', mount: 'Mount', proj: 'Bracket Projection', frontLayer: 'Front of the Double' };
 const valueLabel = (axis, v) => {
     if (axis === 'proj') {
         const n = Number(v);
         const known = { 0.75: '.75"', 3.625: '3-5/8"', 4.625: '4-5/8"', 6: '6"' };
         return known[n] || `${n}"`;
     }
+    // The two ways a double carries its front layer — said as the product, not as the tag.
+    if (axis === 'frontLayer') return v === 'FASCIA' ? 'Stationary fascia with rings (one track)' : 'Traverse track front & rear';
     return String(v).charAt(0) + String(v).slice(1).toLowerCase();
 };
 const slotLabel = (s) => {
@@ -337,18 +339,33 @@ function HardwareConfiguratorInner({
     // rework left each end in its own single-option slot. Same restraint the ring and return rules
     // state: only judged once a rod is CHOSEN. The ends still auto-pick the instant a traverse rod
     // is selected and the drive answer has filtered them — that behavior is unchanged.
+    // ── STEP 1 DECIDES THE TRACKS (Stuart 2026-08-31) ────────────────────────────────────────
+    // "if single, then show one track … if double then show 2 tracks, if double with front
+    //  stationary fascia rings then one track." Which tracks are on the order falls out of the
+    //  setup + frontLayer answers, so a track slot left holding ONE admissible option is not a
+    //  question — it picks itself. The STEP stays on screen (unlike a settled end) because it
+    //  still carries a real decision: the custom-finish upcharge. Gated on setup being ANSWERED —
+    //  the same restraint as the ends, so an untouched screen never bills a track.
+    const trackAuto = useMemo(() => {
+        const auto = {};
+        if (!answers.setup) return auto;
+        model.slots.forEach(s => {
+            if (s.kind === 'TRACK' && !s.suppressedBy && s.options.length === 1) auto[s.key] = s.options[0].id;
+        });
+        return auto;
+    }, [model, answers.setup]);
     const settledKeys = useMemo(() => {
-        const chosenIds = new Set(Object.values(resolvePicks(model, picks)));
+        const chosenIds = new Set([...Object.values(resolvePicks(model, picks)), ...Object.values(trackAuto)]);
         const trvChosen = model.choices.some(c => chosenIds.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind === TRAVERSE);
         if (!trvChosen) return new Set();
         return new Set(model.slots.filter(s => s.kind === 'TRV_END' && s.options.length === 1).map(s => s.key));
-    }, [model, picks, resolvePicks]);
+    }, [model, picks, resolvePicks, trackAuto]);
     const livePicks = useMemo(() => {
-        const auto = {};
+        const auto = { ...trackAuto };
         model.slots.forEach(s => { if (settledKeys.has(s.key)) auto[s.key] = s.options[0].id; });
         // An operator's own pick still wins, so nothing here can overwrite an answer.
         return { ...auto, ...resolvePicks(model, picks) };
-    }, [model, picks, resolvePicks, settledKeys]);
+    }, [model, picks, resolvePicks, settledKeys, trackAuto]);
 
 
     // ── A VISION DRAWING ARRIVES AS ANSWERS (Stuart 2026-08-21) ──────────────────────────────
@@ -969,11 +986,13 @@ function HardwareConfiguratorInner({
         return out;
     }, [model, isTraverse, trvRules, sizeSteps, sizeProjInches, settledKeys]);
 
-    // The one thing a rod step cannot say for itself: that leaving it empty is an ANSWER. A track
-    // omitted is a fascia wearing rings, which is a different product rather than a blank.
+    // Rings-vs-track stopped being an omission the day it became a question (the frontLayer axis,
+    // Stuart 2026-08-31) — so the track step no longer coaches "omit it". What it says instead is
+    // the one fact the auto-picked card cannot: the stock finishes follow the fascia, and painting
+    // to match is the upcharge (offered below via the flow's checkout items on this step).
     const hintFor = useCallback((st) => {
         if (!st || st.kind !== 'SLOT') return '';
-        if (st.slot.kind === 'TRACK') return 'Choose the front track for traverse — omit it to use rings on the fascia.';
+        if (st.slot.kind === 'TRACK') return 'Chosen by the layout at Rod Setup. Comes in bronze or champagne to coordinate with the fascia — add the custom-finish upcharge to paint it to match.';
         return '';
     }, []);
 

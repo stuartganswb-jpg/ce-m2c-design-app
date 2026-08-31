@@ -410,6 +410,15 @@ export function normalizeChoice(input = {}) {
 export const AXES = [
     { key: 'rodKind', label: 'Rod Type', tag: 'rodKind', order: 10, scope: 'rods' },
     { key: 'setup', label: 'Single or Double', tag: 'setup', order: 20, scope: 'admissible' },
+    // ── THE FRONT OF A DOUBLE IS A DECISION (Stuart 2026-08-31, H1-2TRV) ─────────────────────
+    // "when selecting double we have the secondary option of the front being fascia with rings and
+    //  not track … an additional drop down that opens on the rod step if double is selected."
+    // The engine always knew this fork — "choose the front track — omit it to use rings on the
+    // fascia" — but said it as an omission, which reads as an unanswered step. Now it is asked.
+    // The VALUES are discovered like every axis: a front-capable TRACK votes TRACK, a FASCIA votes
+    // FASCIA, so the question only exists where both genuinely live in one assembly — no solid
+    // family can ever grow it. `requires` keeps it closed until the order IS a double.
+    { key: 'frontLayer', label: 'Front of the Double', tag: 'frontLayer', order: 22, scope: 'rods', requires: { setup: 'DOUBLE' } },
     // Motorised vs manual. Asked only where BOTH exist — a manual-only collection must not grow a
     // question with one answer, which is exactly what discovery gives us for free.
     { key: 'drive', label: 'Drive', tag: 'drive', order: 25, scope: 'admissible' },
@@ -444,6 +453,14 @@ export const AXES = [
 const axisValuesOf = (choice, axis) => {
     if (axis.key === 'rodKind') return choice.rodKind ? [choice.rodKind] : [];
     if (axis.key === 'proj') return choice.projs;
+    // The front-of-a-double values are STRUCTURAL, not tagged: what could carry the front layer.
+    // A track pinned to the rear (setup double) serves the rear whatever is chosen, so only a
+    // front-capable track votes.
+    if (axis.key === 'frontLayer') {
+        if (choice.role === 'TRACK' && (choice.tier || 'FRONT') === 'FRONT') return ['TRACK'];
+        if (choice.role === 'FASCIA') return ['FASCIA'];
+        return [];
+    }
     return choice[axis.key] ? [choice[axis.key]] : [];
 };
 
@@ -478,6 +495,17 @@ export function activeAxes(choices, answers = {}) {
         // Each axis is measured under the answers ABOVE it only, so the questions cascade.
         const ctx = {};
         out.forEach(a => { ctx[a.key] = answers[a.key]; });
+        // A gated axis opens only under the required answer above it — answered, or implied where
+        // the assembly only comes one way. Everything else about the cascade is untouched.
+        if (axis.requires) {
+            const eff = (k) => {
+                const v = answers[k];
+                if (v !== undefined && v !== '' && v !== null) return v;
+                const above = out.find(a => a.key === k);
+                return (above && above.implied) ? above.values[0] : undefined;
+            };
+            if (Object.entries(axis.requires).some(([k, v]) => eff(k) !== v)) return;
+        }
         const values = axisValues(choices, axis, ctx);
         if (values.length >= 2) out.push({ ...axis, values });
         else if (values.length === 1) out.push({ ...axis, values, implied: true });
@@ -856,10 +884,13 @@ export function carriesRings(rod, ctx = {}) {
     if (!rod) return false;
     if (rod.carriesRings === true || rod.carriesRings === false) return rod.carriesRings;
     if (rod.role === 'TRACK') return false;
-    // Front-ness, from whichever tag carries it: the pin's own position, its own setup, or the
-    // order's. A one-value setup axis is IMPLIED rather than asked, so it may never reach ctx —
-    // reading the rod itself means the fact does not depend on whether a question was posed.
-    if (rod.role === 'FASCIA') return rod.tier === 'FRONT' || rod.setup === 'DOUBLE' || ctx.setup === 'DOUBLE';
+    // ── RINGS ARE THE FRONT-LAYER ANSWER NOW (Stuart 2026-08-31) ────────────────────────────
+    // "if single, then show one track … if double then show 2 tracks, if double with front
+    //  stationary fascia rings then one track and open the ring option." So a fascia presents a
+    //  ring surface in exactly one configuration: a DOUBLE whose front layer is the stationary
+    //  fascia — which is now an asked question (the frontLayer axis) rather than an inference
+    //  from tier. A single's fascia fronts one track and its drapery traverses; no rings.
+    if (rod.role === 'FASCIA') return ctx.frontLayer === 'FASCIA';
     return true;   // a solid rod, and anything else that is a rod
 }
 
@@ -1080,6 +1111,24 @@ export function slots(choices, answers = {}, selectedIds = []) {
                 : 'nothing in this order presents a face a ring can ride on';
             slot.rejected = [...slot.rejected, ...slot.options.map(choice => ({
                 choice, ok: false, rule: 'nothing to ride on', detail: slot.suppressedReason,
+            }))];
+            slot.options = [];
+        });
+    }
+
+    // ── A STATIONARY FRONT TAKES NO TRACK (Stuart 2026-08-31, H1-2TRV) ──────────────────────
+    // The frontLayer answer: FASCIA means the front layer hangs on rings from the fascia, so the
+    // front track — and the traverse ends that would dress it — serve nobody. One track remains
+    // (the rear, which setup: double already admits) and the ring step opens via carriesRings.
+    // TRACK answered means both layers traverse; the ring rule above already keeps rings away.
+    if (ctx.frontLayer === 'FASCIA') {
+        bucket.forEach(slot => {
+            if (!(['TRACK', 'TRV_END'].includes(slot.kind) && (slot.tier || '') === 'FRONT')) return;
+            if (!slot.options.length) return;
+            slot.suppressedBy = 'the stationary fascia';
+            slot.suppressedReason = 'the front layer is the fascia with rings — the track and its ends serve the rear layer only';
+            slot.rejected = [...slot.rejected, ...slot.options.map(choice => ({
+                choice, ok: false, rule: 'front layer', detail: slot.suppressedReason,
             }))];
             slot.options = [];
         });

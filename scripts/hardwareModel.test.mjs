@@ -913,14 +913,18 @@ eq('nonsense is null', measureOf('n/a'), null);
         ok('naming the rod that suppressed it', sl.suppressedBy === 'TR');
     }
     // A fascia at the FRONT is the face of a double — rings ride on it. (The H1-2TRV case.)
+    // 2026-08-31: rings became the FRONT-LAYER ANSWER, so the order must first BE a double. Here
+    // the fascia is the only front-capable rod, so the frontLayer axis is implied and rings arrive
+    // without a question — the assembly only comes one way.
     {
         const cs = [
             C({ id: 'F', partId: 'FA', role: 'FASCIA', rodKind: 'TRAVERSE', tier: 'FRONT', nodes: ['fas'] }),
             C({ id: 'T', partId: 'TR', role: 'TRACK', rodKind: 'TRAVERSE', tier: 'BACK', nodes: ['trk'] }),
             ring,
         ];
-        eq('a front fascia offers rings', ringSlot(cs, {}, ['F']).options.length, 1);
-        eq('the track behind it does not veto them', ringSlot(cs, {}, ['F', 'T']).options.length, 1);
+        eq('a front fascia offers rings', ringSlot(cs, { setup: 'DOUBLE' }, ['F']).options.length, 1);
+        eq('the track behind it does not veto them', ringSlot(cs, { setup: 'DOUBLE' }, ['F', 'T']).options.length, 1);
+        eq('…but not before the order is a double', ringSlot(cs, {}, ['F']).options.length, 0);
     }
     // A fascia with nothing behind it is a cover, not a face.
     {
@@ -1946,15 +1950,77 @@ eq('nonsense is null', measureOf('n/a'), null);
         C({ id: 'CAR', partId: 'H1-2TRVCAR', role: 'CARRIER', nodes: ['c'] }),
     ];
     const norm = applyFitsDefaults(cs.map(normalizeChoice));
-    const ringsFor = (sel) => slots(norm, { setup: 'DOUBLE' }, sel).find(s => s.kind === 'RING');
+    // 2026-08-31: "omit the front track" grew up into an asked question — the frontLayer axis.
+    // Same fork, said out loud: FASCIA opens the rings, TRACK builds carriers.
+    const ringsFor = (sel, extra = {}) => slots(norm, { setup: 'DOUBLE', ...extra }, sel).find(s => s.kind === 'RING');
 
     // A fascia at the front of a double IS a surface a ring hangs on.
-    ok('omit the track and rings are offered', (ringsFor(['FASCIA'])?.options || []).length === 1);
+    ok('answer the front layer FASCIA and rings are offered', (ringsFor(['FASCIA'], { frontLayer: 'FASCIA' })?.options || []).length === 1);
+    ok('unanswered, the ring question stays closed', (ringsFor(['FASCIA'])?.options || []).length === 0);
     // A track is not — what rides in a track is a carrier, and the engine builds those itself.
-    eq('choose the track and the ring question is gone', (ringsFor(['TRACK'])?.options || []).length, 0);
+    eq('choose the track and the ring question is gone', (ringsFor(['TRACK'], { frontLayer: 'TRACK' })?.options || []).length, 0);
     ok('…and the carrier is built without being asked',
         ridersFor(norm, { setup: 'DOUBLE' }, ['TRACK']).some(r => r.role === 'CARRIER'));
     ok('a carrier is never a slot of its own', !slots(norm, { setup: 'DOUBLE' }, ['TRACK']).some(s => s.kind === 'CARRIER'));
+}
+
+// ── THE FRONT OF A DOUBLE IS A QUESTION (Stuart 2026-08-31) ──────────────────────────────────
+// "we should really decide on step 1. if single, then show one track … if double then show 2
+//  tracks, if double with front stationary fascia rings then one track and open the ring option."
+{
+    const cs = [
+        C({ id: 'FASCIA-W', partId: 'H1-2RCTWR-W', role: 'FASCIA', tier: 'FRONT', nodes: ['f'] }),
+        C({ id: 'TRACK-F', partId: 'H1-2TRV', role: 'TRACK', tier: 'FRONT', nodes: ['tf'] }),
+        C({ id: 'TRACK-B', partId: 'H1-2TRV', role: 'TRACK', tier: 'BACK', setup: 'DOUBLE', nodes: ['tb'] }),
+        C({ id: 'RING', partId: 'H1-2RCTPR', role: 'RING', tier: 'FRONT', nodes: ['r'] }),
+        C({ id: 'END-FL', partId: 'PLUG', role: 'TRV_END', tier: 'FRONT', position: 'LEFT', drive: 'MANUAL', nodes: ['efl'] }),
+        C({ id: 'END-BL', partId: 'PLUG', role: 'TRV_END', tier: 'BACK', position: 'LEFT', drive: 'MANUAL', nodes: ['ebl'] }),
+        // A single-or-double vote so the setup axis exists, as it does live (bracket + rear track).
+        C({ id: 'BKT-S', partId: 'BS', role: 'BRACKET', setup: 'SINGLE', position: 'CENTER', nodes: ['bs'] }),
+        C({ id: 'BKT-D', partId: 'BD', role: 'BRACKET', setup: 'DOUBLE', position: 'CENTER', nodes: ['bd'] }),
+    ];
+    const norm = applyFitsDefaults(cs.map(normalizeChoice));
+    const axesAt = (answers) => activeAxes(norm, answers);
+    const slotsAt = (answers, sel = []) => slots(norm, answers, sel);
+    const find = (list, kind, tier) => list.find(s => s.kind === kind && (s.tier || '') === (tier || ''));
+
+    // The question only opens on a double — and only where a fascia AND a front track both live.
+    ok('no front-layer question before setup is answered', !axesAt({}).some(a => a.key === 'frontLayer'));
+    ok('no front-layer question on a single', !axesAt({ setup: 'SINGLE' }).some(a => a.key === 'frontLayer'));
+    const fl = axesAt({ setup: 'DOUBLE' }).find(a => a.key === 'frontLayer');
+    ok('a double asks how its front is carried', !!fl && !fl.implied);
+    eq('…offering exactly the two ways', [...fl.values].sort(), ['FASCIA', 'TRACK']);
+
+    // Mode A — SINGLE: one track, no rings, no back-tier questions.
+    const single = slotsAt({ setup: 'SINGLE' }, ['FASCIA-W']);
+    eq('a single offers only the front track', find(single, 'TRACK', 'FRONT').options.map(o => o.id), ['TRACK-F']);
+    ok('a single opens no back track', !find(single, 'TRACK', 'BACK')?.options?.length);
+    eq('a single offers no rings', find(single, 'RING', 'FRONT').options.length, 0);
+
+    // Mode B — DOUBLE, front carried by TRACK: both tracks, still no rings.
+    const dblTrack = slotsAt({ setup: 'DOUBLE', frontLayer: 'TRACK' }, ['FASCIA-W', 'TRACK-F']);
+    eq('double+track keeps the front track', find(dblTrack, 'TRACK', 'FRONT').options.map(o => o.id), ['TRACK-F']);
+    eq('double+track opens the back track', find(dblTrack, 'TRACK', 'BACK').options.map(o => o.id), ['TRACK-B']);
+    eq('double+track offers no rings', find(dblTrack, 'RING', 'FRONT').options.length, 0);
+
+    // Mode C — DOUBLE, front carried by the STATIONARY FASCIA: one track, rings open, and the
+    // front track + its ends are suppressed WITH the reason on them.
+    const dblFas = slotsAt({ setup: 'DOUBLE', frontLayer: 'FASCIA' }, ['FASCIA-W']);
+    const tf = find(dblFas, 'TRACK', 'FRONT');
+    eq('double+fascia suppresses the front track', tf.options.length, 0);
+    ok('…saying why', /front layer is the fascia/.test(tf.suppressedReason || ''));
+    eq('double+fascia keeps the rear track', find(dblFas, 'TRACK', 'BACK').options.map(o => o.id), ['TRACK-B']);
+    eq('double+fascia opens the rings', find(dblFas, 'RING', 'FRONT').options.map(o => o.id), ['RING']);
+    eq('double+fascia suppresses the front traverse ends', find(dblFas, 'TRV_END', 'FRONT').options.length, 0);
+    eq('…but the rear ends still ask', find(dblFas, 'TRV_END', 'BACK').options.map(o => o.id), ['END-BL']);
+
+    // No solid family can ever grow the question: without a fascia there is nothing to vote FASCIA.
+    const solidish = applyFitsDefaults([
+        C({ id: 'R1', partId: 'H1-138', role: 'ROD', rodKind: 'SOLID', nodes: ['rod'] }),
+        C({ id: 'B1', partId: 'BS', role: 'BRACKET', setup: 'SINGLE', position: 'CENTER', nodes: ['b1'] }),
+        C({ id: 'B2', partId: 'BD', role: 'BRACKET', setup: 'DOUBLE', position: 'CENTER', nodes: ['b2'] }),
+    ].map(normalizeChoice));
+    ok('a solid double never asks about its front layer', !activeAxes(solidish, { setup: 'DOUBLE' }).some(a => a.key === 'frontLayer'));
 }
 
 // ── THE BOM READS IN THE ORDER IT WAS ANSWERED ───────────────────────────────────────────────
