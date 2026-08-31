@@ -21,7 +21,7 @@ import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
-import { queueNsAssemblyWorkOrder } from "../Shared/nsWorkOrder";
+import { queueNsAssemblyWorkOrder, pickNsWoItem } from "../Shared/nsWorkOrder";
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
 // the trade-discount / net-total display rows).
@@ -401,41 +401,54 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     }, [liveWO, liveShop]);
 
     // ⚓ THE AUTO-ANCHOR (Stuart 2026-08-31: "work orders are created from RTG as soon as the job
-    // hits there — it is too easy for parts to sit on WMS Convert before someone creates them").
-    // RTG watches its live convert-demand mirror: any open demand with no NetSuite WO and no
-    // queue claim gets its /P work order queued from HERE, automatically. Creation-time queueing
-    // stays the first line; this is the net under it (pre-8/30 demands, quota failures, other
-    // creation paths). The claim (nsWoQueuedAt) is written BEFORE queueing and the 2-minute age
-    // floor covers clients on older bundles, so a demand can never earn two NetSuite WOs.
+    // hits there"). RTG watches its live convert-demand mirror and queues the NetSuite work order
+    // itself — on the ROOT item when NetSuite knows it as an assembly ("generate the work order
+    // directly to the root item"), on the /P otherwise (the HTAEC35 phosphate model). Creation-time
+    // queueing stays the first line; this is the net under it.
+    //
+    // Duplicate protection, hardened after the 8/31 9:36 PM multi-fire (ids were claimed one at a
+    // time inside an awaited loop, so each snapshot re-run re-queued the demands the first pass had
+    // not reached): every candidate is claimed in the tried-set SYNCHRONOUSLY before any await, and
+    // each demand is re-read fresh right before queueing. A claim that never produced a number
+    // retries after 10 minutes, at most 3 attempts, each logged.
     const anchorTried = useRef(new Set());
     useEffect(() => {
         const now = Date.now();
+        const RETRY_AFTER = 10 * 60 * 1000;
+        const keyOf = (d) => `${d.id}:${d.nsWoQueuedAt || 0}`;
         const cands = liveConvD.filter(d =>
-            !d.nsWoId && !d.nsWoQueuedAt && d.targetIsNsAssembly !== false &&
-            String(d.status || 'open').toLowerCase() !== 'done' &&
+            !d.nsWoId && String(d.status || 'open').toLowerCase() !== 'done' &&
             (now - (d.createdAt || 0)) > 2 * 60 * 1000 &&
-            !anchorTried.current.has(d.id));
+            (!d.nsWoQueuedAt || (now - d.nsWoQueuedAt > RETRY_AFTER && (d.nsWoAttempts || 1) < 3)) &&
+            !anchorTried.current.has(keyOf(d)));
         if (!cands.length) return;
+        cands.forEach(d => anchorTried.current.add(keyOf(d)));
         (async () => {
+            const lookup = async (code) => {
+                if (!code) return null;
+                const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', String(code).toUpperCase())));
+                return snap.docs.map(x => x.data()).find(x => x.netSuiteInternalId) || null;
+            };
             for (const d of cands) {
-                anchorTried.current.add(d.id);
                 try {
-                    let nsAsmId = d.targetInternalId ? String(d.targetInternalId) : '';
-                    if (!nsAsmId && d.targetErpId) {
-                        const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', String(d.targetErpId).toUpperCase())));
-                        const hit = snap.docs.map(x => x.data()).find(x => x.netSuiteInternalId);
-                        if (hit) nsAsmId = String(hit.netSuiteInternalId);
-                    }
-                    if (!nsAsmId) { addLog(`⚓ auto-anchor: ${d.targetErpId} has no NetSuite internal id in the library — cannot open its work order (sync it in 11.1, then it anchors on its own).`, 'warn'); continue; }
-                    await updateDoc(doc(db, 'convert_demand', d.id), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: 'RTG auto-anchor' });
+                    // Fresh read right before acting — another client (or the creation path on a
+                    // newer bundle) may have claimed or resolved this demand since our snapshot.
+                    const freshSnap = await getDoc(doc(db, 'convert_demand', d.id));
+                    if (!freshSnap.exists()) continue;
+                    const fresh = freshSnap.data();
+                    if (fresh.nsWoId || (fresh.nsWoQueuedAt || 0) > (d.nsWoQueuedAt || 0)) continue;
+                    const pick = pickNsWoItem({ base: await lookup(d.baseErpId), target: await lookup(d.targetErpId), baseErp: d.baseErpId, targetErp: d.targetErpId });
+                    if (!pick) { addLog(`⚓ auto-anchor: neither ${d.baseErpId} nor ${d.targetErpId} is a synced NetSuite ASSEMBLY in the library — cannot open a work order (fix the item, then it anchors on its own).`, 'warn'); continue; }
+                    const attempt = d.nsWoQueuedAt ? (d.nsWoAttempts || 1) + 1 : 1;
+                    await updateDoc(doc(db, 'convert_demand', d.id), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: 'RTG auto-anchor', nsWoAttempts: attempt });
                     await queueNsAssemblyWorkOrder({
-                        brandId: d.brandId, assemblyInternalId: nsAsmId,
-                        erp: d.targetErpId, qty: d.qty,
-                        memo: `convert ${d.baseErpId} → ${d.targetErpId}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
-                        writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                        brandId: d.brandId, assemblyInternalId: pick.internalId,
+                        erp: pick.erp, qty: d.qty,
+                        memo: `${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                        writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: { nsWoOnErp: pick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
                         sourceApp: 'RTG_AUTO_ANCHOR', createdBy: 'RTG',
                     });
-                    addLog(`⚓ auto-anchor: NetSuite work order queued for ${d.targetErpId} ×${d.qty} (${d.woNum || d.id}) — the number stamps back onto the demand and the convert builds against it.`, 'success');
+                    addLog(`⚓ auto-anchor${attempt > 1 ? ` (attempt ${attempt} — the last queue never returned a number; check 11.1 for the failed entry)` : ''}: NetSuite work order queued on ${pick.erp} ×${d.qty} for ${d.woNum || d.id}${pick.side === 'base' ? ' — the ROOT item, NetSuite\u2019s assembly for this chain' : ' — the convert builds against it'}.`, 'success');
                 } catch (e) { addLog(`⚓ auto-anchor failed for ${d.targetErpId}: ${e.message || e}`, 'error'); }
             }
         })();

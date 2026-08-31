@@ -11,6 +11,19 @@
 import { enqueueNsWrite } from './nsOutbox';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 
+// Which item does the NetSuite work order go on? (Stuart 2026-08-31: "the root items are
+// assemblies — generate the work order directly to the root item".) The ROOT (base/raw) wins
+// whenever NetSuite knows it as an assembly — the WO then represents the whole mill→convert
+// chain. The /P is the fallback vehicle for families where the raw is a plain inventory item
+// (the proven HTAEC35 phosphate model). Neither an assembly → null, caller says so out loud.
+export const isNsAssemblyRec = (r) => !!(r && r.netSuiteInternalId &&
+    (r.partClass === 'Assembly' || r.partClass === 'Master Assembly' || String(r.netSuiteRecordType || '').toLowerCase() === 'assemblyitem'));
+export const pickNsWoItem = ({ base, target, baseErp = '', targetErp = '' }) => {
+    if (isNsAssemblyRec(base)) return { erp: baseErp || base.legacyErpId || '', internalId: String(base.netSuiteInternalId), side: 'base' };
+    if (isNsAssemblyRec(target)) return { erp: targetErp || target.legacyErpId || '', internalId: String(target.netSuiteInternalId), side: 'target' };
+    return null;
+};
+
 export const queueNsAssemblyWorkOrder = async ({
     brandId, assemblyInternalId, erp = '', qty, reqDate = '', memo = '',
     writeBacks = [], sourceApp = 'APP', createdBy = '',

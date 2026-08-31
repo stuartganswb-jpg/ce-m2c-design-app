@@ -26,7 +26,7 @@ import { planFinishedRun, fetchAvailability, stockCheckReport, isAssemblyPart } 
 import { millBaseOf } from './finishRouting.js';
 import { fetchAvailabilityUnits } from './oeReviewPlan.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
-import { queueNsAssemblyWorkOrder } from './nsWorkOrder';
+import { queueNsAssemblyWorkOrder, pickNsWoItem } from './nsWorkOrder';
 // The firebase imports serve only the executor/gate-clearer at the bottom — the planners above
 // never touch them, so node tests can import the planning half without dragging firebase in.
 import { db } from '../../firebase';
@@ -182,8 +182,8 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
         const a = actions[i];
         if (a.kind === 'CONVERT') {
             const basePart = partOf(a.base), targetPart = partOf(a.target);
-            const targetIsNsAsm = !!(targetPart && targetPart.netSuiteInternalId &&
-                (targetPart.partClass === 'Assembly' || targetPart.partClass === 'Master Assembly' || targetPart.netSuiteRecordType === 'assemblyitem'));
+            const woPick = pickNsWoItem({ base: basePart, target: targetPart, baseErp: a.base, targetErp: a.target });
+            const targetIsNsAsm = !!(woPick && woPick.side === 'target');
             const demandId = `CVD-${String(brandId).toUpperCase()}-${Date.now()}-${++seq}`;
             await setDoc(doc(db, 'convert_demand', demandId), {
                 id: demandId, brandId, status: 'open',
@@ -208,24 +208,24 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             // is queued for the /P; the number stamps back onto the DEMAND, and the WMS convert
             // then builds AGAINST it (createdfrom) so NetSuite closes it as the build posts.
             // No NS assembly for the /P → said out loud, never guessed.
-            if (targetIsNsAsm) {
+            if (woPick) {
                 try {
                     await queueNsAssemblyWorkOrder({
-                        brandId, assemblyInternalId: String(targetPart.netSuiteInternalId),
-                        erp: a.target, qty: a.qty, reqDate,
-                        memo: `${soRef ? `SO ${soRef} · ` : ''}convert ${a.base} → ${a.target}${finWoErpId ? ` · for ${finWoErpId}` : ''}`,
-                        writeBacks: [{ collection: 'convert_demand', docId: demandId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                        brandId, assemblyInternalId: woPick.internalId,
+                        erp: woPick.erp, qty: a.qty, reqDate,
+                        memo: `${soRef ? `SO ${soRef} · ` : ''}${woPick.side === 'base' ? `mill ${a.base}, convert to ${a.target}` : `convert ${a.base} → ${a.target}`}${finWoErpId ? ` · for ${finWoErpId}` : ''}`,
+                        writeBacks: [{ collection: 'convert_demand', docId: demandId, patch: { nsWoOnErp: woPick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
                         sourceApp: source || 'precheck', createdBy,
                     });
                     // The claim stamp — RTG's auto-anchor skips demands that already queued,
                     // so a slow outbox never earns a duplicate NetSuite work order.
-                    await updateDoc(doc(db, 'convert_demand', demandId), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: createdBy || 'creation' });
-                    made.push(`📤 NS work order queued for ${a.target} ×${a.qty} — the convert builds against it`);
+                    await updateDoc(doc(db, 'convert_demand', demandId), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: createdBy || 'creation', nsWoAttempts: 1 });
+                    made.push(`📤 NS work order queued on ${woPick.erp} ×${a.qty}${woPick.side === 'base' ? ' (the root item — NetSuite\'s assembly)' : ' — the convert builds against it'}`);
                 } catch (nsErr) {
-                    made.push(`⚠ ${a.target}: NetSuite WO queue failed (${nsErr.message || nsErr}) — convert will post standalone`);
+                    made.push(`⚠ ${woPick.erp}: NetSuite WO queue failed (${nsErr.message || nsErr}) — RTG auto-anchor will retry`);
                 }
             } else {
-                made.push(`⚠ ${a.target} is not a synced NetSuite ASSEMBLY — no work-order anchor; convert posts standalone (fix the item with Eric)`);
+                made.push(`⚠ neither ${a.base} nor ${a.target} is a synced NetSuite ASSEMBLY — no work-order anchor; convert posts standalone (fix the item with Eric)`);
             }
         } else if (a.kind === 'COVERED') {
             made.push(`✔ ${a.qty} × ${a.code} already covered by ${a.coveredBy} on order (open PO/WO in NetSuite) — nothing raised`);

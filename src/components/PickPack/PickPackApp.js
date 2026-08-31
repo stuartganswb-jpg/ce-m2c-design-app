@@ -4,7 +4,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
-import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
+import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
@@ -1714,7 +1714,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             const consumeBin = String(srcBin).trim().toUpperCase();
             const receiveBin = String(destBin || '').trim().toUpperCase();
             if (!receiveBin) { setIsSyncing(false); return alert(`${erpOf(target)} has no destination bin — set its home bin (or use the Convert cart, which takes a put-away bin per line). The /P is bin-tracked, so NetSuite needs a receive bin.`); }
-            const demandWo = convertDemandId ? (convertDemands.find(d => d.id === convertDemandId) || {}).nsWoId : null;
+            const demandDoc = convertDemandId ? (convertDemands.find(d => d.id === convertDemandId) || {}) : {};
+            const demandWo = (!demandDoc.nsWoOnErp || demandDoc.nsWoOnErp === demandDoc.targetErpId) ? demandDoc.nsWoId : null;
             const built = await postConvertBuild({ itemId: assemblyId, quantity: qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: receiveBin, memo: nsMemo(memoText), workOrderId: demandWo || undefined });
 
             alert(`✅ Assembly build #${built.id || ''} posted: +${qty} × ${erpOf(target)}, −${qty} × ${base.erpId} (consumed from ${consumeBin}, received into ${receiveBin}).`);
@@ -1954,7 +1955,8 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             // Build via the RESTlet — it sources the BOM and sets the raw component's consume bin server-side,
             // and receives the finished /P into the operator's put-away bin. Raw is consumed from the CART bin.
             const consumeBin = (convBatch.cartBin || cartBin || 'PHOS-CART').trim().toUpperCase();
-            const lineDemandWo = line.demandId ? (convertDemands.find(d => d.id === line.demandId) || {}).nsWoId : null;
+            const lineDemandDoc = line.demandId ? (convertDemands.find(d => d.id === line.demandId) || {}) : {};
+            const lineDemandWo = (!lineDemandDoc.nsWoOnErp || lineDemandDoc.nsWoOnErp === lineDemandDoc.targetErpId) ? lineDemandDoc.nsWoId : null;
             await postConvertBuild({ itemId: assembly.id, quantity: line.qty, subsidiary: nsConfig.subsidiary, location: nsConfig.location, bin: consumeBin, toBin: newBin, memo: nsMemo(`Phos convert ${convBatch.cartBin || ''}`), workOrderId: lineDemandWo || undefined });
             const lines = (convBatch.lines || []).map(l => l.lineId === line.lineId ? { ...l, status: 'converted', newBin, convertedAt: Date.now() } : l);
             await updateDoc(doc(db, "conversion_batches", convBatch.id), { lines, updatedAt: Date.now() });
@@ -4131,7 +4133,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         return (
                                             <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderBottom: `1px solid ${theme.line}`, paddingBottom: '8px' }}>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink }}>
-                                                    {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs{d.woNum ? ` · ${d.woNum}` : ''}{d.finWoId ? ` · for ${d.finWoErpId || finRefOf(d.finWoId)}` : ''}{d.nsWoTran ? <span style={{ color: '#3a7d33' }}>{` · NS WO ${d.nsWoTran}`}</span> : ''}{d.createdBy ? ` · ${d.createdBy}` : ''}
+                                                    {d.baseErpId} → <span style={{ color: theme.brass }}>{d.targetErpId}</span> · {d.qty} pcs{d.woNum ? ` · ${d.woNum}` : ''}{d.finWoId ? ` · for ${d.finWoErpId || finRefOf(d.finWoId)}` : ''}{d.nsWoTran ? <span style={{ color: '#3a7d33' }}>{` · NS WO ${d.nsWoTran}${d.nsWoOnErp && d.nsWoOnErp !== d.targetErpId ? ` (on ${d.nsWoOnErp})` : ''}`}</span> : ''}{d.createdBy ? ` · ${d.createdBy}` : ''}
                                                     {rawPart && <span style={{ color: theme.inkSoft }}> · raw on hand {rawPart.onHand}</span>}
                                                     {onCart && <span style={{ color: '#2f7d3b' }}> · ON CART — convert it above</span>}
                                                 </div>
@@ -4151,18 +4153,18 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                         // BACKFILL THE ANCHOR (2026-08-31): demands created before the
                                                         // /P work-order queueing shipped have no NS WO — one click opens
                                                         // it now, so this convert builds AGAINST a work order too.
-                                                        const tgt = enrichedByErp(d.targetErpId);
-                                                        if (!tgt?.netSuiteInternalId) return alert(`${d.targetErpId} has no NetSuite internal id here — Sync NetSuite Stock first.`);
+                                                        const pick = pickNsWoItem({ base: enrichedByErp(d.baseErpId), target: enrichedByErp(d.targetErpId), baseErp: d.baseErpId, targetErp: d.targetErpId });
+                                                        if (!pick) return alert(`Neither ${d.baseErpId} nor ${d.targetErpId} is a synced NetSuite ASSEMBLY here — Sync NetSuite Stock / fix the item first.`);
                                                         try {
                                                             await queueNsAssemblyWorkOrder({
-                                                                brandId: activeBrand, assemblyInternalId: String(tgt.netSuiteInternalId),
-                                                                erp: d.targetErpId, qty: d.qty,
-                                                                memo: `convert ${d.baseErpId} → ${d.targetErpId}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
-                                                                writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                                                                brandId: activeBrand, assemblyInternalId: pick.internalId,
+                                                                erp: pick.erp, qty: d.qty,
+                                                                memo: `${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                                                                writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: { nsWoOnErp: pick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
                                                                 sourceApp: 'WMS_CONVERT', createdBy: operator?.name || '',
                                                             });
-                                                            await updateDoc(doc(db, 'convert_demand', d.id), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: operator?.name || 'WMS' });
-                                                            alert(`📤 NetSuite work order queued for ${d.targetErpId} ×${d.qty} — its number lands on this row in ~1 min, and the convert will build against it.`);
+                                                            await updateDoc(doc(db, 'convert_demand', d.id), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: operator?.name || 'WMS', nsWoAttempts: (d.nsWoAttempts || 0) + 1 });
+                                                            alert(`📤 NetSuite work order queued on ${pick.erp} ×${d.qty}${pick.side === 'base' ? ' (the root item)' : ''} — its number lands on this row in ~1 min.`);
                                                         } catch (e) { alert('NS WO queue failed: ' + (e.message || e)); }
                                                     }} disabled={isSyncing}
                                                         title="Open the NetSuite work order this convert should build against (demands created before 8/30 have none). The number stamps back here; the convert then posts createdfrom it."
