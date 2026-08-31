@@ -26,7 +26,7 @@ import { planFinishedRun, fetchAvailability, stockCheckReport, isAssemblyPart } 
 import { millBaseOf } from './finishRouting.js';
 import { fetchAvailabilityUnits } from './oeReviewPlan.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
-import { queueNsAssemblyWorkOrder, pickNsWoItem } from './nsWorkOrder';
+import { queueNsAssemblyWorkOrder, pickNsWoItem, isNsAssemblyRec } from './nsWorkOrder';
 // The firebase imports serve only the executor/gate-clearer at the bottom — the planners above
 // never touch them, so node tests can import the planning half without dragging firebase in.
 import { db } from '../../firebase';
@@ -273,6 +273,25 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             }
             shopWoIds.push(woId);
             made.push(`🏭 SHOP WO ${woId} — ${a.qty} × ${a.code}${dispatchShop ? ' (sent to shop milling)' : ' (RTG → Push to Shop)'}`);
+            // THE ROOT'S OWN ANCHOR (Stuart 2026-08-31 "both" model): when the milled item is a
+            // NetSuite assembly in its own right, its work order opens WITH the milling WO — the
+            // number stamps back onto this hq record, and RTG's ⛏ mill-build button closes it
+            // (createdfrom) when the shop finishes. The /P convert keeps its separate WO.
+            if (isNsAssemblyRec(p)) {
+                try {
+                    await queueNsAssemblyWorkOrder({
+                        brandId, assemblyInternalId: String(p.netSuiteInternalId),
+                        erp: a.code, qty: a.qty, reqDate,
+                        memo: `${soRef ? `SO ${soRef} · ` : ''}mill ${a.code}${finWoErpId ? ` · for ${finWoErpId}` : ''}`,
+                        writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                        sourceApp: source || 'precheck', createdBy,
+                    });
+                    await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
+                    made.push(`📤 NS work order queued on ${a.code} ×${a.qty} (the root — milling anchor)`);
+                } catch (nsErr) {
+                    made.push(`⚠ ${a.code}: root NS WO queue failed (${nsErr.message || nsErr}) — open it from RTG later`);
+                }
+            }
         }
     }
     const gateFields = convertDemandIds.length ? {

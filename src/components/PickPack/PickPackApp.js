@@ -4145,6 +4145,28 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     setConvertLot(new Date().toLocaleDateString('en-CA'));
                                                     setConvertDemandId(d.id);
                                                 }} disabled={isSyncing || onCart} style={{ padding: '10px 16px', background: onCart ? theme.paper2 : theme.brass, color: onCart ? theme.inkSoft : '#fff', border: onCart ? `1px solid ${theme.line}` : 'none', cursor: (isSyncing || onCart) ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>{onCart ? 'On cart' : 'Pull & Convert →'}</button>
+                                                {d.nsWoId && ['admin', 'superadmin'].includes(safeUserRole) && (
+                                                    <button onClick={async () => {
+                                                        // ⟲ RE-ANCHOR (Stuart 2026-08-31): for the multi-fire cleanup — close the
+                                                        // stray NetSuite WOs there FIRST, then this clears the stamps and queues
+                                                        // exactly one fresh WO under the current rule (/P first).
+                                                        const pick = pickNsWoItem({ base: enrichedByErp(d.baseErpId), target: enrichedByErp(d.targetErpId), baseErp: d.baseErpId, targetErp: d.targetErpId });
+                                                        if (!pick) return alert(`Neither ${d.baseErpId} nor ${d.targetErpId} is a synced NetSuite ASSEMBLY here — Sync NetSuite Stock / fix the item first.`);
+                                                        if (!window.confirm(`⟲ Re-anchor ${d.targetErpId} ×${d.qty}?\n\nCurrent stamp ${d.nsWoTran || d.nsWoId} is dropped and ONE fresh NetSuite work order is queued on ${pick.erp}.\n\nClose the old WO(s) in NetSuite yourself first — this does not close anything there. Continue?`)) return;
+                                                        try {
+                                                            await updateDoc(doc(db, 'convert_demand', d.id), { nsWoId: deleteField(), nsWoTran: deleteField(), nsWoOnErp: deleteField(), nsWoQueuedAt: Date.now(), nsWoQueuedBy: `${operator?.name || 'WMS'} re-anchor`, nsWoAttempts: 1 });
+                                                            await queueNsAssemblyWorkOrder({
+                                                                brandId: activeBrand, assemblyInternalId: pick.internalId, erp: pick.erp, qty: d.qty,
+                                                                memo: `${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                                                                writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: { nsWoOnErp: pick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                                                                sourceApp: 'WMS_REANCHOR', createdBy: operator?.name || '',
+                                                            });
+                                                            alert(`📤 One fresh NetSuite work order queued on ${pick.erp} ×${d.qty} — its number lands on this row in ~1 min.`);
+                                                        } catch (e) { alert('Re-anchor failed: ' + (e.message || e)); }
+                                                    }} disabled={isSyncing}
+                                                        title="Drop this demand's NetSuite WO stamp and queue ONE fresh work order under the current rule. Close the old WO(s) in NetSuite first — this does not close anything there."
+                                                        style={{ padding: '10px 12px', background: 'transparent', color: '#8a7a4f', border: '1px solid #8a7a4f', cursor: isSyncing ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px' }}>⟲ Re-anchor</button>
+                                                )}
                                                 {!d.nsWoId && d.nsWoQueuedAt && (
                                                     <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#8a7a4f', alignSelf: 'center' }} title="The NetSuite work order is queued (ns_outbox) — its number stamps here when the worker posts it.">⚓ NS WO queued…</span>
                                                 )}

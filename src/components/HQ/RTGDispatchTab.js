@@ -21,7 +21,7 @@ import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
-import { queueNsAssemblyWorkOrder, pickNsWoItem } from "../Shared/nsWorkOrder";
+import { queueNsAssemblyWorkOrder, pickNsWoItem, postNsAssemblyBuild } from "../Shared/nsWorkOrder";
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
 // the trade-discount / net-total display rows).
@@ -1756,6 +1756,30 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     // conversation and the writes. It sits on RTG because these are ORDER-LIFECYCLE events — the
     // order is being closed short — not packing events.
     const [balanceModal, setBalanceModal] = useState(null);   // { order, kind, ordered, good, bad, salvage }
+
+    // ⛏ THE ROOT WO CLOSER (Stuart 2026-08-31 "both" model): a milling WO's own NetSuite work
+    // order (opened at creation) is closed by posting the root's assembly build — createdfrom,
+    // so NetSuite closes it exactly like the /P convert closes its WO. Manual button first (a
+    // wrong build moves real inventory); automate at mill-complete once a live post is verified.
+    const postRootMillBuild = async (o) => {
+        const code = String(o.partErpId || o.rootItem || o.erpId || '').toUpperCase();
+        const qty = Number(o.totalParts || o.qty || 0);
+        if (!code || !qty || !o.nsWoId) return;
+        try {
+            const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', code)));
+            const lib = snap.docs.map(x => x.data()).find(x => x.netSuiteInternalId);
+            if (!lib) return alert(`${code} has no NetSuite internal id in the library — sync it (11.1) first.`);
+            const toBin = (lib.manufacturingSpecs && lib.manufacturingSpecs.binLocation) || '';
+            if (!window.confirm(`⛏ Post the mill build to NetSuite?\n\nBuild ${qty} × ${code} AGAINST ${o.nsWoTran || `WO id ${o.nsWoId}`} (createdfrom — NetSuite closes the work order itself).\nReceive into bin: ${toBin || '(item not bin-tracked / none set)'}\nComponents consume per the item's NetSuite BOM.\n\nThis moves real inventory. Continue?`)) return;
+            const b = await postNsAssemblyBuild({ nsProxyFetch, brandId: activeBrand, internalId: lib.netSuiteInternalId, qty, toBin, memo: `Mill build ${code} · ${woRefOf(o)}`, workOrderId: o.nsWoId });
+            await updateDoc(doc(db, 'hq_work_orders', o.id), { nsRootBuildPosted: true, nsRootBuildId: b.id || null, nsRootBuildAt: Date.now(), nsRootBuildBy: currentUser?.name || '' });
+            addLog(`⛏ mill build #${b.id || ''} posted: +${qty} × ${code} against ${o.nsWoTran || o.nsWoId} — NetSuite closes that work order itself.`, 'success');
+            alert(`✅ Mill build #${b.id || ''} posted — ${o.nsWoTran || 'the work order'} closes in NetSuite (createdfrom).`);
+        } catch (e) {
+            addLog(`⛏ mill build failed for ${code}: ${e.message || e}`, 'error');
+            alert(`⛔ Mill build failed: ${e.message || e}\n\nNothing was changed in the app — fix the cause and press ⛏ again.`);
+        }
+    };
     const mayCloseBalance = canCloseBalance(userRole);
 
     const runBalanceClose = async () => {
@@ -2071,6 +2095,11 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                 <button title="Built fewer than ordered? Record what was good, say what happened to the rest, close the balance and re-issue the shortfall."
                     style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}
                     onClick={() => setBalanceModal({ order: o, kind, ordered: Number(o.totalParts || o.qty || 0), good: '', bad: '', salvage: true })}>⚖ Close Short</button>
+            )}
+            {kind !== 'sales' && o.nsWoId && !o.nsRootBuildPosted && (o.source === 'PRECHECK_MAKEUP' || o.routeTo === 'SHOP') && mayCloseBalance && (
+                <button title={`Post the mill build to NetSuite against ${o.nsWoTran || 'this WO\u2019s open NetSuite work order'} — createdfrom, so NetSuite closes it. Press once milling is complete.`}
+                    style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: '#3a7d44', borderColor: '#3a7d44' }}
+                    onClick={() => postRootMillBuild(o)}>⛏ Mill Build</button>
             )}
             {kind !== 'sales' && (
                 <button title="Re-explode this assembly against today's BOM and rewrite the pull lines — for an order raised before a BOM was corrected. Refused once picking has started."
