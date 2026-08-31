@@ -113,6 +113,13 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
                                         📍 {place}
                                     </div>
                                 )}
+                                {/* The WO11453 class (2026-08-31): on the shelf, NetSuite never got the
+                                    build. This popup is read-only by design — the 🔨 lives on the RTG card. */}
+                                {o.orderType === 'stock' && o.packStatus === 'Packed' && o.nsWoId && !o.nsWoCompletionPosted && (
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f', marginTop: '5px' }}>
+                                        ⚠ NS build never posted — the shelf has the pieces, NetSuite shows none. Post it from this WO's card on RTG (🔨).
+                                    </div>
+                                )}
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginTop: place ? '3px' : '7px', lineHeight: 1.5 }}>
                                     <span style={{ color: tone }}>NEXT</span> · {NEXT_MOVE[st.slowest] || '—'}
                                     {st.isSplit && <span> (that is the {stageLabel(st.slowest).toLowerCase()} half — the other is further along)</span>}
