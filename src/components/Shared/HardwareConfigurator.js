@@ -331,9 +331,18 @@ function HardwareConfiguratorInner({
     // that changes is that a slot left holding ONE end stops being a question and becomes a pick
     // the engine makes — so it prices, renders, reaches the BOM and pushes exactly as if it had
     // been clicked. Tag a second manual end tomorrow and the question comes back on its own.
-    const settledKeys = useMemo(() => new Set(
-        model.slots.filter(s => s.kind === 'TRV_END' && s.options.length === 1).map(s => s.key)
-    ), [model]);
+    // ⚠ NOTHING SETTLES BEFORE ITS WORLD EXISTS (Stuart 2026-08-29, H1-2TRV: an end plug AND a
+    // Somfy pulley rendered and billed on an untouched screen). The settle rule fired the moment a
+    // TRV_END slot held one option — including before the rod type was even answered, when the 1.6
+    // rework left each end in its own single-option slot. Same restraint the ring and return rules
+    // state: only judged once a rod is CHOSEN. The ends still auto-pick the instant a traverse rod
+    // is selected and the drive answer has filtered them — that behavior is unchanged.
+    const settledKeys = useMemo(() => {
+        const chosenIds = new Set(Object.values(resolvePicks(model, picks)));
+        const trvChosen = model.choices.some(c => chosenIds.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind === TRAVERSE);
+        if (!trvChosen) return new Set();
+        return new Set(model.slots.filter(s => s.kind === 'TRV_END' && s.options.length === 1).map(s => s.key));
+    }, [model, picks, resolvePicks]);
     const livePicks = useMemo(() => {
         const auto = {};
         model.slots.forEach(s => { if (settledKeys.has(s.key)) auto[s.key] = s.options[0].id; });
