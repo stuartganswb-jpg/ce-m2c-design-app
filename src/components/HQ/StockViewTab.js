@@ -74,6 +74,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // modal — live stock with units, sourcing-resolved routing, the NetSuite work-order vehicle —
     // and writes NOTHING until the operator approves. { jobs, nsError, unitsKnown, busy }
     const [oeReview, setOeReview] = useState(null);
+    // STOCK REVIEW (Stuart 2026-08-31: the visual gate for the stock paths too). Pre-flight of
+    // createStockFinWOs: the SAME pre-check that will execute renders its per-row plan first;
+    // rows untick out; Approve re-enters with {approved:true} and writes.
+    const [stockReview, setStockReview] = useState(null); // { rows: [{r, info, qty, actionsText[], blocked, include}], toMake }
     const [onOrdModal, setOnOrdModal] = useState(null); // snapshot row → open PO/WO inbound detail popup
     const [cutModal, setCutModal] = useState(null);     // rod-cut order builder — see openCutModal
     // ── THE CUT TOOL OPENS ON ANY POLE (Stuart 2026-08-25) ──────────────────────────────────────
@@ -1254,7 +1258,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // items get one WO per row PARKED IN RTG DISPATCH (Stuart 2026-07-16: same control gate as
     // the POs — nothing reaches the floor un-reviewed); in-house items that ALSO carry a vendor
     // prompt per item — PO to the vendor or WO to the floor.
-    const createStockFinWOs = async (toMake) => {
+    const createStockFinWOs = async (toMake, opts = {}) => {
         const reqDate = woNeedBy || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
         const made = [];
         // ── PHASE 1: resolve each row's BOM pins — the pre-check and the pull lines read the
@@ -1290,6 +1294,29 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 if (pre.nsError) addLog(`⚠ Component pre-check skipped — NetSuite unreachable (${String(pre.nsError).slice(0, 120)}). Verify component stock manually.`, 'warn');
                 else pre.results.forEach(res => preByKey.set(res.key, res));
             } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
+        }
+        // ── THE VISUAL GATE (Stuart 2026-08-31): before anything writes, show the exact plan
+        // this run computed — the same pre-check results execution will use. Approve re-enters
+        // with the rows the operator kept; Cancel writes nothing.
+        if (!opts.approved) {
+            const actionText = (a) => a.kind === 'CONVERT' ? `⇄ CONVERT ${a.qty} × ${a.base} → ${a.target} (raw on hand ${a.rawHave ?? '?'})`
+                : a.kind === 'SHOP' ? `🏭 SHOP WO — mill ${a.qty} × ${a.code}`
+                : a.kind === 'COVERED' ? `✔ ${a.qty} × ${a.code} covered by ${a.coveredBy} on order — nothing raised`
+                : a.kind === 'BUY_NOTE' ? `🧾 ${a.code} short ${a.qty} — BOUGHT${a.vendorName ? ` (${a.vendorName})` : ''}: PO decision, no shop WO`
+                : '';
+            setStockReview({
+                toMake,
+                rows: prepped.map((x, key) => {
+                    const pre = preByKey.get(key) || null;
+                    const blocked = !!(pre && pre.rawUnknown);
+                    return {
+                        key, erpId: x.erpId, name: x.part?.itemName || '', qty: x.qty,
+                        actions: pre ? pre.actions.map(actionText).filter(Boolean) : ['(pre-check unavailable — WO would be created un-gated)'],
+                        blocked, include: !blocked,
+                    };
+                }),
+            });
+            return { n: 0, made: [], deferred: true };
         }
         let n = 0;
             for (let key = 0; key < prepped.length; key++) {
@@ -1908,6 +1935,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 ...(shopWos ? [`• ${shopWos} raw core work order(s) → RTG Dispatch (Push to Shop there)`] : []),
                 ...(convN ? [`• ${convN} convert to-do(s) → WMS · Convert tab ("Needs Phosphating")`] : []),
                 ...(plateN ? [`• ${plateN} plating to-do(s) → WMS · Plating tab ("Needs Plating")`] : []),
+                ...(finRes.deferred ? ['• Finishing work orders → REVIEW MODAL open (approve or cancel there)'] : []),
                 ...(finRes.n ? [`• ${finRes.n} finishing work order(s) → RTG Dispatch (release to Finishing there)`] : []),
                 ...(finRes.made.length ? [`• Component pre-check raised:`, ...finRes.made.map(m => `   ${m}`)] : []),
             ];
@@ -2005,6 +2033,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         try {
             const poResult = buy.length ? await createStockPOs(buy) : { made: [], unmatched: [] };
             const woRes = woMake.length ? await createStockFinWOs(woMake) : { n: 0, made: [] };
+            if (woRes.deferred) addLog('🔍 Stock work orders → review modal — approve or cancel there; POs/converts above already executed.', 'info');
             const convN = conv.length ? await createConvertDemands(conv) : 0;
             setOrderQty({});
             const lines = [
@@ -2774,7 +2803,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                                 <span style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', flex: 1, minWidth: '160px' }}>{l.name || ''}</span>
                                                                 {link ? (
                                                                     <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', padding: '4px 9px', border: '1px solid #3a7d44', color: '#3a7d44', whiteSpace: 'nowrap' }}>
-                                                                        {link.kind === 'WO' ? `⚒ ${link.doc.nsWoTran || link.doc.id} · ${link.doc.status || ''}${link.doc.awaitingConvert ? ' · ⇄ convert' : ''}${link.doc.awaitingSoAccept ? ' · ⏳ SO' : ''}` : `📦 ${link.doc.id} · ${link.doc.vendor || ''} · ${link.doc.status || ''}`}
+                                                                        {link.kind === 'WO' ? `⚒ ${link.doc.nsWoTran || link.doc.id} · ${link.doc.status || ''}${link.doc.awaitingConvert ? ' · ⇄ convert' : ''}${link.doc.awaitingComponents && !link.doc.componentsDone ? ' · 🧩 milling' : ''}${link.doc.awaitingSoAccept ? ' · ⏳ SO' : ''}` : `📦 ${link.doc.id} · ${link.doc.vendor || ''} · ${link.doc.deliveryStatus || link.doc.status || ''}${link.doc.eta ? ` · ETA ${link.doc.eta}` : ''}`}
                                                                     </span>
                                                                 ) : (
                                                                     <button disabled={genBusy} onClick={() => generateOeLineOrder(so, l)} title="Generate the linked order for this line — in-house finish → finishing WO (parked in RTG); bought raw → vendor PO; outsourced finish → plating demand. The order carries this SO's link, need-by and notes." style={{ padding: '7px 14px', background: genBusy ? 'var(--paper-2)' : '#3a7d44', color: genBusy ? 'var(--ink-soft)' : '#fff', border: 'none', cursor: genBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', whiteSpace: 'nowrap' }}>⚙ Generate Order</button>
@@ -3861,6 +3890,63 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 </div>
 
             </div>
+
+            {/* ── STOCK REVIEW GATE (Stuart 2026-08-31) — the same visual gate for the stock
+                paths: the run's OWN pre-check plan, row by row, before one WO exists. */}
+            {stockReview && (() => {
+                const rows = stockReview.rows;
+                const included = rows.filter(r => r.include && !r.blocked);
+                const toggle = (key) => setStockReview(prev => ({ ...prev, rows: prev.rows.map(r => r.key === key ? { ...r, include: !r.include } : r) }));
+                const approve = async () => {
+                    const keep = new Set(included.map(r => r.key));
+                    const toMake = stockReview.toMake.filter((_, i) => keep.has(i));
+                    setStockReview(null);
+                    if (!toMake.length) return;
+                    setGenBusy(true);
+                    try {
+                        const res = await createStockFinWOs(toMake, { approved: true });
+                        alert(`✅ ${res.n} stock work order(s) created → RTG Dispatch.${res.made.length ? `\n\nPre-check raised:\n${res.made.map(m => `• ${m}`).join('\n')}` : ''}`);
+                    } catch (e) { alert('Stock WO generation failed: ' + (e.message || e)); }
+                    setGenBusy(false);
+                };
+                const mono9s = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.78)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <div style={{ background: '#fff', width: '860px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 16px 60px rgba(0,0,0,.3)' }}>
+                            <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>Review &amp; Approve — Stock Work Orders</div>
+                                    <div style={{ ...mono9s, color: 'var(--ink-soft)', marginTop: '4px' }}>The run's own pre-check plan · untick a row to drop it · nothing writes until Approve</div>
+                                </div>
+                                <button onClick={() => setStockReview(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.7rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                            </div>
+                            <div style={{ padding: '14px 26px', overflowY: 'auto', flex: 1 }}>
+                                {rows.map(r => (
+                                    <div key={r.key} style={{ display: 'flex', gap: '12px', padding: '10px 0', borderBottom: '1px solid var(--paper-2)', alignItems: 'flex-start', opacity: r.blocked ? 0.7 : 1 }}>
+                                        <input type="checkbox" checked={r.include && !r.blocked} disabled={r.blocked} onChange={() => toggle(r.key)} style={{ marginTop: '3px' }} />
+                                        <div style={{ minWidth: '200px' }}>
+                                            <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.erpId}</span>
+                                            <span style={{ color: 'var(--ink-soft)' }}> × {r.qty}</span>
+                                            {r.name && <div style={{ fontSize: '0.75rem', color: 'var(--ink-soft)' }}>{r.name}</div>}
+                                            {r.blocked && <div style={{ ...mono9s, color: '#d9534f' }}>⛔ raw read failed — row held; retry Generate</div>}
+                                        </div>
+                                        <div style={{ flex: 1, fontSize: '0.82rem', color: 'var(--ink)' }}>
+                                            {r.actions.length ? r.actions.map((a, i) => <div key={i} style={{ marginBottom: '3px' }}>{a}</div>) : <span style={{ ...mono9s, color: '#3a7d44' }}>components in stock — the pick pulls them</span>}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            <div style={{ padding: '14px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ ...mono9s, color: 'var(--ink-soft)' }}>{included.length} of {rows.length} row(s) will execute</span>
+                                <span style={{ display: 'flex', gap: '10px' }}>
+                                    <button onClick={() => setStockReview(null)} style={{ ...mono9s, padding: '12px 18px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Cancel — write nothing</button>
+                                    <button onClick={approve} disabled={!included.length} style={{ ...mono9s, padding: '12px 22px', background: included.length ? '#3a7d44' : 'var(--paper)', color: included.length ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: included.length ? 'pointer' : 'not-allowed' }}>✓ Approve &amp; Create ({included.length})</button>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* ── ORDER ENTRY REVIEW GATE (Stuart 2026-08-29: "show its work … let operator
                 verify, then send on") — the plan, fully visible, before ONE document exists. */}

@@ -68,7 +68,12 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
     const extraHits = useMemo(() => {
         const term = U(q);
         if (term.length < 2) return [];
-        return extras.filter(d => EXTRA_MATCH_FIELDS.some(f => U(d[f]).includes(term))).slice(0, 6);
+        // A PO answers to its number, its vendor AND every item riding it — "where is my
+        // HCUMB410" should surface the inbound PO carrying it (Stuart 2026-08-31).
+        return extras.filter(d =>
+            EXTRA_MATCH_FIELDS.some(f => U(d[f]).includes(term)) ||
+            (Array.isArray(d.items) && d.items.some(it => U(it && it.itemId).includes(term)))
+        ).slice(0, 6);
     }, [extras, q]);
 
     return (
@@ -121,11 +126,16 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)', border: '1px solid var(--brass)', padding: '2px 6px' }}>{d.__kind || 'DEMAND'}</span>
                                 <b style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}>{d.woNum || d.poId || d.id}</b>
                                 <span style={{ fontSize: '0.82rem', color: 'var(--ink-soft)' }}>
-                                    {d.__kind === 'RODCUT'
+                                    {d.__kind === 'PO'
+                                        ? `${d.vendor || ''} · ${(d.items || []).slice(0, 3).map(it => `${it.quantity || ''} × ${it.itemId || ''}`).join(', ')}${(d.items || []).length > 3 ? ` +${d.items.length - 3}` : ''}`
+                                        : d.__kind === 'RODCUT'
                                         ? `${d.qtySource || ''} × ${d.sourceItemId || ''} → ${d.qtyTarget || ''} × ${d.targetItemId || ''}`
                                         : `${d.qty || ''} × ${d.baseErpId || ''}${d.targetErpId ? ` → ${d.targetErpId}` : ''}`}
                                     {d.finWoErpId || d.finWoId ? ` · for ${d.finWoErpId || d.finWoId}` : ''}
-                                    {d.status ? ` · ${d.status}` : ''}
+                                    {d.nsWoTran ? ` · NS WO ${d.nsWoTran}` : ''}{d.nsPoTran ? ` · NS PO ${d.nsPoTran}` : ''}
+                                    {d.deliveryStatus || d.status ? ` · ${d.deliveryStatus || d.status}` : ''}
+                                    {d.eta ? <b style={{ color: 'var(--brass)' }}>{` · ETA ${d.eta}`}</b> : ''}
+                                    {d.deliveryNote ? ` · ${d.deliveryNote}` : ''}
                                 </span>
                             </div>
                         </div>

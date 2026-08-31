@@ -9,6 +9,7 @@ import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderCo
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
+import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload, canCloseBalance } from '../Shared/scrapClose';
@@ -208,6 +209,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     const [liveConvD, setLiveConvD] = useState([]);
     const [livePlatD, setLivePlatD] = useState([]);
     const [liveRodCuts, setLiveRodCuts] = useState([]);
+    const [poDelivery, setPoDelivery] = useState({}); // per-PO unsaved delivery edits
     const [logTodayOnly, setLogTodayOnly] = useState(false);
     const [formTemplates, setFormTemplates] = useState({}); // hq_config/form_templates — header/footer/terms per doc type
     const [brandLogos, setBrandLogos] = useState({});       // hq_config/brand_logos — printed on the forms
@@ -1985,6 +1987,20 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                         </span>
                     )}
                 </div>
+                {/* SEE ALL — the SAME stamps the floor sees, read LIVE off the fin doc itself
+                    (Stuart 2026-08-31: "what is missing is the floor status … the same stamps,
+                    fully honest"). Source of truth, never a propagated copy. */}
+                {(() => {
+                    const fin = liveFin.find(f => f.id === (o.finPayload && o.finPayload.id) || f.id === o.id || f.orderKey === o.id || (o.orderKey && f.orderKey === o.orderKey));
+                    if (!fin) return null;
+                    const place = physicalPlaceOf(fin);
+                    return (
+                        <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <OrderStatusChips wo={fin} showWho={false} />
+                            {place && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink)', letterSpacing: '.03em' }}>📍 {place}</span>}
+                        </div>
+                    );
+                })()}
             </div>
             <button style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => handleViewOrder(o, kind)}>View</button>
             {o.hqJobId && <button style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px' }} onClick={() => setCfgQuote(o.hqJobId)}>🔍</button>}
@@ -2246,7 +2262,17 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '.1em', display: 'block', marginBottom: '4px' }}>Action Center for Approved Orders</span>
                     <h2 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.8rem', fontWeight: 500, color: 'var(--ink)' }}>Ready to Go (RTG) Dispatch</h2>
                 </div>
-                <div style={{ display: 'flex', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {/* WHERE IS IT — from RTG it sees EVERYTHING: every floor job, board record,
+                        shop job, demand, rod cut AND inbound PO (with delivery status/ETA). */}
+                    <WhereIsIt compact
+                        orders={[...liveFin, ...liveWO.filter(w => !liveFin.some(f => f.id === w.id || f.id === (w.finPayload && w.finPayload.id))), ...liveSO, ...liveShop]}
+                        extras={[
+                            ...liveConvD.map(d => ({ ...d, __kind: 'CONVERT' })),
+                            ...livePlatD.map(d => ({ ...d, __kind: 'PLATING' })),
+                            ...liveRodCuts.filter(o => !['DONE', 'CANCELLED'].includes(String(o.status || '').toUpperCase())).map(o => ({ ...o, __kind: 'RODCUT' })),
+                            ...purchaseOrders.map(p => ({ ...p, __kind: 'PO' })),
+                        ]} />
                     <button onClick={toggleAutoRelease} title={autoRelease?.enabled ? `Auto-release is ON (since ${autoRelease.sinceAt ? new Date(autoRelease.sinceAt).toLocaleString() : '—'}${autoRelease.by ? `, by ${autoRelease.by}` : ''}). New orders dispatch themselves one at a time; gated or ambiguous ones wait for a human. Click to turn OFF.` : 'Turn on auto-release: newly created orders push themselves to the floors, one at a time, fully logged. The parked backlog stays manual.'} style={{ ...btnStyle, background: autoRelease?.enabled ? 'var(--brass)' : '#fff', color: autoRelease?.enabled ? '#fff' : 'var(--brass)', border: '1px solid var(--brass)' }}>
                         {autoRelease?.enabled ? '⚡ Auto-Release ON' : '⚡ Auto-Release OFF'}
                     </button>
@@ -2431,6 +2457,38 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                     )}
                                     <button style={{ ...btnStyle, width: '100%', background: po.nsVendorId ? 'var(--brass)' : 'var(--paper-2)', color: po.nsVendorId ? '#fff' : 'var(--ink-soft)', border: 'none', marginBottom: '8px', cursor: po.nsVendorId ? 'pointer' : 'not-allowed' }} onClick={() => pushPoToNetSuite(po)}>⬆ Push PO → NetSuite</button>
                                     <button style={{ ...btnStyle, width: '100%', background: 'var(--ink)', color: '#fff', border: 'none' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
+                                    {/* DELIVERY TRACKING (Stuart 2026-08-31: "when we get delivery
+                                        updates from suppliers, we can update PO status and see it
+                                        there") — status + ETA + note, shown here, on the Needs
+                                        board chip and in Where-is-it. */}
+                                    <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed var(--line)' }}>
+                                        <div style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', marginBottom: '6px' }}>
+                                            Delivery{po.deliveryStatus ? <b style={{ color: po.deliveryStatus === 'DELAYED' ? '#d9534f' : 'var(--brass)', marginLeft: '6px' }}>{po.deliveryStatus}{po.eta ? ` · ETA ${po.eta}` : ''}</b> : <span style={{ marginLeft: '6px' }}>no supplier update yet</span>}
+                                            {po.deliveryUpdatedBy ? <span style={{ marginLeft: '6px' }}>({po.deliveryUpdatedBy})</span> : null}
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                            <select value={poDelivery[po.id]?.status ?? po.deliveryStatus ?? ''} onChange={e => setPoDelivery(prev => ({ ...prev, [po.id]: { ...(prev[po.id] || {}), status: e.target.value } }))}
+                                                style={{ flex: 1, minWidth: '110px', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', border: '1px solid var(--line)' }}>
+                                                <option value="">— status —</option>
+                                                {['ORDERED', 'CONFIRMED', 'IN TRANSIT', 'PARTIAL', 'DELIVERED', 'DELAYED'].map(x => <option key={x} value={x}>{x}</option>)}
+                                            </select>
+                                            <input type="date" value={poDelivery[po.id]?.eta ?? po.eta ?? ''} onChange={e => setPoDelivery(prev => ({ ...prev, [po.id]: { ...(prev[po.id] || {}), eta: e.target.value } }))}
+                                                style={{ padding: '5px', fontFamily: 'var(--mono)', fontSize: '9px', border: '1px solid var(--line)' }} />
+                                            <input placeholder="note (carrier, partial qty…)" value={poDelivery[po.id]?.note ?? po.deliveryNote ?? ''} onChange={e => setPoDelivery(prev => ({ ...prev, [po.id]: { ...(prev[po.id] || {}), note: e.target.value } }))}
+                                                style={{ flex: 2, minWidth: '140px', padding: '6px', fontFamily: 'var(--mono)', fontSize: '9px', border: '1px solid var(--line)' }} />
+                                            <button onClick={async () => {
+                                                const d = poDelivery[po.id] || {};
+                                                try {
+                                                    await updateDoc(doc(db, 'hq_purchase_orders', po.id), {
+                                                        deliveryStatus: d.status ?? po.deliveryStatus ?? '', eta: d.eta ?? po.eta ?? '', deliveryNote: d.note ?? po.deliveryNote ?? '',
+                                                        deliveryUpdatedAt: Date.now(), deliveryUpdatedBy: currentUser || '',
+                                                    });
+                                                    addLog(`🚚 PO ${po.poId || po.id}: delivery ${d.status || po.deliveryStatus || '—'}${(d.eta ?? po.eta) ? ` · ETA ${d.eta ?? po.eta}` : ''}.`, 'info');
+                                                    setPoDelivery(prev => { const nx = { ...prev }; delete nx[po.id]; return nx; });
+                                                } catch (e) { alert('Delivery update failed: ' + (e.message || e)); }
+                                            }} style={{ ...btnStyle, padding: '6px 12px', fontSize: '9px' }}>Save</button>
+                                        </div>
+                                    </div>
                                 </div>
                             ))}
                         </div>
