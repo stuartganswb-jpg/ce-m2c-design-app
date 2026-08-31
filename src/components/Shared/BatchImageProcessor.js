@@ -200,7 +200,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
             // "Bubley 01 20x12" IS Bubley/01P20x12. Read it, resolve it against the library, and
             // fill the form from what the LIBRARY says rather than from the folder's spelling; the
             // banner below shows both so a folder that does not resolve is obvious before upload.
-            const soft = entry.folder ? softGoodsFor(entry.folder) : null;
+            const soft = softGoodsOf(entry);
             if (soft && soft.hit) {
                 const ids = galleryIdsFor(soft.libCode);
                 setPatternId(ids.patternId);
@@ -273,6 +273,21 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         };
     }, [safeHqParts]);
 
+    // THE FILE NAME IS A SECOND WITNESS (Ashley 2026-08-31). Her folder reached the browser as
+    // "Dalton27P23x23" while the files inside were "Dalton_27P23x23-corner.jpg" — the same identity,
+    // spelled two ways, in one drop. Whichever of the two resolves to a real library item is used;
+    // the folder is asked first because it describes the whole batch, and the filename only gets a
+    // say when the folder produced nothing. A shot word like "-corner" is ignored either way.
+    const softGoodsOf = useMemo(() => (entry) => {
+        if (!entry) return null;
+        const byFolder = entry.folder ? softGoodsFor(entry.folder) : null;
+        if (byFolder && byFolder.hit) return byFolder;
+        const fname = String(entry.file?.name || '').replace(/\.[a-z0-9]{2,4}$/i, '');
+        const byFile = fname ? softGoodsFor(fname) : null;
+        if (byFile && byFile.hit) return { ...byFile, from: 'filename' };
+        return byFolder || byFile || null;
+    }, [softGoodsFor]);
+
     const folderKey = queue[currentIndex]?.folder || '~loose~';
     const currentFolderMeta = folderMeta[folderKey] || {};
 
@@ -284,7 +299,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         if (!entry || !entry.folder || autoRun) { setPairPrompt(null); return; }
         // A pillow has no bracket arm and no return fee — the combo question is a hardware
         // question, and asking it on every soft-goods folder would be pure friction.
-        if (softGoodsFor(entry.folder)?.hit) { setPairPrompt(null); return; }
+        if (softGoodsOf(entry)?.hit) { setPairPrompt(null); return; }
         const fm = folderMeta[entry.folder] || {};
         if (!fm.pairedChosen) { setPairPrompt({ folder: entry.folder }); setPairPromptQuery(""); }
         else setPairPrompt(null);
@@ -603,7 +618,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
         if (portalEnable && !String(collectionName || '').trim()) return alert("Portal flagging needs a COLLECTION — the portal shows an asset only to customers entitled to its collection. Pick one (e.g. Fabricut H1) or un-tick the portal box.");
         if (queue[currentIndex]?.folder) {
             // Fabricut folder conveyor: hard gate — identify with OUR item # AND a Fabricut code.
-            const missing = missingFor(metaFromForm(), softGoodsFor(queue[currentIndex].folder));
+            const missing = missingFor(metaFromForm(), softGoodsOf(queue[currentIndex]));
             if (missing.length) return alert(`NOT IMPORTED — missing: ${missing.join(' · ')}.\nEnter it now; Fabricut assets must be identified by our item # and a matching Fabricut code.`);
         } else if (/^H1-/i.test(String(patternId).trim()) && !resolved) {
             if (!window.confirm("This H1 pattern does not resolve to a Master Library item — import anyway?")) return;
@@ -637,7 +652,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     const handleProcessFolder = async () => {
         const baseMeta = metaFromForm();
         if (portalEnable && !baseMeta.portalFlag) return alert("Portal flagging needs a COLLECTION — pick one (e.g. Fabricut H1) or un-tick the portal box before running the folder.");
-        const soft = softGoodsFor(queue[currentIndex]?.folder);
+        const soft = softGoodsOf(queue[currentIndex]);
         const missing = missingFor(baseMeta, soft);
         if (missing.length) return alert(`NOT IMPORTED — missing: ${missing.join(' · ')}.\n${soft ? 'Fix the folder name, or type our item # by hand, before running the folder.' : 'Set up the first image completely (our item #, finish, Fabricut code) before running the folder.'}`);
         const idxs = [currentIndex];
@@ -657,7 +672,16 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                 // twenty finishes, and exactly wrong here, where it would strip the identity off
                 // every image after the first.
                 if (soft && soft.hit) {
-                    meta = { ...baseMeta, setAsThumbnail: n === 0 && baseMeta.setAsThumbnail };
+                    // When the identity came from the FILE rather than the folder, each file must be
+                    // read on its own — the folder is not the thing that identified this batch, and
+                    // assuming it would tag every image as whatever the first one happened to be.
+                    const per = soft.from === 'filename' ? softGoodsOf(entry) : null;
+                    const ids = per && per.hit ? galleryIdsFor(per.libCode) : null;
+                    meta = {
+                        ...baseMeta,
+                        ...(ids ? { patternId: ids.patternId, finishId: ids.finishId } : {}),
+                        setAsThumbnail: n === 0 && baseMeta.setAsThumbnail,
+                    };
                 } else if (n > 0) {
                     const parsed = parseRenderFilename(entry.file.name);
                     const fin = parsed?.finishId || '';
@@ -894,7 +918,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                             Master Library actually has that item. A folder is filing, not a key, so
                             the resolution is shown rather than assumed. */}
                         {(() => {
-                            const soft = softGoodsFor(queue[currentIndex]?.folder);
+                            const soft = softGoodsOf(queue[currentIndex]);
                             if (!soft) return null;
                             const ok = !!soft.hit;
                             return (
@@ -907,7 +931,7 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                     </div>
                                     <div style={{ fontFamily: theme.mono, fontSize: '12px', marginTop: '5px', color: ok ? '#3a7d44' : '#d9534f' }}>
                                         {ok
-                                            ? `✓ ${soft.libCode}${soft.matchedBy === 'parts' ? '  (matched on pattern + colour + size)' : ''}`
+                                            ? `✓ ${soft.libCode}${soft.from === 'filename' ? '  (read from the file name)' : ''}${soft.matchedBy === 'parts' ? '  (matched on pattern + colour + size)' : ''}`
                                             : `✗ ${soft.libCode || 'could not build a code'} — ${(soft.parsed.why || []).join(' · ') || 'not in the Master Library'}`}
                                     </div>
                                     {!ok && <div style={{ fontFamily: theme.mono, fontSize: '10px', marginTop: '6px', color: theme.inkSoft, lineHeight: 1.6 }}>

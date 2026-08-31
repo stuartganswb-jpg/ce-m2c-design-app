@@ -67,7 +67,13 @@ export function parsePillowFolder(folder) {
     // "/". Three spellings of ONE character, decided by whose machine is looking — so the
     // character is skipped rather than matched. What identifies the item is what sits either
     // side of it, which is the same everywhere.
-    const direct = /^\s*([A-Za-z][A-Za-z0-9 _-]*?)\s*[:/_\-\s]+\s*(\d{1,3})\s*([PT])\s*(.*?)\s*$/i.exec(name);
+    // …AND SOMETIMES THERE IS NO SEPARATOR AT ALL (Ashley 2026-08-31, her screenshot: the folder
+    // reached the browser as "Dalton27P23x23"). A Mac swaps the slash for a colon; Windows/Dropbox
+    // can simply DROP the illegal character instead of substituting one. So the separator is now
+    // optional — zero or more. What anchors the split is the colour+kind+size token, not the
+    // punctuation, and a lazy pattern takes the shortest name that leaves a valid one: "Dalton27P23x23"
+    // splits as Dalton · 27 · P · 23x23, never Dalton2 · 7 · P.
+    const direct = /^\s*([A-Za-z][A-Za-z0-9 _-]*?)\s*[:/_\-\s]*\s*(\d{1,3})\s*([PT])\s*(.*?)\s*$/i.exec(name);
     if (direct) {
         const dPattern = direct[1].trim();
         const dColor = padColor(direct[2]);
