@@ -189,7 +189,11 @@ export function resolveJobLines(job, data) {
                       }
                   }
                   let masterPart = matchPart(l.partId) || matchPart(l.legacyErpId);
-                  if (!masterPart) { result.unresolved.push({ stepTitle: `${l.name || 'Configured line'}`, partId: l.partId || l.legacyErpId }); return; }
+                  // `hard`: a TAGS line IS the finished BOM — one that can't resolve is a data
+                  // error, and its dollars would silently ride the rollup (the SO60147–SO60170
+                  // joiner incident, Stuart 2026-08-31). The builder refuses to queue on these;
+                  // the old step walk's unresolved entries stay warnings (text-only steps exist).
+                  if (!masterPart) { result.unresolved.push({ stepTitle: `${l.name || 'Configured line'}`, partId: l.partId || l.legacyErpId, hard: true, total: Number(l.total) || 0 }); return; }
                   result.stepsConsidered++;
                   if (masterPart.partClass === 'Fee' || String(masterPart.manufacturingSpecs?.productType || '').toUpperCase() === 'FEE') return;
                   if (masterPart.partClass === 'Kit') return;
@@ -406,7 +410,7 @@ export function resolveJobLines(job, data) {
           .filter(l => l && l.isAddOn && l.isFee === false && (l.partId || l.legacyErpId))
           .forEach(l => {
               const part = matchPart(l.partId) || matchPart(l.legacyErpId);
-              if (!part) { result.unresolved.push({ stepTitle: `Checkout add-on — ${l.name || l.legacyErpId || l.partId}`, partId: l.partId || l.legacyErpId }); return; }
+              if (!part) { result.unresolved.push({ stepTitle: `Checkout add-on — ${l.name || l.legacyErpId || l.partId}`, partId: l.partId || l.legacyErpId, hard: true, total: Number(l.total) || 0 }); return; }
               rawLines.push({
                   stepId: `addon:${part.id}`,
                   masterPart: part,
@@ -469,6 +473,21 @@ export async function buildNsTransaction({ job, asType = 'estimate', brand, data
         if (!hasConfig) return { ok: false, error: { code: 'NO_CONFIG', message: 'This quote has no CPQ configuration data attached — re-save it as a fresh quote.' } };
         if (stepsConsidered === 0) return { ok: false, error: { code: 'NO_LINKED_PARTS', message: "This flow's steps aren't linked to physical parts (no Linked Item / Auto-Sync BOM)." } };
         return { ok: false, error: { code: 'UNRESOLVED', message: `${stepsConsidered} configured step(s), but none resolve to a library part:\n${unresolved.map(u => `• ${u.stepTitle} → ${u.partId}`).join('\n')}` } };
+    }
+    // ── A LINE THAT CANNOT REACH NETSUITE BLOCKS THE QUEUE (Stuart 2026-08-31) ───────────────
+    // SO60147–SO60170: every joiner's $16 quietly rode the rollup because a line the resolver
+    // could not place was a WARNING, and nobody reads warnings at save time. A TAGS or checkout
+    // line is real money on the quote — pushing the transaction WITHOUT it makes the rollup lie.
+    // So the builder refuses, names the lines, and the operator fixes the item (library match /
+    // 11.1 NetSuite sync) before anything posts. Old-engine step-walk misses stay warnings.
+    const hardMisses = unresolved.filter(u => u.hard);
+    if (hardMisses.length) {
+        return { ok: false, error: { code: 'LINES_UNRESOLVED', message: `${hardMisses.length} line(s) on this quote can't be resolved to a library item — pushing would silently roll their dollars into the fee line:\n${hardMisses.map(u => `• ${u.stepTitle} (${u.partId})${u.total ? ` — $${u.total.toFixed(2)}` : ''}`).join('\n')}\nFix the item(s), then push from Tab 12 / RTG.` } };
+    }
+    const hardUnmapped = linesToPush.filter(l => (l.nsId === 'UNMAPPED' || l.nsId === 'PENDING')
+        && /^(tags:|addon:|trvcfg:)/.test(String(l.stepId || '')));
+    if (hardUnmapped.length) {
+        return { ok: false, error: { code: 'LINES_UNMAPPED', message: `${hardUnmapped.length} real item(s) on this quote have no NetSuite internal ID — pushing would silently roll their dollars into the fee line:\n${hardUnmapped.map(l => `• ${l.masterPart?.itemName || l.masterPart?.id}`).join('\n')}\nSync them in 11.1 first, then push from Tab 12 / RTG.` } };
     }
     const finishFallbacks = linesToPush.filter(l => l.finishUnmapped).map(l => l.finishUnmapped);
 

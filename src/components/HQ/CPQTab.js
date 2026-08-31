@@ -3,6 +3,7 @@ import { splitNodes, splitNodesLower, exactNode } from '../Shared/nodeList';
 import { Sheet2DOverlay, MaterialRail } from '../Shared/sheet2d';
 import { setupAllows, driveAllows, isTrvPoleChoice, trvAttachGate } from '../Shared/traverseTags';
 import { choicesFromAssembly, modelNodesOf } from '../Shared/hardwareAdapter';
+import { assertFreshBundle } from '../Shared/UpdateBanner';
 import HardwareConfigurator from '../Shared/HardwareConfigurator';
 import { kitsForSeeding } from '../Shared/kitSeed';
 import { finishVariantOf as sharedFinishVariantOf } from '../Shared/finishVariant';
@@ -2792,6 +2793,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   const handleFinalizeQuote = async (saveAs = 'QUOTE') => {
       if (!jobData.customerId) return alert("Please select a Customer.");
       if (cart.length === 0) return alert("Your cart is empty. Please add an assembly first.");
+      // ── SAVE IS SEND, SO A STALE TAB SENDS STALE RULES (Stuart 2026-08-31) ──────────────────
+      // A day-old tab built every one of SO60147–SO60170's payloads with old resolver code and
+      // quietly rolled the joiner's dollars into the fee line. The NetSuite payload is built HERE,
+      // in this browser — so a tab older than the live deploy refuses to save until it refreshes.
+      // The cart survives (localStorage draft / Resume Draft); offline or local dev never blocks.
+      if (!(await assertFreshBundle(saveAs === 'SALES_ORDER' ? 'save the sales order' : 'save the quote'))) return;
 
       const targetJobId = cart[0].masterQuoteId || activeMasterQuoteId || `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
