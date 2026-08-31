@@ -744,10 +744,12 @@ function HardwareConfiguratorInner({
     const extraLines = useMemo(() => extras.filter(x => x.code).map(x => {
         const part = findPart(x.code);
         const qty = Number(x.qty) > 0 ? Number(x.qty) : 1;
-        const p = priceChoice({ partId: x.code }, part, priceCtx);
         // The slot travels with the line (a per-track fee is its own line per track), and a
         // paint-match fee says WHICH color the upcharge buys — the fascia's, via the override.
+        // It also PRICES at that color: a fee with finish variants (painted vs plated upgrade)
+        // bills the variant the matched finish actually is, not the configuration's.
         const matched = x.slot ? matchFinishOverride[livePicks[x.slot]] : '';
+        const p = priceChoice({ partId: x.code }, part, matched ? { ...priceCtx, finishCode: matched } : priceCtx);
         return { partId: x.code, name: part?.itemName || x.code, qty, unit: p.price, total: p.price * qty,
                  sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true,
                  ...(x.slot ? { slot: x.slot } : {}),
