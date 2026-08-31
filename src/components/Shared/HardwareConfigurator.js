@@ -572,6 +572,33 @@ function HardwareConfiguratorInner({
     // and the configuration's otherwise, so the common order is one click and the mixed one is two.
     const finishFor = useCallback((c) => partFinish[c.id] || globalFinish, [partFinish, globalFinish]);
 
+    // ── A CUSTOM-FINISHED TRACK WEARS THE FASCIA'S FINISH (Stuart 2026-08-31) ────────────────
+    // "one tick per track and we will need if ticked to associate the same finish color as
+    //  selected for the fascia in the cpq." The stock track is bronze or champagne and never asks
+    // a finish question — the upcharge FEE on a track step IS the decision to paint it. So a fee
+    // extra ticked on a track step dresses THAT track in whatever the fascia is wearing (its own
+    // exception first, the configuration finish otherwise) — and it stays LIVE: change the
+    // fascia's finish and the paint-matched track follows, because this is derived, never copied.
+    // Scoped by data on every side: only a FEE item (partClass/productType, the same test the CPQ
+    // uses) ticked on a TRACK slot can arm it, and only traverse assemblies have track slots.
+    const matchFinishOverride = useMemo(() => {
+        const out = {};
+        const isFeePart = (p) => !!(p && (p.partClass === 'Fee'
+            || String(p.manufacturingSpecs?.productType || p.productType || '').toUpperCase() === 'FEE'));
+        const feeSlots = new Set(extras
+            .filter(x => Number(x.qty) > 0 && x.slot && isFeePart(findPart(x.code)))
+            .map(x => x.slot));
+        if (!feeSlots.size) return out;
+        const fascia = chosenList.find(c => c.role === 'FASCIA');
+        const code = fascia ? finishFor(fascia) : globalFinish;
+        if (!code) return out;
+        model.slots.filter(s => s.kind === 'TRACK' && feeSlots.has(s.key)).forEach(s => {
+            const pick = livePicks[s.key];
+            if (pick) out[pick] = code;
+        });
+        return out;
+    }, [extras, findPart, chosenList, finishFor, globalFinish, model, livePicks]);
+
     // ── THE FINISH A LINE IS ACTUALLY BILLED AND SPRAYED IN (Stuart 2026-08-21) ───────────────
     // "once the finish is chosen to the left it needs to list the chosen color in the pricing
     // window as well of course in the bom to send along to finishing … in case people do choose
@@ -597,13 +624,16 @@ function HardwareConfiguratorInner({
     // a finish its material can take, so a wood stain chosen for the configuration does not bill a
     // stained bracket, and clear acrylic bills and sprays as nothing at all.
     const lineFinishFor = useCallback((choice) => {
+        // The paint-to-match override outranks every gate — noFinish and the material rule say
+        // what the STOCK part takes, and the upcharge is precisely the decision to overrule that.
+        if (choice && matchFinishOverride[choice.id]) return matchFinishOverride[choice.id];
         if (!choice || choice.noFinish) return '';
         const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || globalFinish;
         if (!code) return '';
         const f = finishByCode.get(String(code).toUpperCase());
         if (!f || !finishesFor(choice, [f]).length) return '';
         return code;
-    }, [partFinish, partFinishByPart, globalFinish, finishByCode]);
+    }, [partFinish, partFinishByPart, globalFinish, finishByCode, matchFinishOverride]);
 
     // NODE → TEXTURE. A no-finish part is skipped entirely, so the clear rule paints it instead —
     // the collar of a two-part finial takes the finish, the acrylic top never does.
@@ -628,16 +658,18 @@ function HardwareConfiguratorInner({
             // The owner itself if it was chosen; otherwise the chosen part it is a piece of.
             const c = chosenIds.has(owner.id) ? owner
                 : (owner.partId ? byPart.get(String(owner.partId).toUpperCase()) : null);
-            if (!c || c.noFinish || owner.noFinish) return;
-            const f = finishByCode.get(String(finishFor(c)).toUpperCase());
+            // A paint-matched track renders painted — the same override, applied to the same set.
+            const ov = c && (matchFinishOverride[c.id] || matchFinishOverride[owner.id]);
+            if (!c || ((c.noFinish || owner.noFinish) && !ov)) return;
+            const f = finishByCode.get(String(ov || finishFor(c)).toUpperCase());
             // The material gate, applied at the last moment: a global pick of a wood stain simply
             // does not land on the steel brackets, and nothing lands on the acrylic.
-            if (!f || !finishesFor(c, [f]).length) return;
+            if (!f || (!ov && !finishesFor(c, [f]).length)) return;
             const url = f.textureUrl || f.finalImageUrl;
             if (url) out[String(node).toLowerCase()] = url;
         });
         return out;
-    }, [resolved, chosenList, finishByCode, finishFor]);
+    }, [resolved, chosenList, finishByCode, finishFor, matchFinishOverride]);
 
     // ── PRICE ─────────────────────────────────────────────────────────────────────────────────
     // ── OUR COST TO THEM IS THE DEFAULT, ONCE THERE IS A "THEM" ──────────────────────────────
@@ -713,12 +745,16 @@ function HardwareConfiguratorInner({
         const part = findPart(x.code);
         const qty = Number(x.qty) > 0 ? Number(x.qty) : 1;
         const p = priceChoice({ partId: x.code }, part, priceCtx);
+        // The slot travels with the line (a per-track fee is its own line per track), and a
+        // paint-match fee says WHICH color the upcharge buys — the fascia's, via the override.
+        const matched = x.slot ? matchFinishOverride[livePicks[x.slot]] : '';
         return { partId: x.code, name: part?.itemName || x.code, qty, unit: p.price, total: p.price * qty,
                  sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true,
+                 ...(x.slot ? { slot: x.slot } : {}),
                  // Priced at the configuration's finish, so it says so — a row with no finish under
                  // it beside rows that have one reads as an oversight rather than a fact.
-                 finishCode: globalFinish };
-    }), [extras, findPart, priceCtx, globalFinish]);
+                 finishCode: matched || globalFinish };
+    }), [extras, findPart, priceCtx, globalFinish, matchFinishOverride, livePicks]);
 
     // ── TRAVERSE COMPONENTS ARE THE LAST QUESTION A TRACK ASKS (Stuart 2026-08-21) ────────────
     // "integrate that simple configurator at the last step of any traverse rod … it basically has
@@ -1103,7 +1139,7 @@ function HardwareConfiguratorInner({
             // extraLines = the extras AS THE PANEL PRICED THEM (priceChoice, customer row) — the
             // handoff uses these verbatim so the docs, floors and NetSuite bill what was shown.
             // Filtered to extras actually TAKEN: extraLines coerces a 0 qty to 1 for display.
-            extras, extraLines: extraLines.filter(l => Number((extras.find(x => x.code === l.partId) || {}).qty) > 0),
+            extras, extraLines: extraLines.filter(l => Number((extras.find(x => x.code === l.partId && (x.slot || '') === (l.slot || '')) || {}).qty) > 0),
             stepNotes, answers, picks: livePicks, partFinish, globalFinish, stepQty,
             // The kit, so the cart bills exactly what the panel showed.
             kit: kitBill,
@@ -1772,16 +1808,21 @@ function HardwareConfiguratorInner({
                                 <div style={{ ...mono, color: 'var(--ink-soft)', marginBottom: '7px' }}>Add an item</div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
                                     {stepExtras.map(it => {
-                                        const row = extras.find(x => x.code === it.code);
+                                        // ONE TICK PER TRACK (Stuart 2026-08-31): the same fee item is offered on
+                                        // BOTH track steps of a double, and each is its own decision — so on a slot
+                                        // step the extra is keyed by the slot too. Length-step extras (splices)
+                                        // keep the plain code key they have always had.
+                                        const slotScope = step?.kind === 'SLOT' ? step.slot.key : '';
+                                        const row = extras.find(x => x.code === it.code && (x.slot || '') === slotScope);
                                         const qty = row?.qty ?? '';
                                         const set = (patch) => setExtras(a => {
-                                            const i = a.findIndex(x => x.code === it.code);
-                                            if (i < 0) return [...a, { code: it.code, qty: '1', note: '', ...patch }];
+                                            const i = a.findIndex(x => x.code === it.code && (x.slot || '') === slotScope);
+                                            if (i < 0) return [...a, { code: it.code, qty: '1', note: '', ...(slotScope ? { slot: slotScope } : {}), ...patch }];
                                             const next = [...a]; next[i] = { ...next[i], ...patch };
                                             return next[i].qty === '' || Number(next[i].qty) <= 0 ? next.filter((_, j) => j !== i) : next;
                                         });
                                         const part = findPart(it.code);
-                                        const line = row ? extraLines.find(l => l.partId === it.code) : null;
+                                        const line = row ? extraLines.find(l => l.partId === it.code && (l.slot || '') === slotScope) : null;
                                         return (
                                             <div key={it.code} style={{ border: `1px solid ${row ? 'var(--ink)' : 'var(--line)'}`, background: '#fff', padding: '8px 9px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>

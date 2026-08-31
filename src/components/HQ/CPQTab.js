@@ -1635,9 +1635,13 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               qty: item.qty,
               sidemark: (!item.sidemark || item.sidemark === 'No Sidemark') ? '' : item.sidemark,
               globalFinish: item.engineConfig?.globalFinish || item.finishes?.[0]?.code || '',
-              // Hand-added extras (splices, odd rings) live as flagged breakdown rows.
-              extras: (item.pricingBreakdown || []).filter(l => l.addedByHand)
-                  .map(l => ({ code: l.partId, qty: String(l.qty || 1), note: l.customNote || '' })),
+              // Hand-added extras (splices, odd rings) live as flagged breakdown rows — but the
+              // engineConfig's own extras are the exact state (slot-scoped per-track fees
+              // included), so where the save carried them they win over the reconstruction.
+              extras: (item.engineConfig?.extras || []).length
+                  ? item.engineConfig.extras
+                  : (item.pricingBreakdown || []).filter(l => l.addedByHand)
+                      .map(l => ({ code: l.partId, qty: String(l.qty || 1), note: l.customNote || '' })),
           });
           setCart(cart.filter(c => c.id !== itemId));
           if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
