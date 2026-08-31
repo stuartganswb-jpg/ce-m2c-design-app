@@ -2988,7 +2988,22 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           let nsQueueNote = '';
           try {
               const ctx = { db, doc, getDoc };
-              const txData = { libraryParts, cpqFlows, outsourceFinishes, globalFinishes };
+              // ── THE QUOTE MUST PUSH FROM THE SAME PARTS IT PRICED FROM (Stuart 2026-08-31) ────
+              // ROOT CAUSE of the SO60147-SO60170 rolled-up joiner. This tab prices the engine
+              // against `[...libraryParts, ...liveAssemblies]` (the configurator's `parts` prop),
+              // then handed the NetSuite resolver `libraryParts` ALONE - and that list is filtered
+              // to Inventory/Fee/Alias (+ checkout-ticked). H1-1JNR-16G is partClass "Assembly", so
+              // it lives in liveAssemblies: the CPQ priced it at $16, matchPart then found nothing,
+              // the line fell into `unresolved` (a warning nobody reads at save time), and its
+              // dollars rode the BRIMAR - GENERATED rollup. Tab 12 never reproduced it because
+              // ERPPushPullTab loads Approved_Designs WHOLE. One parts universe on both sides of
+              // the save, deduped by doc id - what the quote can price, the push can resolve.
+              const txParts = (() => {
+                  const seen = new Set(); const out = [];
+                  [...libraryParts, ...liveAssemblies].forEach(p => { if (p && p.id && !seen.has(p.id)) { seen.add(p.id); out.push(p); } });
+                  return out;
+              })();
+              const txData = { libraryParts: txParts, cpqFlows, outsourceFinishes, globalFinishes };
               const jobForTx = { ...payload, id: targetJobId };
               if (saveAs === 'SALES_ORDER') {
                   const soDocId = `SO-APP-${String(mintedQuoteNo || payload.quoteNo || targetJobId).replace(/[^A-Za-z0-9-]/g, '')}`;
