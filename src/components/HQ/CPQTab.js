@@ -977,6 +977,9 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       };
       const ctx = { customerId: jobData.customerId, customer: addOnCustomer, priceLevel: lvl.level, levelIsDefault: lvl.isDefault, outsourceCodes: outsourceFinishes, findByCode };
       const priceFor = (p) => priceChoice({ partId: p.id }, p, ctx).price || 0;
+      // The same resolver also knows the customer's own part# for the row (their clientSku) — it
+      // rides the catalog entry so the quote line, and every customer document after it, can say it.
+      const skuFor = (p) => priceChoice({ partId: p.id }, p, ctx).sku || '';
       const inScope = (p) => {
           const cols = p?.manufacturingSpecs?.collections || [];
           if (!cols.length || !flowCollections.size) return true;
@@ -1005,7 +1008,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // fees show ALL unless at least one FEE is itself ticked, in which case only the ticked
       // fees show (that's the curation Stuart asked for on 2026-07-31 — it was never meant to be
       // switched off by an unrelated item tick).
-      const checkout = buildCheckoutCatalog(eligible, { priceFor, customerId: jobData.customerId, flowCodes });
+      const checkout = buildCheckoutCatalog(eligible, { priceFor, skuFor, customerId: jobData.customerId, flowCodes });
       const curatedFeeCount = checkout.filter(e => e.isFee).length;
       const fees = curatedFeeCount > 0 ? [] : buildFeeCatalog(scopedParts, { priceFor });
       const seen = new Set(checkout.map(e => e.id));
@@ -2861,8 +2864,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   partHandling: line.partHandling || '',
                   partId: line.partId || null,
                   legacyErpId: line.legacyErpId || null,
+                  // The customer's own part# for this line (their clientPricing row's SKU) — money
+                  // documents print THEIRS where one exists (Shared/lineClassification).
+                  clientSku: line.clientSku || null,
                   isFee: !!line.isFee,
                   isSizeRow: !!line.isSizeRow,
+                  // Per-foot stamps must survive the merge: money documents multiply qty by the
+                  // feet, and the NetSuite push consumes rod stock by the foot off these two.
+                  ...(line.perFoot ? { perFoot: true, feet: Number(line.feet) || 0 } : {}),
+                  ...(line.hidden ? { hidden: true } : {}),
                   cutLength: line.cutLength || null,
                   dimensions: line.dimensions || null
               });
@@ -2896,6 +2906,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           addOnLines.forEach(l => mergedBreakdown.push({
               name: `  - ${l.name}`, qty: l.qty, price: l.price, total: l.total,
               partHandling: l.partHandling || '', partId: l.partId || null, legacyErpId: l.legacyErpId || null,
+              ...(l.clientSku ? { clientSku: l.clientSku } : {}),
               // Real items added at checkout are NOT fees: they push as their own NetSuite line and
               // route by their own Part Handling, exactly as if the flow had produced them.
               isFee: l.isFee !== false, isAddOn: true, addOnExplain: l.explain || '',

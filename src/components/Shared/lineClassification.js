@@ -82,6 +82,15 @@ export const customerDocLines = (lines = [], docType = '', finishFallback = '') 
     return real.filter(l => !l.hidden && !l.shopOnly)
         .map(l => (l.perFoot && Number(l.feet) > 0
             ? { ...l, qty: (Number(l.qty) || 1) * Number(l.feet) }
+            : l))
+        // ── THE CUSTOMER'S PART# ON THE CUSTOMER'S PAPER (Stuart 2026-08-31, invoice S060147:
+        // "it has a customer part# associated with it and Brimar is the chosen customer … it
+        // should display their part#'s"). A line priced off the customer's own clientPricing row
+        // carries their SKU as `clientSku`; on a money document that IS the item number — ours
+        // survives on `houseItemNo` for anything that still needs to trace it. The floors and the
+        // ERP push never come through this branch, so picking and NetSuite stay on our numbers.
+        .map(l => (l.clientSku && l.clientSku !== l.legacyErpId
+            ? { ...l, legacyErpId: l.clientSku, houseItemNo: l.legacyErpId || l.partId || '' }
             : l));
 };
 

@@ -59,7 +59,12 @@ const codeOf = (part, fallback) => String(
  */
 function handoffLine(l, part, finishName = '') {
     return {
-        name: l.name || codeOf(part, l.partId) || '',
+        // ⚠ THE 1.6 LABEL NEVER LEAVES 1.6 (Stuart 2026-08-31, invoice S060147: descriptions read
+        // "H21INPOLELEFT" — the designer's node label). A pin's partName is whatever the .glb slot
+        // was called; the MASTER LIBRARY's description is what a customer, a picker and a NetSuite
+        // line should read. So a line that resolves to a library part is named by the library, and
+        // the pin label survives only where no part resolves (a parked placeholder has nothing else).
+        name: part?.itemName || l.name || codeOf(part, l.partId) || '',
         qty: l.qty || 1,
         price: l.unit || 0,
         total: l.total || 0,

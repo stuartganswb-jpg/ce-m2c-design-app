@@ -179,7 +179,7 @@ export const checkoutAssignmentOf = (part, { customerId = null, flowCodes = null
     return null;
 };
 
-export function buildCheckoutCatalog(parts, { priceFor, customerId = null, flowCodes = null } = {}) {
+export function buildCheckoutCatalog(parts, { priceFor, skuFor, customerId = null, flowCodes = null } = {}) {
     return (parts || [])
         .filter(p => checkoutAssignmentOf(p, { customerId, flowCodes }) !== null)
         .filter(p => p?.manufacturingSpecs?.isRetired !== true)
@@ -189,6 +189,9 @@ export function buildCheckoutCatalog(parts, { priceFor, customerId = null, flowC
             return {
                 id: p.id,
                 code: String(p.legacyErpId || p.itemId || '').toUpperCase(),
+                // The customer's own part# (their clientPricing row's SKU) — customer documents
+                // print theirs, so the line must carry it from the moment it is offered.
+                clientSku: typeof skuFor === 'function' ? (skuFor(p) || '') : '',
                 name: p.itemName || '',
                 partHandling: p?.manufacturingSpecs?.partHandling || '',
                 isFee: isFeeItemRecord(p),
@@ -220,6 +223,7 @@ export function buildAddOnLines(selections, catalog, configSubtotal) {
             // Part Handling); only genuine fees ride as fees.
             isFee: entry.isFee !== false, isAddOn: true,
             partId: entry.id, legacyErpId: entry.code,
+            ...(entry.clientSku ? { clientSku: entry.clientSku } : {}),
             partHandling: entry.partHandling || '',
             explain,
         });
