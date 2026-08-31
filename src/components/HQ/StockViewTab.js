@@ -18,7 +18,7 @@ import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { runBatchPrecheck, executeMakeupActions, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode } from '../Shared/finishRouting';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
-import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
+import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from '../Shared/nsWorkOrder';
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -1813,6 +1813,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 note: `Raw core replenish · avail ${info.available} · threshold ${info.threshold ?? info.minOnHand ?? 0}`,
                 createdAt: Date.now(), createdBy: currentUser || ''
             }), { merge: true });
+            // THE ROOT'S OWN ANCHOR (2026-08-31 "both" model, same as executeMakeupActions): a
+            // milled root that is a NetSuite assembly opens its work order WITH the milling WO —
+            // number stamps back, RTG's ⛏ Mill Build closes it when the shop finishes.
+            if (isNsAssemblyRec(info.part)) {
+                try {
+                    await queueNsAssemblyWorkOrder({
+                        brandId: activeBrand, assemblyInternalId: String(info.part.netSuiteInternalId),
+                        erp: r.itemid, qty, reqDate,
+                        memo: `mill ${r.itemid} · raw core replenish`,
+                        writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                        sourceApp: 'RAW_CORES', createdBy: currentUser || '',
+                    });
+                    await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
+                } catch (e) { console.warn('root NS WO queue failed', r.itemid, e); }
+            }
             n++;
         }
         return n;

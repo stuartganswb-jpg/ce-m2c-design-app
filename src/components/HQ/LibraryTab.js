@@ -6,6 +6,7 @@ import { finishCodeFromErp } from '../Shared/finishingTime';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
 import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
+import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from '../Shared/nsWorkOrder';
 import { makeFullTasks, withItemCode } from '../Shared/workOrderContract';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
@@ -1082,8 +1083,24 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           ...(part.netSuiteInternalId ? { stockInternalId: String(part.netSuiteInternalId) } : {}),
           ...(part.manufacturingSpecs?.productType ? { productType: String(part.manufacturingSpecs.productType).toUpperCase() } : {}),
           ...(part.manufacturingSpecs?.paintSize ? { paintSize: String(part.manufacturingSpecs.paintSize).toUpperCase() } : {}),
+          source: 'LIBRARY_MAKEUP',
           createdAt: Date.now()
       }));
+      // THE ROOT'S OWN ANCHOR (2026-08-31 "both" model): a milled root that is a NetSuite
+      // assembly opens its work order WITH the milling WO — the number stamps back onto this
+      // record and RTG's ⛏ Mill Build closes it (createdfrom) when the shop finishes.
+      if (isNsAssemblyRec(part)) {
+          try {
+              await queueNsAssemblyWorkOrder({
+                  brandId: activeBrand, assemblyInternalId: String(part.netSuiteInternalId),
+                  erp: String(part.legacyErpId).toUpperCase(), qty: Number(qty),
+                  memo: `mill ${String(part.legacyErpId).toUpperCase()} · library make-up`,
+                  writeBacks: [{ collection: 'hq_work_orders', docId: newWoId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                  sourceApp: 'LIBRARY_MAKEUP', createdBy: (currentUser && (currentUser.name || currentUser.email)) || '',
+              });
+              await updateDoc(doc(db, 'hq_work_orders', newWoId), { nsWoQueued: true });
+          } catch (e) { console.warn('root NS WO queue failed', part.legacyErpId, e); }
+      }
       return newWoId;
   };
 
@@ -1269,6 +1286,9 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               if (nsAsmId && nsConfig.location) {
                   await enqueueNsWrite({
                       kind: 'workorder',
+                      // The outbox duplicate guard (2026-08-31): a second queue for this run's
+                      // hq record is refused while one is in flight.
+                      dedupeKey: `wo:hq_work_orders:${woId}`,
                       label: `NS WO — build ${erp} ×${qty}`,
                       sourceApp: 'MASTER_LIBRARY', createdBy: (currentUser && (currentUser.name || currentUser.email)) || '',
                       targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',

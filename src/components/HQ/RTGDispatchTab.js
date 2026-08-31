@@ -1258,6 +1258,8 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             if (nsAsmId && nsConfig.location) {
                 await enqueueNsWrite({
                     kind: 'workorder',
+                    // The outbox duplicate guard (2026-08-31) — belt under the nsWoQueued STOP.
+                    dedupeKey: `wo:hq_work_orders:${hqOrder.id}`,
                     label: `NS WO — build ${erp || fp.id} ×${fp.totalParts}`,
                     sourceApp: 'RTG', createdBy: currentUser || '',
                     targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',
@@ -2118,7 +2120,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: 'var(--brass)', borderColor: 'var(--brass)' }}
                     onClick={() => setBalanceModal({ order: o, kind, ordered: Number(o.totalParts || o.qty || 0), good: '', bad: '', salvage: true })}>⚖ Close Short</button>
             )}
-            {kind !== 'sales' && o.nsWoId && !o.nsRootBuildPosted && (o.source === 'PRECHECK_MAKEUP' || o.routeTo === 'SHOP') && mayCloseBalance && (
+            {kind !== 'sales' && o.nsWoId && !o.nsRootBuildPosted && (o.source === 'PRECHECK_MAKEUP' || o.source === 'LIBRARY_MAKEUP' || o.routeTo === 'SHOP') && mayCloseBalance && (
                 <button title={`Post the mill build to NetSuite against ${o.nsWoTran || 'this WO\u2019s open NetSuite work order'} — createdfrom, so NetSuite closes it. Press once milling is complete.`}
                     style={{ ...btnStyle, padding: '6px 10px', fontSize: '9px', color: '#3a7d44', borderColor: '#3a7d44' }}
                     onClick={() => postRootMillBuild(o)}>⛏ Mill Build</button>
