@@ -247,9 +247,20 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         const finPart = partOf(p.finishedErp);
         const isNsAssembly = finPart && finPart.netSuiteInternalId &&
             (finPart.partClass === 'Assembly' || finPart.partClass === 'Master Assembly' || finPart.netSuiteRecordType === 'assemblyitem');
+        // FLOW1 upgrade (Stuart 2026-08-31): the finish-variant not existing in NetSuite does not
+        // mean nothing does — the BASE assembly (HRW-138TRAVLB behind /RF2) usually IS one. Its
+        // top-level work order opens with the job so the item shows ON ORDER to a CSR the moment
+        // production starts, and the closing chain is: mill builds the components → app convert
+        // phosphates them → the final assembly build posts against THIS work order and consumes
+        // the /P components per the BOM.
+        const basePart = partOf(p.erp);
+        const baseIsNsAssembly = basePart && basePart.netSuiteInternalId &&
+            (basePart.partClass === 'Assembly' || basePart.partClass === 'Master Assembly' || basePart.netSuiteRecordType === 'assemblyitem');
         const nsPlan = isNsAssembly
             ? { flow: 'FLOW2', assemblyInternalId: String(finPart.netSuiteInternalId), note: `NetSuite work order opens for ${p.finishedErp} ×${p.qty} — the floor waits for its number.` }
-            : { flow: 'FLOW1', note: `No NetSuite assembly for ${p.finishedErp} — the SALES ORDER is the NetSuite record; the /P work-order anchor ships with the convert-RESTlet upgrade.` };
+            : baseIsNsAssembly
+            ? { flow: 'FLOW1', baseAssemblyInternalId: String(basePart.netSuiteInternalId), baseErp: String(p.erp).toUpperCase(), note: `Top-level NetSuite work order opens on the BASE assembly ${String(p.erp).toUpperCase()} ×${p.qty} (the /${p.finish} variant is app-only) — the final assembly build posts against it and consumes the components. The SO carries the finish.` }
+            : { flow: 'FLOW1', note: `No NetSuite assembly for ${p.finishedErp} (or its base) — the SALES ORDER is the NetSuite record; the /P convert work orders are the anchors.` };
 
         return { ...p, components, holds, nsPlan };
     });

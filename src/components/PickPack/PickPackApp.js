@@ -4157,7 +4157,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             await updateDoc(doc(db, 'convert_demand', d.id), { nsWoId: deleteField(), nsWoTran: deleteField(), nsWoOnErp: deleteField(), nsWoQueuedAt: Date.now(), nsWoQueuedBy: `${operator?.name || 'WMS'} re-anchor`, nsWoAttempts: 1 });
                                                             await queueNsAssemblyWorkOrder({
                                                                 brandId: activeBrand, assemblyInternalId: pick.internalId, erp: pick.erp, qty: d.qty,
-                                                                memo: `${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                                                                memo: `${d.soRef ? `SO ${d.soRef} · ` : ''}${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
                                                                 writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: { nsWoOnErp: pick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
                                                                 sourceApp: 'WMS_REANCHOR', createdBy: operator?.name || '',
                                                             });
@@ -4181,7 +4181,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                             await queueNsAssemblyWorkOrder({
                                                                 brandId: activeBrand, assemblyInternalId: pick.internalId,
                                                                 erp: pick.erp, qty: d.qty,
-                                                                memo: `${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                                                                memo: `${d.soRef ? `SO ${d.soRef} · ` : ''}${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
                                                                 writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: { nsWoOnErp: pick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
                                                                 sourceApp: 'WMS_CONVERT', createdBy: operator?.name || '',
                                                             });

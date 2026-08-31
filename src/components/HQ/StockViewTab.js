@@ -2373,6 +2373,28 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
                         addLog(`📤 NetSuite work order queued for ${finishedErp} ×${qty} — the floor release waits for its number.`, 'success');
                     } catch (e) { addLog(`⚠ ${finishedErp}: NetSuite WO queue failed (${e.message || e}) — WO parked awaiting it; retry from RTG.`, 'error'); }
+                } else if (job.nsPlan && job.nsPlan.flow === 'FLOW1' && job.nsPlan.baseAssemblyInternalId) {
+                    // The TOP-LEVEL anchor (Stuart 2026-08-31): WO on the BASE assembly so the
+                    // order shows ON ORDER in NetSuite from day one. Closing chain: mill builds
+                    // → app convert (/P) → final assembly build posts against this WO. It does
+                    // NOT gate the floor — the converts/components gates own the release.
+                    try {
+                        await queueNsAssemblyWorkOrder({
+                            brandId: activeBrand, assemblyInternalId: job.nsPlan.baseAssemblyInternalId,
+                            erp: job.nsPlan.baseErp, qty, reqDate: needBy,
+                            memo: `SO ${so.soId || so.id} · ${so.customer || ''} · build ${job.nsPlan.baseErp} ×${qty} · finish ${finish} · closes on the final assembly build (after mill + phosphate convert)`,
+                            writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: { nsWoOnErp: job.nsPlan.baseErp, nsWoOnInternalId: job.nsPlan.baseAssemblyInternalId }, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                            sourceApp: 'OE_REVIEW', createdBy: currentUser || '',
+                        });
+                        await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
+                        addLog(`📤 Top-level NetSuite WO queued on ${job.nsPlan.baseErp} ×${qty} (SO ${so.soId || so.id}) — shows ON ORDER; the final assembly build closes it.`, 'success');
+                    } catch (e) { addLog(`⚠ ${job.nsPlan.baseErp}: top-level NS WO queue failed (${e.message || e}) — the RTG anchor review will re-offer it.`, 'error'); }
+                    if (!gate.awaitingConvert && !gate.awaitingComponents) {
+                        await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-review');
+                        addLog(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — approved in review → RELEASED to the finishing floor (${woId}).`, 'success');
+                    } else {
+                        addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — waiting on ${gate.awaitingConvert ? 'its phosphate convert' : ''}${gate.awaitingConvert && gate.awaitingComponents ? ' + ' : ''}${gate.awaitingComponents ? 'its component shop WO(s)' : ''}; auto-releases when they post.`, 'success');
+                    }
                 } else if (!gate.awaitingConvert && !gate.awaitingComponents) {
                     await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-review');
                     addLog(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — approved in review → RELEASED to the finishing floor (${woId}).`, 'success');
@@ -4010,7 +4032,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     {j.aliasNote && <span style={{ ...mono9, color: 'var(--brass)', marginLeft: '8px' }}>🔗 {j.aliasNote}</span>}
                                                 </span>
                                                 <span style={{ ...mono9, color: j.nsPlan.flow === 'FLOW2' ? '#3a7d44' : 'var(--brass)' }}>
-                                                    {j.nsPlan.flow === 'FLOW2' ? '🏭 NS WORK ORDER OPENS FOR THE FINISHED ITEM' : j.nsPlan.flow === 'PO' ? '🧾 BOUGHT — VENDOR PO IS THE RECORD' : 'SO = NETSUITE RECORD (no finished assembly)'}
+                                                    {j.nsPlan.flow === 'FLOW2' ? '🏭 NS WORK ORDER OPENS FOR THE FINISHED ITEM' : j.nsPlan.flow === 'PO' ? '🧾 BOUGHT — VENDOR PO IS THE RECORD' : j.nsPlan.baseAssemblyInternalId ? `🏭 TOP-LEVEL NS WO OPENS ON ${j.nsPlan.baseErp}` : 'SO = NETSUITE RECORD (no finished assembly)'}
                                                 </span>
                                             </div>
                                             <div style={{ padding: '4px 16px 10px', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>{j.nsPlan.note}</div>

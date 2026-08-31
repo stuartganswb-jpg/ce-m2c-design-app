@@ -454,7 +454,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 await queueNsAssemblyWorkOrder({
                     brandId: d.brandId, assemblyInternalId: pick.internalId,
                     erp: pick.erp, qty: d.qty,
-                    memo: `${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                    memo: `${d.soRef ? `SO ${d.soRef} · ` : ''}${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
                     writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: { nsWoOnErp: pick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
                     sourceApp: 'RTG_ANCHOR_REVIEW', createdBy: currentUser?.name || 'RTG',
                 });

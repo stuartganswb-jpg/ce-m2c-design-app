@@ -198,6 +198,7 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
                 // The gate link — same idea as rod_cut_orders.finWoId: completing this demand
                 // releases (or helps release) the work order it was raised for.
                 finWoId: finWoId || null, finWoErpId: finWoErpId || null,
+                soRef: soRef || null,
                 note: `Component pre-check for ${finWoErpId || finWoId || 'run'} — ${a.target} short ${a.qty}`,
                 createdBy, createdAt: Date.now(),
             });
