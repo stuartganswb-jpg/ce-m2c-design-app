@@ -21,6 +21,7 @@ import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
+import { queueNsAssemblyWorkOrder } from "../Shared/nsWorkOrder";
 
 // Pull the real, classifiable order lines out of a CPQ job (skip the ▶ assembly headers and
 // the trade-discount / net-total display rows).
@@ -398,6 +399,48 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [liveWO, liveShop]);
+
+    // ⚓ THE AUTO-ANCHOR (Stuart 2026-08-31: "work orders are created from RTG as soon as the job
+    // hits there — it is too easy for parts to sit on WMS Convert before someone creates them").
+    // RTG watches its live convert-demand mirror: any open demand with no NetSuite WO and no
+    // queue claim gets its /P work order queued from HERE, automatically. Creation-time queueing
+    // stays the first line; this is the net under it (pre-8/30 demands, quota failures, other
+    // creation paths). The claim (nsWoQueuedAt) is written BEFORE queueing and the 2-minute age
+    // floor covers clients on older bundles, so a demand can never earn two NetSuite WOs.
+    const anchorTried = useRef(new Set());
+    useEffect(() => {
+        const now = Date.now();
+        const cands = liveConvD.filter(d =>
+            !d.nsWoId && !d.nsWoQueuedAt && d.targetIsNsAssembly !== false &&
+            String(d.status || 'open').toLowerCase() !== 'done' &&
+            (now - (d.createdAt || 0)) > 2 * 60 * 1000 &&
+            !anchorTried.current.has(d.id));
+        if (!cands.length) return;
+        (async () => {
+            for (const d of cands) {
+                anchorTried.current.add(d.id);
+                try {
+                    let nsAsmId = d.targetInternalId ? String(d.targetInternalId) : '';
+                    if (!nsAsmId && d.targetErpId) {
+                        const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', String(d.targetErpId).toUpperCase())));
+                        const hit = snap.docs.map(x => x.data()).find(x => x.netSuiteInternalId);
+                        if (hit) nsAsmId = String(hit.netSuiteInternalId);
+                    }
+                    if (!nsAsmId) { addLog(`⚓ auto-anchor: ${d.targetErpId} has no NetSuite internal id in the library — cannot open its work order (sync it in 11.1, then it anchors on its own).`, 'warn'); continue; }
+                    await updateDoc(doc(db, 'convert_demand', d.id), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: 'RTG auto-anchor' });
+                    await queueNsAssemblyWorkOrder({
+                        brandId: d.brandId, assemblyInternalId: nsAsmId,
+                        erp: d.targetErpId, qty: d.qty,
+                        memo: `convert ${d.baseErpId} → ${d.targetErpId}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                        writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                        sourceApp: 'RTG_AUTO_ANCHOR', createdBy: 'RTG',
+                    });
+                    addLog(`⚓ auto-anchor: NetSuite work order queued for ${d.targetErpId} ×${d.qty} (${d.woNum || d.id}) — the number stamps back onto the demand and the convert builds against it.`, 'success');
+                } catch (e) { addLog(`⚓ auto-anchor failed for ${d.targetErpId}: ${e.message || e}`, 'error'); }
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [liveConvD]);
 
     // 🔁 ORDER ENTRY AUTO-FLOW — independent of the ⚡ per-brand toggle: these orders authorized
     // their own routing at creation (Stuart 2026-08-28: "the system should already have all the

@@ -4143,7 +4143,10 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     setConvertLot(new Date().toLocaleDateString('en-CA'));
                                                     setConvertDemandId(d.id);
                                                 }} disabled={isSyncing || onCart} style={{ padding: '10px 16px', background: onCart ? theme.paper2 : theme.brass, color: onCart ? theme.inkSoft : '#fff', border: onCart ? `1px solid ${theme.line}` : 'none', cursor: (isSyncing || onCart) ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>{onCart ? 'On cart' : 'Pull & Convert →'}</button>
-                                                {!d.nsWoId && (
+                                                {!d.nsWoId && d.nsWoQueuedAt && (
+                                                    <span style={{ fontFamily: theme.mono, fontSize: '10px', color: '#8a7a4f', alignSelf: 'center' }} title="The NetSuite work order is queued (ns_outbox) — its number stamps here when the worker posts it.">⚓ NS WO queued…</span>
+                                                )}
+                                                {!d.nsWoId && !d.nsWoQueuedAt && (
                                                     <button onClick={async () => {
                                                         // BACKFILL THE ANCHOR (2026-08-31): demands created before the
                                                         // /P work-order queueing shipped have no NS WO — one click opens
@@ -4158,6 +4161,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                                 writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
                                                                 sourceApp: 'WMS_CONVERT', createdBy: operator?.name || '',
                                                             });
+                                                            await updateDoc(doc(db, 'convert_demand', d.id), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: operator?.name || 'WMS' });
                                                             alert(`📤 NetSuite work order queued for ${d.targetErpId} ×${d.qty} — its number lands on this row in ~1 min, and the convert will build against it.`);
                                                         } catch (e) { alert('NS WO queue failed: ' + (e.message || e)); }
                                                     }} disabled={isSyncing}

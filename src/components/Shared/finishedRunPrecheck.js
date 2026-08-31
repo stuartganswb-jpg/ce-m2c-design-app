@@ -182,6 +182,8 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
         const a = actions[i];
         if (a.kind === 'CONVERT') {
             const basePart = partOf(a.base), targetPart = partOf(a.target);
+            const targetIsNsAsm = !!(targetPart && targetPart.netSuiteInternalId &&
+                (targetPart.partClass === 'Assembly' || targetPart.partClass === 'Master Assembly' || targetPart.netSuiteRecordType === 'assemblyitem'));
             const demandId = `CVD-${String(brandId).toUpperCase()}-${Date.now()}-${++seq}`;
             await setDoc(doc(db, 'convert_demand', demandId), {
                 id: demandId, brandId, status: 'open',
@@ -191,6 +193,7 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
                 baseAvailAtRequest: a.rawHave ?? null,
                 targetErpId: a.target, targetItemId: targetPart?.id || null,
                 targetInternalId: targetPart?.netSuiteInternalId ? String(targetPart.netSuiteInternalId) : null,
+                targetIsNsAssembly: targetIsNsAsm,
                 qty: a.qty, source,
                 // The gate link — same idea as rod_cut_orders.finWoId: completing this demand
                 // releases (or helps release) the work order it was raised for.
@@ -205,8 +208,7 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             // is queued for the /P; the number stamps back onto the DEMAND, and the WMS convert
             // then builds AGAINST it (createdfrom) so NetSuite closes it as the build posts.
             // No NS assembly for the /P → said out loud, never guessed.
-            if (targetPart && targetPart.netSuiteInternalId &&
-                (targetPart.partClass === 'Assembly' || targetPart.partClass === 'Master Assembly' || targetPart.netSuiteRecordType === 'assemblyitem')) {
+            if (targetIsNsAsm) {
                 try {
                     await queueNsAssemblyWorkOrder({
                         brandId, assemblyInternalId: String(targetPart.netSuiteInternalId),
@@ -215,6 +217,9 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
                         writeBacks: [{ collection: 'convert_demand', docId: demandId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
                         sourceApp: source || 'precheck', createdBy,
                     });
+                    // The claim stamp — RTG's auto-anchor skips demands that already queued,
+                    // so a slow outbox never earns a duplicate NetSuite work order.
+                    await updateDoc(doc(db, 'convert_demand', demandId), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: createdBy || 'creation' });
                     made.push(`📤 NS work order queued for ${a.target} ×${a.qty} — the convert builds against it`);
                 } catch (nsErr) {
                     made.push(`⚠ ${a.target}: NetSuite WO queue failed (${nsErr.message || nsErr}) — convert will post standalone`);
