@@ -1,5 +1,5 @@
 import { db } from '../../firebase';
-import { collection, doc, setDoc } from 'firebase/firestore';
+import { collection, doc, setDoc, getDocs, query, where } from 'firebase/firestore';
 
 // ============================================================================
 // LAYER 2 — STAGED NETSUITE WRITES (Stuart 2026-07-16)
@@ -24,7 +24,16 @@ import { collection, doc, setDoc } from 'firebase/firestore';
 // gets status + nsPoId + nsPoTran, and the card updates via its listener).
 //
 // Monitor / retry / cancel UI: HQ 11.1 → "NetSuite Sync Queue".
-export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, sourceApp, createdBy, writeBack }) => {
+export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, sourceApp, createdBy, writeBack, dedupeKey }) => {
+    // THE DUPLICATE GUARD (Stuart 2026-08-31, after 14 duplicate work orders): an entry carrying
+    // a dedupeKey is REFUSED while another entry with the same key is still in flight — whatever
+    // caller bug asked twice. Posted entries don't block (a deliberate ⟲ re-anchor is allowed);
+    // the caller's own claim stamps cover that side.
+    if (dedupeKey) {
+        const inflight = await getDocs(query(collection(db, 'ns_outbox'), where('dedupeKey', '==', dedupeKey)));
+        const live = inflight.docs.map(d2 => d2.data()).filter(e => ['PENDING', 'POSTING'].includes(e.status));
+        if (live.length) throw new Error(`already queued (${live[0].label || dedupeKey} is ${live[0].status} in the NetSuite Sync Queue) — not queuing a duplicate.`);
+    }
     const ref = doc(collection(db, 'ns_outbox'));
     const p = payload ? JSON.parse(JSON.stringify(payload)) : {};
     // Shop time (High Point NC) regardless of the device's zone, so the memo reads true on the floor.
@@ -34,7 +43,7 @@ export const enqueueNsWrite = async ({ kind, label, targetUrl, method, payload, 
     else if (method === 'POST' && /\/record\/v1\//.test(String(targetUrl))) p.memo = marker;
     await setDoc(ref, {
         id: ref.id, kind: kind || 'write', label: label || '', sourceApp: sourceApp || '', createdBy: createdBy || '',
-        targetUrl, method, payload: p, writeBack: writeBack || null,
+        targetUrl, method, payload: p, writeBack: writeBack || null, dedupeKey: dedupeKey || null,
         status: 'PENDING', attempts: 0, lastError: null, nsId: null, nsTran: null,
         createdAt: Date.now(), nextAttemptAt: Date.now(), leasedAt: null, postedAt: null
     });

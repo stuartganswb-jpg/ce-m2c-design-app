@@ -400,18 +400,15 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [liveWO, liveShop]);
 
-    // ⚓ THE AUTO-ANCHOR (Stuart 2026-08-31: "work orders are created from RTG as soon as the job
-    // hits there"). RTG watches its live convert-demand mirror and queues the NetSuite work order
-    // itself — on the ROOT item when NetSuite knows it as an assembly ("generate the work order
-    // directly to the root item"), on the /P otherwise (the HTAEC35 phosphate model). Creation-time
-    // queueing stays the first line; this is the net under it.
-    //
-    // Duplicate protection, hardened after the 8/31 9:36 PM multi-fire (ids were claimed one at a
-    // time inside an awaited loop, so each snapshot re-run re-queued the demands the first pass had
-    // not reached): every candidate is claimed in the tried-set SYNCHRONOUSLY before any await, and
-    // each demand is re-read fresh right before queueing. A claim that never produced a number
-    // retries after 10 minutes, at most 3 attempts, each logged.
+    // ⚓ THE ANCHOR REVIEW (Stuart 2026-08-31, after the 14-duplicate incident: "have it pop up a
+    // window for sending the work orders, one that allows us to accept or cancel"). RTG still
+    // notices every open convert demand with no NetSuite work order — but instead of queueing
+    // silently it STAGES them into a review pop-up; nothing reaches NetSuite until Accept.
+    // Three independent guards against duplicates: candidates are marked staged synchronously
+    // before any await; Accept re-reads each demand fresh and claims it before queueing; and the
+    // outbox itself refuses a second in-flight entry for the same demand (dedupeKey).
     const anchorTried = useRef(new Set());
+    const [anchorReview, setAnchorReview] = useState(null); // { rows: [{ d, pick, attempt, include }] }
     useEffect(() => {
         const now = Date.now();
         const RETRY_AFTER = 10 * 60 * 1000;
@@ -429,31 +426,42 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', String(code).toUpperCase())));
                 return snap.docs.map(x => x.data()).find(x => x.netSuiteInternalId) || null;
             };
+            const rows = [];
             for (const d of cands) {
                 try {
-                    // Fresh read right before acting — another client (or the creation path on a
-                    // newer bundle) may have claimed or resolved this demand since our snapshot.
-                    const freshSnap = await getDoc(doc(db, 'convert_demand', d.id));
-                    if (!freshSnap.exists()) continue;
-                    const fresh = freshSnap.data();
-                    if (fresh.nsWoId || (fresh.nsWoQueuedAt || 0) > (d.nsWoQueuedAt || 0)) continue;
                     const pick = pickNsWoItem({ base: await lookup(d.baseErpId), target: await lookup(d.targetErpId), baseErp: d.baseErpId, targetErp: d.targetErpId });
-                    if (!pick) { addLog(`⚓ auto-anchor: neither ${d.baseErpId} nor ${d.targetErpId} is a synced NetSuite ASSEMBLY in the library — cannot open a work order (fix the item, then it anchors on its own).`, 'warn'); continue; }
-                    const attempt = d.nsWoQueuedAt ? (d.nsWoAttempts || 1) + 1 : 1;
-                    await updateDoc(doc(db, 'convert_demand', d.id), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: 'RTG auto-anchor', nsWoAttempts: attempt });
-                    await queueNsAssemblyWorkOrder({
-                        brandId: d.brandId, assemblyInternalId: pick.internalId,
-                        erp: pick.erp, qty: d.qty,
-                        memo: `${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
-                        writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: { nsWoOnErp: pick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
-                        sourceApp: 'RTG_AUTO_ANCHOR', createdBy: 'RTG',
-                    });
-                    addLog(`⚓ auto-anchor${attempt > 1 ? ` (attempt ${attempt} — the last queue never returned a number; check 11.1 for the failed entry)` : ''}: NetSuite work order queued on ${pick.erp} ×${d.qty} for ${d.woNum || d.id}${pick.side === 'base' ? ' — the ROOT item, NetSuite\u2019s assembly for this chain' : ' — the convert builds against it'}.`, 'success');
-                } catch (e) { addLog(`⚓ auto-anchor failed for ${d.targetErpId}: ${e.message || e}`, 'error'); }
+                    if (!pick) { addLog(`⚓ ${d.woNum || d.id}: neither ${d.baseErpId} nor ${d.targetErpId} is a synced NetSuite ASSEMBLY in the library — no work order staged (fix the item, it will re-offer).`, 'warn'); continue; }
+                    rows.push({ d, pick, attempt: d.nsWoQueuedAt ? (d.nsWoAttempts || 1) + 1 : 1, include: true });
+                } catch (e) { addLog(`⚓ staging failed for ${d.targetErpId}: ${e.message || e}`, 'error'); }
             }
+            if (rows.length) setAnchorReview(prev => ({ rows: [...((prev && prev.rows) || []).filter(r => !rows.some(x => x.d.id === r.d.id)), ...rows] }));
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [liveConvD]);
+
+    const approveAnchors = async () => {
+        const rows = (anchorReview?.rows || []).filter(r => r.include);
+        setAnchorReview(null);
+        for (const { d, pick, attempt } of rows) {
+            try {
+                // Fresh read right before acting — a claim or number may have landed since staging.
+                const freshSnap = await getDoc(doc(db, 'convert_demand', d.id));
+                if (!freshSnap.exists()) { addLog(`⚓ ${d.woNum || d.id}: demand no longer exists — skipped.`, 'warn'); continue; }
+                const fresh = freshSnap.data();
+                if (fresh.nsWoId) { addLog(`⚓ ${d.woNum || d.id}: already has ${fresh.nsWoTran || fresh.nsWoId} — skipped.`, 'warn'); continue; }
+                if ((fresh.nsWoQueuedAt || 0) > (d.nsWoQueuedAt || 0)) { addLog(`⚓ ${d.woNum || d.id}: queued elsewhere moments ago — skipped.`, 'warn'); continue; }
+                await updateDoc(doc(db, 'convert_demand', d.id), { nsWoQueuedAt: Date.now(), nsWoQueuedBy: currentUser?.name || 'RTG anchor review', nsWoAttempts: attempt });
+                await queueNsAssemblyWorkOrder({
+                    brandId: d.brandId, assemblyInternalId: pick.internalId,
+                    erp: pick.erp, qty: d.qty,
+                    memo: `${pick.side === 'base' ? `mill ${d.baseErpId}, convert to ${d.targetErpId}` : `convert ${d.baseErpId} → ${d.targetErpId}`}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                    writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: { nsWoOnErp: pick.erp }, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                    sourceApp: 'RTG_ANCHOR_REVIEW', createdBy: currentUser?.name || 'RTG',
+                });
+                addLog(`⚓ NetSuite work order queued on ${pick.erp} ×${d.qty} for ${d.woNum || d.id}${attempt > 1 ? ` (attempt ${attempt})` : ''} — the number stamps back onto the demand.`, 'success');
+            } catch (e) { addLog(`⚓ queue failed for ${pick.erp}: ${e.message || e}`, 'error'); }
+        }
+    };
 
     // 🔁 ORDER ENTRY AUTO-FLOW — independent of the ⚡ per-brand toggle: these orders authorized
     // their own routing at creation (Stuart 2026-08-28: "the system should already have all the
@@ -2885,6 +2893,35 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     )}
                 </div>
             </div>
+            {/* ⚓ ANCHOR REVIEW — nothing reaches NetSuite until Accept (Stuart 2026-08-31). */}
+            {anchorReview && (anchorReview.rows || []).length > 0 && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.8)', zIndex: 9998, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                    <div style={{ background: '#fff', width: '660px', maxWidth: '96vw', maxHeight: '92vh', overflowY: 'auto', border: '1px solid var(--line)', padding: '28px' }}>
+                        <h2 style={{ margin: '0 0 4px', fontFamily: 'var(--serif)', fontSize: '1.5rem', fontWeight: 500, color: 'var(--ink)' }}>⚓ NetSuite work orders — review &amp; send</h2>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '14px' }}>
+                            These convert demands have no NetSuite work order. Untick any you do not want; nothing is sent until you press Accept. Each sends exactly ONE work order — a duplicate is refused by the queue itself.
+                        </div>
+                        {(anchorReview.rows || []).map((r, i) => (
+                            <label key={r.d.id} style={{ display: 'flex', alignItems: 'baseline', gap: '10px', padding: '10px 12px', border: '1px solid var(--paper-2)', marginBottom: '6px', cursor: 'pointer', background: r.include ? '#fff' : 'var(--paper-2)' }}>
+                                <input type="checkbox" checked={r.include} onChange={() => setAnchorReview(prev => ({ rows: prev.rows.map((x, j) => j === i ? { ...x, include: !x.include } : x) }))} />
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--ink)' }}><b>{r.pick.erp}</b> ×{r.d.qty}</span>
+                                <span style={{ fontSize: '0.82rem', color: 'var(--ink-soft)' }}>
+                                    {r.d.woNum || r.d.id}{r.d.finWoErpId ? ` · for ${r.d.finWoErpId}` : ''}
+                                    {r.pick.side === 'base' ? ' · on the ROOT (the /P is not a synced NS assembly)' : ''}
+                                    {r.attempt > 1 ? ` · attempt ${r.attempt} — the last queue never returned a number (check 11.1)` : ''}
+                                </span>
+                            </label>
+                        ))}
+                        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '16px' }}>
+                            <button onClick={() => setAnchorReview(null)} style={{ padding: '12px 18px', background: 'transparent', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>CANCEL — SEND NOTHING</button>
+                            <button onClick={approveAnchors} disabled={!(anchorReview.rows || []).some(r => r.include)}
+                                style={{ padding: '12px 18px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px' }}>
+                                ⚓ ACCEPT — SEND {(anchorReview.rows || []).filter(r => r.include).length} WORK ORDER{(anchorReview.rows || []).filter(r => r.include).length === 1 ? '' : 'S'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {/* ⚖ CLOSE SHORT — the four scenarios Eric described, as three numbers and one question. */}
             {balanceModal && (() => {
                 const m2 = balanceModal;

@@ -45,7 +45,9 @@ export const queueNsAssemblyWorkOrder = async ({
     const nsConfig = BRAND_NETSUITE_MAP[String(brandId || '').toLowerCase()] || {};
     if (!assemblyInternalId) throw new Error(`${erp || 'item'}: no NetSuite internal id — sync it (11.1) before opening a work order.`);
     if (!nsConfig.location) throw new Error(`brand "${brandId}" has no NetSuite location mapping.`);
+    const wb = (writeBacks && writeBacks[0]) || null;
     return enqueueNsWrite({
+        dedupeKey: wb ? `wo:${wb.collection}:${wb.docId}` : null,
         kind: 'workorder',
         label: `NS WO — build ${erp || assemblyInternalId} ×${qty}`,
         sourceApp, createdBy,
