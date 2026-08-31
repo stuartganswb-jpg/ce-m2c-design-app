@@ -627,6 +627,10 @@ function HardwareConfiguratorInner({
         // The paint-to-match override outranks every gate — noFinish and the material rule say
         // what the STOCK part takes, and the upcharge is precisely the decision to overrule that.
         if (choice && matchFinishOverride[choice.id]) return matchFinishOverride[choice.id];
+        // A TRACK ships in its stock finish (bronze or champagne, matched to the fascia in the
+        // library) — the configuration's finish never lands on it uninvited, or every quote would
+        // send the floor an unpaid paint job. Only the upcharge above can paint a track.
+        if (choice && choice.role === 'TRACK') return '';
         if (!choice || choice.noFinish) return '';
         const code = partFinish[choice.id] || partFinishByPart[String(choice.partId || '').toUpperCase()] || globalFinish;
         if (!code) return '';
@@ -661,6 +665,8 @@ function HardwareConfiguratorInner({
             // A paint-matched track renders painted — the same override, applied to the same set.
             const ov = c && (matchFinishOverride[c.id] || matchFinishOverride[owner.id]);
             if (!c || ((c.noFinish || owner.noFinish) && !ov)) return;
+            // …and an unmatched track renders its stock look, never the configuration's finish.
+            if (!ov && (c.role === 'TRACK' || owner.role === 'TRACK')) return;
             const f = finishByCode.get(String(ov || finishFor(c)).toUpperCase());
             // The material gate, applied at the last moment: a global pick of a wood stain simply
             // does not land on the steel brackets, and nothing lands on the acrylic.
