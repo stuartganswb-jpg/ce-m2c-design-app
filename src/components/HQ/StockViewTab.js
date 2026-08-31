@@ -2290,16 +2290,30 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         setOeReview(prev => ({ ...prev, busy: true }));
         const poBuckets = {}; // `${vendor}|${soId}` → { vendorName, so, lines: [] }
         try {
+            // START-NOW SPLIT (Stuart 2026-08-31): a bought TO-BE-FINISHED line with stock on
+            // hand may begin finishing immediately for the reviewed portion — that portion gets
+            // its own WO (-NOW) and picks from the shelf; the remainder's WO (-PO) waits for the
+            // material. PO lines are collected once, on the first half only.
+            const expanded = [];
             for (const job of runnable) {
+                const nowQty = job.buy && job.finish ? Math.max(0, Math.min(Number(job.startNow) || 0, job.startNowMax || 0, job.qty)) : 0;
+                if (nowQty > 0 && nowQty < job.qty) {
+                    const per = job.startNowPer || 1;
+                    const mkPlan = (pcs) => ({ ...job.plan, lines: (job.plan?.lines || []).map(pl => ({ ...pl, quantity: pcs * per })) });
+                    expanded.push({ ...job, qty: nowQty, buyQty: nowQty * per, plan: mkPlan(nowQty), __tag: '-NOW' });
+                    expanded.push({ ...job, qty: job.qty - nowQty, buyQty: (job.qty - nowQty) * per, plan: mkPlan(job.qty - nowQty), __tag: '-PO', __skipPo: true });
+                } else expanded.push(job);
+            }
+            for (const job of expanded) {
                 const { so, part, finish, qty } = job;
                 const erp = String(part.legacyErpId || part.itemId || '').toUpperCase();
                 const finishedErp = job.finishedErp;
                 const specs = part.manufacturingSpecs || {};
                 const needBy = so.needByDate || '';
                 const prodNote = so.productionNotes || '';
-                const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}-${job.key}`;
+                const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}-${job.key}${job.__tag || ''}`;
                 const { makeup, poLines } = actionsOfReviewedJob(job);
-                poLines.forEach(pl => {
+                if (!job.__skipPo) poLines.forEach(pl => {
                     const k = `${pl.vendorName}|${so.id}`;
                     (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so, lines: [] }).lines.push(pl);
                 });
@@ -2309,9 +2323,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // it releases to the floor and waits at the WMS pick until the material lands.
                 // A raw-only buy (no finish) still makes no work order.
                 if (job.buy) {
-                    if (!poLines.length) addLog(`✔ ${erp} ×${qty} (SO ${so.soId || so.id}) — material covered by stock/on-order as reviewed; nothing ordered.`, 'success');
+                    if (!poLines.length && !job.__skipPo) addLog(`✔ ${erp} ×${qty} (SO ${so.soId || so.id}) — material covered by stock/on-order as reviewed; nothing ordered.`, 'success');
                     if (!finish) continue;
-                    addLog(`🎨 ${erp} ×${qty}: TO BE FINISHED — creating the finishing WO now; it waits at the pick until the material arrives.`, 'info');
+                    addLog(job.__tag === '-NOW'
+                        ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing WO releases and picks from the shelf.`
+                        : `🎨 ${erp} ×${qty}: TO BE FINISHED — creating the finishing WO now; it waits at the pick until the material arrives.`, 'info');
                 }
                 let gate = {};
                 if (makeup.length) {
@@ -4000,6 +4016,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         ...j, components: j.components.map(c => c.code !== code ? c : ({ ...c, ...patch })),
                     })),
                 }));
+                const patchJob = (jobKey, patch) => setOeReview(prev => ({
+                    ...prev, jobs: prev.jobs.map(jj => jj.key === jobKey ? { ...jj, ...patch } : jj),
+                }));
                 const patchAction = (jobKey, code, idx, patch) => setOeReview(prev => ({
                     ...prev,
                     jobs: prev.jobs.map(j => j.key !== jobKey ? j : ({
@@ -4090,6 +4109,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                                 )}
                                                             </div>
                                                         ))}
+                                                        {/* START-NOW (Stuart 2026-08-31): stock on hand can begin finishing
+                                                            before the PO lands — the reviewed portion gets its own WO and
+                                                            picks from the shelf; the rest waits for the material. */}
+                                                        {j.buy && j.finish && (j.startNowMax || 0) > 0 && (
+                                                            <div style={{ marginTop: '8px', padding: '8px 10px', border: '1px dashed var(--brass)', display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                                                <span style={{ ...mono9, color: 'var(--brass)' }}>🎨 START FINISHING NOW FROM STOCK</span>
+                                                                <label style={{ ...mono9, color: 'var(--ink)' }}>
+                                                                    <input type="number" min="0" max={j.startNowMax} value={j.startNow ?? 0}
+                                                                        onChange={e => patchJob(j.key, { startNow: Math.max(0, Math.min(j.startNowMax, parseInt(e.target.value) || 0)) })}
+                                                                        style={{ width: '76px', padding: '3px 6px', fontFamily: 'var(--mono)', border: '1px solid var(--line)' }} />
+                                                                    {' '}of {j.startNowMax} pcs possible ({j.startNowHave} {String(j.startNowUnit || '').toLowerCase()} on hand{j.startNowPer > 1 ? ` ÷ ${j.startNowPer} ft/pc` : ''})
+                                                                </label>
+                                                                <span style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>0 = all of it waits for the PO. A number here splits the work: that many release to finishing NOW and pick from the shelf; the rest waits for the material.</span>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                             ))}

@@ -241,7 +241,12 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         });
 
         if (p.buy) {
-            return { ...p, components, holds, nsPlan: { flow: 'PO', note: p.finish ? 'Bought material — the vendor PO is the NetSuite record for the MATERIAL; a finishing work order still opens for the TO-BE-FINISHED work and waits at the pick until it arrives.' : 'Bought item — the vendor PO is the NetSuite record; no work order opens.' } };
+            // START-NOW OPTION (Stuart 2026-08-31): material on hand can begin finishing before
+            // the PO lands — "a client may want some now". The review asks; default is 0 (wait).
+            const compNow = components[0] || {};
+            const per = (p.line && p.line.perFoot && Number(p.line.feetPer)) ? Number(p.line.feetPer) : 1;
+            const startNowMax = Math.max(0, Math.min(p.qty, Math.floor((Number(compNow.have) || 0) / per)));
+            return { ...p, components, holds, startNowMax, startNowPer: per, startNowHave: Number(compNow.have) || 0, startNowUnit: compNow.nsUnit || compNow.appUnit || '', startNow: 0, nsPlan: { flow: 'PO', note: p.finish ? 'Bought material — the vendor PO is the NetSuite record for the MATERIAL; a finishing work order still opens for the TO-BE-FINISHED work and waits at the pick until it arrives.' : 'Bought item — the vendor PO is the NetSuite record; no work order opens.' } };
         }
         // NetSuite vehicle: finished variant present as a synced NetSuite assembly → FLOW2.
         const finPart = partOf(p.finishedErp);
