@@ -1628,6 +1628,20 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     if (rem.convert || rem.plating) demandNote = `, ${rem.convert + rem.plating} WMS demand(s) removed (${[...rem.convertIds, ...rem.platingIds].join(', ')})`;
                 } catch (e) { console.warn('linked demand cleanup after delete failed:', e); }
             }
+            // COMPONENT MAKE-UP WOs CASCADE HERE TOO (found live 2026-08-31: the parked card's ×
+            // deleted the parent and left its WO-CMP milling orders standing — this is the same
+            // cascade closeOrderEverywhere got on 8/30, which this path never received).
+            for (const cid of (order.componentShopWoIds || [])) {
+                try {
+                    const cs = await getDoc(doc(db, 'hq_work_orders', cid));
+                    if (!cs.exists()) continue;
+                    const c = { id: cs.id, ...cs.data() };
+                    if (c.deleted || ['Closed', 'Deleted', 'CANCELLED'].includes(String(c.status || ''))) continue;
+                    await closeEverywhere({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                        { order: c, kind: 'stock', by: currentUser || '', from: 'RTG_PARENT_DELETE', reason: `parent ${id} deleted` });
+                    demandNote += `, component ${c.woDisplayId || c.id} closed`;
+                } catch (e) { console.warn('component WO cascade on delete failed', cid, e); }
+            }
             addLog(`🗑 ${id} deleted (record kept${res.ledger ? ', ledger indexed' : ' — LEDGER WRITE FAILED, tombstone only'}${floorClosed ? `, ${floorClosed} floor doc(s) closed` : ''}${demandNote}).`, "warn");
             loadRTGOrders();
         } catch (e) {
