@@ -19,6 +19,7 @@ import { runBatchPrecheck, executeMakeupActions, releaseFinWoToFloor } from '../
 import { isOutsourcedFinishCode } from '../Shared/finishRouting';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
 import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from '../Shared/nsWorkOrder';
+import { assertFreshBundle } from '../Shared/UpdateBanner';
 
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
@@ -2217,6 +2218,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // Build the plan (live NetSuite read WITH units, sourcing-resolved routing, NS work-order
     // vehicle per line) and open the modal. Writes nothing.
     const openOeReviewForLines = async (items) => {
+        if (!(await assertFreshBundle('Generate'))) return;
         setGenBusy(true);
         try {
             const jobs = [];
@@ -2301,11 +2303,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     const k = `${pl.vendorName}|${so.id}`;
                     (poBuckets[k] = poBuckets[k] || { vendorName: pl.vendorName, so, lines: [] }).lines.push(pl);
                 });
-                // A BOUGHT line makes no work order — the PO (below) or existing stock/on-order
-                // covers it, exactly as the review showed.
+                // A BOUGHT line's PO (or coverage) settles the MATERIAL only. When the line is
+                // TO BE FINISHED (Stuart 2026-08-31: "the track should really create a work order
+                // for the finishing for once it arrives"), the finishing WO is still created —
+                // it releases to the floor and waits at the WMS pick until the material lands.
+                // A raw-only buy (no finish) still makes no work order.
                 if (job.buy) {
-                    if (!poLines.length) addLog(`✔ ${erp} ×${qty} (SO ${so.soId || so.id}) — covered by stock/on-order as reviewed; nothing ordered.`, 'success');
-                    continue;
+                    if (!poLines.length) addLog(`✔ ${erp} ×${qty} (SO ${so.soId || so.id}) — material covered by stock/on-order as reviewed; nothing ordered.`, 'success');
+                    if (!finish) continue;
+                    addLog(`🎨 ${erp} ×${qty}: TO BE FINISHED — creating the finishing WO now; it waits at the pick until the material arrives.`, 'info');
                 }
                 let gate = {};
                 if (makeup.length) {

@@ -241,7 +241,7 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         });
 
         if (p.buy) {
-            return { ...p, components, holds, nsPlan: { flow: 'PO', note: 'Bought item — the vendor PO is the NetSuite record; no work order opens.' } };
+            return { ...p, components, holds, nsPlan: { flow: 'PO', note: p.finish ? 'Bought material — the vendor PO is the NetSuite record for the MATERIAL; a finishing work order still opens for the TO-BE-FINISHED work and waits at the pick until it arrives.' : 'Bought item — the vendor PO is the NetSuite record; no work order opens.' } };
         }
         // NetSuite vehicle: finished variant present as a synced NetSuite assembly → FLOW2.
         const finPart = partOf(p.finishedErp);

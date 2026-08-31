@@ -8,6 +8,26 @@ import React, { useEffect, useState } from 'react';
 // (an operator may be mid-count). Local dev has no __APP_V → banner stays off.
 const CHECK_MS = 4 * 60 * 1000;
 
+// GENERATE-TIME STALENESS GUARD (Stuart 2026-08-31: Eric's per-line generate ran an evening-old
+// bundle and produced a different order shape than the same button on the current code — "the
+// buttons either need to work the same or be removed"). Order-writing flows call this first: a
+// tab older than the live deploy REFUSES to generate and points at the update banner. Unknowable
+// (local dev, offline) passes — the guard must never block real work on a network hiccup.
+export const assertFreshBundle = async (what = 'generate orders') => {
+    const mine = window.__APP_V;
+    if (!mine) return true;
+    try {
+        const r = await fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!r.ok) return true;
+        const j = await r.json();
+        if (j && j.v && String(j.v) !== String(mine)) {
+            alert(`⟳ A newer version of the app is live — this tab is running an older build, and ordering rules may have changed.\n\nHard-refresh (the "New version is live" pill at the bottom), then ${what} again. Nothing was written.`);
+            return false;
+        }
+    } catch (e) { /* offline — do not block */ }
+    return true;
+};
+
 const UpdateBanner = () => {
     const [stale, setStale] = useState(false);
 

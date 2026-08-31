@@ -418,8 +418,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             (now - (d.createdAt || 0)) > 2 * 60 * 1000 &&
             (!d.nsWoQueuedAt || (now - d.nsWoQueuedAt > RETRY_AFTER && (d.nsWoAttempts || 1) < 3)) &&
             !anchorTried.current.has(keyOf(d)));
-        if (!cands.length) return;
         cands.forEach(d => anchorTried.current.add(keyOf(d)));
+        // The same net for hq WORK ORDERS (Stuart 2026-08-31: Eric's stale-bundle generate made
+        // the TRAVLB WO without its top-level NetSuite anchor). An ORDER_ENTRY WO with no NS
+        // number and no claim stages into the same review — the base assembly is looked up the
+        // same way the review plan does it; not-an-assembly items are skipped silently forever.
+        const woCands = liveWO.filter(o => o.orderClass === 'ORDER_ENTRY' && !o.nsWoId && !o.nsWoQueued && !o.deleted &&
+            !['Closed', 'Deleted', 'CANCELLED', 'Completed'].includes(String(o.status || '')) &&
+            (now - (o.createdAt || 0)) > 2 * 60 * 1000 &&
+            !anchorTried.current.has('WO:' + o.id));
+        woCands.forEach(o => anchorTried.current.add('WO:' + o.id));
+        if (!cands.length && !woCands.length) return;
         (async () => {
             const lookup = async (code) => {
                 if (!code) return null;
@@ -434,15 +443,47 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     rows.push({ d, pick, attempt: d.nsWoQueuedAt ? (d.nsWoAttempts || 1) + 1 : 1, include: true });
                 } catch (e) { addLog(`⚓ staging failed for ${d.targetErpId}: ${e.message || e}`, 'error'); }
             }
-            if (rows.length) setAnchorReview(prev => ({ rows: [...((prev && prev.rows) || []).filter(r => !rows.some(x => x.d.id === r.d.id)), ...rows] }));
+            for (const o of woCands) {
+                try {
+                    const variant = String(o.partErpId || o.erpId || '').toUpperCase();
+                    const baseCode = String(o.rootItem || '').toUpperCase();
+                    const pick = pickNsWoItem({ target: await lookup(variant), base: await lookup(baseCode), targetErp: variant, baseErp: baseCode });
+                    if (!pick) continue; // raw-item lines (HTAEC35-style) have no assembly to anchor — silent, forever
+                    rows.push({ kind: 'WO', o, pick, include: true });
+                } catch (e) { addLog(`⚓ WO staging failed for ${woRefOf(o)}: ${e.message || e}`, 'error'); }
+            }
+            if (rows.length) setAnchorReview(prev => ({ rows: [...((prev && prev.rows) || []).filter(r => !rows.some(x => (x.d && r.d && x.d.id === r.d.id) || (x.o && r.o && x.o.id === r.o.id))), ...rows] }));
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [liveConvD]);
+    }, [liveConvD, liveWO]);
 
     const approveAnchors = async () => {
         const rows = (anchorReview?.rows || []).filter(r => r.include);
         setAnchorReview(null);
-        for (const { d, pick, attempt } of rows) {
+        for (const row of rows) {
+            const { d, pick, attempt } = row;
+            if (row.kind === 'WO') {
+                const o = row.o;
+                try {
+                    const freshSnap = await getDoc(doc(db, 'hq_work_orders', o.id));
+                    if (!freshSnap.exists()) continue;
+                    const fresh = freshSnap.data();
+                    if (fresh.nsWoId || fresh.nsWoQueued) { addLog(`⚓ ${woRefOf(o)}: already anchored — skipped.`, 'warn'); continue; }
+                    await updateDoc(doc(db, 'hq_work_orders', o.id), { nsWoQueued: true, nsWoQueuedAt: Date.now(), nsWoQueuedBy: currentUser?.name || 'RTG anchor review' });
+                    // The SO number for the memo lives on the sales doc, not the WO.
+                    let soNo = o.soNum || '';
+                    if (o.soAppId) { try { const ss = await getDoc(doc(db, 'hq_sales_orders', o.soAppId)); if (ss.exists()) soNo = ss.data().soId || soNo; } catch (e) {} }
+                    await queueNsAssemblyWorkOrder({
+                        brandId: activeBrand, assemblyInternalId: pick.internalId,
+                        erp: pick.erp, qty: Number(o.totalParts || o.qty || 0), reqDate: o.needBy || o.reqDate || '',
+                        memo: `${soNo ? `SO ${soNo} · ` : ''}${o.customer || ''} · build ${pick.erp} ×${o.totalParts || o.qty}${o.recipe ? ` · finish ${o.recipe}` : ''} · closes on the final assembly build`,
+                        writeBacks: [{ collection: 'hq_work_orders', docId: o.id, patch: { nsWoOnErp: pick.erp, nsWoOnInternalId: pick.internalId }, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                        sourceApp: 'RTG_ANCHOR_REVIEW', createdBy: currentUser?.name || 'RTG',
+                    });
+                    addLog(`⚓ Top-level NetSuite WO queued on ${pick.erp} ×${o.totalParts || o.qty} for ${woRefOf(o)}${soNo ? ` (SO ${soNo})` : ''} — the number stamps back onto the card.`, 'success');
+                } catch (e) { addLog(`⚓ WO queue failed for ${woRefOf(o)}: ${e.message || e}`, 'error'); }
+                continue;
+            }
             try {
                 // Fresh read right before acting — a claim or number may have landed since staging.
                 const freshSnap = await getDoc(doc(db, 'convert_demand', d.id));
@@ -2918,14 +2959,20 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                             These convert demands have no NetSuite work order. Untick any you do not want; nothing is sent until you press Accept. Each sends exactly ONE work order — a duplicate is refused by the queue itself.
                         </div>
                         {(anchorReview.rows || []).map((r, i) => (
-                            <label key={r.d.id} style={{ display: 'flex', alignItems: 'baseline', gap: '10px', padding: '10px 12px', border: '1px solid var(--paper-2)', marginBottom: '6px', cursor: 'pointer', background: r.include ? '#fff' : 'var(--paper-2)' }}>
+                            <label key={r.kind === 'WO' ? `wo-${r.o.id}` : r.d.id} style={{ display: 'flex', alignItems: 'baseline', gap: '10px', padding: '10px 12px', border: '1px solid var(--paper-2)', marginBottom: '6px', cursor: 'pointer', background: r.include ? '#fff' : 'var(--paper-2)' }}>
                                 <input type="checkbox" checked={r.include} onChange={() => setAnchorReview(prev => ({ rows: prev.rows.map((x, j) => j === i ? { ...x, include: !x.include } : x) }))} />
-                                <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--ink)' }}><b>{r.pick.erp}</b> ×{r.d.qty}</span>
-                                <span style={{ fontSize: '0.82rem', color: 'var(--ink-soft)' }}>
-                                    {r.d.woNum || r.d.id}{r.d.finWoErpId ? ` · for ${r.d.finWoErpId}` : ''}
-                                    {r.pick.side === 'base' ? ' · on the ROOT (the /P is not a synced NS assembly)' : ''}
-                                    {r.attempt > 1 ? ` · attempt ${r.attempt} — the last queue never returned a number (check 11.1)` : ''}
-                                </span>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '12px', color: 'var(--ink)' }}><b>{r.pick.erp}</b> ×{r.kind === 'WO' ? (r.o.totalParts || r.o.qty) : r.d.qty}</span>
+                                {r.kind === 'WO' ? (
+                                    <span style={{ fontSize: '0.82rem', color: 'var(--ink-soft)' }}>
+                                        TOP-LEVEL for {woRefOf(r.o)}{r.o.customer ? ` · ${r.o.customer}` : ''}{r.o.recipe ? ` · finish ${r.o.recipe}` : ''} · closes on the final assembly build
+                                    </span>
+                                ) : (
+                                    <span style={{ fontSize: '0.82rem', color: 'var(--ink-soft)' }}>
+                                        {r.d.woNum || r.d.id}{r.d.finWoErpId ? ` · for ${r.d.finWoErpId}` : ''}
+                                        {r.pick.side === 'base' ? ' · on the ROOT (the /P is not a synced NS assembly)' : ''}
+                                        {r.attempt > 1 ? ` · attempt ${r.attempt} — the last queue never returned a number (check 11.1)` : ''}
+                                    </span>
+                                )}
                             </label>
                         ))}
                         <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '16px' }}>
