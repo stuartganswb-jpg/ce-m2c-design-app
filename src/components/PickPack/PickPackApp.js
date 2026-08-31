@@ -4,6 +4,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
+import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
@@ -4142,6 +4143,27 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     setConvertLot(new Date().toLocaleDateString('en-CA'));
                                                     setConvertDemandId(d.id);
                                                 }} disabled={isSyncing || onCart} style={{ padding: '10px 16px', background: onCart ? theme.paper2 : theme.brass, color: onCart ? theme.inkSoft : '#fff', border: onCart ? `1px solid ${theme.line}` : 'none', cursor: (isSyncing || onCart) ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>{onCart ? 'On cart' : 'Pull & Convert →'}</button>
+                                                {!d.nsWoId && (
+                                                    <button onClick={async () => {
+                                                        // BACKFILL THE ANCHOR (2026-08-31): demands created before the
+                                                        // /P work-order queueing shipped have no NS WO — one click opens
+                                                        // it now, so this convert builds AGAINST a work order too.
+                                                        const tgt = enrichedByErp(d.targetErpId);
+                                                        if (!tgt?.netSuiteInternalId) return alert(`${d.targetErpId} has no NetSuite internal id here — Sync NetSuite Stock first.`);
+                                                        try {
+                                                            await queueNsAssemblyWorkOrder({
+                                                                brandId: activeBrand, assemblyInternalId: String(tgt.netSuiteInternalId),
+                                                                erp: d.targetErpId, qty: d.qty,
+                                                                memo: `convert ${d.baseErpId} → ${d.targetErpId}${d.finWoErpId ? ` · for ${d.finWoErpId}` : ''}`,
+                                                                writeBacks: [{ collection: 'convert_demand', docId: d.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
+                                                                sourceApp: 'WMS_CONVERT', createdBy: operator?.name || '',
+                                                            });
+                                                            alert(`📤 NetSuite work order queued for ${d.targetErpId} ×${d.qty} — its number lands on this row in ~1 min, and the convert will build against it.`);
+                                                        } catch (e) { alert('NS WO queue failed: ' + (e.message || e)); }
+                                                    }} disabled={isSyncing}
+                                                        title="Open the NetSuite work order this convert should build against (demands created before 8/30 have none). The number stamps back here; the convert then posts createdfrom it."
+                                                        style={{ padding: '10px 12px', background: 'transparent', color: '#3a7d44', border: '1px solid #3a7d44', cursor: isSyncing ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px' }}>⚓ NS WO</button>
+                                                )}
                                                 {['admin', 'superadmin'].includes(safeUserRole) && (
                                                     <button onClick={() => deleteConvertDemand(d)} disabled={isSyncing}
                                                         title={`Delete this convert to-do (admin) — for strays left by deleted or re-run ordering attempts. If it's the last one gating ${d.finWoErpId || d.finWoId || 'a work order'}, the gate lifts (release stays in RTG).`}
