@@ -17,6 +17,8 @@ const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#
 const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     // queue entries: { file, folder } — folder = the containing folder's name when the batch came
     // in via SELECT FOLDER (Kermit renders: folder name IS the plate code), '' for loose files.
+    const [libraryError, setLibraryError] = useState('');
+    const [stampFails, setStampFails] = useState([]);   // library writes this login was not allowed
     const [queue, setQueue] = useState([]);
     // ONE IMAGE BECOMES THE THUMBNAIL (Stuart 2026-08-27: "apply one as the thumbnail for the
     // master library"). A folder holds several photographs of the same pillow; they all belong in
@@ -114,11 +116,21 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
     useEffect(() => {
         let unsub = null;
         try {
+            // A DENIED READ USED TO LOOK LIKE AN EMPTY LIBRARY (Stuart 2026-08-27: "works from my
+            // machine but not associates? hers is pc … and role level access only differences").
+            // This was the ONE listener in the file with no error callback, so if a login cannot
+            // read Approved_Designs the snapshot errors, hqParts stays [], and every folder reports
+            // "not in the Master Library" — the same words as a genuinely wrong folder name. The
+            // person is then told their filing is wrong when it is their permissions. Say which.
             unsub = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
                 if (!snap || !snap.docs) return;
+                setLibraryError('');
                 setHqParts(snap.docs.map(d => ({ id: d.id, ...(d.data() || {}) })));
+            }, (e) => {
+                console.error("Master Library read failed:", e);
+                setLibraryError(String(e?.code || e?.message || e));
             });
-        } catch (err) { console.error("HQ DB Error:", err); }
+        } catch (err) { console.error("HQ DB Error:", err); setLibraryError(String(err?.message || err)); }
         return () => { if (typeof unsub === 'function') unsub(); };
     }, []);
 
@@ -566,9 +578,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                 await updateDoc(doc(db, 'Approved_Designs', t.id), imageUpdate(thumbUrl, IMG_GALLERY));
             }
         } catch (e) {
-            // The asset itself is written and safe. A failed stamp is recoverable from the Library's
-            // Sync Thumbnails button, so it must never fail the upload.
+            // The asset itself is written and safe, so this must never fail the upload — but it must
+            // not be invisible either. It was a console.warn, which meant an operator whose login
+            // cannot write the Master Library saw a completely successful import and no picture,
+            // with nothing on screen to explain it. Collected and surfaced when the batch ends.
             console.warn('Image stamped to gallery but not onto the library part:', e);
+            const code = String(e?.code || e?.message || e);
+            setStampFails(prev => prev.length >= 25 ? prev : [...prev, { code: displayId, why: code }]);
         }
     };
 
@@ -770,6 +786,36 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                 </div>
             </div>
 
+            {/* PERMISSIONS, SAID OUT LOUD. Two failures used to be silent and both look identical
+                to "your folder is named wrong": a login that cannot READ the Master Library sees
+                every folder unresolved, and one that cannot WRITE it uploads perfectly and never
+                gets a thumbnail. Neither is the operator's mistake and neither should be guessed at. */}
+            {libraryError && (
+                <div style={{ background: '#fdf3f3', border: '1px solid #d9534f', padding: '16px 22px' }}>
+                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.14em', textTransform: 'uppercase', color: '#d9534f', marginBottom: '6px' }}>Master Library could not be read</div>
+                    <div style={{ fontFamily: theme.sans, fontSize: '0.92rem', color: theme.ink, lineHeight: 1.6 }}>
+                        This login cannot read the Master Library, so no folder will resolve to an item and
+                        every one will report “not in the Master Library” — that is this, not your folder names.
+                        Images can still be uploaded to the Asset Gallery; they will not get a thumbnail.
+                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '8px' }}>{libraryError} · ask Stuart to check this role's access</div>
+                    </div>
+                </div>
+            )}
+            {stampFails.length > 0 && (
+                <div style={{ background: '#fdf8ee', border: `1px solid ${theme.brass}`, padding: '16px 22px' }}>
+                    <div style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.14em', textTransform: 'uppercase', color: theme.brass, marginBottom: '6px' }}>Uploaded — but the thumbnail was refused</div>
+                    <div style={{ fontFamily: theme.sans, fontSize: '0.92rem', color: theme.ink, lineHeight: 1.6 }}>
+                        {stampFails.length} image(s) reached the Asset Gallery, but this login was not allowed to
+                        set the picture on the Master Library item. Nothing is lost — someone with library access
+                        can run <b>4. Master Library → Sync Thumbnails</b> to finish it.
+                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '8px' }}>
+                            {stampFails.slice(0, 6).map(f => f.code).join(', ')}{stampFails.length > 6 ? ` +${stampFails.length - 6} more` : ''} · {stampFails[0].why}
+                        </div>
+                    </div>
+                    <button onClick={() => setStampFails([])} style={{ marginTop: '10px', padding: '7px 14px', background: 'transparent', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', color: theme.inkSoft }}>Dismiss</button>
+                </div>
+            )}
+
             {safeQueue.length === 0 ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px dashed ${theme.brass}`, color: theme.inkSoft, fontFamily: theme.serif, fontSize: '1.4rem', padding: '60px 20px' }}>
                     <div>Drag & Drop or Select a Batch of Images to Begin</div>
@@ -864,7 +910,13 @@ const BatchImageProcessor = ({ activeBrand, currentUser }) => {
                                             ? `✓ ${soft.libCode}${soft.matchedBy === 'parts' ? '  (matched on pattern + colour + size)' : ''}`
                                             : `✗ ${soft.libCode || 'could not build a code'} — ${(soft.parsed.why || []).join(' · ') || 'not in the Master Library'}`}
                                     </div>
-                                    {!ok && <div style={{ fontFamily: theme.mono, fontSize: '10px', marginTop: '6px', color: theme.inkSoft, lineHeight: 1.6 }}>Type our item # below to import anyway — nothing is written against a code the library does not have.</div>}
+                                    {!ok && <div style={{ fontFamily: theme.mono, fontSize: '10px', marginTop: '6px', color: theme.inkSoft, lineHeight: 1.6 }}>
+                                        {libraryError
+                                            ? 'The Master Library could not be read on this login — see the banner above. This is NOT your folder name.'
+                                            : (safeHqParts.length === 0
+                                                ? 'The Master Library has not loaded yet — give it a moment and this will re-check itself.'
+                                                : 'Type our item # below to import anyway — nothing is written against a code the library does not have.')}
+                                    </div>}
                                 </div>
                             );
                         })()}
