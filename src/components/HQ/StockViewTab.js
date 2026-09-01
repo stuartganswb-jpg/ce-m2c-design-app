@@ -16,7 +16,7 @@ import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { runBatchPrecheck, executeMakeupActions, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
-import { isOutsourcedFinishCode } from '../Shared/finishRouting';
+import { isOutsourcedFinishCode, handlingForErp } from '../Shared/finishRouting';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
 import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from '../Shared/nsWorkOrder';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
@@ -414,11 +414,17 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
                 const mergedBins = Array.from(item.all_bins || []).join(', ');
 
-                const pTypeClean = (item.product_type || '').toLowerCase().trim();
                 const uomClean = (item.uom || '').toLowerCase().trim();
                 
-                const isPoleOrLinear = pTypeClean === 'pole' || pTypeClean === 'poles' || uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
-                const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';
+                // ONE POLE TEST, ONE HANDLING RULE (Stuart 2026-09-01). This NetSuite pull carried
+                // its own copy of both: the test matched 'pole'/'poles' and so could not see a ROD,
+                // and it stamped every pole Custom — which is how a STOCKED finished assembly
+                // (HCUMP810/BS) arrived from NetSuite already routed to the shop floor. The suffix
+                // decides now, exactly as in the Master Library sync; see Shared/finishRouting.
+                const isPoleOrLinear = isPoleCategory(item.product_type) || uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
+                const autoPartHandling = isPoleCategory(item.product_type)
+                    ? handlingForErp(item.itemid)
+                    : (isPoleOrLinear ? 'Custom' : 'Small Parts');
                 
                 const hasVendor = item.vendor_name && item.vendor_name.trim() !== '';
 
