@@ -104,14 +104,19 @@ export const isPoleCategory = (productType) => /\b(POLES?|RODS?)\b/i.test(String
 // So the two tags a pole carries, derived from the one category rather than typed in per item:
 //   FINISH STREAM  — POLES for anything in the pole/rod category, always. This is the recipe
 //                    variant only (-P), and it is what was missing on her orders.
-//   PART HANDLING  — SMALL PARTS for a STOCKED pole. Stuart: "they need to be tagged small parts
-//                    in the parts handling as these are stocked poles and do not require custom".
-//                    Custom routes a line to the custom shop division; a stocked 4 ft rod is an
-//                    ordinary finishing job and does not belong there. A pole that is NOT stocked
-//                    is cut to order, so it stays Custom.
+//
+// PART HANDLING IS NOT DERIVED FROM THE CATEGORY, AND NOT FROM isStocked (Stuart 2026-09-01).
+// This file briefly carried an `autoPartHandlingFor` that read "stocked poles are Small Parts" as
+// implying "unstocked poles are Custom". He never said that, and it took stocked poles off the
+// finishing floor: "that force should not have forced the change to custom (they should have
+// stayed small parts to stay in finishing), custom drives poles to shop floor, it should have
+// updated the tag finish stream to Poles finish like a pole".
+//
+// Handling is decided by the FINISH SUFFIX on the item code, not by the category and not by a
+// stock flag — see Shared/finishRouting.handlingForErp, which owns that rule and the vocabulary
+// it needs. A pole answers TWO questions from two different places: this file says how it is
+// FINISHED (the pole recipe), finishRouting says where it is BUILT (finishing or the shop).
 export const autoFinishStream = (productType) => isPoleCategory(productType) ? 'POLES' : '';
-export const autoPartHandlingFor = (productType, isStocked) =>
-    isPoleCategory(productType) ? (isStocked ? 'Small Parts' : 'Custom') : 'Small Parts';
 
 export function poleCutPlan(erpId, qty, opts = {}) {
     // CATEGORY FIRST, GRAMMAR SECOND (Stuart 2026-08-22: "MB is bracket … you are safe to go to

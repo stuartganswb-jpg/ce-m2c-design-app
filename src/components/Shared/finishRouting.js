@@ -37,6 +37,38 @@ export const millBaseOf = (erpId) => {
 
 export const isOutsourcedErp = (erpId) => isOutsourcedFinishCode(finishSuffixOf(erpId));
 
+// ── APPLIED FINISH vs ASSEMBLY FINISH — what decides Custom / Small Parts ──────────────────────
+// Stuart 2026-09-01, after the isStocked rule shipped and was wrong:
+//   "any pole that does not have an assembly finish code, which ends before the /p, and the cpq
+//    and/or order entry apply the finish /P01, /EP1, etc. these all are routed to custom and
+//    finish like poles. any pole that has a complete assembly ie. HCUMP810/BS these are routed to
+//    small parts and finish like poles, any pole that is handled with rod cuts is this same way."
+//   "all finishes with /P are in house custom (except P25 that is out source custom), all EP and
+//    MEP are outsourced custom. All other colors like CP, SG, N90, etc. are all small parts."
+//
+// So the question is never "is it stocked" — it is "does this code already NAME its finish, or is
+// a finish about to be applied to it". A mill code (HCUMP810) and an applied-finish code
+// (HCUMP810/P, /P01, /EP3) are both made to order: cut, fabricated and finished for this order,
+// which is the custom division. A complete assembly (HCUMP810/BS, /N90, /CP) is an ordinary
+// finishing job on a stocked part — including the ones rod cuts produce, which arrive as exactly
+// that. The suffix is the whole test.
+const APPLIED_PAINT_RE = /^P\d*$/i;                 // P (the rollup), P01…P24, P25 is plated below
+export const isAppliedFinishCode = (code) =>
+    isOutsourcedFinishCode(code) || APPLIED_PAINT_RE.test(String(code || '').trim());
+
+/**
+ * Part Handling from the item code alone: 'Custom' or 'Small Parts'.
+ *
+ * DELIBERATELY NOT APPLIED LIBRARY-WIDE. Brackets, backplates, rings and finials are tagged Small
+ * Parts on purpose (see Shared/lineClassification §1) and a plated bracket — H1-1CP-V/EP4 — must
+ * stay there; routing those to the shop is what starved the finishing pick list once already.
+ * Callers scope it to the pole/rod category.
+ */
+export const handlingForErp = (erpId) => {
+    const suffix = finishSuffixOf(erpId);
+    return (!suffix || isAppliedFinishCode(suffix)) ? 'Custom' : 'Small Parts';
+};
+
 const uniq = (a) => Array.from(new Set(a.map(x => String(x).toUpperCase())));
 
 /**

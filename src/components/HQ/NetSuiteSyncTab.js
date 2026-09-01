@@ -5,7 +5,8 @@ import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, writeBatch, onSnap
 import { parseFabricutWorkbook, buildFabricutPlan, buildPremiumTierRepairPlan } from '../Shared/fabricutImport';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { buildNsItemBody } from "../Shared/nsItemFields";
-import { isPoleCategory, autoFinishStream, autoPartHandlingFor } from "../Shared/poleCut";
+import { isPoleCategory, autoFinishStream } from "../Shared/poleCut";
+import { handlingForErp, finishSuffixOf } from "../Shared/finishRouting";
 import { woItemCodeOf } from "../Shared/workOrderContract";
 import { SOURCING, sourcingOf } from "../Shared/sourcing";
 
@@ -520,11 +521,16 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     const [poleFixBusy, setPoleFixBusy] = useState(false);
     const [stampBusy, setStampBusy] = useState(false);
     const handleForcePoleTags = async () => {
-        const dry = !window.confirm('FORCE POLE TAGS\n\nEvery item categorised POLE or ROD gets:\n   • Finish Stream = POLES\n   • Part Handling = Small Parts (stocked poles only — unstocked stay Custom)\n\nOpen finishing work orders for those items are repaired too, so orders already on the floor pick up the pole recipe.\n\nAn item explicitly set to SMALL is left alone.\n\nOK = apply · Cancel = dry run (report only, changes nothing)');
+        const dry = !window.confirm('FORCE POLE TAGS\n\nEvery item categorised POLE or ROD gets:\n   • Finish Stream = POLES\n   • Part Handling BY ITS FINISH SUFFIX — mill code or an applied finish (/P, /P01, /EP3, /MEP2, /P25) = Custom; a complete assembly (/BS, /N90, /CP) = Small Parts\n\nOpen finishing work orders for those items are repaired too, so orders already on the floor pick up the pole recipe.\n\nAn item explicitly set to SMALL is left alone.\n\nOK = apply · Cancel = dry run (report only, changes nothing)');
         setPoleFixBusy(true);
         addLog(dry ? '🔍 DRY RUN — reporting what would change, writing nothing.' : '🔧 Applying pole tags…', dry ? 'warn' : 'info');
         try {
             let libScanned = 0, libFixed = 0, woFixed = 0, skippedExplicit = 0;
+            // The dry run is the ACCEPTANCE TEST for the suffix rule, so it reports the decision
+            // for every pole/rod scanned — not just the ones that move. Read this list before
+            // pressing OK; a wrong call here is a pole on the wrong floor.
+            let nCustom = 0, nSmall = 0, logged = 0;
+            const LOG_CAP = dry ? 300 : 15;
             const parts = await getDocs(collection(db, 'Approved_Designs'));
             const poleByErp = new Map();
             let batch = writeBatch(db), ops = 0;
@@ -537,17 +543,25 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 const explicit = String(specs.finishStream || '').toUpperCase();
                 if (explicit === 'SMALL') { skippedExplicit++; continue; }
                 const wantStream = 'POLES';
-                const wantHandling = autoPartHandlingFor(specs.productType, specs.isStocked);
+                // THE SUFFIX DECIDES (Stuart 2026-09-01) — see Shared/finishRouting.handlingForErp.
+                // This button is the deliberate bulk repair, so unlike the sync it DOES restate
+                // handling; that is the whole reason it exists.
+                const erp = part.legacyErpId || part.itemId || '';
+                const wantHandling = handlingForErp(erp);
+                const suffix = finishSuffixOf(erp);
+                if (wantHandling === 'Custom') nCustom++; else nSmall++;
                 if (explicit === wantStream && specs.partHandling === wantHandling) continue;
                 libFixed++;
-                if (libFixed <= 15) addLog(`   ${part.legacyErpId} (${specs.productType}) — stream ${explicit || '(blank)'} → POLES · handling ${specs.partHandling || '(blank)'} → ${wantHandling}`, 'info');
+                if (logged++ < LOG_CAP) addLog(`   ${erp} (${specs.productType}) — /${suffix || '(mill)'} → ${wantHandling} · stream ${explicit || '(blank)'} → POLES · handling ${specs.partHandling || '(blank)'} → ${wantHandling}`, 'info');
                 if (!dry) {
                     batch.update(d.ref, { 'manufacturingSpecs.finishStream': wantStream, 'manufacturingSpecs.partHandling': wantHandling });
                     if (++ops >= 400) { await batch.commit(); batch = writeBatch(db); ops = 0; }
                 }
             }
             if (!dry && ops) await batch.commit();
+            if (logged > LOG_CAP) addLog(`   … and ${logged - LOG_CAP} more not listed (log capped).`, 'warn');
             addLog(`Library: ${libScanned} pole/rod items · ${libFixed} ${dry ? 'would be' : ''} re-tagged · ${skippedExplicit} left alone (explicitly SMALL).`, 'success');
+            addLog(`By finish suffix: ${nCustom} → Custom (mill / applied /P /EP /MEP /P25) · ${nSmall} → Small Parts (complete assembly).`, 'info');
 
             // OPEN ORDERS — the ones Grace is looking at. An order already on the floor keeps
             // whatever it was stamped with at creation; nothing re-reads the item master.
@@ -967,12 +981,18 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                 // ordinary small part and nothing downstream could tell it was a pole.
                 const isPole = isPoleCategory(item.product_type) || pTypeClean.includes('track') ||
                                uomClean === 'ft' || uomClean === 'foot' || uomClean === 'feet';
-                // PART HANDLING — Stuart: "they need to be tagged small parts in the parts handling
-                // as these are stocked poles and do not require custom". Custom routes a line into
-                // the custom shop division; a stocked rod is an ordinary finishing job. A pole that
-                // is not stocked is cut to order, so it stays Custom.
+                // PART HANDLING — for a POLE/ROD the FINISH SUFFIX decides, never the stock flag
+                // (Stuart 2026-09-01; the rule and his words live in Shared/finishRouting). A mill
+                // code or an applied finish (/P, /P01, /EP3) is made to order → Custom; a complete
+                // assembly (/BS, /N90, /CP) is an ordinary finishing job → Small Parts.
+                //
+                // AND THE SYNC ONLY FILLS THE BLANK. Stuart: "these rules cover 90% the rest we
+                // will do by hand" — a curated value is that hand, and a pull that re-derived it
+                // every time would erase the exception on the next sync. Exactly how the previous
+                // rule kept re-flipping HCUMP810/BS to Custom after it had been put right.
+                // Non-pole items keep the legacy behaviour untouched.
                 const partHandling = isPoleCategory(item.product_type)
-                    ? autoPartHandlingFor(item.product_type, isStocked)
+                    ? (existingAppRecord?.manufacturingSpecs?.partHandling || handlingForErp(item.itemid || item.id))
                     : (isPole ? "Custom" : "Small Parts");
                 // FINISH STREAM — the tag that was missing on her orders. Category-derived, so a
                 // pole never depends on someone remembering to set it per item.
