@@ -16,6 +16,7 @@ import { planBalanceClose, describeBalanceClose, buildPayload, adjustmentPayload
 import { millBaseOf } from '../Shared/finishRouting';
 import { woRecipeCode } from '../Shared/finishingTime';
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
+import { isPoleCategory } from '../Shared/poleCut';
 import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import FormPreview from '../Shared/FormPreview';
 import { printForm } from '../Shared/printForm';
@@ -1459,13 +1460,34 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 // that, so its orders reached the floor with no item code on the card at all —
                 // and nothing for the NetSuite work order to resolve the assembly from.
                 stockErpId: hqOrder.paintOnly === true ? (hqOrder.jfpItemCode || null) : (hqOrder.rootItem || hqOrder.variantErpId || hqOrder.partErpId || null),
-                // Scheduler keys. A stock build is one finished assembly -> one size + one product
-                // type, so the whole quantity packs into that size and resolves one matrix cell.
-                paintSize: (hqOrder.paintSize || '').toUpperCase() || null,
+                // ── THE RELEASE GATE ASKS WHETHER IT IS A POLE (Sandra 2026-09-01) ──────────────
+                // WO11535 (HCUMP415/N25) reached the floor with both streams: its poles sprayed and
+                // baked, its SLED steps stuck PENDING forever on an order with no small parts. This
+                // branch is where that was finally assembled — it expanded a paintSize into
+                // paintSizes without ever asking what the item was, and stamped no pole count at
+                // all, so the floor saw sled sizes with the full quantity on them and no poles.
+                //
+                // Of every screen that releases work, this was the ONLY one that never asked the
+                // question: `poles:` did not appear in this file. It is the gate everything passes
+                // through, so a pole-blind gate could undo a correctly-stamped order on the way out.
+                // Poles are racked, not sled-packed; the size keys stay null and the rack count is
+                // the quantity.
                 productType: (hqOrder.productType || '').toUpperCase() || null,
-                paintSizes: (hqOrder.paintSize && ['S', 'M', 'L'].includes((hqOrder.paintSize || '').toUpperCase()))
-                    ? { S: 0, M: 0, L: 0, [(hqOrder.paintSize).toUpperCase()]: Number(hqOrder.totalParts) || 0 }
-                    : null,
+                ...(isPoleCategory(hqOrder.productType)
+                    ? {
+                        poles: { qty: Number(hqOrder.totalParts) || 0, type: String(hqOrder.productType || 'POLE').toUpperCase() },
+                        totalPoles: Number(hqOrder.totalParts) || 0,
+                        paintSize: null, paintSizes: null,
+                    }
+                    : {
+                        // Scheduler keys. A stock build is one finished assembly -> one size + one
+                        // product type, so the whole quantity packs into that size and resolves one
+                        // matrix cell.
+                        paintSize: (hqOrder.paintSize || '').toUpperCase() || null,
+                        paintSizes: (hqOrder.paintSize && ['S', 'M', 'L'].includes((hqOrder.paintSize || '').toUpperCase()))
+                            ? { S: 0, M: 0, L: 0, [(hqOrder.paintSize).toUpperCase()]: Number(hqOrder.totalParts) || 0 }
+                            : null,
+                    }),
                 // Finish-stream exception (e.g. the elbow: small part, pole recipe). The finPayload
                 // branch has always carried it; this branch dropped it, so Stock View grid WOs lost
                 // the flag at release and ran the small-parts recipe.

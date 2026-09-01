@@ -755,9 +755,27 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     // the one WO-creating path here that ignored it (2026-08-17).
                     ...(woUrgent ? { urgent: true, urgentAck: false, needBy: woNeedBy || new Date(Date.now() + 12096e5).toISOString().split('T')[0], urgentBy: currentUser || '', urgentAt: Date.now() } : {}),
                     ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
+                    // ── A POLE IS NOT A SLED (Sandra 2026-09-01, WO11535 · HCUMP415/N25) ────────
+                    // "Keep showing on finishing stage because say the order has small parts." Her
+                    // order ran POLE SPRAY and POLE BAKE to completion, then sat forever on SLED
+                    // SPRAY and SLED BAKE — steps that can never finish, because there are no small
+                    // parts on it. It read "10 pcs · 0 pole(s)".
+                    //
+                    // This push stamped paintSize from the item master without ever asking what the
+                    // item IS, and stamped no pole count at all. RTG then expands a paintSize of
+                    // S/M/L into paintSizes with the full quantity on it, and on the floor ANY
+                    // non-zero sled size forces the small-parts stream on before the pole count is
+                    // even consulted. So the order carried both streams and could only ever half
+                    // finish. Poles are racked (8 to a rack), never sled-packed — a sled size on a
+                    // pole was always wrong, it just had nowhere to show until now.
+                    //
+                    // Same shape as the Setup Queue's `.includes('POLE')` that missed rods: a screen
+                    // deciding for itself what a pole is. It asks the one category test now.
+                    ...(isPoleCategory(part.manufacturingSpecs?.productType || part.productType)
+                        ? { poles: { qty: Number(qty), type: String(part.manufacturingSpecs?.productType || part.productType || 'POLE').toUpperCase() }, totalPoles: Number(qty), paintSize: null }
+                        : { paintSize: (part.manufacturingSpecs?.paintSize || '').toUpperCase() || null }),
                     // Scheduler keys for the finishing time matrix (recipe × paintSize × productType).
                     // Carried downstream by RTGDispatch.pushToFinishing onto the fin_workorder.
-                    paintSize: (part.manufacturingSpecs?.paintSize || '').toUpperCase() || null,
                     productType: (part.manufacturingSpecs?.productType || part.productType || '').toUpperCase() || null,
                     routingType: part.routingType || 'Standard',
                     needsPhosphating: isPhosphate,
