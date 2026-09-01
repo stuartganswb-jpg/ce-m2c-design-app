@@ -4,7 +4,11 @@ import { collectPrintStyles } from './printStyles';
 // Print a React element (e.g. <FormPreview/>) as a standalone document in a new window. We copy the
 // app's stylesheets + :root CSS variables so the branded form — fonts, light-grey shading, and the
 // barcode — prints exactly as it previews. print-color-adjust:exact keeps the greys/barcode solid.
-export function printForm(element, title = 'Document') {
+// `opts.pageCss` overrides the page box for documents that are already drawn as full sheets —
+// a form whose pages carry their OWN 8.5in width and inner margins must print at margin 0, or the
+// printer's half-inch is added to the one already in the artwork and the sheet is scaled down
+// (Stuart 2026-08-31, the Fabricut quote). Callers that say nothing keep the Letter/0.5in default.
+export function printForm(element, title = 'Document', opts = {}) {
   let markup;
   try { markup = renderToStaticMarkup(element); }
   catch (e) { console.error('print render failed', e); alert('Could not render the form for printing.'); return; }
@@ -23,7 +27,7 @@ export function printForm(element, title = 'Document') {
     <style>
       /* Declared LAST and with an explicit size so nothing copied above can decide the page for
          us — a form is Letter portrait, whatever was printed in this tab before it. */
-      @page { size: Letter portrait; margin: 0.5in; }
+      ${opts.pageCss || '@page { size: Letter portrait; margin: 0.5in; }'}
       html, body { margin: 0; padding: 0; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     </style>
   </head><body>${markup}</body></html>`);

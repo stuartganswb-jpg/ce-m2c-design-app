@@ -17,6 +17,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
+import { printForm } from '../Shared/printForm';
 
 const printStyles = `
   @media print {
@@ -1264,14 +1265,15 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
       const renderQuote = isFullPacket || activeDocType === 'QUOTE';
       const renderRouter = isFullPacket || activeDocType === 'FACTORY_ROUTER';
 
-      return (
-          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9999, overflowY: 'auto', padding: '40px 0' }}>
-              <div style={{ position: 'relative' }}>
-                  <div className="no-print" style={{ position: 'absolute', top: 0, right: '-160px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <button onClick={() => window.print()} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>Print PDF</button>
-                      <button onClick={() => setActiveDocJob(null)} style={{ padding: '16px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>Close</button>
-                  </div>
-
+      // ── A QUOTE IS NOT A LABEL (Stuart 2026-08-31) ──────────────────────────────────────────
+      // window.print() prints THIS page, and this page's head holds every stylesheet the app has
+      // ever injected — including the label printer's `@page{size:4in 2in}`. So the branded quote
+      // came out of the dialog as a 4-page landscape thing sized for the label roll. The same
+      // document now goes through printForm: its own window, the app's styles copied but every
+      // copied @page stripped, and Letter declared last. margin 0 because these pages already ARE
+      // full 8.5in sheets with their own inner margins. (RTG, Admin and the invoice modal have
+      // printed this way since 2026-08-03 — this was the one door still calling window.print.)
+      const printableDoc = (
                   <div id="printable-document" style={{ width: '8.5in', display: 'flex', flexDirection: 'column', gap: '30px' }}>
                       
                       {/* PAGE 1: QUOTE — the actual Form Templates document */}
@@ -1387,9 +1389,18 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                               </div>
                           </div>
                       )}
-
-                      <style>{printStyles}</style>
                   </div>
+      );
+      return (
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', backgroundColor: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9999, overflowY: 'auto', padding: '40px 0' }}>
+              <div style={{ position: 'relative' }}>
+                  <div className="no-print" style={{ position: 'absolute', top: 0, right: '-160px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <button onClick={() => printForm(printableDoc, `${String(activeDocType || 'QUOTE').replace(/_/g, ' ')} ${activeDocJob.jobId || activeDocJob.id}`, { pageCss: '@page { size: Letter portrait; margin: 0; }' })} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>Print PDF</button>
+                      <button onClick={() => setActiveDocJob(null)} style={{ padding: '16px 24px', background: '#fff', color: 'var(--ink)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}>Close</button>
+                  </div>
+
+                  {printableDoc}
+                  <style>{printStyles}</style>
               </div>
           </div>
       );
