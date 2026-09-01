@@ -1159,13 +1159,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     item: { id: String(holderNs) }, quantity: 1, rate: parseFloat(trvTotal.toFixed(2)), price: { id: '-1' },
                     description: `${kitLines.map(l => `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.erp}`).join(' + ')} · ${kitLines.map(l => l.note).join(' · ')} [traverse system — components below]`,
                 });
-                trvDocLines.push({
-                    kind: 'KIT',
-                    code: kitLines.map(l => l.aliasErp || l.erp).join(' + '),
-                    name: kitLines.map(l => l.name).filter(Boolean).join(' + '),
-                    note: kitLines.map(l => l.note).filter(Boolean).join(' · '),
-                    qty: 1, rate: parseFloat(trvTotal.toFixed(2)), memo: kitMemo,
-                });
+                // ⚠ ONE HOLDER LINE FOR NETSUITE, ONE LINE PER KIT FOR THE CUSTOMER (Stuart
+                // 2026-08-31). NetSuite wants the traverse dollars on a single non-inventory
+                // holder — that is its design and it stays. The customer's document must not
+                // inherit it: two kits and their extra footage collapsed into one $1,428 line
+                // reading "6ft system · 8ft system" is impossible to check. So the mirror is
+                // built per CART LINE — each kit its own line at its own price, each kit's parts
+                // beneath it, and the additional-foot charge as its own line under the kit it
+                // extends. The rows still sum to the holder's total, because they are its parts.
                 const byId = (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase());
                 // ── A SUB-FINISH SUFFIX IS A FINISH, NOT AN ITEM (Stuart 2026-08-31) ─────────
                 // The family's track code carries the base colour it is finished in
@@ -1182,7 +1183,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     return { part: null, suffix: '' };
                 };
                 let rulesDoc = null;
+                const feetPool = trvOrder.filter(x => x.trvIsFeet);
                 for (const l of kitLines) {
+                    trvDocLines.push({
+                        kind: 'KIT', key: l.key, kitCode: String(l.trvKitCode || l.erp || '').toUpperCase(),
+                        code: l.aliasErp || l.erp, name: l.name, note: l.note,
+                        qty: l.eachQty || 1, rate: l.rate || 0, memo: String(l.lineMemo || '').trim(),
+                    });
                     const kitDoc = itemById(l.itemId);
                     const fam = kitDoc?.manufacturingSpecs?.kitFamily || 'H1-2TRV';
                     if (!rulesDoc) { try { const snap = await getDoc(doc(db, 'system', `traverse_rules_${fam}`)); rulesDoc = snap.exists() ? snap.data() : null; } catch { rulesDoc = null; } }
@@ -1215,10 +1222,19 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             item: { id: String(cd.netSuiteInternalId) }, quantity: c.qty, rate: 0, price: { id: '-1' },
                             description: `${cd.legacyErpId || c.code} — ${cd.itemName || c.code} · ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,
                         });
-                        trvDocLines.push({ kind: 'PART', code: cd.legacyErpId || c.code, name: cd.itemName || c.code, note: `${c.why}${finShown ? ` · ${finShown}` : ''}`, qty: c.qty, rate: 0 });
+                        trvDocLines.push({ kind: 'PART', ofKey: l.key, code: cd.legacyErpId || c.code, name: cd.itemName || c.code, note: `${c.why}${finShown ? ` · ${finShown}` : ''}`, qty: c.qty, rate: 0 });
                     });
                     ex.skipped.forEach(sk => addLog(`Traverse: ${sk}`, 'info'));
+                    // The extra footage beyond the kit's base length bills on its own line — the
+                    // customer reads what the kit costs and what the length added, separately.
+                    const fi = feetPool.findIndex(f => String(f.trvKitCode || '').toUpperCase() === String(l.trvKitCode || '').toUpperCase());
+                    if (fi >= 0) {
+                        const f = feetPool.splice(fi, 1)[0];
+                        trvDocLines.push({ kind: 'FEET', ofKey: l.key, code: f.aliasErp || f.erp, name: f.name, note: f.note, qty: f.eachQty || 1, rate: f.rate || 0, memo: String(f.lineMemo || '').trim() });
+                    }
                 }
+                // Any footage line whose kit never exploded still bills — never silently dropped.
+                feetPool.forEach(f => trvDocLines.push({ kind: 'FEET', code: f.aliasErp || f.erp, name: f.name, note: f.note, qty: f.eachQty || 1, rate: f.rate || 0, memo: String(f.lineMemo || '').trim() }));
             }
 
             // Shipping — the exact shape ERPPushPull sends (proven against this account): saved
@@ -1303,22 +1319,34 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         // a number that did not add up. Kit first, its contents indented under it,
                         // loose items after; each line says its own memo (the room).
                         breakdown: (() => {
-                            const kitCodes = trvOrder.map(l => String(l.trvKitCode || '').toUpperCase()).filter(Boolean);
-                            const ofKit = (l) => kitCodes.some(c => String(l.note || '').toUpperCase().includes(`[${c}]`));
-                            const memoOf = (l) => String(l.lineMemo || '').trim() ? ` · 📍 ${String(l.lineMemo).trim()}` : '';
+                            const memoOf = (m) => String(m || '').trim() ? ` · 📍 ${String(m).trim()}` : '';
                             const cartRow = (l, indent) => ({
-                                name: `${indent}${l.aliasErp || l.erp} — ${l.name}${l.perFoot ? ` [${l.qty} pc × ${l.feetPer} ft]` : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}${memoOf(l)}`,
+                                name: `${indent}${l.aliasErp || l.erp} — ${l.name}${l.perFoot ? ` [${l.qty} pc × ${l.feetPer} ft]` : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}${memoOf(l.lineMemo)}`,
                                 qty: l.eachQty, price: l.rate, total: l.rate * l.eachQty, legacyErpId: l.erp,
                                 ...(indent ? { inKit: true } : {}),
                                 ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}),
                             });
-                            return [
-                                ...trvDocLines.map(d => d.kind === 'KIT'
-                                    ? { name: `${d.code} — ${d.name}${d.note ? ` · ${d.note}` : ''}${d.memo ? ` · 📍 ${d.memo}` : ''}`, qty: d.qty, price: d.rate, total: d.rate, legacyErpId: d.code }
-                                    : { name: `   · ${d.code} — ${d.name}${d.note ? ` · ${d.note}` : ''}`, qty: d.qty, price: 0, total: 0, legacyErpId: d.code, inKit: true }),
-                                ...lines.filter(ofKit).map(l => cartRow(l, '   · ')),
-                                ...lines.filter(l => !ofKit(l)).map(l => cartRow(l, '')),
-                            ];
+                            const partRow = (d) => ({ name: `   · ${d.code} — ${d.name}${d.note ? ` · ${d.note}` : ''}`, qty: d.qty, price: 0, total: 0, legacyErpId: d.code, inKit: true });
+                            // The extra footage is a CHARGE, not a content — its own line, its own
+                            // code, priced, sitting under the kit whose length it extends.
+                            const feetRow = (d) => ({ name: `  ${d.code} — ${d.note || 'Additional foot'}${memoOf(d.memo)}`, qty: d.qty, price: d.rate, total: d.rate * d.qty, legacyErpId: d.code });
+                            const used = new Set();
+                            const rows = [];
+                            trvDocLines.filter(d => d.kind === 'KIT').forEach(k => {
+                                rows.push({ name: `${k.code} — ${k.name}${k.note ? ` · ${k.note}` : ''}${memoOf(k.memo)}`, qty: k.qty, price: k.rate, total: k.rate * k.qty, legacyErpId: k.code });
+                                trvDocLines.filter(d => d.kind === 'PART' && d.ofKey === k.key).forEach(d => rows.push(partRow(d)));
+                                // The components the operator picked for THIS kit — the configurator
+                                // stamps its kit code into the line's note, which is the only tie
+                                // back to the kit once they are ordinary cart lines.
+                                lines.forEach(l => {
+                                    if (used.has(l.key) || !k.kitCode) return;
+                                    if (String(l.note || '').toUpperCase().includes(`[${k.kitCode}]`)) { used.add(l.key); rows.push(cartRow(l, '   · ')); }
+                                });
+                                trvDocLines.filter(d => d.kind === 'FEET' && d.ofKey === k.key).forEach(d => rows.push(feetRow(d)));
+                            });
+                            trvDocLines.filter(d => d.kind === 'FEET' && !d.ofKey).forEach(d => rows.push(feetRow(d)));
+                            lines.filter(l => !used.has(l.key)).forEach(l => rows.push(cartRow(l, '')));
+                            return rows;
                         })(),
                         cartItems: [],
                     },
@@ -1400,8 +1428,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // sees it and the invoice carried no kit line at all — the same hole the quote
                     // document had. Same mirror, same numbers as the NetSuite holder line.
                     trvDocLines.filter(d => d.kind === 'KIT').forEach(d => out.push({
-                        type: 'KIT', code: d.code, price: d.rate,
-                        components: trvDocLines.filter(x => x.kind === 'PART').map(x => ({ erp: x.code, realErp: x.code, name: `${x.name}${x.note ? ` · ${x.note}` : ''}`, qty: x.qty, packs: null, packUom: '' })),
+                        type: 'KIT', code: d.code, price: d.rate * (d.qty || 1),
+                        components: trvDocLines.filter(x => x.kind === 'PART' && x.ofKey === d.key).map(x => ({ erp: x.code, realErp: x.code, name: `${x.name}${x.note ? ` · ${x.note}` : ''}`, qty: x.qty, packs: null, packUom: '' })),
+                    }));
+                    trvDocLines.filter(d => d.kind === 'FEET').forEach(d => out.push({
+                        type: 'ITEM', erp: d.code, realErp: d.code, name: d.note || 'Additional foot',
+                        qty: d.qty, packs: null, packUom: '', packSize: 1, rate: d.rate, total: d.rate * d.qty, note: String(d.memo || ''),
                     }));
                     // Loose lines invoice in the unit the customer BUYS: "2 × 7 PACK" at the pack
                     // price, with the each count kept for reference. qty stays the each count so an
