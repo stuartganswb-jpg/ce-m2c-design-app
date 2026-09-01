@@ -2689,7 +2689,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         // spray-zone load (70 S · 35 M · 17 L) prints one label PER LOAD — PART 1 OF n — instead
         // of a single label. Same barcode on every label, so they stage and scan as one order.
         // Poles are racked, never zone-loaded, and an unsized job falls back to the single label.
-        const isPole = !!(job.poles || job.totalPoles) || /POLE|ROD/.test(String(job.productType || ''));
+        // ONE POLE TEST (sweep 2026-09-01) — the stamped count first, the category as the fallback
+        // for orders raised before a count was stamped (Sandra's WO11535 shape).
+        const isPole = !!(job.poles || job.totalPoles) || isPoleCategory(job.productType);
         const plan = (type === 'SMALL_PARTS' && !isPole)
             ? machineLoadPlan(null, job.paintSize, job.productType, job.totalParts) : null;
         if (plan) return printMachineLoadLabels(base, plan.loads);

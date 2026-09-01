@@ -1159,7 +1159,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const specs = part?.manufacturingSpecs || {};
         const size = (specs.paintSize || '').toUpperCase();
         const ptype = (specs.productType || '').toUpperCase();
-        const isPole = /POLE|ROD/.test(ptype);
+        // ONE POLE TEST (sweep 2026-09-01) — Shared/poleCut is the single answer.
+        const isPole = isPoleCategory(ptype);
         const isAssembly = part?.partClass === 'Assembly' || part?.netSuiteRecordType === 'assemblyitem';
         const isOutsourced = specs.isInHouse === false && !!String(specs.vendorName || '').trim() && !isAssembly;
         let available = Math.round(Number(r.available) || 0);
@@ -2357,7 +2358,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const planLines = (job.plan?.lines || []).map(pl => String(pl.legacyErpId || '').toUpperCase() === finishedErp
                     ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
                 const ptype = String(specs.productType || '').toUpperCase();
-                const isPole = /POLE|ROD/.test(ptype);
+                // ONE POLE TEST (sweep 2026-09-01, after Sandra's WO11535). Was /POLE|ROD/ here —
+                // equivalent today, and exactly the kind of local copy that drifts: the Setup
+                // Queue's own copy could not see a ROD, and RTG had no copy at all.
+                const isPole = isPoleCategory(ptype);
                 const size = String(specs.paintSize || '').toUpperCase();
                 const finPayload = withItemCode({
                     id: woId, orderKey: so.id, quoteId: null, salesOrderId: so.id, estimateId: null,

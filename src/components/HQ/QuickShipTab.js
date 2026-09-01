@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { isPoleCategory } from '../Shared/poleCut';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
@@ -32,7 +33,7 @@ const classifyCat = (pt) => {
     if (t.includes('BRACKET')) return 'BRACKET';
     if (t.includes('FINIAL')) return 'FINIAL';
     if (t.includes('RING')) return 'RING';
-    if (t.includes('POLE') || t.includes('ROD')) return 'POLE';
+    if (isPoleCategory(t)) return 'POLE';
     return '';
 };
 const erpOf = (it) => String(it.legacyErpId || it.itemId || '').toUpperCase();
@@ -1651,7 +1652,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         }
                     }
                     const ptype = String(rawPart?.manufacturingSpecs?.productType || '').toUpperCase();
-                    const isPole = /POLE|ROD/.test(ptype);
+                    // ONE POLE TEST (sweep 2026-09-01) — Shared/poleCut is the single answer.
+                    const isPole = isPoleCategory(ptype);
                     const size = String(rawPart?.manufacturingSpecs?.paintSize || '').toUpperCase();
                     const finPayload = withItemCode({
                         id: woId, orderKey: hqId, quoteId: null, salesOrderId: hqId, estimateId: null,
