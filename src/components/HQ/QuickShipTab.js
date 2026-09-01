@@ -1019,6 +1019,12 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     };
 
     const setQty = (key, q) => setCart(prev => prev.map(l => l.key === key ? { ...l, qty: Math.max(1, parseInt(q) || 1) } : l));
+    // ── EVERY LINE CAN NAME ITS ROOM (Stuart 2026-08-31) ────────────────────────────────────
+    // One order covers several windows, so the room belongs on the LINE, not only in the header
+    // sidemark. The memo prints on the customer's quote beside the line it describes, rides that
+    // line's NetSuite Tag (custcol3 — the header sidemark stays the fallback), and is stored on
+    // the sales-order line so the floor and the packing station read the same room.
+    const setLineMemo = (key, v) => setCart(prev => prev.map(l => l.key === key ? { ...l, lineMemo: String(v || '').slice(0, 120) } : l));
     const removeLine = (key) => setCart(prev => prev.filter(l => l.key !== key));
 
     // LIVE pricing (Stuart 2026-07-17): rates resolve at RENDER/PUSH time, never frozen at add
@@ -1116,6 +1122,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
 
             // ── traverse explosion ───────────────────────────────────────────────────────────
             const trvPushLines = [];
+            // ── THE SAME KIT, IN WORDS THE CUSTOMER CAN CHECK (Stuart 2026-08-31) ────────────
+            // The NetSuite payload below already says everything: the kit as a priced holder line
+            // and its contents beneath it. The QUOTE document was built from the cart alone, so it
+            // printed the loose components and the kit's dollars appeared only in the total — a
+            // quote with no kit code and no contents is one the client cannot verify. This mirror
+            // is built from the very same data, so the paper and the ERP can never disagree.
+            const trvDocLines = [];
+            const kitMemo = (trvOrder.find(l => String(l.lineMemo || '').trim()) || {}).lineMemo || '';
             if (trvOrder.length) {
                 // The $-holder: a generic traverse non-inventory item (made once with the 11.1
                 // item tool), found by its code; falls back to the CPQ rollup item so a missing
@@ -1128,6 +1142,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 trvPushLines.push({
                     item: { id: String(holderNs) }, quantity: 1, rate: parseFloat(trvTotal.toFixed(2)), price: { id: '-1' },
                     description: `${kitLines.map(l => `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.erp}`).join(' + ')} · ${kitLines.map(l => l.note).join(' · ')} [traverse system — components below]`,
+                });
+                trvDocLines.push({
+                    kind: 'KIT',
+                    code: kitLines.map(l => l.aliasErp || l.erp).join(' + '),
+                    name: kitLines.map(l => l.name).filter(Boolean).join(' + '),
+                    note: kitLines.map(l => l.note).filter(Boolean).join(' · '),
+                    qty: 1, rate: parseFloat(trvTotal.toFixed(2)), memo: kitMemo,
                 });
                 const byId = (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase());
                 let rulesDoc = null;
@@ -1161,6 +1182,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                             item: { id: String(cd.netSuiteInternalId) }, quantity: c.qty, rate: 0, price: { id: '-1' },
                             description: `${c.code} — ${cd.itemName || c.code} · ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,
                         });
+                        trvDocLines.push({ kind: 'PART', code: c.code, name: cd.itemName || c.code, note: `${c.why}${finShown ? ` · ${finShown}` : ''}`, qty: c.qty, rate: 0 });
                     });
                     ex.skipped.forEach(sk => addLog(`Traverse: ${sk}`, 'info'));
                 }
@@ -1220,8 +1242,8 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         // The customer ordered the alias code — name it first so the SO reads the way
                         // they ordered, while the LINE ITEM stays the real stocked part.
                         description: `${l.aliasErp ? l.aliasErp + ' — ' : ''}${l.name}${l.note ? ' (' + l.note + ')' : ''}${l.packUom ? ' [' + l.qty + ' × ' + l.packUom + ']' : ''}${l.kitName ? ' [Kit: ' + l.kitName + (l.kitFinish ? ' - ' + l.kitFinish : '') + ']' : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : l.feeRule ? ' [fee]' : ' [Quick Ship stock]'}`,
-                        ...(lineTag ? { custcol3: lineTag } : {}),
-                    })).concat(trvPushLines.map(t => lineTag ? { ...t, custcol3: lineTag } : t))
+                        ...((String(l.lineMemo || '').trim() || lineTag) ? { custcol3: String(l.lineMemo || '').trim().slice(0, 300) || lineTag } : {}),
+                    })).concat(trvPushLines.map(t => (kitMemo || lineTag) ? { ...t, custcol3: String(kitMemo || lineTag).slice(0, 300) } : t))
                 }
             };
 
@@ -1241,7 +1263,30 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     createdBy: { name: currentUser || '', via: 'QUICKSHIP' },
                     cpqData: {
                         totalPrice: lines.reduce((sum, l) => sum + l.rate * l.eachQty, 0) + trvPushLines.reduce((sum, t) => sum + ((t.rate || 0) * (t.quantity || 1)), 0),
-                        breakdown: lines.map(l => ({ name: `${l.aliasErp || l.erp} — ${l.name}${l.perFoot ? ` [${l.qty} pc × ${l.feetPer} ft]` : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}`, qty: l.eachQty, price: l.rate, legacyErpId: l.erp, ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}) })),
+                        // ── WHAT THE CLIENT HAS TO BE ABLE TO CHECK (Stuart 2026-08-31) ─────────
+                        // The kit prints as ONE priced line under the code they ordered, and every
+                        // part inside it prints beneath at no charge — the kit's dollars used to
+                        // reach the paper only as the grand total, so the quote showed add-ons and
+                        // a number that did not add up. Kit first, its contents indented under it,
+                        // loose items after; each line says its own memo (the room).
+                        breakdown: (() => {
+                            const kitCodes = trvOrder.map(l => String(l.trvKitCode || '').toUpperCase()).filter(Boolean);
+                            const ofKit = (l) => kitCodes.some(c => String(l.note || '').toUpperCase().includes(`[${c}]`));
+                            const memoOf = (l) => String(l.lineMemo || '').trim() ? ` · 📍 ${String(l.lineMemo).trim()}` : '';
+                            const cartRow = (l, indent) => ({
+                                name: `${indent}${l.aliasErp || l.erp} — ${l.name}${l.perFoot ? ` [${l.qty} pc × ${l.feetPer} ft]` : ''}${l.toBeFinished ? ` [TO BE FINISHED — ${l.finishCode || ''}]` : ''}${memoOf(l)}`,
+                                qty: l.eachQty, price: l.rate, total: l.rate * l.eachQty, legacyErpId: l.erp,
+                                ...(indent ? { inKit: true } : {}),
+                                ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '' } : {}),
+                            });
+                            return [
+                                ...trvDocLines.map(d => d.kind === 'KIT'
+                                    ? { name: `${d.code} — ${d.name}${d.note ? ` · ${d.note}` : ''}${d.memo ? ` · 📍 ${d.memo}` : ''}`, qty: d.qty, price: d.rate, total: d.rate, legacyErpId: d.code }
+                                    : { name: `   · ${d.code} — ${d.name}${d.note ? ` · ${d.note}` : ''}`, qty: d.qty, price: 0, total: 0, legacyErpId: d.code, inKit: true }),
+                                ...lines.filter(ofKit).map(l => cartRow(l, '   · ')),
+                                ...lines.filter(l => !ofKit(l)).map(l => cartRow(l, '')),
+                            ];
+                        })(),
                         cartItems: [],
                     },
                     dateSaved: new Date().toISOString().split('T')[0], author: currentUser || '', createdAt: serverTimestamp(),
@@ -1302,7 +1347,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 // toBeFinished/finishCode ride the stored line (they were dropped here until
                 // 2026-08-27, which left the WMS reading a made-to-order line as a shelf pull).
                 // finishOutsourced routes the WMS label: FROM PLATING vs FROM FINISHING.
-                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })),
+                lines: lines.map(l => ({ erp: l.erp, aliasErp: l.aliasErp || '', name: l.name, qty: l.perFoot ? l.qty : l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '', bin: l.bin || '', note: l.note || '', memo: String(l.lineMemo || '').trim(), kit: l.kitName ? `${l.kitName}${l.kitFinish ? ' - ' + l.kitFinish : ''}` : '', ...(l.perFoot ? { perFoot: true, feetPer: parseFloat(l.feetPer) || 1, billedFeet: l.eachQty } : {}), ...(l.toBeFinished ? { toBeFinished: true, finishCode: l.finishCode || '', ...(isOutFinish(l.finishCode) ? { finishOutsourced: true } : {}) } : {}) })),
                 // Customer-facing INVOICE presentation (CRM prints/sends this): the customer pays
                 // against the KIT # + kit price; components print as unpriced sub-lines; loose
                 // items itemized. Captured at TRANSACTION time so later kit-price edits never
@@ -1317,6 +1362,14 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         // ordered. The real code is kept as realErp for internal reconciliation.
                         return { type: 'KIT', code: `${g[0].kitName}${g[0].kitFinish ? ' - ' + g[0].kitFinish : ''}`, price: kp !== null ? kp : g.reduce((s, l) => s + l.rate * l.eachQty, 0), components: g.map(l => ({ erp: l.aliasErp || l.erp, realErp: l.erp, name: l.name, qty: l.eachQty, packs: l.packUom ? l.qty : null, packUom: l.packUom || '' })) };
                     });
+                    // ⚠ A TRAVERSE KIT IS NOT A `kitKey` GROUP (Stuart 2026-08-31). Its cart lines
+                    // are pulled out into trvOrder before `lines` is built, so the loop above never
+                    // sees it and the invoice carried no kit line at all — the same hole the quote
+                    // document had. Same mirror, same numbers as the NetSuite holder line.
+                    trvDocLines.filter(d => d.kind === 'KIT').forEach(d => out.push({
+                        type: 'KIT', code: d.code, price: d.rate,
+                        components: trvDocLines.filter(x => x.kind === 'PART').map(x => ({ erp: x.code, realErp: x.code, name: `${x.name}${x.note ? ` · ${x.note}` : ''}`, qty: x.qty, packs: null, packUom: '' })),
+                    }));
                     // Loose lines invoice in the unit the customer BUYS: "2 × 7 PACK" at the pack
                     // price, with the each count kept for reference. qty stays the each count so an
                     // older invoice reader (which knows nothing about packs) still totals correctly.
@@ -2113,6 +2166,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '0.82rem', color: 'var(--ink)' }}>{l.aliasErp || l.erp || '—'} {!l.nsId && <span style={{ color: '#d9534f' }} title="No NetSuite ID — will be skipped on push">⚠</span>}</div>
                                     {l.aliasErp && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>ships as {l.erp}</div>}
                                     <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}{l.note ? ` · ${l.note}` : ''}{l.packUom && <span style={{ color: 'var(--brass)' }}> · {l.qty} × {l.packUom} = {l.eachQty} ea</span>}{l.kitName && <span style={{ color: 'var(--brass)' }}> · KIT: {l.kitName}{l.kitFinish ? ` · ${l.kitFinish}` : ''}</span>}</div>
+                                    <input value={l.lineMemo || ''} onChange={e => setLineMemo(l.key, e.target.value)} placeholder="Memo / room — e.g. LIVING ROOM LEFT" title="Prints on the customer's quote beside this line, and rides the line's NetSuite Tag" style={{ width: '100%', marginTop: '4px', padding: '4px 6px', border: '1px solid var(--line)', background: l.lineMemo ? '#fffdf5' : '#fff', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }} />
                                 </div>
                                 <input type="number" min="1" value={l.qty} onChange={e => setQty(l.key, e.target.value)} style={qtyInp} title={l.packUom ? `Packs of ${l.packSize}` : 'Quantity'} />
                                 <div style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', textAlign: 'right', color: 'var(--ink)' }}>${(l.rate * l.eachQty).toFixed(2)}</div>
