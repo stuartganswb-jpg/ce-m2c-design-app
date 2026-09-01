@@ -7,6 +7,22 @@ and every setting touched on 2026-08-31, so nothing has to be rediscovered.*
 
 ---
 
+## ⛔ WORKING AGREEMENT (Stuart, 2026-08-31) — binds every session
+
+1. **Plan first, always** — state the plan and WAIT for approval before editing code, shipping, or
+   changing production data. Reading and measuring need no permission; changing does.
+2. **Requested scope only** — exactly what was asked, nothing beside it. Adjacent problems get
+   NAMED, not fixed in passing. Working, tested code is not yours to touch because you are in the file.
+3. **No temporary fixes** — fix the cause, or say it cannot be done properly and stop.
+4. **Look downstream — RTG is the single source of truth.** CPQ / Order Entry feed work orders, the
+   finishing floor, the shop floor, WMS and NetSuite, all hanging off the ONE RTG spine. Before any
+   change, trace it forward through every one of them and say so in the plan. No change may break
+   that linkage.
+
+Full text: `CLAUDE.md` (top).
+
+---
+
 ## 0. Operating the session (unchanged, reuse it)
 
 - **Pin-in**: Stuart pins you into the live app via **Claude-in-Chrome** (his real Chrome). He types

@@ -6,6 +6,22 @@ side and carries the same operating procedures — read its §0 (pin-in login, V
 Cloud Shell) verbatim; it applies here unchanged. Governing doc: `APP_ARCHITECTURE_BRIEF.md`
 (§4 H1 principle + canonical fields).*
 
+## ⛔ WORKING AGREEMENT (Stuart, 2026-08-31) — binds every session
+
+1. **Plan first, always** — state the plan and WAIT for approval before editing code, shipping, or
+   changing production data. Reading and measuring need no permission; changing does.
+2. **Requested scope only** — exactly what was asked, nothing beside it. Adjacent problems get
+   NAMED, not fixed in passing. Working, tested code is not yours to touch because you are in the file.
+3. **No temporary fixes** — fix the cause, or say it cannot be done properly and stop.
+4. **Look downstream — RTG is the single source of truth.** CPQ / Order Entry feed work orders, the
+   finishing floor, the shop floor, WMS and NetSuite, all hanging off the ONE RTG spine. Before any
+   change, trace it forward through every one of them and say so in the plan. No change may break
+   that linkage.
+
+Full text: `CLAUDE.md` (top).
+
+---
+
 **Team-facing explainer already exists** — the in-app **User Guide tab → Work Orders** section and
 the shareable page https://claude.ai/code/artifact/629a7307-70a0-4dfe-9749-e67bb564ce77. Keep both
 current when you change these screens (`UserGuideTab.js`, plain JSX).

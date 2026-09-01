@@ -2,6 +2,38 @@
 
 React + Firebase manufacturing PLM/WMS for Classical Elements & M2C Studio. Live at **4cosworkcenter.com** (Vercel). Firebase project: `ce-m2c-design-collab`. Repo: `github.com/stuartganswb-jpg/ce-m2c-design-app`.
 
+## ⛔ WORKING AGREEMENT — read before touching anything (Stuart, 2026-08-31)
+
+These four rules bind every session, every time. They are not style preferences; each one was
+written after a change that cost real money or real trust.
+
+1. **Plan first, always.** State the plan and WAIT for approval before editing code, shipping, or
+   changing production data. Every time — no exceptions for "small", "obvious" or "while I'm in
+   there". Diagnosis, reading and measuring need no permission; changing things does.
+
+2. **Requested scope only.** Deliver exactly what was asked, and nothing beside it. If something
+   adjacent looks wrong, NAME it and wait — never fix, remove, restructure or "improve" it in
+   passing. Working, tested code is not yours to touch because you happened to be in the file.
+   (2026-08-31: asked to ADD a Reopen Order Entry button, the session also made the working Reopen
+   CPQ / Reopen Vision buttons conditional. Nobody asked for that.)
+
+3. **No temporary fixes.** Fix the cause. If it cannot be done properly right now, say so and stop
+   — a stopgap that hides the cause is worse than an open bug, because the next session inherits
+   both.
+
+4. **Look downstream before you change anything — RTG is the single source of truth.** CPQ and
+   Order Entry are the kickoff point of the entire operation: what they write becomes work orders,
+   the finishing floor's queue, the shop floor's queue, WMS pick/pack and the NetSuite transaction.
+   Every one of those now hangs off RTG as the ONE spine, and it stays that way. So before any
+   change to a quote, an order, a line, a part identity or a push payload, trace it forward:
+   - what does this do to the WORK ORDERS this order fires (and their anchors back to the SO)?
+   - what does the FINISHING FLOOR see — recipe, finish code, sub-finish routing, sequencing?
+   - what does the SHOP FLOOR see — router, cut list, component pulls?
+   - what does WMS see — pick lines, bins, packs, labels?
+   - what reaches NETSUITE — item identity, quantities, rates, the rollup?
+   State that trace in the plan. **No change may break the RTG linkage.** If a change would fork
+   the spine or leave a screen reading its own copy of the truth, it is the wrong change.
+
 ## Build / verify
 - Lint a file before committing: `npx --no-install eslint <path>` — **0 errors required** (pre-existing warnings are fine).
 - Full build sanity check (slow, ~1–2 min): `CI=false npx --no-install react-scripts build`.

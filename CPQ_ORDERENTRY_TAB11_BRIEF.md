@@ -6,6 +6,22 @@ side. The sibling brief (`WO_CREATION_SCREENS_BRIEF.md`) covers Stock View / Sal
 Master Library. Read `APP_ARCHITECTURE_BRIEF.md` §4 first — the H1 principle and canonical-field
 rules govern everything here.*
 
+## ⛔ WORKING AGREEMENT (Stuart, 2026-08-31) — binds every session
+
+1. **Plan first, always** — state the plan and WAIT for approval before editing code, shipping, or
+   changing production data. Reading and measuring need no permission; changing does.
+2. **Requested scope only** — exactly what was asked, nothing beside it. Adjacent problems get
+   NAMED, not fixed in passing. Working, tested code is not yours to touch because you are in the file.
+3. **No temporary fixes** — fix the cause, or say it cannot be done properly and stop.
+4. **Look downstream — RTG is the single source of truth.** CPQ / Order Entry feed work orders, the
+   finishing floor, the shop floor, WMS and NetSuite, all hanging off the ONE RTG spine. Before any
+   change, trace it forward through every one of them and say so in the plan. No change may break
+   that linkage.
+
+Full text: `CLAUDE.md` (top).
+
+---
+
 ---
 
 ## 0. Operating the session (how this session actually worked — reuse it)
@@ -95,10 +111,13 @@ loop and it caught two bugs code-reading missed:
 
 ## 2. Still to work out (Stuart's words: "still some things")
 
-1. **H1-75 tag cleanup (1.6, data)** — the engine's own red notes: `H1-75CB` has NO projection
-   tag; `H1-75ILPS` tagged 4.625 vs item field 3.625; `H1-75BD` and `H1-75D` tagged 6.5 vs 3.25.
-   "Clear it or correct it before somebody believes it." Also set/blank the H1-75 flow's Kit
-   Family (it carried a junk `CE-ASM-…` stamp; the guard now prevents new ones).
+1. ~~**H1-75 tag cleanup**~~ RESOLVED 2026-08-27: `H1-75CB` is a CEILING bracket (drop, not
+   projection — audit now exempts ceiling-mount pins); `H1-75ILPS` was tagged wrong in 1.6,
+   Stuart corrected to 3.625; `H1-75BD`/`H1-75D` were legacy-master noise (one projection field
+   can't hold a double bracket's two depths — audit now exempts doubles). STILL OPEN: the H1-75
+   flow's junk `CE-ASM-…` Kit Family stamp (tab 11 → Flow Settings → clear it). ALSO 2026-08-27:
+   passing rule FLIPPED — no Ring Style axis; centre bracket offers every style and the chosen
+   bracket's `passing` tag filters the rings (rings-only rule in admits, slots() derives per tier).
 2. **Kit sheet imports pending**: H1-138 (and beyond) — Stuart said H1-2TRV "is the only one I
    have done to date". Import in 4.6 → Kit Builder; the tag system lights the picker automatically.
 3. **Estimate→SO transform live verification** (first real CRM Approve) + CE SO form 177 via the
