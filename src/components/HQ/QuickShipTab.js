@@ -1025,6 +1025,22 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // line's NetSuite Tag (custcol3 — the header sidemark stays the fallback), and is stored on
     // the sales-order line so the floor and the packing station read the same room.
     const setLineMemo = (key, v) => setCart(prev => prev.map(l => l.key === key ? { ...l, lineMemo: String(v || '').slice(0, 120) } : l));
+
+    // ── A SAVED ORDER LEAVES NOTHING BEHIND (Stuart 2026-08-31) ─────────────────────────────
+    // The cart emptied on save but the HEADER did not: the PO, the sidemark, the internal memo,
+    // the need-by, the production notes, the shipping override and any half-finished kit picker
+    // all survived and silently attached themselves to the next order — a quote's room memo on
+    // somebody else's job. The customer stays selected (the counter usually takes another order
+    // for the same account, and it is in plain sight at the top); everything that belonged to
+    // THAT order goes.
+    const resetOrderEntry = () => {
+        setCart([]); setJobName('');
+        setSoExtras({ po: '', sidemark: '', internalMemo: '', needBy: '', prodNotes: '' });
+        setShip({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+        setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
+        setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setQuickQty('');
+        setEditingSo(null);
+    };
     const removeLine = (key) => setCart(prev => prev.filter(l => l.key !== key));
 
     // LIVE pricing (Stuart 2026-07-17): rates resolve at RENDER/PUSH time, never frozen at add
@@ -1151,6 +1167,20 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     qty: 1, rate: parseFloat(trvTotal.toFixed(2)), memo: kitMemo,
                 });
                 const byId = (c) => allItems.find(x => String(x.legacyErpId || x.itemId || '').toUpperCase() === String(c).toUpperCase());
+                // ── A SUB-FINISH SUFFIX IS A FINISH, NOT AN ITEM (Stuart 2026-08-31) ─────────
+                // The family's track code carries the base colour it is finished in
+                // (H1-2TRVTRK/C), and that /C is right for the floor — but the library and
+                // NetSuite stock the bare H1-2TRVTRK, so the lookup missed and the TRACK was
+                // dropped from the consumption entirely. The Fabricut estimate went out with a
+                // fascia, brackets, a splice and a motor, and no track at all. So an unresolved
+                // code now falls back to its base item and the suffix travels on as what it is.
+                const resolveComponent = (code) => {
+                    const exact = byId(code);
+                    if (exact) return { part: exact, suffix: '' };
+                    const m = String(code || '').match(/^(.+)\/([A-Za-z0-9]+)$/);
+                    if (m) { const base = byId(m[1]); if (base) return { part: base, suffix: m[2].toUpperCase() }; }
+                    return { part: null, suffix: '' };
+                };
                 let rulesDoc = null;
                 for (const l of kitLines) {
                     const kitDoc = itemById(l.itemId);
@@ -1173,16 +1203,19 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // still counts, it is just no longer the only way to be right.
                     const finObj = finishList.find(f => f.code === String(l.trvFinish || '').toUpperCase());
                     ex.lines.forEach(c => {
-                        const cd = byId(c.code);
-                        if (!cd?.netSuiteInternalId) { addLog(`Component ${c.code} has no NetSuite ID — NOT consumed (${c.why}).`, 'warn'); return; }
+                        const { part: cd, suffix: codeSub } = resolveComponent(c.code);
+                        if (!cd) { addLog(`Component ${c.code} is not in the Master Library — NOT consumed (${c.why}). Check the code, or the traverse rules doc.`, 'warn'); return; }
+                        if (!cd.netSuiteInternalId) { addLog(`Component ${cd.legacyErpId || c.code} has no NetSuite ID — NOT consumed (${c.why}).`, 'warn'); return; }
+                        if (codeSub) addLog(`${c.code} → consuming ${cd.legacyErpId || c.code} (the /${codeSub} is the sub finish it is made in, not a separate item).`, 'info');
                         const takesSub = !!cd?.manufacturingSpecs?.usesSubFinish || !!c.subFinish;
-                        const finShown = takesSub && finObj?.subFinishCode ? `${finObj.subFinishCode} (sub finish)` : (l.trvFinish || '');
+                        const finShown = codeSub ? `${codeSub} (sub finish)`
+                            : takesSub && finObj?.subFinishCode ? `${finObj.subFinishCode} (sub finish)` : (l.trvFinish || '');
                         if (takesSub && !finObj?.subFinishCode) addLog(`${c.code} (${c.role || 'sub-finish part'}) is made in the base colours, but ${l.trvFinish || 'the chosen finish'} has no aligned one (set it in 4.5) — pushing in the mainline finish.`, 'warn');
                         trvPushLines.push({
                             item: { id: String(cd.netSuiteInternalId) }, quantity: c.qty, rate: 0, price: { id: '-1' },
-                            description: `${c.code} — ${cd.itemName || c.code} · ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,
+                            description: `${cd.legacyErpId || c.code} — ${cd.itemName || c.code} · ${c.why} · ${finShown} [consumed — $ in the traverse system line]`,
                         });
-                        trvDocLines.push({ kind: 'PART', code: c.code, name: cd.itemName || c.code, note: `${c.why}${finShown ? ` · ${finShown}` : ''}`, qty: c.qty, rate: 0 });
+                        trvDocLines.push({ kind: 'PART', code: cd.legacyErpId || c.code, name: cd.itemName || c.code, note: `${c.why}${finShown ? ` · ${finShown}` : ''}`, qty: c.qty, rate: 0 });
                     });
                     ex.skipped.forEach(sk => addLog(`Traverse: ${sk}`, 'info'));
                 }
@@ -1300,7 +1333,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 addLog(`✅ Quote saved (${qJobId}) and queued to NetSuite (outbox ${obId}).`, 'success');
                 alert(`✅ Quote saved on ${selectedCustomer?.name || customerId}'s pipeline (Tab 10) and queued to NetSuite — the estimate # lands on it in ~1 minute.`);
                 setLastCreated({ kind: 'QUOTE', id: qJobId });
-                setCart([]); setJobName('');
+                resetOrderEntry();
                 setPushing(false); return;
             }
 
@@ -1580,7 +1613,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             }
 
             setLastCreated({ kind: 'SALES ORDER', id: hqId });
-            setCart([]); setJobName('');
+            resetOrderEntry();
         } catch (e) {
             console.error('Quick Ship push error', e);
             addLog(`❌ FAILED: ${e.message}`, 'error');
