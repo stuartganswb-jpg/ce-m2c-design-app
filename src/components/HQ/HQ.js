@@ -206,11 +206,21 @@ function HQ() {
       localStorage.setItem('hq_reopen_qs_so', JSON.stringify({ soId, at: Date.now() }));
       setActiveTab('7. Quick Ship');
     };
+    // Reopen an Order Entry QUOTE (CRM → Reopen Order Entry, 2026-08-31): tab 7 restores the
+    // stored cart; saving supersedes the original quote.
+    const handleReopenQsQuote = (e) => {
+      const jobId = e.detail?.jobId;
+      if (!jobId) return;
+      localStorage.setItem('hq_reopen_qs_quote', JSON.stringify({ jobId, at: Date.now() }));
+      setActiveTab('7. Quick Ship');
+    };
+    window.addEventListener('REOPEN_QUOTE_IN_ORDERENTRY', handleReopenQsQuote);
     window.addEventListener('REOPEN_SO_IN_ORDERENTRY', handleReopenSo);
     window.addEventListener('NAVIGATE_TAB', handleTabNavigation);
     window.addEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);
     window.addEventListener('REOPEN_QUOTE_IN_VISION', handleReopenVision);
     return () => {
+      window.removeEventListener('REOPEN_QUOTE_IN_ORDERENTRY', handleReopenQsQuote);
       window.removeEventListener('REOPEN_SO_IN_ORDERENTRY', handleReopenSo);
       window.removeEventListener('NAVIGATE_TAB', handleTabNavigation);
       window.removeEventListener('REOPEN_QUOTE_IN_CPQ', handleReopenQuote);

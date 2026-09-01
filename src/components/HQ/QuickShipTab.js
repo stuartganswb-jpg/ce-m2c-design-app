@@ -373,6 +373,37 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
     // the cart rebuilds from the SO's lines, rates re-resolve LIVE, and pushing the edited cart
     // SUPERSEDES the original: the old SO closes with a pointer to the new one.
     const [editingSo, setEditingSo] = useState(null);
+    // The quote currently being re-entered (CRM → Reopen Order Entry). Saving stamps the new
+    // quote as its successor and marks this one superseded, so two live quotes never chase the
+    // same job — the confusion the Fabricut re-quotes caused on 2026-08-31.
+    const [reopenedQuote, setReopenedQuote] = useState('');
+    useEffect(() => {
+        if (!allItems.length) return;
+        let h = null;
+        try { h = JSON.parse(localStorage.getItem('hq_reopen_qs_quote') || 'null'); } catch (e) { h = null; }
+        if (!h || !h.jobId) return;
+        localStorage.removeItem('hq_reopen_qs_quote');
+        (async () => {
+            try {
+                const snap = await getDoc(doc(db, 'jobs', h.jobId));
+                if (!snap.exists()) return alert('That quote no longer exists.');
+                const j = { id: snap.id, ...snap.data() };
+                const saved = Array.isArray(j.quickShipCart) ? j.quickShipCart : null;
+                if (!saved || !saved.length) {
+                    return alert(`Quote ${j.jobId || j.id} was saved before Order Entry started keeping its cart (2026-08-31), so there is nothing to reopen — the printed lines are prose, not a cart. Rebuild it here and every quote from now on will reopen.`);
+                }
+                setCustomerId(j.customer?.id || '');
+                setCustSearch(j.customer?.name ? `${j.customer.name} (${j.customer.id || ''})` : '');
+                const ex = j.quickShipExtras || {};
+                setJobName(ex.jobName || j.jobName || '');
+                if (ex.soExtras) setSoExtras(p2 => ({ ...p2, ...ex.soExtras }));
+                if (ex.ship) setShip(p2 => ({ ...p2, ...ex.ship }));
+                setCart(saved.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })));
+                setReopenedQuote(j.jobId || j.id);
+                addLog(`✎ Quote ${j.jobId || j.id} reopened — ${saved.length} line(s). Saving creates the corrected quote and supersedes this one.`, 'info');
+            } catch (e) { console.warn('quote reopen failed', e); alert(`Could not reopen that quote: ${e.message || e}`); }
+        })();
+    }, [allItems.length]); // eslint-disable-line react-hooks/exhaustive-deps
     useEffect(() => {
         if (!allItems.length) return;
         let handoff = null;
@@ -1039,7 +1070,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
         setShip({ method: 'SAVED', addressId: '', amount: '', custom: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
         setTrvCfg(null); setTrvCode(''); setTrvKitId(''); setTrvFeet(''); setTrvMotor(''); setTrvFinish(''); setTrvProj('');
         setTbfItemId(''); setTbfFinish(''); setTbfQty(''); setQuickQty('');
-        setEditingSo(null);
+        setEditingSo(null); setReopenedQuote('');
     };
     const removeLine = (key) => setCart(prev => prev.filter(l => l.key !== key));
 
@@ -1350,8 +1381,24 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                         })(),
                         cartItems: [],
                     },
+                    // ── A QUOTE YOU CAN REOPEN (Stuart 2026-08-31) ──────────────────────────
+                    // The printed breakdown is prose — a kit line reading "6ft system - 4ft set"
+                    // cannot be turned back into a kit, its footage and its configurator picks.
+                    // So the CART ITSELF rides along, exactly as it was typed, and the CRM's
+                    // Reopen Order Entry hands it straight back to tab 7. Prices are NOT frozen
+                    // here: the tab reprices on render, which is what it has always done.
+                    quickShipCart: JSON.parse(JSON.stringify(cart || [])),
+                    quickShipExtras: JSON.parse(JSON.stringify({ soExtras, ship, jobName: jobName || '' })),
+                    ...(reopenedQuote ? { supersedes: reopenedQuote } : {}),
                     dateSaved: new Date().toISOString().split('T')[0], author: currentUser || '', createdAt: serverTimestamp(),
                 });
+                // The quote this one replaces stops being live paper.
+                if (reopenedQuote) {
+                    try {
+                        await updateDoc(doc(db, 'jobs', reopenedQuote), { supersededBy: qJobId, status: 'SUPERSEDED', supersededAt: Date.now() });
+                        addLog(`✎ Quote ${reopenedQuote} superseded by ${qJobId}.${'' } ⚠ Close the OLD estimate in NetSuite too.`, 'warn');
+                    } catch (e) { addLog(`⚠ Could not mark ${reopenedQuote} superseded: ${e.message || e}`, 'error'); }
+                }
                 const obId = await enqueueNsWrite({
                     kind: 'estimate', label: `Quick Ship Quote · ${selectedCustomer?.name || customerId}`,
                     targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/estimate`,
@@ -1699,6 +1746,15 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             </div>
 
             {/* ✎ EDITING AN EXISTING SO (CRM handoff) — pushing supersedes the original */}
+            {reopenedQuote && (
+                <div style={{ ...card, padding: '14px 24px', border: '2px solid var(--brass)', background: '#fdf8ef', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', letterSpacing: '.04em' }}>
+                        ✎ REOPENED QUOTE <b>{reopenedQuote}</b> — saving creates the corrected quote and marks this one superseded. Close the old estimate in NetSuite by hand.
+                    </span>
+                    <button onClick={() => { setReopenedQuote(''); addLog('✎ Reopen cancelled — the cart stays, the original quote is untouched.', 'info'); }}
+                        style={{ padding: '8px 14px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-soft)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Unlink</button>
+                </div>
+            )}
             {editingSo && (
                 <div style={{ ...card, padding: '14px 24px', border: '2px solid var(--brass)', background: '#fdf8ef', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                     <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', letterSpacing: '.04em' }}>

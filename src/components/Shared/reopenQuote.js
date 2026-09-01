@@ -17,6 +17,23 @@ export const reopenQuoteInVision = (job) => {
     return true;
 };
 
+// "Reopen in Order Entry": a Quick Ship / Order Entry quote is not a CPQ configuration — it has
+// no flow and no cartItems, so Reopen CPQ can never open one. What it does have (since 2026-08-31)
+// is the CART it was built from, stored on the job. This hands that back to tab 7; saving there
+// creates the corrected quote and marks this one superseded.
+export const reopenQuoteInOrderEntry = (job) => {
+    const jobId = job.jobId || job.id;
+    if (!Array.isArray(job.quickShipCart) || !job.quickShipCart.length) {
+        alert(`Quote ${jobId} was saved before Order Entry began keeping its cart (2026-08-31), so there is nothing to reopen — its printed lines are prose, not a cart. Rebuild it in tab 7; every quote saved from now on reopens.`);
+        return false;
+    }
+    if (job.netsuiteEstimateId) {
+        if (!window.confirm(`⚠ This quote already reached NetSuite estimate ${job.netsuiteEstimateNo || job.netsuiteEstimateId}.\n\nReopening and re-saving creates a NEW estimate — the old one must be closed in NetSuite by hand.\n\nReopen anyway?`)) return false;
+    }
+    window.dispatchEvent(new CustomEvent('REOPEN_QUOTE_IN_ORDERENTRY', { detail: { jobId } }));
+    return true;
+};
+
 export const reopenQuoteInCpq = (job) => {
     const jobId = job.jobId || job.id;
     const items = Array.isArray(job.cpqData?.cartItems) ? job.cpqData.cartItems : [];
