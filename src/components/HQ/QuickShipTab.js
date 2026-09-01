@@ -417,7 +417,25 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 const so = { id: snap.id, ...snap.data() };
                 setCustomerId(so.customerId || '');
                 setCustSearch(so.customer ? `${so.customer} (${so.customerId || ''})` : '');
-                setJobName(so.jobName || '');
+                const ex = so.quickShipExtras || {};
+                setJobName(ex.jobName || so.jobName || '');
+                if (ex.soExtras) setSoExtras(p2 => ({ ...p2, ...ex.soExtras }));
+                if (ex.ship) setShip(p2 => ({ ...p2, ...ex.ship }));
+                // THE CART AS TYPED, when the order carries it: kits, footage, configurator picks
+                // and per-line memos all return. `lines` is the fallback for orders written before
+                // 2026-08-31 — and it cannot hold a traverse kit, so it says so rather than
+                // quietly handing back an order worth less than the one being edited.
+                if (Array.isArray(so.quickShipCart) && so.quickShipCart.length) {
+                    setCart(so.quickShipCart.map((l, i) => ({ ...l, key: `${l.erp || 'line'}-${Date.now()}-${i}` })));
+                    // Same slim shape the legacy path sets — the banner and the supersede write
+                    // read exactly these three fields.
+                    setEditingSo({ id: so.id, soId: so.soId || so.id, customer: so.customer || '' });
+                    addLog(`✎ Editing SO ${so.soId || so.id} — restored from its stored cart (${so.quickShipCart.length} line(s), kits and footage included). Pushing this cart SUPERSEDES the original.`, 'warn');
+                    return;
+                }
+                if ((so.invoiceLines || []).some(x => x && x.type === 'KIT')) {
+                    alert(`⚠ SO ${so.soId || so.id} was written before Order Entry stored its cart (2026-08-31), and it contains a KIT.\n\nThe rebuilt cart below carries the component lines only — the kit and any additional-foot charge are NOT in it, and pushing as-is would supersede this order with a cheaper one. Re-add the kit before saving, or cancel the edit.`);
+                }
                 setCart((so.lines || []).map((l, i) => {
                     const erp = String(l.erp || '').toUpperCase();
                     const it = allItems.find(x => erpOf(x) === erp) || null;
@@ -1489,6 +1507,16 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     return out;
                 })(),
                 invoiceTotal: lines.reduce((s, l) => s + l.rate * l.eachQty, 0),
+                // ── AN ORDER YOU CAN REOPEN WITHOUT LOSING THE KIT (Stuart 2026-08-31) ───────
+                // ✎ Edit rebuilt the cart from `lines`, and a traverse order's KIT and its
+                // additional-foot charge are not in `lines` — they are pulled into trvOrder
+                // before that array exists. Editing such an order therefore brought back the
+                // components and dropped most of the money. The cart itself now rides the SO,
+                // exactly as typed, the same field the quote carries so ONE restore serves both.
+                // Additive: work orders still fire from `lines`, the floors and WMS still read
+                // `lines[]`, the NetSuite payload was built above, and RTG reads neither field.
+                quickShipCart: JSON.parse(JSON.stringify(cart || [])),
+                quickShipExtras: JSON.parse(JSON.stringify({ soExtras, ship, jobName: jobName || '' })),
                 createdBy: currentUser || '', createdAt: Date.now(), createdDate: new Date().toISOString()
             });
 
