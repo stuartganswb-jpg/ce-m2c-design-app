@@ -217,13 +217,14 @@ one of them must win. **Trace:** the breakdown lines a kit-seeded configuration 
 must carry the same `partId / legacyErpId / partHandling / finishCode` as a hand-built one — test
 it in `kitSeed.test.mjs` with prod-shaped fixtures.
 
-### F3 — the traverse components modal (a real bug)
+### F3 — the traverse components step — ALREADY BUILT; proof only
 
-The old engine gated every add on `trvPendingRef` (`ENGINE_CHECKOUT_BRIEF.md` §3 ①); the new
-engine's add path does not, so a traverse configuration can reach the cart without its components
-priced or listed. Find where the engine's add-to-cart bypasses the modal, restore the gate **as
-the engine's own slot** (the components are engine choices, not a bolt-on), and prove on tab 12
-that a traverse order's components push. **Trace:** components missing here are components
+*(Corrected 09-02 by the F session.)* `ENGINE_CHECKOUT_BRIEF.md` §3 ① described the bypass as
+of 08-21 morning; **commit `38843e3` (08-21) closed it** — the components are the engine's own
+last step (kind `TRV`), seeded from the length chart and always folded into `handoffItem`
+(`trvComponents`) and the total, so an add cannot skip them. **No code.** What remains is proof on
+tab 12 that a new-engine traverse order pushes its components once. The only way components go
+missing now is a data hole — an assembly with no `traverse_rules` doc — which is F6. **Trace:** components missing here are components
 missing from the WMS pick and the NetSuite SO — the 58034 double-push and the missing TRACK line
 (E's) are the same seam seen from the other side; coordinate with E so one of you owns the
 traverse push and the other the traverse configuration.
@@ -335,8 +336,8 @@ repo guide. Listed in the handoff.
    projection or does CPQ ask; seed-or-lock when the operator diverges; **what does a kit-matched
    CPQ configuration bill — the kit or the parts?**; how does a Fabricut CSR read the motor?
 2. **H2 cutover timing** — does the Vision bridge count as verified, so F1 is "next" now?
-3. **Traverse ownership with E** — the push (58034, TRACK) is E's; the configuration (the modal)
-   is F's. Confirm the line, or hand both to one.
+3. **Traverse ownership with E** — E owns the 58034 double-push and the TRACK list (E6); F owns
+   the components step and gives E the engine's splice source. Confirm the line.
 4. **The 4-row plate sheet** — portrait 11×17 (shipped), fewer hanging rings (a drawing
    convention), or two sheets? One answer, then it is built to that.
 5. **F7** — wanted this week, or parked as the memory says?
