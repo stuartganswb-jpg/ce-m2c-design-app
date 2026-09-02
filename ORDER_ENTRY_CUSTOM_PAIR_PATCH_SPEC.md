@@ -1,7 +1,8 @@
 # Order Entry → custom pair — full plan & patch spec
 
 **Author:** pole-routing session, 2026-09-01 · **For:** Stuart + whoever owns `RTGDispatchTab.js`
-**Status:** spec only, nothing built. Half of it lands in RTG's file, which this session does not edit.
+**Status:** ✅ BUILT — RTG half `3f6a953`, Stock View half in the same push. Stuart chose (a) at §7.
+Both live sessions cleared `RTGDispatchTab.js` before it was edited.
 
 ---
 
@@ -81,10 +82,11 @@ An Order Entry work order is a **customer** job — it carries `orderClass: 'ORD
 the milling backlog, which is the wrong queue and the wrong card. `:3211` already passes
 `activeViewOrder.orderType` and is the model to follow.
 
-> **Open question for the RTG owner — please name the authority, do not let Stock View guess.**
-> Which field says "this is a sales job"? `orderClass === 'ORDER_ENTRY'`, a new explicit
-> `orderType: 'sales'` on the WO doc, or the presence of `soAppId`? Stock View is not stamping any
-> of them today and will stamp whichever you name.
+> **SETTLED: an explicit `orderType` on the WO doc.** Chosen because it is provably non-breaking —
+> every `orderType` in the tree today lives inside a *finPayload* (`stockRun.buildStockFinPayload`,
+> StockView, QuickShip), never on the `hq_work_orders` doc — so `wo.orderType || 'stock'` resolves
+> to `'stock'` for every order written before this existed. Order Entry's shop half stamps
+> `orderType: 'sales'`.
 
 ### 3.2 Carry the finishing sibling through
 
@@ -202,9 +204,9 @@ So there are two readings of "in house custom", and they lead to different build
   rule onto the OE work order so RTG, packaging and pick/pack all classify it correctly, and leave
   the routing to the existing convert gate. No RTG patch needed at all.
 
-**Stuart chose the shop floor when asked, before this detail surfaced.** It is worth putting the
-question again now that it is concrete, because (b) is a tenth of the work and touches nobody
-else's file.
+**Asked again with the detail concrete, Stuart chose (a): the shop floor.** Built as specced. The
+empty cut list is honest — there is nothing to cut; the shop's role on these lines is the pull and
+the phosphate hand-off, and the pairing is what gets the finishing half released behind it.
 
 ## 8. Deliberately not touched
 

@@ -16,7 +16,7 @@ import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { runBatchPrecheck, executeMakeupActions, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
-import { isOutsourcedFinishCode, handlingForErp } from '../Shared/finishRouting';
+import { isOutsourcedFinishCode, handlingForErp, finishSuffixOf } from '../Shared/finishRouting';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
 import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from '../Shared/nsWorkOrder';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
@@ -2368,6 +2368,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // equivalent today, and exactly the kind of local copy that drifts: the Setup
                 // Queue's own copy could not see a ROD, and RTG had no copy at all.
                 const isPole = isPoleCategory(ptype);
+                // ── CUSTOM LINES GET A SHOP SIBLING (Stuart 2026-09-01) ────────────────────────
+                // A mill code plus an applied finish (/P01, /EP3) is made to order — his rule:
+                // "the cpq and/or order entry apply the finish /P01, /EP1, etc. these all are
+                // routed to custom". Order Entry raised ONE finishing WO for those, so the custom
+                // half of the work had no home and the shop never saw it. A complete assembly
+                // (/BS, /N90) is unchanged: one finishing WO, exactly as before.
+                //
+                // The PAIR is the same shape RTG's autoSplitSalesOrder builds for a CPQ order, and
+                // Shared/workOrderContract keys entirely off finSiblingId — so shop-start pick
+                // release, the customFabStatus mirror and PickPack's pack gate all come for free
+                // once the two ids point at each other. Both halves are STAGED in hq_work_orders
+                // and released by RTG, never written to a floor directly: these lines carry
+                // awaitingNsWo / awaitingConvert / awaitingComponents gates that only RTG clears.
+                const custom = isPole && handlingForErp(finishedErp) === 'Custom';
+                const shopWoId = `${woId}-C`;
                 const size = String(specs.paintSize || '').toUpperCase();
                 const finPayload = withItemCode({
                     id: woId, orderKey: so.id, quoteId: null, salesOrderId: so.id, estimateId: null,
@@ -2387,7 +2402,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
                     tasks: makeFullTasks(),
                     machineAssigned: null, redlineAlert: false, sentToPickPack: false, pickStatus: 'Pending',
-                    shopSiblingId: null, hasCustomSibling: false, customFabStatus: 'Pending',
+                    // §A1 (Shared/workOrderContract): a paired order's small-parts pick is released
+                    // by the shop operator STARTING the custom job — they meet again at staging.
+                    shopSiblingId: custom ? `SHOP-${shopWoId}` : null, hasCustomSibling: custom, customFabStatus: 'Pending',
                     brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
                 });
                 await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
@@ -2411,6 +2428,38 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     ...gate,
                     createdAt: Date.now(), createdBy: currentUser || ''
                 }), { merge: true });
+
+                // ── THE CUSTOM HALF ────────────────────────────────────────────────────────────
+                // Parked exactly like its sibling, released by RTG to the SHOP. orderType is what
+                // tells pushToShop this is a customer job and not a stock build — without it the
+                // order lands in the Stock Milling backlog instead of Custom Fabrication. It is
+                // read as `wo.orderType || 'stock'`, so every order written before this field
+                // existed keeps behaving exactly as it did.
+                //
+                // finSiblingId is the whole point: workOrderContract's releaseSiblingToPickPack
+                // and mirrorCustomStatusToSibling both return early without it, which is how a
+                // shop order ends up an orphan that never releases its own pick.
+                //
+                // The gates are per-LINE, not per-floor — short components mean neither half is
+                // ready — so the same gate object rides both.
+                if (custom) {
+                    await setDoc(doc(db, 'hq_work_orders', shopWoId), withItemCode({
+                        id: shopWoId, woId: shopWoId, brand: activeBrand, type: finishedErp, status: 'Approved',
+                        source: 'ORDER_ENTRY', routeTo: 'SHOP', autoFlow: true, orderType: 'sales',
+                        orderClass: 'ORDER_ENTRY', soAppId: so.id, soId: so.soId || so.id,
+                        finSiblingId: woId, hasSmallSibling: true,
+                        customerId: so.customerId || null, customer: so.customer || '',
+                        recipe: finish, erpId: finishedErp, partErpId: finishedErp, rootItem: erp,
+                        ...(job.aliasNote ? { aliasErp: job.lineErp } : {}),
+                        itemName: part.itemName || '',
+                        qty, totalParts: qty, reqDate: needBy, ...(needBy ? { needBy } : {}),
+                        soAccepted: !!so.nsInternalId,
+                        ...(flow2 ? { awaitingNsWo: true } : {}),
+                        ...gate,
+                        createdAt: Date.now(), createdBy: currentUser || ''
+                    }), { merge: true });
+                    addLog(`🔧 ${finishedErp} is an applied finish (/${finishSuffixOf(finishedErp)}) — custom: shop job ${shopWoId} + finishing job ${woId}, linked.`, 'info');
+                }
                 if (flow2) {
                     try {
                         await queueNsAssemblyWorkOrder({
