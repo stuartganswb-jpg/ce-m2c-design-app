@@ -66,6 +66,11 @@ code, `partId` = the library doc id — `codeOf()` exists because fixtures once 
 every test passed while 187 sheets printed); and **a fixture that cannot fail is decoration** —
 mutation-test every new assertion.
 
+**Driving a 4.6 save from the browser tools:** the client-row save gates on **`window.confirm`**
+(`CustomerCollectionsTab.js:426`), not only `alert`. Stub both, or a dismissed confirm reads as
+*cancel* and nothing is written — the retiring session lost one attempt exactly this way. Read the
+confirm text back each time; it states what else the save touches (below).
+
 **Cloud Shell.** Rules deployed. `functions/portalEngine.js` mirrors the engine's size families
 (`SIZE_FAMILIES`) — a family change is a hand-off to the portal, deployed there.
 
@@ -157,6 +162,21 @@ honour a defining choice, because "four confident lines and one quiet one" is th
 fault this engine has produced. Quick Ship bills the kit (per-set + per-foot from `clientPricing`);
 CPQ bills the resolved parts — *both are live today and must not both be.*
 
+**4.6 row saves are coupled to the item's tiers — one direction.** Saving a customer's client
+pricing row *also rewrites part of the item's Fabricut pricing box* "so the CPQ price levels stay
+in step" (the confirm at `CustomerCollectionsTab.js:426`; `:84`). The retiring session verified
+after every save that the tiers survived — they did — but row edits and tier edits are not
+independent, and a row edit made without the tiers in mind can quietly move them. Treat it as a
+trap until §8 Q6 is answered.
+
+**The H1-2TRV cuff-bracket kits, as left on 09-02 (data, no code):** `H1-2RCTCB / ECB / 6CB`
+repriced — painted `/P` tiers 61/122/244 · 63/126/252 · 65/130/260, plated `/EP` tiers
+80/146/292 · 83/151/302 · 87/159/318, own price cleared, client rows `H3622F / H3623F / H3624F`
+aligned to the painted SKU, `kitComponents` and `plateUpcharge` untouched. Eleven ghost stubs
+deleted (library 3,503 → 3,492) after an `assembly_pins` + `cpq_flows` scan (4,422 references)
+proved none referenced, each through the app's own orphan guard. 1.6 search on the bracket now
+returns only the real kits.
+
 **H2** is four single-assembly flows plus a CPQ landing (🎯, 07-24) — the union/size-step machinery
 is retired for H2 and stays for Fabricut H1. Never add `codeRx` to H1 while its combined flow is
 live. Acrylic renders from the AC master-finish chip, not code.
@@ -237,7 +257,11 @@ double return pins' proj → `FRONT: 8.5, BACK: 3.25` · the H1-138 flow's `H2-1
 extra replaced or dropped · the 6" single returns' `feeItemNo` · the wood singles' untagged pin
 copy · the two NEW-SLOT finial sections → `rod: front` · H1-2TRV's duplicate fascia cluster
 (why two? resolve, delete one) · the duplicate bracket clusters · prices for `H1-138AR`,
-`H1-138D`, `H1-DBLMR` in 4.6 · the H1-75 depth audit. Then the ⚖ scan clean. Then Regenerate.
+`H1-138D`, `H1-DBLMR` in 4.6 · the H1-75 depth audit · **the 40 remaining PENDING stubs** in the
+library — 21 of them the H1-138 `ABF / AGF / AKF / WCGF / ILJL` family — the same ghost-stub defect
+the retiring session cleared on H1-2TRV, in a collection it was not asked to touch: scan
+`assembly_pins` + `cpq_flows` for references first, delete only the unreferenced through the
+orphan guard, and say which were kept and why. Then the ⚖ scan clean. Then Regenerate.
 
 ### F7 — the 1.6 window for untagged geometry (last, low priority)
 
@@ -316,6 +340,9 @@ repo guide. Listed in the handoff.
 4. **The 4-row plate sheet** — portrait 11×17 (shipped), fewer hanging rings (a drawing
    convention), or two sheets? One answer, then it is built to that.
 5. **F7** — wanted this week, or parked as the memory says?
+6. **The 4.6 row → tier coupling** (§3). Keep it one-way as it is (and say so on the screen), make
+   it explicit two-way, or decouple so a row edit never moves a tier? A wrong answer here moves
+   Fabricut prices silently.
 
 ---
 

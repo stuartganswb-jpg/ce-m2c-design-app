@@ -108,6 +108,7 @@ adding one guarded mount.
 | B §8 answer 2 | B's split must drop the finishing doc for an outsourced recipe — it needs to know from the sales doc | E2: `finishOutsourced` per line, both doors |
 | audit §8 | `queueEstimateToSalesOrder` — "⚠ Needs live verification on the first real approve" (`nsTransmit.js:642`) | §8 Q2 |
 | peer session, 09-01 | item **58034** (track splice) pushes twice at $0 on a traverse order where the configurator also picks a splice — real double stock relief, unfixed; and **past traverse orders are missing their TRACK line** in NetSuite (the forward fix `5b7faae` does not touch posted orders) | E6 |
+| retiring session, closing comments (relayed by Stuart 09-02) | **the Kit-class push path is untested**: a cuff-bracket kit (`H1-2RCTCB / ECB / 6CB`, client rows `H3622F / H3623F / H3624F`) reaching NetSuite through the TAGS engine must be proven to emit items **59101 + 64805 / 59100 / 64806** rather than let the dollars ride the rollup — the `21b43b0` joiner-incident class (memory `cpq-parts-universe-seam`) | §6 acceptance; tab 12 first, then one live order |
 | `CPQ_ORDERENTRY_TAB11_BRIEF.md` §2 | its still-open list (per-foot $0 quotes reopen once; the H1-75 depth audit; kit sheet imports) | fold what is yours into §6; the kit items are F's |
 | memory `portal-cpq-contract` | the portal mirrors CPQ logic — a logic/schema change needs the mirror sweep | E8 |
 
@@ -311,6 +312,7 @@ repo guide. Listed in the handoff.
 | Portal approve → SO | E1 header from the job; `queueEstimateToSalesOrder` verified live (§8 Q2) |
 | Vision line → CPQ → SO | `missed` empty; cut sheet on the job; `VisionHardware.js` diff empty or one mount |
 | Traverse order with a splice | **one** 58034 line on tab 12 and in NetSuite |
+| Cuff-bracket kit (`H1-2RCTCB`) through the TAGS engine → SO | tab 12 shows **59101 + 64805/59100/64806** as their own lines at their own rates; nothing on the rollup that belongs to an item |
 | The TRACK list | SO numbers for Eric; nothing posted |
 | Reopen CPQ / Vision / Order Entry after E1 | header fields restored; a pre-E1 quote reopens blank, not +14 |
 | tab 7 after E4 | `git diff -w` = removals only; every tab-7 flow still works (cart, kits, aliases, per-foot, documents, save) |
@@ -342,8 +344,9 @@ repo guide. Listed in the handoff.
 3. **The class map** — Eric: class ids per brand (CE = 2 Hardware; M2C, Uniquity, Leyla = ?), and
    the sales-order / estimate form ids for each.
 4. **The portal mirror** — E after E1, or a portal session with the field list?
-5. **The retired session's handoff** — was it written? If so, where; if not, E starts from
-   `CPQ_ORDERENTRY_TAB11_BRIEF.md` §1/§2 and this brief.
+5. **The retired session's handoff** — **not written as a file** (checked 09-02). Its closing
+   comments are recorded here (§2) and in Brief F §2/§3; E starts from `CPQ_ORDERENTRY_TAB11_BRIEF.md`
+   §1/§2 and this brief.
 
 ---
 
