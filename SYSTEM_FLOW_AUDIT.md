@@ -182,6 +182,8 @@ stored header fields differ: CPQ `poNumber / shippingAddressId / customShippingA
 shippingAmount / orderSidemark`; Order Entry `customerPo / shipTo[] / needByDate / productionNotes /
 sidemark`. RTG reads `so.reqDate` for a CPQ order and `so.needByDate` for an OE order.
 
+> **Correction (2026-09-02):** an earlier draft said RTG had no card for a stocked-only Order Entry sale. Wrong — `liveSO` subscribes to every `hq_sales_orders` doc with no class filter (`RTGDispatchTab.js:327`) and the board keys each one in (`:557`). A Quick Ship sale has its RTG record; it simply never *splits*, because auto-release requires `hqJobId` (`:349`). That is exactly the behaviour Stuart wants (Q6).
+
 The recipe for a CPQ sales order is **not stored on the SO** — it is written as `PENDING-RECIPE`
 (`CPQTab.js:3014`) and resolved at release by `fetchEnrichedJobData` (`RTGDispatchTab.js:696`),
 which scans `cartItems[].finishLabel`, `finishes[]`, `config` keys, `engineConfig.globalFinish` and
@@ -270,11 +272,9 @@ the custom parts are at the plater. **Question 2, §10.**
 3. **Plated custom parts read as complete on pack** (§8). *Fix shape:* mirror `'Sent to Plating'`
    not `'Complete'`, and let the WMS plating receipt mirror `'Complete'` — the field and the
    contract already exist.
-4. **firestore.rules deploy state unknown.** Three briefs say pending (`hq_deletion_log`,
-   `rod_pieces`, `rod_cut_orders`, `core_urgent_demand`). If undeployed, hard deletes refuse, the rod
-   ledger cannot write, and the code's error text blames the folder/permissions. Code and rules
-   agree (0 collections referenced without a match block) — only the deploy is in doubt.
-   *Question 3.*
+4. ~~firestore.rules deploy state unknown.~~ **Closed 09-02 — Stuart confirms deployed (Q3).**
+   Code and rules agree (0 collections referenced without a match block). The three briefs that
+   say "pending" are stale on this point.
 
 **P1 — the same rule in several places (the "fix breaks elsewhere" class)**
 
@@ -307,45 +307,50 @@ the custom parts are at the plater. **Question 2, §10.**
 
 ---
 
-## 10. Questions — please answer what you can, mark the rest for Eric
+## 10. Decisions — Stuart, 2026-09-02 morning
 
-1. **Order Entry NetSuite anchors.** Since 08-29, every to-be-finished OE line opened a NetSuite
-   work order (FLOW2 on the variant; FLOW1 on the base assembly). Is someone closing those by hand
-   in NetSuite, or are they open with components committed? Eric can answer from the WO list.
-2. **Plated custom orders.** When the shop marks a custom order "Sent to Plating," should the
-   finishing sibling's `customFabStatus` read Complete (today) or wait for the plater's return? And
-   when the parts come back — who receives them, and should that receipt open the pack gate?
-3. **Rules deploy.** Has `firestore.rules` been deployed from Cloud Shell since `f16e152`
-   (08-27)? If unsure: try a hard delete from RTG's 📜 panel — a refusal means no.
-4. **Route-open parking.** Master Library make-up, RTG re-issue and the plating base-short milling
-   WO all park with no route and wait for a human. Is that intended for any of them, or should a
-   finished item always route to FINISHING and a raw one to SHOP, everywhere?
-5. **finPayload vs enrich.** Two models of release exist (§2). Do you want one? My recommendation is
-   "always pre-build the floor doc at creation" (the Snapshot model) — it is the one that survived
-   every incident — but it makes the Master Library and grid writers heavier.
-6. **Order Entry as a second spine.** Should tab 7's stocked lines keep going straight to the WMS
-   (fast path, no RTG card), or should every sales order — Quick Ship included — appear on RTG and
-   split there? Today RTG has no card for a stocked-only Order Entry sale.
-7. **The OE Custom pair** (shipped tonight, untested). The shop card for `HCUMP810 + /P01` has an
-   empty cut list. Confirm that is acceptable, or say what the shop should see on it.
-8. **Stock-build POs.** A bought component short on a Stock View grid order produces a log note and
-   no document. Do you want a "needs a PO" board for stock builds, the way Order Entry Needs exists
-   for sales?
-9. **Two sales-order field sets** (§6). Should `hq_sales_orders` carry one header shape regardless of
-   door (`customerPo`, `sidemark`, `needBy`, `shipTo`, `productionNotes`), with CPQ filling it from
-   the job? RTG, CRM, WMS and the documents would then read one set.
-10. **Recipe on the SO.** Should CPQ resolve and stamp the recipe on the sales order at save (one
-    resolver, once) instead of RTG re-deriving it at release from five sources?
-11. **Master Library direct release.** `releaseRunToFloor` bypasses RTG's release by design. Keep the
-    UX (one press from the card) but route it through the same builder as RTG? Or leave it as the
-    one sanctioned direct path?
-12. **The retired tab-7 generator.** Delete it, or is there a reason it is kept?
-13. **Which of the 20 local suffix readers are routing decisions?** I can classify them in an hour;
-    say if you want that before the sweep or as part of it.
-14. **The open CPQ/Order-Entry session.** Retire it and start the new one on the brief. Its context
-    predates the pole rule, the pair, and tonight's RTG edits; its handoff (it said it was writing
-    one) is the useful part. Ask it to finish that handoff, then close it.
-15. **Order of work.** §12 proposes it. Push back before the briefs are cut.
+Every question answered. Recorded verbatim in intent; the code consequence follows each.
+
+| # | question | decision | consequence |
+|---|---|---|---|
+| 1 | OE anchor WOs — who closes them? | **Closed by hand today. The app must build them.** Prevention is the goal so the hand-closes disappear. | Brief D: every NetSuite WO the app opens, the app posts the build against — sales-typed included. `onStockBuildDone`'s `orderType === 'stock'` guard is the seam. FLOW1's *final* assembly build needs a defined trigger. |
+| 2 | Plated custom orders | **The plating process on the WMS tab is exactly what we want** — PO to the plater, out-to-plating bin status, receipts just starting. The job is to prove it works without bugs. | Briefs C + D: validate the round trip end-to-end. P0 #3 (shop mirrors Complete before the plater) is a bug *in* that process, fixed as part of validating it; receipt should open the pack gate. |
+| 3 | Rules deployed? | **Yes.** | P0 #4 closed. |
+| 4 | Route-open parking | **Everything routes to where it belongs, always.** Stocked poles → finishing like small parts with the POLES scheme (done). Custom → shop. Small parts → floor. **Plated parts → a PLATING route** for picking and starting that process, with the same component backup as in-house: short components → shop milling WO → then out to the plater. | Brief A: the route rule at every writer; route-open parking abolished. **New requirement:** `PLATING` as a first-class route from creation, backed by the pre-check (§13 a). |
+| 5 | finPayload vs enrich | **Snapshot model** — always pre-build. | Brief A: `parkWorkOrder` always writes the complete floor doc. |
+| 6 | Order Entry as a second spine | **Stocked lines go straight to WMS, and the record goes to RTG.** All processes go direct and record to RTG — no manual push; RTG is the master record and the close. | Already true for the record (see §6 correction). Brief E keeps the direct WMS path; Brief B makes "no manual push" universal. |
+| 7 | The OE Custom pair / stocked poles | **Add a tag, not a rule.** Poles/rods stocked at finished length (`HCUMP810` 8 ft, `HCUMP610` 6 ft, `HCUMP410` 4 ft) carry **"Stocked at Finished Length"** → orders go straight to finishing or rod cuts. Raw poles like `H1-1R`, made from 20 ft sticks (stock usage to be set up on the shop floor) → always custom. | **Supersedes the suffix rule for poles** shipped 0615687 — see §13 b. A stocked-length pole with an applied `/P01` is a finishing job, so Monday night's OE pair (b531f53) would *not* fire for `HCUMP810`; it fires only for raw poles. New library field + editor control (§13 b). |
+| 8 | Stock-build "needs a PO" board | **Yes.** | Brief A. |
+| 9 | One SO header shape regardless of door | **Yes, 100%.** | Brief E. |
+| 10 | Recipe stamped at save | **Yes, 100% — Order Entry custom finished items too.** | Brief E (CPQ + tab 7), Brief B stops re-deriving at release. |
+| 11 | Master Library direct release | **Through RTG everywhere.** Releases directly — no second button press by a person — but through RTG as the process and control. | Brief A/B: `releaseRunToFloor` goes through the shared builder + RTG's auto path. |
+| 12 | Delete the retired tab-7 generator? | Asked for detail. **The dead code is `QuickShipTab.js:1545–1701` only** — the `if (tbfLines.length && !OE_SAVE_AUTOFIRE_RETIRED) { … }` block (157 lines), unreachable since the flag went `true` on 08-29. The tab, the cart, SO save, the outbox push, the documents, kits, aliases, the review-gate hand-off message at `:1542` — all stay. `tbfMade` / `woWriteBacks` are still referenced at `:1707-1709` and survive as empty arrays. | Brief E, one commit, `git diff -w` proves nothing else moved. |
+| 13 | Which suffix readers are routing decisions? | Asked for detail — classified below. | Brief A sweeps the eight routing-grade ones; the rest can wait. |
+| 14 | The open CPQ/OE session | **OK** — let it finish its handoff, retire it, start Brief E fresh. | — |
+| 15 | Order of work | No objection. | §12 stands. |
+
+### Q13 — the twenty local suffix readers, classified
+
+**Routing-grade (8) — a decision about where work goes or what recipe runs; each is a place the rule can drift, and two are outright duplicates of a `Shared/` rule:**
+
+| site | what it decides | note |
+|---|---|---|
+| `StockViewTab.js:1121` `finishOf` | the Snapshot's finish/recipe from the code | **duplicate of `finishCodeFromErp`** with different semantics (strips a `-N` marker and `-10/-12` sizes). Two answers to "what finish is this". |
+| `StockViewTab.js:1875` `tierOfItem` | raw / /P / plated tier → which screen orders it | **duplicate of `LibraryMassUpdateTab.js:745` `tierOfErp`** |
+| `LibraryMassUpdateTab.js:745` `tierOfErp` | same | the other copy |
+| `StockViewTab.js:535` | PO builder: plating demand vs milling from the suffix | routing |
+| `StockViewTab.js:1893` (+`1778`, same loop) | 3-tier grouping | routing-adjacent |
+| `StockViewTab.js:1947` | suffix → outsource finish match → plating demand | routing |
+| `StockViewTab.js:2060` | `/P` → convert vs shop | routing |
+| `LibraryTab.js:1418` | plater vs in-house on the Library run | routing |
+
+**Identity / base-code derivation (5) — "which item is this", not "where does it go":** `StockViewTab.js:1241, 1397, 3221, 3224`; `QuickShipTab.js:63`. These want `millBaseOf` / `finishSuffixOf` from `Shared/finishRouting` for hygiene, not urgency.
+
+**Display only (2):** `StockViewTab.js:2975, 3194`.
+
+**Dead or false positive (3):** `StockViewTab.js:3241` (a JSX style string), `LibraryTab.js:932` (URL parsing), `QuickShipTab.js:1606` (inside the retired block).
+
+**Not local (1):** `CustomerCollectionsTab.js:65` already calls the shared `isPlatedSuffix`; only the split is inline.
 
 ---
 
@@ -388,3 +393,39 @@ PickPackApp 24 · HardwareConfigurator 21 · QuickShipTab 21 · CPQTab 21 · Ext
 finishedRunPrecheck 11 · AdminTab 11. The three most-changed files are the three the spine runs
 through. That is where a consolidation pays back fastest, and where two sessions in one file is
 most dangerous.
+
+---
+
+## 13. New requirements the decisions create
+
+**a. PLATING as a first-class route (Q4).** Today a plated item is either a to-do on the WMS
+Plating tab (`plating_demand`, fire-and-forget) or a finishing WO that `finishRouteOf` segregates
+after the fact. Stuart wants it routed at creation: `routeTo: 'PLATING'` → the WMS plating tab
+picks it and starts the process, and the **same component pre-check** backs it — short mill cores
+→ a shop milling WO → *then* out to the plater. The pre-check already knows how to raise the
+milling WO (`executeMakeupActions` `SHOP`); what is missing is a PLATING route that waits on it
+(`awaitingComponents` → plating, not finishing) and a receipt that tells the order it is back.
+Brief A (writer + route), Brief D (WMS tab + receipt), Brief C (shop hand-off).
+
+**b. "Stocked at Finished Length" tag on poles/rods (Q7).** New library field on
+`manufacturingSpecs` (name to settle in Brief A — e.g. `stockedFinishedLength: true`), edited next
+to `isStocked` (`LibraryTab.js:2477`) and `finishStream` (`:2241`), applied to `HCUMP810 / 610 /
+410` and their families. **For poles it replaces the suffix rule** in
+`Shared/finishRouting.handlingForErp` (0615687): tagged → finishing (or rod cuts), whatever finish
+is applied; untagged raw stock (`H1-1R`) → custom. The suffix rule stays as the answer for
+non-pole items only if a brief needs one there — today nothing does. Consequence for the OE pair
+(b531f53): fires for raw poles, not for tagged ones. **Stuart to confirm this reading before Brief
+A bakes it in.**
+
+**c. The app builds every NetSuite WO it opens (Q1).** Sales-typed included. The seam is
+`onStockBuildDone`'s `orderType === 'stock'` guard and RTG's `kind !== 'sales'` guards; FLOW1's
+final assembly build needs a trigger defined (pack putaway of the finished order is the natural
+one).
+
+**d. RTG is automatic control + the master record, never a button (Q6, Q11).** Every path
+releases through RTG's builder on its own; humans see status and close. The Master Library run
+included.
+
+**e. One sales-order header; recipe stamped at save (Q9, Q10).** Both doors.
+
+**f. A "needs a PO" board for stock builds (Q8).**
