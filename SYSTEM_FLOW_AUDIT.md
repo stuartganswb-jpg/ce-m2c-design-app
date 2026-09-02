@@ -316,10 +316,10 @@ Every question answered. Recorded verbatim in intent; the code consequence follo
 | 1 | OE anchor WOs — who closes them? | **Closed by hand today. The app must build them.** Prevention is the goal so the hand-closes disappear. | Brief D: every NetSuite WO the app opens, the app posts the build against — sales-typed included. `onStockBuildDone`'s `orderType === 'stock'` guard is the seam. FLOW1's *final* assembly build needs a defined trigger. |
 | 2 | Plated custom orders | **The plating process on the WMS tab is exactly what we want** — PO to the plater, out-to-plating bin status, receipts just starting. The job is to prove it works without bugs. | Briefs C + D: validate the round trip end-to-end. P0 #3 (shop mirrors Complete before the plater) is a bug *in* that process, fixed as part of validating it; receipt should open the pack gate. |
 | 3 | Rules deployed? | **Yes.** | P0 #4 closed. |
-| 4 | Route-open parking | **Everything routes to where it belongs, always.** Stocked poles → finishing like small parts with the POLES scheme (done). Custom → shop. Small parts → floor. **Plated parts → a PLATING route** for picking and starting that process, with the same component backup as in-house: short components → shop milling WO → then out to the plater. | Brief A: the route rule at every writer; route-open parking abolished. **New requirement:** `PLATING` as a first-class route from creation, backed by the pre-check (§13 a). |
+| 4 | Route-open parking | **Everything routes to where it belongs, always.** Stocked poles → finishing with the POLES scheme (done). Custom → shop. Small parts → floor. **Plated items** (second pass, 09-02): all are set up as **complete assemblies with an outsourced finish**. When the ROP load or the Sales Snapshot shows one short, **issue the PO** (to the plater) from there; the **demand for the BOM component** (the root / mill core) goes to the **WMS plating demand**, whose tab pulls the core from stock, switches its bin to plating and stages it in the plating dispatch area — shipped out **once a week**. The plating tab is the connection between the PO for the outsourced finish and the actual component. **If the root has no stock**, a work order is created (again at the Snapshot) and hits the shop floor to produce it, then it goes to plating. | Brief A: the route rule at every writer; route-open parking abolished. Plating is **not** a new `routeTo` — it is PO + `plating_demand` + (core short → shop WO), issued together from the Snapshot. §13 a rewritten to this design. |
 | 5 | finPayload vs enrich | **Snapshot model** — always pre-build. | Brief A: `parkWorkOrder` always writes the complete floor doc. |
 | 6 | Order Entry as a second spine | **Stocked lines go straight to WMS, and the record goes to RTG.** All processes go direct and record to RTG — no manual push; RTG is the master record and the close. | Already true for the record (see §6 correction). Brief E keeps the direct WMS path; Brief B makes "no manual push" universal. |
-| 7 | The OE Custom pair / stocked poles | **Add a tag, not a rule.** Poles/rods stocked at finished length (`HCUMP810` 8 ft, `HCUMP610` 6 ft, `HCUMP410` 4 ft) carry **"Stocked at Finished Length"** → orders go straight to finishing or rod cuts. Raw poles like `H1-1R`, made from 20 ft sticks (stock usage to be set up on the shop floor) → always custom. | **Supersedes the suffix rule for poles** shipped 0615687 — see §13 b. A stocked-length pole with an applied `/P01` is a finishing job, so Monday night's OE pair (b531f53) would *not* fire for `HCUMP810`; it fires only for raw poles. New library field + editor control (§13 b). |
+| 7 | The OE Custom pair / stocked poles | **Leave it.** *(Reversed 09-02 second pass — the "Stocked at Finished Length" tag is dropped.)* Control is the **finish**: `/P` is the control for finishes we always apply custom; any other letters qualify as small parts, finished like poles. | The suffix rule shipped in 0615687 (`handlingForErp`: mill code, `/P`, `/P##`, `/P25`, `/EP*`, `/MEP*` → Custom; `/BS`, `/N90`, `/CP`… → Small Parts; stream POLES) **stands as is.** The OE pair (b531f53) stands as built. No new library field. |
 | 8 | Stock-build "needs a PO" board | **Yes.** | Brief A. |
 | 9 | One SO header shape regardless of door | **Yes, 100%.** | Brief E. |
 | 10 | Recipe stamped at save | **Yes, 100% — Order Entry custom finished items too.** | Brief E (CPQ + tab 7), Brief B stops re-deriving at release. |
@@ -398,24 +398,31 @@ most dangerous.
 
 ## 13. New requirements the decisions create
 
-**a. PLATING as a first-class route (Q4).** Today a plated item is either a to-do on the WMS
-Plating tab (`plating_demand`, fire-and-forget) or a finishing WO that `finishRouteOf` segregates
-after the fact. Stuart wants it routed at creation: `routeTo: 'PLATING'` → the WMS plating tab
-picks it and starts the process, and the **same component pre-check** backs it — short mill cores
-→ a shop milling WO → *then* out to the plater. The pre-check already knows how to raise the
-milling WO (`executeMakeupActions` `SHOP`); what is missing is a PLATING route that waits on it
-(`awaitingComponents` → plating, not finishing) and a receipt that tells the order it is back.
-Brief A (writer + route), Brief D (WMS tab + receipt), Brief C (shop hand-off).
+**a. The plating path, as Stuart defines it (Q4, second pass).** Every plated item is a
+**complete assembly** whose BOM names its mill core, with an outsourced finish. One demand at the
+ROP load or the Sales Snapshot produces up to three documents together:
 
-**b. "Stocked at Finished Length" tag on poles/rods (Q7).** New library field on
-`manufacturingSpecs` (name to settle in Brief A — e.g. `stockedFinishedLength: true`), edited next
-to `isStocked` (`LibraryTab.js:2477`) and `finishStream` (`:2241`), applied to `HCUMP810 / 610 /
-410` and their families. **For poles it replaces the suffix rule** in
-`Shared/finishRouting.handlingForErp` (0615687): tagged → finishing (or rod cuts), whatever finish
-is applied; untagged raw stock (`H1-1R`) → custom. The suffix rule stays as the answer for
-non-pole items only if a brief needs one there — today nothing does. Consequence for the OE pair
-(b531f53): fires for raw poles, not for tagged ones. **Stuart to confirm this reading before Brief
-A bakes it in.**
+1. a **PO to the plater** for the outsourced finish (NetSuite's record of the order);
+2. a **`plating_demand`** for the BOM component — the WMS Plating tab pulls the core from stock,
+   moves its bin to plating, stages it in the plating dispatch area, and ships **once a week**;
+   the tab is the bridge between the PO and the physical part;
+3. **if the core has no stock**, a shop work order (raised at the Snapshot) to mill it first —
+   then it goes to plating.
+
+The mechanics exist today, in **three copies**: the Stock View PO builder (`StockViewTab.js:554`
+demand, `:571` core-short WO, `:609` PO), the Sales Snapshot (`:1950` demand, `:1681` PO) and the
+Order Entry review (`:2206` demand, `:2511` PO). Brief A consolidates them into one
+`issuePlatedDemand({item, qty, from})` so the three screens cannot disagree, and adds the data
+check Stuart asked for: **a report of every outsourced-finish item that is not a complete assembly
+with a core in its BOM** (the sync already classes `/P` and `/EP` SKUs as Assembly,
+`NetSuiteSyncTab.js:934`; whether each carries a BOM pin is a NetSuite-data question).
+
+What still has to be answered by testing, not design: **what waits on the plater.** Receipt
+(`plating_shipments` received) must put the plated assembly into stock and, for a custom order,
+tell the finishing sibling and the pack gate — P0 #3 is exactly that seam. Briefs C + D.
+
+**b. ~~"Stocked at Finished Length" tag on poles/rods.~~ Dropped (Q7, second pass).** The finish
+suffix is the control. `handlingForErp` (0615687) stands; the OE pair (b531f53) stands.
 
 **c. The app builds every NetSuite WO it opens (Q1).** Sales-typed included. The seam is
 `onStockBuildDone`'s `orderType === 'stock'` guard and RTG's `kind !== 'sales'` guards; FLOW1's
