@@ -361,7 +361,12 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     await autoSplitSalesOrder(so, { skipConfirm: true });
                 } else if (wo.routeTo === 'SHOP') {
                     addLog(`⚡ Auto-release: ${wo.id} → shop floor…`, 'info');
-                    await pushToShop(wo, 'stock', { auto: true });
+                    // THE ORDER SAYS WHAT IT IS (Stuart 2026-09-01). 'stock' was hard-coded here,
+                    // and pushToShop reads it as isStock → routeTo MILLING, category 'Stock
+                    // Milling'. An Order Entry job is a CUSTOMER job: released as stock it lands
+                    // in the milling backlog instead of Custom Fabrication. Orders written before
+                    // orderType existed carry none, so `|| 'stock'` is exactly today's behaviour.
+                    await pushToShop(wo, wo.orderType || 'stock', { auto: true });
                 } else {
                     addLog(`⚡ Auto-release: ${wo.id} → finishing floor…`, 'info');
                     await pushToFinishing(wo, 'stock', { auto: true });
@@ -1599,8 +1604,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 orderKey,
                 quoteId: hqOrder.hqJobId || null,
                 salesOrderId: (orderType === 'sales' ? hqOrder.soId : null) || null,
-                finSiblingId: null,
-                hasSmallSibling: false,
+                // CARRY THE SIBLING (Stuart 2026-09-01). These were hard-coded null/false, so every
+                // shop order this created was an orphan: Shared/workOrderContract's
+                // releaseSiblingToPickPack (§A1) and mirrorCustomStatusToSibling (§5) both return
+                // early without a finSiblingId, so the shop operator's START released no pick and
+                // the finishing side never learned the custom parts were done. A source order that
+                // names its sibling now keeps it; one that doesn't is unchanged.
+                finSiblingId: hqOrder.finSiblingId || null,
+                hasSmallSibling: !!hqOrder.finSiblingId,
                 soNum: hqOrder.soId || hqOrder.woId || 'N/A',
                 isStock,
                 routeTo: isStock ? 'MILLING' : 'CUSTOM_FAB',
@@ -2610,7 +2621,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                             {wo.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
                                         </button>
                                         {wo.routeTo !== 'FINISHING' && (
-                                            <button style={{ ...btnStyle, flex: 1, background: wo.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: wo.pushedToShop ? 'var(--ink-soft)' : '#fff', border: wo.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(wo, 'stock')}>
+                                            <button style={{ ...btnStyle, flex: 1, background: wo.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: wo.pushedToShop ? 'var(--ink-soft)' : '#fff', border: wo.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(wo, wo.orderType || 'stock')}>
                                                 {wo.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
                                             </button>
                                         )}
