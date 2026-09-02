@@ -329,6 +329,15 @@ Every question answered. Recorded verbatim in intent; the code consequence follo
 | 14 | The open CPQ/OE session | **OK** — let it finish its handoff, retire it, start Brief E fresh. | — |
 | 15 | Order of work | No objection. | §12 stands. |
 
+### Brief B's four questions — answered 2026-09-02
+
+| # | question | decision |
+|---|---|---|
+| B1 | supervisor "release now" under S3 | **keep one**, behind the scary confirm, in the detail view |
+| B2 | the plating state on the finishing floor | **outsourced finishes never enter the finishing floor** — only plating and/or WMS pick/pack when available. The Setup Queue's outsourced group becomes empty by construction, then is deleted. `'Sent to Plating'` is a pack-gate state read by WMS/RTG, not a finishing state |
+| B3 | floor-originated scrap re-make | **retired for stock** — the Snapshot addresses the shortfall on future orders; custom orders keep the hard-red-letter flag on the flow and re-issue from RTG |
+| B4 | the legacy enrich fallback | **clean up after a week** of zero |
+
 ### Q13 — the twenty local suffix readers, classified
 
 **Routing-grade (8) — a decision about where work goes or what recipe runs; each is a place the rule can drift, and two are outright duplicates of a `Shared/` rule:**
@@ -436,3 +445,11 @@ included.
 **e. One sales-order header; recipe stamped at save (Q9, Q10).** Both doors.
 
 **f. A "needs a PO" board for stock builds (Q8).**
+
+**g. Outsourced finishes never enter the finishing floor (B §8 answer 2).** Today
+`autoSplitSalesOrder` writes a `fin_workorders` doc for the small lines whatever the recipe
+(`RTGDispatchTab.js:1060`), and the Setup Queue segregates outsourced arrivals (`SetupQueue.js:50`).
+After: an outsourced recipe produces a WMS pick + plating demands and no finishing document; a
+mixed recipe keeps the fin doc for in-house lines only; the segregation code is deleted once the
+group is empty by construction. A's writers refuse to park a finishing WO for an outsourced
+finish. Briefs A, B, C, D.

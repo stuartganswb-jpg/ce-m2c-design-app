@@ -88,7 +88,7 @@ what they call* (your builders), A swaps the call. The shop floor's own status f
 | P1 #10 | the gate list hand-written in three places | one `gatesOf(wo)` |
 | P1 #8 | recipe resolved in four places, PENDING-RECIPE still reachable | read the stamped recipe first (Q10); make the fallback explain itself |
 | P0 #1 (writer 10) | RTG re-issue parks route-open | A's patch spec: one `parkWorkOrder` call |
-| P0 #3, fin side | shop mirrors Complete before the plater; pack gate opens | the `customFabStatus` contract gains `'Sent to Plating'`; Setup Queue shows it |
+| P0 #3, fin side | shop mirrors Complete before the plater; pack gate opens | the `customFabStatus` contract gains `'Sent to Plating'` as a pack-gate state; **the finishing floor never sees an outsourced order at all** (B5) |
 | Q2 | the plating process is the wanted design — prove it works | the fin-side states and the RTG view of a plated order |
 | Q5 | Snapshot model | your builders assume a complete `finPayload`; the enrich branch becomes a legacy fallback, then goes |
 | Q6, Q11 → **S3** | no manual push; RTG records everything | retire the Push buttons into status; auto-release covers every parked order; the PO panel becomes review-and-send |
@@ -180,7 +180,7 @@ Then the six call sites become one call each:
 | # | path | file:line | after |
 |---|---|---|---|
 | 1 | `pushToFinishing` verbatim branch | `RTGDispatchTab.js:1381` | `setDoc(buildFinDoc(...))` |
-| 2 | `pushToFinishing` enrich branch | `:1408-1539` | **legacy fallback only** for docs parked before A ships; logs "enriched at release — legacy writer" so the board can count them; deleted when the count is zero for a week |
+| 2 | `pushToFinishing` enrich branch | `:1408-1539` | **legacy fallback only** for docs parked before A ships; logs "enriched at release — legacy writer" so the board can count them; **deleted after one week of zero** (Stuart, answer 4) |
 | 3 | `autoSplitSalesOrder` fin half | `:1080` | `buildFinDoc` with the split's computed payload |
 | 4 | `autoSplitSalesOrder` shop half | `:1145` | `buildShopDoc` |
 | 5 | `pushToShop` | `:1567` | `buildShopDoc` |
@@ -216,7 +216,7 @@ every parked order has `routeTo`, `finPayload` (finishing) and `autoFlow: true`.
 
 - the auto-release effect (`:345`) takes **every** `Approved` order whose `gatesOf` are all closed — the `finPayload || routeTo` test stays as a guard, never as a reason to wait for a human;
 - the Push buttons are replaced by the **AUTO-FLOW status chip** pattern already at `:2615` — what it is waiting on, in `gatesOf` words, or "released → Finishing 10:42";
-- a single **supervisor override** (behind the existing scary confirm at `:1376`) stays available from the order's detail view, not the row — a person can still force a release, they are never *required* to press anything. **Ask Stuart (§8 Q1) whether to keep it at all.**
+- a single **supervisor override** (behind the existing scary confirm at `:1376`) stays available from the order's detail view, not the row — a person can still force a release, they are never *required* to press anything. **Stuart, 09-02: keep it (answer 1).**
 - the **PO panel** (`:2660-2700`) becomes review-and-send (S5, from A's hand-off): the open PO shows its lines with their `from` sources, the running total, the vendor minimum if the record has one; **Send** is the existing push at `:244`; the memo at `:268` reads `po.note || po.source`.
 - the board shows every document — WO, SO (Quick Ship included, it already does — audit §6 correction), PO, and the floor docs' live stamps — with `source` on each. A parked order with no `source` is a bug, listed in red.
 
@@ -230,27 +230,46 @@ five-source scan (`:739-776`) becomes the fallback for orders saved before E's c
 for legacy stock docs. Target: no doc reaches the Setup Queue as `PENDING-RECIPE` without a
 `recipeSource: 'none'` stamp that names the SO — so the PENDING group explains itself (B8).
 
-### B5 — the `customFabStatus` contract grows one state (P0 #3, Q2)
+### B5 — outsourced finishes never enter the finishing floor (Stuart, 09-02 — answer 2)
 
-Today: `Pending → In Process → Complete`, mirrored by the shop (`ShopFloor.js:1138, 1231, 1256`).
-The shop's COMPLETE mirrors `'Complete'` **before** its `toPlating` branch, so a plated custom
-order reads complete on the pack gate (`PickPackApp.js:2658`) while its parts are at the plater.
+> *"Sent to plating never needs to hit finishing. Anything outsourced finish should not ever be
+> sent to finishing — only to either plating and/or WMS pick pack when available. Orders that are
+> plating finishes never go to finishing."*
 
-You define the contract, in `workOrderContract.js`:
-`customFabStatus ∈ 'Pending' | 'In Process' | 'Sent to Plating' | 'Complete'`, with
-`mirrorCustomStatusToSibling` accepting the new value and stamping `customFabAt`. Then:
-- **C** calls `'Sent to Plating'` at shop complete when `toPlating` (their file);
-- **D** calls `'Complete'` at the plating **receipt** (their file);
-- **you** make the Setup Queue chip (`:791`) and `OrderStatusChips` show the state, and
-  `orderStatusOf` treat `'Sent to Plating'` as *not ready to pack*.
+That is a stronger rule than segregation. Today (`SetupQueue.js:50`) an outsourced order still
+arrives at `currentPhase 'Setup'` and is filed in a separate group; under this rule it must never
+arrive. Three places create the docs that arrive:
 
-This is the seam Q2 asks you to prove: receipts are just starting; watch one live with D.
+| creator | today | after |
+|---|---|---|
+| `autoSplitSalesOrder` `:1060` | `hasSmall` writes a `fin_workorders` doc for the small lines **whatever the recipe** — an all-plated CPQ order lands its rings and brackets in the Setup Queue's outsourced group | when `isOutsourcedFinishCode(recipe)`: **no fin doc.** The small lines become a **WMS pick** (the pull lines, `sentToPickPack:true`, on a WMS-only doc or the SO itself — decide with D) plus a **`plating_demand`** per plated line for the cores; the custom half goes to the shop with `isOutsourced:true` and `'Sent to Plating'` at completion (C). Mixed recipes (in-house small parts + a plated pole) keep the fin doc for the in-house lines only |
+| Order Entry review `StockViewTab.js:2204` (A's) | already writes a `plating_demand` for an outsourced line and **returns before the finishing WO** (`:2216`, verified 09-02) — A's conversion must keep that early return | unchanged behaviour, proven |
+| the stock writers (A's) | an outsourced item short → the plating triple (A3), never a finishing WO | A's route rule already says so; **you verify it at the Setup Queue: the outsourced group must be empty by construction**, then the group's code (`:44-52`, `finishRouteOf` segregation) is deleted, not kept as a safety net — a safety net here hides the writer bug it was built for |
+
+The `customFabStatus` contract still grows one state, because the **pack gate** is the thing that
+must wait: `'Pending' | 'In Process' | 'Sent to Plating' | 'Complete'`, `mirrorCustomStatusToSibling`
+accepting it and stamping `customFabAt`. **C** calls `'Sent to Plating'` at shop complete when
+`toPlating`; **D** calls `'Complete'` at the plating **receipt**; `orderStatusOf` treats
+`'Sent to Plating'` as *not ready to pack*. The state is read by the WMS and RTG — **not by the
+finishing floor**, which never sees the order. Wording for the chip: **"At the plater since
+<date>"** (Stuart, answer 2, confirm the exact words with Grace/Sandra when you show it).
+
+**Downstream trace:** *finishing* — sees nothing for an outsourced recipe (the point); *shop* —
+unchanged, `isOutsourced` from `isOutsourcedFinishCode` not the name-includes match; *WMS* — gains
+the pick for plated small lines and the plating demands; the pack gate reads the new state;
+*NetSuite* — the SO and the plater PO are unchanged; *RTG* — the board shows the order with its
+plating state and no finishing stage.
 
 ### B6 — the hand-offs from A, landed here
 
-- **writer 8** — Setup Queue scrap re-make (`SetupQueue.js:508`): replace the inline
-  `hq_work_orders` write with `parkWorkOrder({intent:'REMAKE', source:'SETUP_QUEUE_REMAKE'})`
-  the day A's builder lands; the floor-side finPayload construction (`:441-507`) goes with it;
+- **writer 8** — Setup Queue scrap re-make (`SetupQueue.js:441-516`): **retired for stock
+  orders** (Stuart, answer 3): a stock shortfall is not re-made from the floor — the balance close
+  reduces stock and **the Snapshot addresses it on future orders**. For a **custom** order the
+  existing mechanism stands: the shortfall is flagged in **hard red letters on the order's flow**
+  (the `redlineAlert` / balance-close path) and re-issued from RTG (writer 10), never from the
+  floor. So the floor-side writer and its finPayload construction are deleted, not converted;
+  the Setup Queue keeps a "report scrap" action that calls the one closer (`closeOrderEverywhere`
+  with the count) and nothing else;
 - **writer 10** — RTG balance re-issue (`RTGDispatchTab.js:1958`): `parkWorkOrder({intent:'REISSUE',
   replaces:{woId, reason}})` — it stops parking route-open;
 - **PO memo** `:268` and the **PO review/send panel** — B3 above;
@@ -302,7 +321,10 @@ finishing-floor explainer: no more Push buttons; what the status chip words mean
 | Same order, marked urgent on the board after parking | released doc carries `urgent`, `needBy`, `urgentBy` — the board's later statement wins |
 | Order Entry to-be-finished line (A-parked, `autoFlow`) with a convert gate | parked with the gate; WMS convert completes → `clearConvertGate` → `releaseFinWoToFloor` → `buildFinDoc`; the doc carries `nsWoId` |
 | CPQ sales order with a custom line | `autoSplitSalesOrder` writes both docs via the builders; siblings cross-linked; fin `sentToPickPack:false`; shop START releases the pick |
-| Shop completes a plated custom order | fin `customFabStatus:'Sent to Plating'`; Setup Queue chip says so; pack refuses; D's receipt flips to `'Complete'`; pack allows |
+| Shop completes a plated custom order | `customFabStatus:'Sent to Plating'` on the sibling; RTG/WMS chip reads "At the plater since …"; pack refuses; D's receipt flips to `'Complete'`; pack allows. **No document of this order is on the finishing floor** |
+| CPQ order, all lines in an `/EP` finish | `autoSplitSalesOrder` writes **no** `fin_workorders` doc; the small lines are a WMS pick + plating demands; the Setup Queue shows nothing for it |
+| CPQ order, in-house small parts + a plated custom pole | fin doc carries only the in-house lines; the pole is shop → plating; the Setup Queue never shows a plated line |
+| Scrap on a stock order at the floor | the count closes through the one closer; **no re-make WO is raised**; the Snapshot shows the shortfall on its next run |
 | A legacy parked doc (no finPayload, created before A) | the enrich fallback releases it and stamps `legacyEnriched: true`; the board's legacy count shows 1 |
 | Library run (A's writer 7, after both land) | reaches the floor with the same fields as a Snapshot release — diff the two docs |
 | Balance close short + re-issue | the re-issued WO parks with `routeTo`, `source:'RTG_REISSUE'`, `replacesWo`, and auto-releases |
@@ -329,19 +351,15 @@ finishing-floor explainer: no more Push buttons; what the status chip words mean
 
 ---
 
-## 8. Open questions for Stuart (ask before the plan)
+## 8. Stuart's answers (2026-09-02) — settled, do not re-ask
 
-1. **The supervisor override.** Keep one "release now" behind a scary confirm in the order's detail
-   view, or remove the ability entirely so RTG is purely a record? (S3 says no *required* press; it
-   does not say no *possible* press.)
-2. **`'Sent to Plating'`** as a visible finishing-floor state — confirm the wording Grace and Sandra
-   should read.
-3. **The Setup Queue's scrap re-make** stays the one floor-originated writer (through
-   `parkWorkOrder`)? Or should re-makes also be raised from the Snapshot only?
-4. **The legacy enrich branch** — delete after a week of zero legacy releases, or keep as a
-   permanent fallback?
-
----
+1. **Supervisor override — yes, keep one** behind the scary confirm, in the detail view.
+2. **Outsourced finishes never enter the finishing floor.** Only plating and/or WMS pick/pack when
+   available. B5 rewritten to this; the Setup Queue's outsourced group is to become empty by
+   construction and then be deleted.
+3. **Scrap re-make from the floor — retired for stock.** Custom orders: hard red letters on the
+   flow (exists). Stock orders: the Snapshot addresses the shortfall on future orders.
+4. **Legacy enrich fallback — clean up after a week** of zero legacy releases.
 
 ## 9. Handoff
 

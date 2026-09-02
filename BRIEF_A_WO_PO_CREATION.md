@@ -130,7 +130,7 @@ From the audit, by number:
 **Part Handling for a POLE/ROD is decided by the finish suffix** (`Shared/finishRouting.handlingForErp`, 0615687, reaffirmed 09-02):
 mill code, `/P`, `/P##`, `/P25`, `/EP*`, `/MEP*` → **Custom**; any other suffix (`/BS`, `/N90`, `/CP`…) → **Small Parts**; Finish Stream = **POLES** either way (`poleCut.autoFinishStream`). Scoped to pole/rod category. Stuart: *"P is our control for finishes that we always apply custom and any other letters are qualified as small parts finish like poles."* The Master Library sync fills the blank only; a hand-set value survives.
 
-**Where an order goes** (Q4): an item with a finish suffix that is not outsourced → **FINISHING**; a raw/mill code → **SHOP**; an outsourced finish (`isOutsourcedFinishCode`) → **the plating triple** (§13 a), not a finishing WO. Custom lines from a sales order → shop + finishing pair (RTG's split; not yours).
+**Where an order goes** (Q4): an item with a finish suffix that is not outsourced → **FINISHING**; a raw/mill code → **SHOP**; an outsourced finish (`isOutsourcedFinishCode`) → **the plating triple** (§13 a), **never a finishing WO — an outsourced finish never enters the finishing floor** (Stuart 09-02, B §8 answer 2: "only to either plating and/or WMS pick pack when available"). Custom lines from a sales order → shop + finishing pair (RTG's split; not yours). Your `parkWorkOrder` must refuse `routeTo:'FINISHING'` for an outsourced finish — throw, do not park.
 
 **What a stocked pole does** (`poleCut`): a 4/6 ft order is a **cut** from stocked 8 ft rods (`poleCutPlan`), gated `awaitingRodCut`; the cut prints the finishing label. Not yours to change; your writer must keep raising the cut.
 
@@ -153,7 +153,7 @@ instead of hand-writing a `hq_work_orders` doc:
 
 ```js
 parkWorkOrder({
-  intent,        // 'STOCK_FINISH' | 'STOCK_MILL' | 'REMAKE' | 'COMPONENT_MILL' | 'REISSUE' | 'ORDER_ENTRY'
+  intent,        // 'STOCK_FINISH' | 'STOCK_MILL' | 'COMPONENT_MILL' | 'REISSUE' | 'ORDER_ENTRY'   (no REMAKE — retired 09-02)
   part, qty, brand, createdBy,
   finish,        // recipe code when known (the suffix, or the OE line's finishCode)
   reqDate, needBy, urgent, note,
@@ -197,7 +197,7 @@ proven by a live run — see §6):
 | 2 | plating base-short `:571` | route-open, no source, no anchor | `intent:'STOCK_MILL', source:'STOCKVIEW_PO_BUILDER', anchor:'AT_CREATION'` — see A3, it moves into the plated triple |
 | 6 | Library card `LibraryTab.js:1067` | route-open | `intent:'STOCK_FINISH'` or `'STOCK_MILL'` by suffix — **it now pre-builds and auto-releases through RTG** (Q11); the card's "goes to RTG" behaviour stays, the human push goes |
 | 7 | Library `releaseRunToFloor` `:1122` | writes fin directly, second release implementation | parks via `parkWorkOrder` with `autoFlow`; RTG's auto path releases it within the same second. The UX (one press) is unchanged; the mechanism is RTG's. **Coordinate with B** — their builder must be in before this converts, or the run loses fields. If B is not ready, this row waits; do not build a third copy |
-| 8 | Setup Queue re-make `SetupQueue.js:508` | B's file | patch spec to B: one `parkWorkOrder({intent:'REMAKE'})` call |
+| 8 | Setup Queue re-make `SetupQueue.js:508` | B's file | **retired for stock** (Stuart 09-02): the Snapshot addresses a scrapped stock shortfall on future orders; custom re-issue stays RTG's (writer 10). Drop `'REMAKE'` from the intent list |
 | 9 | component shop WO `finishedRunPrecheck.js:241` | yours; also writes the shop doc directly when `dispatchShop` | `intent:'COMPONENT_MILL'` — keep the direct shop write for now (it is the OE auto-flow's mechanism); B will absorb it into their shop builder |
 | 5 | Order Entry Needs `:2410/:2446` | already pre-builds; the pair | `intent:'ORDER_ENTRY'` with `sales` — carries FLOW1/FLOW2 anchor policy and the Custom sibling |
 | 10 | RTG re-issue `RTGDispatchTab.js:1958` | B's file | patch spec to B |
