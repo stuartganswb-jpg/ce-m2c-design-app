@@ -424,7 +424,10 @@ most dangerous.
 **complete assembly** whose BOM names its mill core, with an outsourced finish. One demand at the
 ROP load or the Sales Snapshot produces up to three documents together:
 
-1. a **PO to the plater** for the outsourced finish (NetSuite's record of the order);
+1. ~~a PO to the plater~~ — **settled 09-02 evening:** the plater PO stays with the **WMS weekly
+   shipment** (Phase 3); the Snapshot raises no PO. *"From the Sales Snapshot we will see demand
+   there, so we need to create demand for these items to be pulled on WMS and sent to the plater
+   tab."* (Briefs A and D both caught the double.)
 2. a **`plating_demand`** for the BOM component — the WMS Plating tab pulls the core from stock,
    moves its bin to plating, stages it in the plating dispatch area, and ships **once a week**;
    the tab is the bridge between the PO and the physical part;

@@ -233,11 +233,14 @@ Verify, live, that after conversion:
 
 ### A3 — the plating triple: `issuePlatedDemand` + the BOM-core report
 
-Stuart's design (§13 a): every plated item is a complete assembly with an outsourced finish. One
-short at the ROP load or the Snapshot → **(1)** a PO to the plater, **(2)** a `plating_demand` for
-the BOM core (the WMS Plating tab pulls it, moves its bin, stages it for the weekly shipment),
-**(3)** a shop WO for the core if it has no stock. *"The plating tab is the connection between the
-PO for the outsourced finish and the actual component."*
+Stuart's design (§13 a), **settled 09-02 evening after A and D found the double:** *"the plater PO
+should stay at WMS at time of ship, but from the Sales Snapshot we will see demand there, so we
+need to create demand for these items to be pulled on WMS and sent to the plater tab."* So one
+short at the ROP load or the Snapshot → **(1)** a `plating_demand` for the BOM core (the WMS
+Plating tab pulls it, moves its bin, stages it for the weekly shipment), **(2)** a shop WO for the
+core if it has no stock. **No PO at demand time** — the plater PO is raised by the WMS at the
+weekly shipment (Phase 3, `PickPackApp ~2280`), exactly as today; that is the S5 exception. The
+demand IS the signal the Snapshot sends; the tab is the connection between it and the shipment.
 
 Today, three copies: PO builder (`StockViewTab.js:545-616`), Snapshot (`createPlatingDemands`
 `:1942` + the tier batch's `shop` and `buy` buckets `:1965`), OE review (`:2206` + `:2511`).
@@ -246,18 +249,16 @@ New export in `Shared/platingDemand.js`:
 
 ```js
 issuePlatedDemand({ part, qty, brand, from, createdBy, inventory, nsStock, vendors, soRef })
-→ { demandId, poId | null, shopWoId | null, made[] }
+→ { demandId, shopWoId | null, made[] }
 ```
 - resolves the core with `millBaseOf`, the finish with `isOutsourcedFinishCode`;
 - writes the `plating_demand` in the exact doc shape PickPack reads today (`baseErpId`,
   `targetErpId`, `finishCode`, `finishName`, `qty`, `woNum PLW-…`, `status:'open'`) — **no reader
   change**;
-- raises the PO through A4's `createPurchaseOrder` to the finish's plater (the vendor on the
-  `hq_outsource_finishes` record — the same resolution PickPack's plating pull uses at
-  `PickPackApp.js:2125`);
+- raises **no PO** — the plater PO belongs to the WMS shipment (settled 09-02);
 - if `nsStock[core].available < qty` → `parkWorkOrder({intent:'STOCK_MILL', anchor:'AT_CREATION'})`
   for the shortfall, stamped `forPlating: <target>`;
-- returns the three ids so the caller can log them together.
+- returns the ids so the caller can log them together.
 
 The three screens call it. The PO builder's inline block and the Snapshot's separate functions go.
 
