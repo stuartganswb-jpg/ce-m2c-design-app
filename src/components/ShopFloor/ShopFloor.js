@@ -24,6 +24,7 @@ import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 import RodPieceInventory, { RodCutPanel } from '../Shared/RodPieceInventory';
 import { shopDb, cleanId, SHOP_TABS, hqWorkOrderIdOf } from './shopShared';
+import { millBaseOf } from '../Shared/finishRouting';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
 // salesOrderId/orderKey but no soNum ("SO: undefined" on cards AND printed labels), and no
@@ -1169,11 +1170,26 @@ const ShopFloor = () => {
                 await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process', startedAt: serverTimestamp(), startedBy: user.name }));
                 await mirrorCustomStatusToSibling(order, 'In Process');
                 await releaseSiblingToPickPack(order);
-                await addDoc(collection(db, "global_messages"), {
+                // Follows the sibling (§8 Q2) — same rule as the card's Start button.
+                if (order.finSiblingId) await addDoc(collection(db, "global_messages"), {
                     sender: 'System', sourceApp: 'SHOP', target: 'FINISHING',
                     msg: `Custom Fab Started for SO: ${soNumOf(order)}.`, t: serverTimestamp(), isSystem: true
                 });
             } catch (e) { alert('Failed to start: ' + (e.message || e)); }
+        };
+        // THE SHOP INSTRUCTION ON THE ITEM (Stuart 2026-09-02, Brief C §8 Q1 — S1, a tag before
+        // code): an Order Entry custom line has no geometry, so its card has no cut list and said
+        // nothing about what to do. The answer lives on the ITEM — Approved_Designs
+        // manufacturingSpecs.shopInstruction, edited on the Library card and in 4.5 — and the
+        // card reads it live: the doc's own copy first (buildShopDoc may carry it), then the exact
+        // item code, then the mill base the finish was applied to (HCUMP810/P01 → HCUMP810).
+        const shopInstructionOf = (order) => {
+            if (order?.shopInstruction) return String(order.shopInstruction);
+            const code = String(shopItemCodeOf(order) || '').toUpperCase();
+            if (!code) return '';
+            const find = (c) => hqParts.find(p => String(p.legacyErpId || '').toUpperCase() === c || String(p.itemCode || '').toUpperCase() === c);
+            const part = find(code) || find(String(millBaseOf(code)).toUpperCase());
+            return String(part?.manufacturingSpecs?.shopInstruction || '');
         };
         // Compact staged row: enough to review (View Item / SOP / Drawing) without the bulk —
         // the full card renders on the right once started.
@@ -1264,7 +1280,10 @@ const ShopFloor = () => {
                 // §A1: starting the custom job is the trigger that releases the sibling small
                 // parts into the Pick/Pack queue (so picking runs in parallel with fabrication).
                 await releaseSiblingToPickPack(order);
-                await addDoc(collection(db, "global_messages"), {
+                // The message follows the sibling (Stuart, Brief C §8 Q2): finishing hears about a
+                // START only when it holds the other half. An all-plated order has no finishing
+                // half and the finishing floor must never hear of it.
+                if (order.finSiblingId) await addDoc(collection(db, "global_messages"), {
                     sender: 'System', sourceApp: 'SHOP', target: 'FINISHING',
                     msg: `Custom Fab Started for SO: ${soNumOf(order)}.`, t: serverTimestamp(), isSystem: true
                 });
@@ -1334,6 +1353,14 @@ const ShopFloor = () => {
                         <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Req Qty</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.qty}</span></div>
                         {order.cutLength && <div><span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)', display: 'block', marginBottom: '4px' }}>Cut To</span><span style={{ fontFamily: 'var(--sans)', fontSize: '1.1rem', fontWeight: 500, color: 'var(--ink)' }}>{order.cutLength}"</span></div>}
                     </div>
+
+                    {/* No cut list → the item says what to do (§8 Q1). Silent until the item carries one. */}
+                    {(!Array.isArray(order.cutList) || order.cutList.length === 0) && (i => i ? (
+                        <div style={{ marginBottom: '20px', padding: '12px 16px', background: 'var(--ink)', color: '#fff' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.12em', opacity: 0.8, marginBottom: '4px' }}>Shop Instruction</div>
+                            <div style={{ fontFamily: 'var(--sans)', fontSize: '1rem', lineHeight: 1.4 }}>{i}</div>
+                        </div>
+                    ) : null)(shopInstructionOf(order))}
 
                     {/* BUILD × N, SAID AT THE TOP OF THE CARD (Stuart 2026-08-26: "clearly ... so
                         that they do not make a 2ft pole but rather 2 of the same"). When every CPQ
