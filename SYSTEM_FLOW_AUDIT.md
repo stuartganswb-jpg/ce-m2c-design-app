@@ -294,6 +294,17 @@ the custom parts are at the plater. **Question 2, §10.**
 9. **Three PO shapes, one push, wrong memo, subsidiary check on one path only** (§3).
 10. **Gate list hand-written in three places** (§5). Agree today.
 
+**P1 — added 2026-09-02 while cutting Brief E**
+
+15. **CPQ's sales-order date is fiction.** `hq_sales_orders.reqDate` on a CPQ save-as-SO and on a
+    portal approve is `Date.now() + 14 days` (`CPQTab.js:3015`, `ExternalCoopTab.js:908`); a CPQ
+    job carries no need-by at all. RTG, the split and both floors schedule every CPQ order on a
+    date nobody chose. *Brief E1.*
+16. **Two NetSuite header builders.** `nsTransmit.buildNsTransaction` (`:592-610`, CPQ/portal) and
+    Quick Ship's inline copy (`QuickShipTab.js:1323-1331`) each hard-code `brand === 'ce' →
+    customForm 177/299 + class 2` and each resolve the ship method on their own. Sinaya's "Class"
+    failure is one symptom. *Brief E3.*
+
 **P2 — hygiene**
 
 11. `source` missing on the grid writer and the plating-base-short writer.
