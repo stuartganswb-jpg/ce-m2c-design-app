@@ -256,10 +256,15 @@ header carries the sidemark and the need-by, the split's `fabNotes` carry the cu
 
 ### E6 — the traverse items the peer session found
 
-1. **58034 pushes twice at $0.** Two sources add a splice to a traverse order: the kit builder's
-   slot (`QuickShipTab.js:958`, `cfg.spliceId`) and the configurator's own pick. Find the second
-   source, make one of them the owner, and prove on tab 12 that a traverse order with a splice
-   pushes one 58034 line. Real double stock relief until then.
+1. **58034 pushes twice at $0.** *(Corrected 09-02 by the E session — the kit-builder slot
+   `cfg.spliceId` is the ordinary pole-kit builder and is NOT the source.)* On a tab-7 traverse order
+   the double is: (1) `applyTrvComponents` pushing the modal's chart-included splice as an ordinary
+   cart line (→ a NetSuite line at $0), and (2) `explodeTraverse` at save adding `P.splice` from the
+   usage-count table into `trvPushLines` (→ a second $0 line) — same item, both at chart count.
+   Fix shape: **one owner** — the configurator line carries its role, and the explosion drops roles
+   the cart already carries for that kit. CPQ's path has no explosion; its only risk is
+   `flow.extraItems` listing the same splice — prove on tab 12, don't assume. Real double stock
+   relief until then.
 2. **Past traverse orders missing the TRACK line.** `5b7faae` fixed resolution going forward.
    Produce the list — jobs with a `trvOrder` saved before that commit that reached NetSuite — with
    their SO numbers, for Eric to add the line by hand. **Do not post anything.**
