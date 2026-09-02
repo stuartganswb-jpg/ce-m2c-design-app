@@ -1,0 +1,345 @@
+# Brief D — WMS: every loop the warehouse closes, closed
+
+*Cut from `SYSTEM_FLOW_AUDIT.md` (§1, §5, §7, §8, §10, §13 a/c/g) and the hand-offs in Briefs B
+and C. Inherits `FLOORS_WMS_HANDOFF_BRIEF.md` (08-07) for the environment and the convert chase.
+Written 2026-09-02. This session's job: the warehouse is where four loops end — the NetSuite work
+order the app opened, the plated part that went out, the component gate a convert or a cut
+clears, and the sales order that ships — and today two of the four end in nothing. D makes every
+one of them close on its own, through the one write path, and say so on RTG.*
+
+## ⛔ WORKING AGREEMENT (Stuart, 2026-08-31) — binds this session
+
+1. **Plan first, always** — state the plan and WAIT for approval before editing code, shipping, or
+   changing production data. Reading and measuring need no permission; changing does.
+2. **Requested scope only.** Adjacent problems get NAMED, not fixed.
+3. **No temporary fixes.**
+4. **Look downstream — RTG is the single source of truth.** Every change traced through work
+   orders, finishing, shop, WMS, NetSuite, and said in the plan.
+
+**Two rules this brief lives or dies by.** Every NetSuite write here **moves real inventory**. A
+double-tap is a double build. So: nothing is posted twice, nothing is posted from two places, and
+nothing is guessed — *"DO NOT GUESS a payload"* (the multi-location fulfilment, §4 D4) is the
+standing instruction from the pole session, and it holds for every line in this brief. And: **ask,
+don't derive.**
+
+## ⚙ STANDING RULES (Stuart, 2026-09-02) — verbatim from Brief A
+
+**S1 · Tags before code.** **S2 · The guide moves with the code** — there is **no WMS section in
+the guide today**; you write it (§4 D8). **S3 · Everything auto-routes; RTG records everything** —
+the loops you close report to RTG. **S4 · BOTH always asks.** **S5 · POs open, accumulate, then
+send** — the plater PO (Phase 3) is the one exception Stuart named: it is issued *by the shipment*,
+weekly; it is not an accumulating PO. Keep it as it is.
+
+**Decisions that bind this brief:** *Q1* — anchor WOs are closed by hand today; **the app must
+build them; prevention is the goal.** *Q2* — the plating process on the WMS tab is the wanted
+design; **prove it works without bugs, do not redesign it.** *B §8 answer 2* — outsourced finishes
+never enter the finishing floor; the plated part's only two destinations are plating and WMS
+pick/pack. *Q3* — rules are deployed.
+
+---
+
+## 0. Operating the session
+
+**Login.** The WMS is its own PIN-gated front-end (chip PINs). Stuart pins you in via
+**Claude-in-Chrome**, `find`→ref, never credentials. Sandra and Andrea are the users; the screens
+are tablets in Spanish-first hands — wording matters (`i18n.js`).
+
+**Vercel.** `curl -s https://www.4cosworkcenter.com/version.json` → stamp after commit time.
+**PickPackApp is a lazy chunk** (5,813 lines, one file) — sweep `/asset-manifest.json`, string
+literals only.
+
+**Cloud Shell — yours, and not automatic.** `functions/index.js` (`nsOutboxWorker`,
+`onStockBuildDone`, `netsuiteProxy`) deploys only from `shell.cloud.google.com`: `git pull` →
+`firebase deploy --only functions:<name> --project ce-m2c-design-collab`. Local `firebase login`
+fails on this Mac (memory `firebase-deploy-cloud-shell`). **Every functions change in this brief
+ends with "Stuart, deploy X from Cloud Shell" and a verification that it is live** (the outbox
+log shows the worker's version, or a marker in a memo). The RESTlet
+(`netsuite/ce_convert_build_restlet.js`) deploys **in NetSuite** by Eric; its script/deploy ids
+are constants (`PickPackApp.js:101`).
+
+**Git.** Multi-session repo: never switch branches, stage only your files, `pull --rebase
+--autostash`, fix-forward, lint to 0 errors. `ListAgents` before `Shared/`.
+
+**Diagnosis.** App Check blocks scripts; the proxy rejects unauthenticated SuiteQL. Your windows
+onto NetSuite: **11.1 → NetSuite Sync Queue** (every outbox entry, its attempts, its error), the
+**RTG Transmit Log** (click a row: full error + sent payload), and Stuart/Eric screenshots. The
+outbox worker runs **every minute**, leases for 5, retries with exponential backoff to 15 min, gives
+up at **6 attempts** (`FAILED`), and on any retry first looks in NetSuite for an already-posted
+copy by memo marker (`recoverByMarker`) — so ↻ Retry from 11.1 can never double-post *our* writes.
+
+---
+
+## 1. Territory
+
+**You own:** `src/components/PickPack/PickPackApp.js` and everything in `PickPack/` ·
+`functions/index.js` — `nsOutboxWorker`, `onStockBuildDone`, `netsuiteProxy` (the `portal*` and
+user-directory exports are E's / not in scope) · `Shared/nsOutbox.js` · `Shared/nsWorkOrder.js` ·
+`Shared/nsProxy.js` · `Shared/convertDiag.js` · `Shared/pickOrder.js`, `pickTabs.js`, `labelPrint.js`,
+`platingPackingList.js`, `platingOrderPdf.js`, `quickShipUom.js`, `i18n.js` ·
+`netsuite/ce_convert_build_restlet.js` (the file; Eric deploys it).
+
+**Read-only:** A's (`StockViewTab`, `finishedRunPrecheck` — you *call* `clearConvertGate`),
+B's (`RTGDispatchTab`, `workOrderContract` — you *call* `mirrorCustomStatusToSibling`,
+`orderLifecycle` — you *call* `propagateFloorState`, `orderStatus` — you *read* `gatesOf`),
+C's (`ShopFloor/*`, `rodPieceLedger` — it *calls* your outbox), E's (`nsTransmit`, `CPQTab`,
+`QuickShipTab`).
+
+**Must not touch:** how an order is created or routed (A), how it is released (B), what the shop
+does before it reaches you (C). You are the end of every loop; if the loop was started wrong,
+name it upstream.
+
+---
+
+## 2. What this brief inherits
+
+| ref | item | this brief's part |
+|---|---|---|
+| **P0 #2 / Q1 / §13 c** | Order Entry FLOW1/FLOW2 anchor WOs are `orderType 'sales'`; `onStockBuildDone` returns on `orderType !== 'stock'` (`functions:567`); nothing posts their build — Stuart: closed by hand, **the app must build them** | D2 |
+| **P0 #3, WMS side / Q2** | plating receipt (4a) and build-back (4b) **tell the order nothing** — no sibling, no mirror, no RTG (`PickPackApp.js:2313-2336`, `:2426-2468`); the pack gate reads `customFabStatus` | D1 |
+| C §7 hand-offs | the plating demand gains `finSiblingId / orderKey / shopOrderId`; the hq WO gains `millGoodQty / millCompletedAt / floorPhase` at mill-complete | D1 reads the first; D3 reads the second |
+| audit §8 anchors | the root build is RTG's manual ⛏ (`RTGDispatchTab.js:1862`), "automate at mill-complete once a live post is verified" | D3 |
+| POLE_ROUTING_HANDOFF_BRIEF §4 | 11.1 fulfilment queue: 3 multi-location (Eric), 3 already-closed (approved-in-principle fix), 3 missing Class (the SO push, E's) | D4 |
+| audit §1 | `ns_outbox` is the ONE NetSuite write path — **but the WMS posts plating pull, receive, WIP reversal and build-back directly through `nsProxyFetch`** (`:2113`, `:2323`, `:2388`, `:2462`), outside the outbox's idempotency, retry and log | D5 |
+| audit §5 | the WMS clears three gates: rod cut (`:1848`), convert (`clearConvertGate`), demand-delete (`:2825`); B's `gatesOf` is the wording | D6 |
+| audit §6 / P2 #14 | two pick-line dialects (`hq_sales_orders.lines[]` for Quick Ship, `fin_workorders.partsList[]`) | D7 — one reader |
+| S2 | no WMS section in the User Guide | D8 |
+| FLOORS_WMS brief §5 | known-open / unverified targets from the convert chase | fold what is still open into §6 |
+
+---
+
+## 3. The rules you build on — settled
+
+**The outbox contract** (`Shared/nsOutbox.enqueueNsWrite` → `functions:429`): an entry carries
+`kind, label, sourceApp, createdBy, targetUrl, method, payload, writeBack[]` (collection, docId,
+patch, `idField`, `tranField`) and optionally a **deterministic id** (`obRef.create` refuses a
+second — `onStockBuildDone`'s `wocmpl-<docId>`, the 2026-08-31 lesson) and a `dedupeKey`. Memo
+markers `[app push … #xxxxxx]` are what recovery searches. **Any write that can be retried safely
+belongs here.** A write whose *answer* the operator needs before continuing (the convert RESTlet's
+BOM sourcing; a bin count) may stay synchronous — but it still logs to the transmit log.
+
+**`onStockBuildDone`** (`functions:564`): fires on any `fin_workorders` write; posts the WO-linked
+assembly build (`workorder/<id>/!transform/assemblyBuild`) **at pack putaway** (`packStatus
+'Packed'`), into the **scanned** bin (`putawayBin`), qty = `completedParts || totalParts`; requires
+`orderType 'stock'` **and** `nsWoId`; stamps `nsCompletionQueued` *after* creating the entry.
+Non-WIP WOs complete via this build, never `workordercompletion` (400s).
+
+**The fulfilment** (`:1286-1298`): pack → outbox `itemfulfillment` transform of the SO, `shipStatus
+B`, writeBack `nsIfId/nsIfTran` to the fin doc (and the SO doc). Shipping executes in NetSuite;
+**⤓ Tracking pull** (`pullFulfillment` `:1311`) reads `ItemShip WHERE createdfrom = <so>` and
+stamps status + tracking back. That query is the one D4(a) reuses.
+
+**The convert** (`postConvertBuild` `:106`, RESTlet `2848/1`): builds the `/P` assembly from
+bin-tracked raw, server-side BOM sourcing, **against the demand's anchor WO** (`workOrderId`,
+`:1718`); then `clearConvertGate` (A's) → an auto-flow WO releases itself. `diag:true` posts nothing
+(`convertDiag`). `rawUnknown` rows are refused upstream.
+
+**Rod cuts** (`:1836-1880`): completing a FINISHING cut clears `awaitingRodCut` on the hq WO and
+**prints the finishing setup label at the saw** — that is what makes the order ordinary from then
+on. The cut posts a 2-line adjustment (acct 254).
+
+**Plating, the four phases** (Stuart's design, audit §13 a): **1** demand (`plating_demand`, from
+A's triple or C's custom complete) → **2** pull: bin transfer Good→WIP-Plating into the plating bin
+(`:2113`), a `plating_shipments` line `staged` → **3** ship: NetSuite PO to the plater + app PO
+`kind:'plating'` (`:2280`) + packing list, lines `shipped` → **4a** receive: item receipt against
+the PO (`:2313`), lines `received` → **4b** build-back: WIP reversal + assembly build of
+`targetErpId` (`:2426`), line `built`. **The process is right; the loop back to the order is
+missing.**
+
+**JFP** (paint-only, no assembly, no WO): the pick posts a −qty adjustment (`:2607`), put-away posts
+a +qty adjustment (`:1250`); the trigger ignores it (no `nsWoId`).
+
+**Holds, urgency, where-is-it, `pendingReasonOf`** (`:787`): the WMS already explains "still
+upstream" in three words. Extend that habit; do not invent a second vocabulary — B's `gatesOf`
+supplies the words.
+
+---
+
+## 4. The work, in order
+
+### D1 — the receipt closes the order (P0 #3 WMS side, Q2, C's hand-off)
+
+1. **The shipment line carries the order.** When the pull (`:2071-2127`) fulfils a
+   `plating_demand`, copy the demand's `finSiblingId / orderKey / salesOrderId / shopOrderId /
+   custom` onto the `plating_shipments` line. C adds them to the demand; you carry them.
+2. **Build-back tells the order** (`pushPlatingBuildBack` `:2426`), after the build posts:
+   - custom order (`custom:true`): `mirrorCustomStatusToSibling({finSiblingId}, 'Complete')`
+     (B's contract) → the pack gate opens; `propagateFloorState(finWo, 'Plated')` → RTG's chip
+     changes from "At the plater since …" to "Plated, ready to pack";
+   - stock plated item (A's triple): the built assembly is now on the shelf — `pullNetSuiteStock()`
+     already refreshes; stamp the originating demand/PO `builtAt` so A's Stock Build Needs and the
+     Snapshot read it as covered;
+   - either: the app PO `kind:'plating'` gets `receivedAt / builtAt`, so External Co-Op's vendor
+     card closes it.
+3. **Receipt without build-back** is a state the board must see: a line `received` for > N days
+   with no build is a red row on RTG (B shows it; you stamp `receivedAt`).
+
+**Downstream trace:** *WMS* — pack gate opens only now; *RTG* — the plating state ends; *shop* —
+nothing; *finishing* — nothing (never involved); *NetSuite* — unchanged posts, now on the outbox
+(D5); *CRM* — the plater PO closes.
+
+### D2 — the app builds every NetSuite WO it opens (Q1, §13 c)
+
+The seam is one line: `if (after.orderType !== 'stock' || !after.nsWoId || after.nsCompletionQueued) return;`
+(`functions:567`). Two flows open a WO on a **sales-typed** fin doc:
+
+| flow | anchor on | opened by | must close by |
+|---|---|---|---|
+| **FLOW2** — the finished variant exists as a NetSuite assembly | the variant (`stockErpId`) | Order Entry review at creation; `nsWoId` stamped by writeBack, copied to the fin doc at release (`releaseFinWoToFloor` `:318`) | a WO-linked assembly build at **pack** of the finished order — the same entry `onStockBuildDone` makes for stock, into the scanned bin or, for a sales order that ships, no bin (it is fulfilled next) |
+| **FLOW1** — raw + app-applied finish, no finished NS item | the **base assembly** (`nsWoOnErp`, `nsWoOnInternalId`) — "closes on the final assembly build (after mill + phosphate convert)" (`StockViewTab.js:2476-2484`) | Order Entry review at creation | a WO-linked build of the **base assembly** against the anchor at pack; the SO line was pushed as the base item (`finishFallbacks`) so fulfilment then ships it |
+
+Do it in `onStockBuildDone`: drop the `orderType` guard, branch on `after.orderType`, and for a
+sales-typed doc build `after.nsWoOnErp ? nsWoOnInternalId : stockInternalId` against `nsWoId`,
+deterministic id `wocmpl-<docId>`, **before** the fulfilment entry is queued (a fulfilled SO line
+needs the stock the build creates — order the two entries by `nextAttemptAt`). Sales docs with no
+`nsWoId` (CPQ customs, whose NetSuite record is the SO) are untouched.
+
+**Ask Eric first (§8 Q1):** confirm the FLOW1 close chain — that a build of the base assembly
+against the anchor WO, after the /P convert has posted against its own WO, is what closes the
+order in NetSuite. This is the one payload in the brief that has never been posted live; it
+follows the pattern of the two that have (Route A's build, the convert's build), which is why it
+is a question and not a guess. Then D deploys the function and watches the first one on 11.1 with
+Stuart.
+
+**Trace:** *NetSuite* — an open WO per Order Entry line stops accumulating; components commit and
+release correctly; *RTG* — `nsWoCompletionTran` on the row; *WMS* — nothing visible; *finishing* —
+nothing.
+
+### D3 — the root build, automated (C's stamps, RTG's note)
+
+C stamps `millCompletedAt / millGoodQty / floorPhase:'Complete'` on the hq work order of a milled
+root that has `nsWoId`. Add `onMillComplete` in `functions/index.js` on `hq_work_orders/{id}`
+writes: when those three are present and `nsRootBuildPosted` is not, queue the root's assembly
+build against `nsWoId` (`postNsAssemblyBuild`'s payload, id `rootbuild-<woId>`, qty
+`millGoodQty`, bin = the item's library bin), writeBack `nsRootBuildPosted / nsRootBuildId`. This
+is exactly RTG's ⛏ (`:1862-1879`) made automatic. **Go-live is gated** (C §8 Q3): ship it behind a
+per-brand flag in `system/wms_config`, watch ⛏ posts succeed live N times, then flip; B retires
+the button when you say so.
+
+### D4 — the fulfilment queue, three classes, three answers
+
+**(a) Already fulfilled / SO closed — retries forever.** Before enqueueing the transform (`:1286`)
+and inside 11.1's ↻ Retry for `kind:'itemfulfillment'`, run `pullFulfillment`'s query
+(`ItemShip WHERE createdfrom = <so>`, `:1316`). If one exists: write back `nsIfId/nsIfTran`, stamp
+`nsFulfillQueued: true`, **no entry**. The worker's marker recovery covers duplicates of *our*
+posts; this covers fulfilments made in NetSuite by hand. Also classify the error text on a FAILED
+entry ("already closed", "already fulfilled") into a plain-words `failureClass` the queue shows in
+red, so a real failure is not buried under ones that can never succeed. *Approved in principle
+(pole brief §4 B); build it.*
+
+**(b) Multi-location — three failures.** *"Fulfillments can be shipped from only one location when
+using Multi-Location Inventory."* Our transform sends no location; the SO carries it only on the
+header. Two opposite fixes: state the location on the payload, or one fulfilment per location with
+the other lines marked unfulfilled. **No code until Eric opens SO60104 and says whether its lines
+carry one location or two** (§8 Q4). Write both payloads in the plan; post neither.
+
+**(c) Missing Class** (Sinaya's SO) — `class: {id:'2'}` is sent only for `brand === 'ce'`
+(`nsTransmit.js:596`), the **sales-order push**, E's file. Hand-off to E: a per-brand class map
+beside `BRAND_NETSUITE_MAP`. Your fulfilment payload sends no class and needs none.
+
+### D5 — the direct posts ride the outbox
+
+Four WMS writes bypass the one write path: plating pull (`:2113`, bin transfer), receive
+(`:2323`, item receipt), WIP reversal (`:2388`, adjustment), build-back (`:2462`, **assembly build
+— a real inventory movement with no double-post guard**). Move all four to `enqueueNsWrite` with
+deterministic ids (`platepull-<lineId>`, `platercv-<shipmentId>`, `platebuild-<lineId>`) and
+writeBacks to the shipment line, so a double-tap cannot double-build and every one appears on the
+transmit log. The operator loses the immediate NetSuite error in exchange for "queued — watch
+11.1"; **ask Stuart** (§8 Q3) whether Sandra needs the synchronous answer on the pull. The convert
+RESTlet stays synchronous (its BOM sourcing *is* the answer) but logs an entry.
+
+### D6 — every gate the WMS clears, verified end to end
+
+With B's `gatesOf` words: rod cut complete → `awaitingRodCut:false` + the setup label prints +
+the order auto-releases (B) — verify the label is the one the Setup Queue expects; convert
+complete → `clearConvertGate` → an auto-flow WO releases, a non-auto one shows "gate clear" on RTG;
+convert to-do deleted → gate lifted with the note (`:2825`); plating build-back → D1. The WMS
+**pending window** (`:777-791`) reads `gatesOf` for its reason text instead of its own three cases.
+
+### D7 — one pick-line reader
+
+Quick Ship orders carry `lines[] {erp, aliasErp, qty, eachQty, packs, packUom, toBeFinished,
+finishCode, finishOutsourced}`; finishing orders carry `partsList[] {legacyErpId, partId, partName,
+quantity, partHandling, binLocation, jfpSource}`. `c435d6d` taught the pull to read both. Put that
+in one `Shared/pickLines.js` — `pickLinesOf(job) → [{code, qty, each, packs, packUom, name, bin,
+source}]` — used by the queue, the pick screen, the pack screen, labels and `PullLinesLive`. When E
+aligns the SO header (Q9), this is the one place the WMS changes.
+
+### D8 — the WMS guide (S2) — from scratch
+
+There is no WMS section in `UserGuideTab.js`. Write one, in the guide's voice, for Sandra and
+Andrea: the queue and what "pending — still upstream" means; pick; pack vs put-away and what each
+posts to NetSuite; convert ("Needs Phosphating"), why it waits on raw, what CHECK BOM does; rod
+cuts and the label at the saw; plating — the four phases, what the PO is, what "received, awaiting
+build-back" means and why the pack waits for it; counts and bin transfers; holds and where-is-it.
+Plus the repo guide. Listed in the handoff.
+
+---
+
+## 5. What you do NOT do
+
+- **No guessed payloads.** Multi-location waits on Eric. FLOW1's close chain is confirmed before
+  it is posted. A wrong build moves real stock.
+- **No second write path.** Nothing new calls `nsProxyFetch` for a POST that could ride the outbox.
+- **No routing, no release, no shop.** You close loops; you do not open them.
+- **No plating redesign** (Q2). The four phases stay; the loop back is added.
+- **No E work** — the class map is a hand-off; the SO header is E's.
+- **No fixing in passing.** Name it.
+
+---
+
+## 6. Acceptance — live runs, Stuart pinned in, 11.1 open beside you
+
+| run | expect |
+|---|---|
+| Stock finishing order → put away | `wocmpl-<id>` entry once; build posts into the **scanned** bin; `nsWoCompletionTran` on the fin doc and RTG; a second put-away tap creates nothing |
+| **Order Entry FLOW2 line** → pack | build against `nsWoId` queued **before** the fulfilment; both post; NetSuite WO closes; SO fulfilled |
+| **Order Entry FLOW1 line** → pack (after Eric confirms) | build of the base assembly against the anchor; WO closes; SO line (base item) fulfils |
+| CPQ custom order (no `nsWoId`) → pack | fulfilment only, exactly as today |
+| Plated custom part: shop complete → pull → ship → receive → build-back | line carries `finSiblingId`; after build-back the sibling reads `'Complete'`, RTG says "Plated, ready to pack", pack allowed; the app PO closes; **every post is on the transmit log** |
+| Plated stock item (A's triple) → build-back | on the shelf; Snapshot/Stock Build Needs read it covered |
+| Build-back double-tap | one build (deterministic id) |
+| Milled root, last op GOOD (C's stamps) with the flag on | `rootbuild-<woId>` posts once; `nsRootBuildPosted`; RTG's ⛏ no longer offered |
+| Pack an SO already fulfilled by hand in NetSuite | no entry; `nsIfTran` written back from the query; 11.1 shows nothing new |
+| 11.1 FAILED entry "already closed" | `failureClass` in red, plain words; ↻ Retry re-runs the pre-check and does not re-queue |
+| Multi-location SO60104-class | **untouched** until Eric's answer; the plan holds both payloads |
+| Rod cut for finishing complete | gate clears; the setup label the Setup Queue expects prints; the order auto-releases |
+| Convert complete on an auto-flow WO | gate clears; the WO releases itself; the demand's anchor WO closed by the build |
+| WMS pending window | reasons in `gatesOf` words, identical to RTG's chip |
+| Quick Ship order and a finishing order in the same pick queue | both read through `pickLinesOf`; labels and pack read the same lines |
+| Cloud Shell | every function change verified live (worker version / memo marker) before the run that depends on it |
+
+---
+
+## 7. Sequencing and hand-offs
+
+1. **D1 the day C's demand fields land** (they are one commit on C's side; ask for them first).
+   D5's build-back move can ship with it — same function.
+2. **D2 after Eric's answer** (§8 Q1) — plan and payloads now, deploy after.
+3. D4(a) and D7 any time. D4(b) never without Eric. D4(c) is a hand-off.
+4. D3 behind the flag, after C's stamps; go-live when C/Stuart say.
+5. D6 as each upstream piece lands. D8 last.
+6. **Hand-offs out:** to **B** — retire ⛏ (D3 live); show "received, no build-back" rows; the
+   pending-window wording. To **C** — the field names you read off the demand. To **E** — the
+   per-brand class map. To **A** — the plating_demand shape is frozen by your reader.
+7. **Hand-offs in:** C's demand fields + mill stamps; B's state and `gatesOf`; Eric's two answers.
+
+---
+
+## 8. Open questions (ask before the plan)
+
+1. **Eric — FLOW1's close.** After the /P convert posts against its WO, does a build of the base
+   assembly against the top-level anchor close the order correctly? (D2)
+2. **Stuart — the receipt.** When build-back completes for a *custom* order, "Plated, ready to
+   pack" on RTG and the pack gate open — confirm that is the whole loop, nothing else waits.
+3. **Stuart — synchronous vs queued.** Moving the plating pull to the outbox means Sandra sees
+   "queued" instead of NetSuite's immediate error. Acceptable, or keep the pull synchronous and
+   queue only receive + build-back?
+4. **Eric — SO60104.** One location on every line, or two? (D4 b)
+
+---
+
+## 9. Handoff
+
+`BRIEF_D_HANDOFF.md`: what shipped (commit, deploy, run, proof), the state of D1–D8, what waits on
+Eric / C / B / E, anything named and not fixed. Update `SYSTEM_FLOW_AUDIT.md` §8 to the new state.
+**The guide (S2):** the new WMS section, listed.
