@@ -20,6 +20,36 @@ twice on pole routing (`POLE_ROUTING_HANDOFF_BRIEF.md` §1); and **a sweep must 
 that decides the thing, not every place you were already looking** — the sixth copy of the pole
 test was an *importer*, not a WO writer.
 
+## ⚙ STANDING RULES FOR EVERY BRIEF (Stuart, 2026-09-02) — A through F inherit these
+
+**S1 · Tags before code.** When items need to move differently, the first answer is a **tag on the
+item** — edited in **4.5 Mass Update** (bulk) and on the item's **Master Library card** (single) —
+and code that reads the tag. Not a rewrite of the routing logic. The settled rules (§3) are the
+default; a tag is how an exception or a new behaviour is introduced without a large code change.
+(This does not reopen Q7: the pole handling rule *is* the suffix, and no stock- or length-based
+pole tag is wanted. S1 is about the next modification, not that one.)
+
+**S2 · The guide moves with the code.** A brief is not complete until the **User Guide** is updated
+— both the in-app guide (`src/components/HQ/UserGuideTab.js`, plain JSX) and the repo doc it is
+written from — so the explanation the team reads matches what the app does. Every §9 handoff
+lists the guide sections touched.
+
+**S3 · Everything auto-routes; RTG records everything.** Any work order — raw stock to the shop,
+finished work to the floor — and any purchase order routes on its own. No screen has a manual
+"push" a person must press for the work to move. RTG holds the master record of all of it and is
+where a person sees status and closes. (For a PO, "auto-route" means it lands in the vendor's
+**open** PO automatically — S5 — and RTG records it; the one deliberate act is the final send.)
+
+**S4 · BOTH always asks, on every screen.** An assembly marked sourcing BOTH makes every
+work-generating screen — Snapshot, grid, Library card, the pre-check, Order Entry review, the new
+Stock Build Needs board — ask whether to create a **work order or a purchase order** for it. Never
+defaulted silently.
+
+**S5 · Purchase orders open, accumulate, then send.** Many vendors have minimum orders. A PO is
+created **open** for its vendor and **items are added to it** as demand appears — from any screen
+— until a person reviews it and sends it to NetSuite. Nothing creates a second open PO for a
+vendor while one exists.
+
 ---
 
 ## 0. Operating the session
@@ -91,6 +121,7 @@ From the audit, by number:
 | Q6, Q11 | **RTG = automatic control + master record, no manual push** — Master Library included | the Library's two paths park through `parkWorkOrder` and let RTG auto-release |
 | Q8 | **a "needs a PO" board for stock builds** | §4 A5 |
 | Q7 (second pass) | **the suffix rule stands; no tag** | do not reintroduce a stock- or tag-based pole rule |
+| S1–S5 | standing rules (top of this brief) | tags before code · guide moves with the code · everything auto-routes, RTG records all · BOTH asks everywhere · POs open, accumulate, send |
 
 ---
 
@@ -179,13 +210,26 @@ docs unchanged in shape; *WMS* — pulls come from the same `planFinishedRun`; t
 convert gates fire from the same helpers; *NetSuite* — anchors fire from the same
 `queueNsAssemblyWorkOrder` calls at the same moments; **no new push, no changed payload**.
 
-### A2 — the route rule everywhere; the human push retired on your screens
+### A2 — everything auto-routes; RTG keeps the record (S3)
 
-Falls out of A1 for writers 1–7. Specifically verify, live, that after conversion:
+Falls out of A1 for work orders and A4 for purchase orders. The rule, in Stuart's words: *"all and
+any work order for raw stock (shop) or finishing, or a purchase order — they auto route, but RTG
+keeps record of all."* So after conversion, on your screens:
+
+- a **finishing** WO parks with `routeTo:'FINISHING'`, a complete `finPayload` and `autoFlow:true`
+  — RTG's auto-release takes it the moment its gates are clear; nobody presses Push to Finishing;
+- a **shop** WO (raw core, component mill, Library raw make-up) parks with `routeTo:'SHOP'` and
+  `autoFlow:true` — same; nobody presses Push to Shop;
+- a **purchase order** lands in the vendor's open PO (A4) and appears on RTG's PO panel at once;
+  the send to NetSuite is the one act a person does, after checking the vendor's minimum (S5);
+- the RTG board shows every one of them, with `source`, from the moment it exists.
+
+Verify, live, that after conversion:
 - a Library make-up of a finished item (`H1-138BF/EP1`-class, and a `/BS`-class) parks with
-  `routeTo` set and RTG's auto-release takes it — and the board no longer offers **Push to Shop** on it;
-- a Library make-up of a raw item routes SHOP and anchors at creation;
-- a Snapshot raw row still parks route-**stated** (`SHOP`), never route-open.
+  `routeTo` set and RTG's auto-release takes it — and the board no longer offers **Push to Shop**;
+- a Library make-up of a raw item routes SHOP, anchors at creation, and auto-releases;
+- a Snapshot raw row parks route-**stated** (`SHOP`), never route-open, and auto-releases;
+- a bought short from any screen appears in the vendor's open PO on RTG without a press.
 
 ### A3 — the plating triple: `issuePlatedDemand` + the BOM-core report
 
@@ -227,24 +271,37 @@ the items, NetSuite data gets fixed by a person.
 gets the same PO through the same outbox path; *finishing* sees nothing (correct — plated work
 never enters the spray queue).
 
-### A4 — one PO writer
+### A4 — one PO writer, and POs that open, accumulate, then send (S4, S5)
 
 New `Shared/purchaseOrders.js`. Move the six local helpers out of `StockViewTab.js:1596-1645`
 (`loadNsVendors`, `resolveVendorRec`, `resolveVendorByNsId`, `consensusVendorNsId`,
 `vendorSubsidiaryGap`, `poRateOf`) and add:
 
 ```js
-createPurchaseOrder({ vendorName | vendorNsId, lines:[{part, qty, reason}], brand, from, createdBy, soRef, soAppId, reqDate, note })
-→ { poId, rec, gap } | { skipped: reason }
+addToOpenPurchaseOrder({ vendorName | vendorNsId, lines:[{part, qty, reason, from}], brand, createdBy, soRef, soAppId, reqDate, note })
+→ { poId, created:boolean, rec, gap, lineCount } | { skipped: reason }
 ```
+- **finds the vendor's OPEN PO for this brand** (status `Approved` — the existing pre-queue state;
+  do not invent a new status unless RTG needs it, and then coordinate with B) and **appends** the
+  lines; creates one only if none is open. Stuart: *"purchase orders should open and items should
+  be added before final send, since many vendors have minimum orders."*
+- a line for a code already on the open PO from the same `soRef`/WO **adds to its quantity**, it
+  does not duplicate the row;
 - vendor by name **or** by `consensusVendorNsId` on every path (today only OE review does both);
-- `vendorSubsidiaryGap` checked on every path (today only the Snapshot) and stamped;
-- `source` on every PO (`'STOCKVIEW_PO_BUILDER' | 'SALES_SNAPSHOT' | 'OE_REVIEW' | 'PLATING'`);
-- `note` carried for the memo.
+- `vendorSubsidiaryGap` checked and stamped on every path (today only the Snapshot);
+- `source` per line (`from`) and on the PO (`'STOCKVIEW_PO_BUILDER' | 'SALES_SNAPSHOT' | 'OE_REVIEW' | 'PLATING' | 'STOCK_BUILD_NEEDS'`), `note` carried for the memo;
+- shows the vendor's minimum beside the running total **if** the record carries one
+  (`manufacturingSpecs.moq` / a vendor-level field — read what exists, do not add a sync).
 
-The three writers (`:609`, `:1681`, `:2511`) call it. **Hand-off to B:** RTG's push memo at
-`RTGDispatchTab.js:268` is hard-coded `"Stock replenishment … (Sales Snapshot)"`; it should read
-`po.note || po.source`. Five lines, their file.
+**BOTH asks (S4).** Before any of the three writers — or the pre-check, or the new board — turns a
+short on a BOTH-sourced assembly into a document, it asks **work order or purchase order**. The
+Snapshot's chooser (`17e1d27`, "BOTH always asks") is the model; make it one shared prompt
+component and use it everywhere.
+
+The three writers (`:609`, `:1681`, `:2511`) call `addToOpenPurchaseOrder`. **Hand-offs to B:**
+RTG's PO panel becomes the review-and-**send** surface: the open PO shows its lines, sources,
+running total and minimum; **Send** is the existing push (`RTGDispatchTab.js:244`), and the memo
+at `:268` reads `po.note || po.source` instead of the hard-coded Snapshot text. Their file.
 
 ### A5 — the "needs a PO" board for stock builds (Q8)
 
@@ -252,8 +309,9 @@ Today a bought component short on a grid or Snapshot order is a `BUY_NOTE` in a 
 visible and actionable, modelled on Order Entry Needs:
 - `executeMakeupActions` records each `BUY_NOTE` onto the WO doc as `buyNeeds:[{code, qty, vendorName, reason}]` (it already has the data at `finishedRunPrecheck.js:233`);
 - Stock View gains a **"Stock Build Needs"** view beside 🧾 Order Entry Needs: every live
-  `hq_work_orders` with `buyNeeds`, grouped by vendor, with one **Generate PO** action per vendor
-  that calls A4 and stamps `buyNeedsPoId` back on the WO;
+  `hq_work_orders` with `buyNeeds`, grouped by vendor, with one **Add to PO** action per vendor
+  that calls `addToOpenPurchaseOrder` (appending to the vendor's open PO, S5) and stamps
+  `buyNeedsPoId` back on the WO; a BOTH-sourced assembly on the board asks WO-or-PO first (S4);
 - a WO whose `buyNeeds` are all covered by a live PO reads as covered (same rule as OE Needs:
   closed/deleted POs do not count).
 
@@ -294,6 +352,9 @@ no order created after your conversions carries a blank `source`.
   `releaseFinWoToFloor`: B's. You park; RTG releases.
 - **No CPQ / Order Entry form work** (E), no floor screens (B, C), no WMS (D).
 - **No fixing in passing.** Something adjacent looks wrong → name it in your handoff, move on.
+- **No large code change where a tag would do (S1).** If a screen needs an item to behave
+  differently, propose the tag (name, values, where 4.5 and the card edit it) and the one read
+  site — not a new branch of routing logic.
 
 ---
 
@@ -351,3 +412,10 @@ When you stop, write `BRIEF_A_HANDOFF.md`: what shipped (commit, run, proof), wh
 on whom, the exact state of each writer in the §4 table, and anything adjacent you named and did
 not fix. Update `SYSTEM_FLOW_AUDIT.md` §2's table to the new state — that table is the shared
 truth every brief reads.
+
+**The guide (S2) — not optional.** Before the handoff, update the in-app User Guide
+(`src/components/HQ/UserGuideTab.js` — the Work Orders section, Stock View / Sales Snapshot /
+Master Library subsections, and the Purchase Orders text) and the repo guide it mirrors, so a
+team member reading the guide sees: orders route on their own and RTG records them; POs open and
+accumulate until sent; BOTH items ask; where the Stock Build Needs board is and what "covered"
+means; and the plated-item triple in plain words. List the sections touched in the handoff.
