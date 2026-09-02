@@ -23,7 +23,7 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 import RodPieceInventory, { RodCutPanel } from '../Shared/RodPieceInventory';
-import { shopDb, cleanId, SHOP_TABS } from './shopShared';
+import { shopDb, cleanId, SHOP_TABS, hqWorkOrderIdOf } from './shopShared';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
 // salesOrderId/orderKey but no soNum ("SO: undefined" on cards AND printed labels), and no
@@ -378,6 +378,24 @@ const ShopFloor = () => {
     // A hold lands on the ORDER's spine doc (shop_custom_orders) — the milling/schedule rows
     // walk back to it via sourceCustomOrderId so a stopped order stops on the machines too.
     const spineOf = (row) => row?.sourceCustomOrderId ? customOrdersRaw.find(o => o.id === row.sourceCustomOrderId) : null;
+
+    // THE MILLING PIPELINE TELLS THE RECORD WHAT IT MADE (Brief C · C2, 2026-09-02). RTG is the
+    // single source of truth, and until now the only thing a finished milling run told it was
+    // the spine's status — enough to clear the component gate, nothing about counts or failures.
+    // The stamp goes on the hq_work_orders doc behind the spine (hqWorkOrderIdOf — the writer's
+    // own id convention). D's root-build automation reads millGoodQty + nsWoId from that record;
+    // the shop never posts the NetSuite build itself. Never throws: a stamp that fails must not
+    // stop the run from finalizing on the floor.
+    const stampMillRecord = async (row, patch) => {
+        const hqId = hqWorkOrderIdOf(spineOf(row));
+        if (!hqId) return null;
+        try {
+            const snap = await getDoc(doc(db, 'hq_work_orders', hqId));
+            if (!snap.exists()) { console.warn('mill record stamp: no hq_work_orders doc for', hqId); return null; }
+            await updateDoc(doc(db, 'hq_work_orders', hqId), patch);
+            return hqId;
+        } catch (e) { console.warn('mill record stamp failed:', hqId, e); return null; }
+    };
     const heldGuard = (row) => {
         const spine = spineOf(row);
         if (spine && isHeld(spine)) {
@@ -587,13 +605,27 @@ const ShopFloor = () => {
                 const nextOp = routing.ops[nextIndex];
                 await addDoc(shopDb.collection("schedule"), { routingId: task.routingId, currentOpIndex: nextIndex, op: '', mach: nextOp.machine, prog: nextOp.progId, woNum: task.woNum, targetQty: grandTotalGood, reqDate: task.reqDate, notes: task.notes, customFileUrl: task.customFileUrl, phosphate: task.phosphate, orderKey: task.orderKey || null, sourceCustomOrderId: task.sourceCustomOrderId || null, itemCode: task.itemCode || null, status: "Pending", totalPausedMs: 0, partialGoodQty: 0, t: serverTimestamp() });
                 writeLog(`Spawned OP ${nextIndex + 1} for ${task.woNum}`, 'production');
+            } else if (grandTotalGood <= 0) {
+                // Nothing came off this op. No next op is spawned, and the spine must NOT read
+                // Completed — RTG's component gate would clear and release a parent whose
+                // components do not exist (it did exactly that on a zero-good last op before).
+                // The record says why the order stopped instead.
+                await stampMillRecord(task, { floorPhase: 'Failed', floorUpdatedAt: Date.now(), millFailReason: `No good pieces on OP ${task.currentOpIndex + 1}`, millFailedOp: task.currentOpIndex + 1, millFailedAt: Date.now(), millFailedBy: user.name });
             } else if (!hasNextOp && task.sourceCustomOrderId) {
                 // Last op done → the order's spine doc (shop_custom_orders) completes. Before the
                 // intake stamped instead of deleting, there was no spine left to tell.
                 await updateDoc(doc(db, "shop_custom_orders", task.sourceCustomOrderId), {
                     status: 'Completed', completedAt: serverTimestamp(), completedBy: user.name, updatedAt: serverTimestamp()
                 }).catch(e => console.warn('spine completion stamp failed:', e));
+                // C2: RTG's board shows "built 18 / 20", not only "gate clear"; millScrapQty is
+                // this finalize's scrap (earlier shifts log good counts only).
+                await stampMillRecord(task, { floorPhase: 'Complete', floorCompletedAt: Date.now(), floorCompletedBy: user.name, millGoodQty: grandTotalGood, millScrapQty: sQty, millCompletedAt: Date.now(), millCompletedBy: user.name });
             }
+        } else {
+            // A failed op leaves the order stuck in the shop — the record says why, so RTG and
+            // Where-is-it can explain it. The spine is untouched: the operator re-runs the op or
+            // management re-issues from RTG.
+            await stampMillRecord(task, { floorPhase: 'Failed', floorUpdatedAt: Date.now(), millFailReason: [qcForm.failReason, qcForm.failNotes].filter(Boolean).join(' — '), millFailedOp: task.currentOpIndex + 1, millFailedAt: Date.now(), millFailedBy: user.name });
         }
         writeLog(`Run finalized: OP ${task.currentOpIndex + 1} of ${task.routingId}`, 'production'); setActiveModal(null);
     };

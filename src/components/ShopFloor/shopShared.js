@@ -9,6 +9,15 @@ export const shopDb = { collection: (colName) => collection(db, colName.startsWi
 
 export const cleanId = (s1, s2) => `${s1}_${s2}`.replace(/[^a-zA-Z0-9]/g, "_");
 
+// The hq_work_orders record behind a shop spine doc, by the WRITER's own convention: RTG's
+// pushToShop names the shop doc `SHOP-<hq work order id>` and RTG's component gate reads
+// `SHOP-<cid>` straight back. Read, never inferred — the spine's orderKey is NOT that id (the
+// stock writers set it to the library part's id), which is why a key walk finds no parent here.
+export const hqWorkOrderIdOf = (spine) => {
+    const id = String(spine?.id || '');
+    return id.startsWith('SHOP-') && id.length > 5 ? id.slice(5) : null;
+};
+
 // The full tab list, in nav order. AdminTab's per-role permissions editor renders this same list.
 // ('admin' displays as MACHINE CONFIG on the floor.)
 export const SHOP_TABS = ['floor', 'milling', 'scheduler', 'custom', 'logs', 'export', 'routings', 'programs', 'tooling', 'messaging', 'reports', 'livio', 'assets', 'app imp', 'admin'];
