@@ -383,7 +383,9 @@ Every question answered. Recorded verbatim in intent; the code consequence follo
 | **C. Shop Floor** | `ShopFloor/*`, `pushToShop` payload contract (with B), plating hand-off | P0 #3 (shop side), Q2 Q7 | RTG release logic (B) |
 | **D. WMS** | `PickPack/*`, `functions/index.js` `onStockBuildDone` + fulfilment, `nsOutbox.js`, convert/rod-cut/plating gates, `rodPieces*.js` | P0 #2 (once Eric answers), #3 (receipt), #4, fulfilment queue | — |
 | **E. CPQ + Vision + Order Entry (sales side)** | `CPQTab.js`, `VisionHardware.js`, `visionBridge.js`, `QuickShipTab.js`, `ExternalCoopTab.js` (SO surfaces), `nsTransmit.js`, `hardwareHandoff.js`, `lineClassification.js` | P2 #14, Q6 Q9 Q10 Q12 | RTG, floors |
-| **F. Kits + Spec Sheets** | `kitSeed.js`, `kitCode.js`, `HardwareConfigurator.js` (kit mount), `CustomerCollectionsTab.js` (4.6 kits), `SpecSheet/*` | own backlogs (`KIT_CPQ_ALIGNMENT_BRIEF.md`, `SPEC_SHEET_HANDOFF_BRIEF.md`, spec-sheet memory) | the sales spine (E) |
+| **F. The tag engine + Kits + Spec Sheets + 1.6** | `hardwareModel.js`, `hardwareAdapter.js`, `hardwarePricing.js`, `HardwareConfigurator.js`, `assemblyTags.js`, `traverse*.js`, `sizeMatrix.js`, `plateRules.js`, `kitSeed.js`, `kitCode.js`, `CustomerCollectionsTab.js` (4.6), `SpecSheet/*`, `AssemblyBuilderTab.js` (1.6), `NodeClusterTab.js`, the flow generator in `AdminTab.js`, `studioScene.js`, `GuideBuilder.js` | own backlogs — `KIT_CPQ_ALIGNMENT_BRIEF.md`, `ENGINE_CHECKOUT_BRIEF.md` §3 ①, `TRAVERSE_HANDOFF_BRIEF.md`, the spec-sheet memory (trusted over its brief), `engine-cutover-backlog` | the sales spine (E) — F produces a correct cart item; `hardwareHandoff.js` is E's |
+
+**All six briefs are written (2026-09-02):** `BRIEF_A_WO_PO_CREATION.md`, `BRIEF_B_RTG_FINISHING.md`, `BRIEF_C_SHOP_FLOOR.md`, `BRIEF_D_WMS.md`, `BRIEF_E_SALES_SIDE.md`, `BRIEF_F_KITS_SPEC_SHEETS.md`. The standing rules S1–S5 sit at the top of A and are quoted in each.
 
 `Shared/` modules that more than one brief reads are **owned by one and read-only to the rest**,
 named per module in each brief. That rule exists (`CROSS_SESSION_CONTRACT.md`) and is the reason
