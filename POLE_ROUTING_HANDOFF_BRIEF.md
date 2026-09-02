@@ -1,65 +1,56 @@
 # Pole routing — handoff, 2026-09-01
 
-**Stuart is picking up here.** One shipped rule is WRONG and is actively doing damage on every
-sync. Everything else in this brief is context around that.
+**Updated 2026-09-01 evening.** The rule this brief was written to flag is now FIXED — §1 records
+what it actually turned out to be, because the answer is not what either of my two attempts said.
+Sections 2–6 are unchanged context; §4 (fulfillments) is still open and still needs Eric.
 
 ---
 
-## 1. ⛔ THE THING TO FIX FIRST — my rule is wrong
+## 1. ✅ RESOLVED — the handling rule, and what it actually is
 
-**Stuart, 2026-09-01:**
-> "that force should not have forced the change to custom (they should have stayed small parts to
-> stay in finishing), custom drives poles to shop floor, it should have updated the tag finish
-> stream to Poles finish like a pole"
+**Status 2026-09-01 evening: fixed by Stuart with another session (`0615687`, `25a25d9`).
+Nothing to do here. Verified against the repo before this section was rewritten.**
 
-### What the correct state looks like
-`HCUMP810/BL` — his screenshot, the reference:
+I had this section telling you to "delete `autoPartHandlingFor` and never touch partHandling".
+That was my correction to my own bug and it was still not the rule. Stuart's real rule is narrower
+and better:
 
-| field | value |
-|---|---|
-| PROD TYPE | `POLE` |
-| **PART HANDLING** | **`SMALL PARTS`** ← keeps it in FINISHING |
-| **FINISH STREAM** | **`POLES — finish like a pole (-P recipe)`** |
+### The rule — the FINISH SUFFIX decides handling
 
-### What I shipped instead
-`Shared/poleCut.js:113`:
+| item code | handling | why |
+|---|---|---|
+| mill code, no suffix | `Custom` | nothing applied yet — the shop makes it |
+| `/P` `/P01` `/P25` `/EP*` `/MEP*` | `Custom` | a finish is APPLIED to it |
+| `/BS` `/N90` `/CP` | `Small Parts` | a complete stocked assembly — stays in finishing |
+
+Finish stream is `POLES` either way. **`isStocked` plays no part in it** — that was my invention,
+twice over (first as `isStocked ? Small Parts : Custom`, then as "leave handling alone").
+
+Lives in `Shared/finishRouting.js` as `handlingForErp` / `isAppliedFinishCode`, reusing the existing
+`isOutsourcedFinishCode` so the EP grammar has ONE definition. `autoPartHandlingFor` is deleted;
+only a tombstone comment remains in `poleCut.js:109`.
+
+### A SIXTH copy of the pole test — the one my sweep missed
+`8f4e709` swept five. There was a sixth, in **`StockViewTab.pullNetSuiteStock`** (~:420) — a
+*separate* NetSuite importer with its own copy of both the pole test AND the handling rule:
+
 ```js
-export const autoPartHandlingFor = (productType, isStocked) =>
-    isPoleCategory(productType) ? (isStocked ? 'Small Parts' : 'Custom') : 'Small Parts';
+const isPoleOrLinear = pTypeClean === 'pole' || pTypeClean === 'poles' || uom ft…   // no ROD
+const autoPartHandling = isPoleOrLinear ? 'Custom' : 'Small Parts';                 // every pole
 ```
 
-I invented the `isStocked ? 'Small Parts' : 'Custom'` branch. Stuart's original words were *"they
-need to be tagged small parts in the parts handling as these are stocked poles and do not require
-custom"* — I read "stocked poles → Small Parts" as implying "unstocked poles → Custom". **He never
-said that, and it is wrong: `Custom` routes a pole to the SHOP FLOOR instead of finishing.**
+That is how a **stocked** `/BS` pole arrived from NetSuite already routed to the shop floor. Fixed
+in `25a25d9`. My sweep looked for writers of finishing work orders and missed an *importer* that
+writes the routing fields — worth remembering as the shape of the gap, not just the instance.
 
-### The correct rule
-**The pole auto-rule must not touch `partHandling` at all.** It sets the finish stream and nothing
-else. Handling is a human's call and already correct on these items.
+### The re-flip is closed too
+The sync now **fills the blank only** on a pole's handling — `existingAppRecord…partHandling ||
+handlingForErp(...)`. A hand-set value survives every pull. Stuart: *"these rules cover 90%, the
+rest we will do by hand"* — and the old rule re-deriving it every time is exactly what kept
+re-flipping `HCUMP810/BS` after it had been put right.
 
-Concretely:
-- `autoPartHandlingFor` should be **deleted**, and both call sites stop setting handling:
-  - `NetSuiteSyncTab.js:540` — the 🪝 Force Pole / Rod Tags backfill
-  - `NetSuiteSyncTab.js:975` — the Master Library sync's per-item stamp
-- `autoFinishStream` (POLES for any pole/rod category) is CORRECT and stays.
-
-### ⚠ Live damage — two items are wrong right now
-The force fix ran **2026-09-01 15:11** and flipped these to `Custom`. They must go back to
-`Small Parts` (Master Library → the part → PART HANDLING):
-
-```
-HCUMP810/BS      (Pole) — handling SMALL PARTS → Custom     ← revert to Small Parts
-HRW-138TRAV12    (Pole) — handling Small Parts → Custom     ← revert to Small Parts
-```
-
-**And it will keep happening.** `NetSuiteSyncTab.js:975` runs on EVERY Master Library sync, so any
-pole/rod not flagged stocked gets flipped to Custom again on the next pull. Fix the code before the
-next sync, or the two reverts above will simply undo themselves.
-
-*(Side note, not a bug: those two items being treated as "not stocked" is itself worth a look —
-`specs.isStocked` is false on them. Irrelevant once handling is left alone.)*
-
----
+`HCUMP810/BS` and `HRW-138TRAV12` are back to `Small Parts`. Stuart re-ran the force fix; poles
+look good.
 
 ## 2. What that same 3:11 PM run got RIGHT — don't undo it
 
@@ -85,14 +76,20 @@ small parts. It could never complete. That order is now repaired.
 | commit | what |
 |---|---|
 | `00b26f3` | **Sandra's fix.** Stock View grid + RTG release now stamp `poles`/`totalPoles` and leave sled sizes null for pole/rod items. RTG was the only release path that never asked "is this a pole?" — `poles:` did not appear in that file. |
-| `8f4e709` | **The sweep.** Five remaining local copies of the pole test (StockView ×2, QuickShip ×2, PickPack ×1) now call `isPoleCategory`. Zero local copies remain in any WO-writing path. |
-| `ce34fe1` | Pole tags: `autoFinishStream` + the force-fix button + Setup Queue/ActiveFloor/sync all using one category test. **Contains the bad `autoPartHandlingFor` — see §1.** |
+| `8f4e709` | **The sweep.** Five local copies of the pole test (StockView ×2, QuickShip ×2, PickPack ×1) now call `isPoleCategory`. **Incomplete — a sixth lived in an IMPORTER, not a writer; see §1.** |
+| `ce34fe1` | Pole tags: `autoFinishStream` + the force-fix button + Setup Queue/ActiveFloor/sync all using one category test. Carried the bad `autoPartHandlingFor`, since removed in `0615687` — see §1. |
 | `b0a7d9b` | 14.5 pillow folders: separator optional (Ashley's `Dalton27P23x23`), filename as second witness. |
 | `d07019c` | 14.5: `: _ / -` and space all skipped as separators. |
 | `ba96e33` | 14.5: surfaces library read/write permission failures instead of blaming the folder name. |
 | `7e43b6a` | Photo beats `.glb` render beats inherited stand-in; legacy renders classified by their `auto_thumbs/` storage path. |
 | `48d0230` | 14.5 imports stamp the item directly; one shared gallery matcher. |
 | `7bed796` | User Guide gains a "Working on the App" section. |
+
+**Landed by Stuart + another session after the above** — `0615687` (suffix decides handling),
+`25a25d9` (the sixth copy, in `pullNetSuiteStock`), `3f6a953` + `b531f53` (Order Entry pair:
+`pushToShop` resolves the order type instead of assuming 'stock', and passes `finSiblingId` through
+so the sibling release stops no-oping). My pole-aware `finPayload` branch in RTGDispatchTab is
+untouched by those.
 
 **Deliberately NOT touched** (named, not fixed): the tag classifiers in BOMTab, AdminTab,
 NodeClusterTab, VisionHardware, tagSheetImport — they sort parts into BACKPLATE/BRACKET/FINIAL/
@@ -162,6 +159,12 @@ The Setup Queue's copy could not see a `ROD` (Grace, WO11485/11486). RTG had no 
 `Shared/poleCut.js → isPoleCategory` is the one answer. Category only — `POLE`/`ROD` — never the
 finish stream, never the code grammar.
 
-**And §1 is the same failure in a different costume:** I derived a routing rule from an
-adjacent sentence rather than asking. `autoFinishStream` answers a question Stuart actually asked.
-`autoPartHandlingFor` answers one he did not.
+**And §1 was the same failure in a different costume, twice.** I derived a routing rule from an
+adjacent sentence rather than asking — `isStocked ? 'Small Parts' : 'Custom'` — and when that was
+caught, my proposed correction ("never touch handling") was ALSO a guess. The real rule was a third
+thing: the finish suffix decides. `autoFinishStream` answered a question Stuart actually asked;
+everything I built around handling answered one he did not.
+
+The sixth copy in `pullNetSuiteStock` says something about the sweep, too: I swept the WRITERS of
+finishing work orders and missed an IMPORTER that writes the same routing fields. "Every place that
+decides X" has to mean every place, not every place of the kind I was already looking at.
