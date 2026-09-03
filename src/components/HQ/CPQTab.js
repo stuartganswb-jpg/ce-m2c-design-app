@@ -17,6 +17,7 @@ import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
+import { soHeaderOf, stampLineFinishRouting, readyDateOf, leadText, isRushFeeItem } from '../Shared/salesOrderHeader';
 import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds, Html } from '@react-three/drei';
@@ -678,6 +679,11 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // the quote/SO/packing-slip HEADER (job.sidemark + the NetSuite estimate memo). Distinct from
       // the per-LINE tag (lineTag below) that names each configuration ("Living Room").
       sidemark: '',
+      // THE ONE HEADER (Brief E, 2026-09-03): the customer's need-by date and the production
+      // notes ride the job and the sales order under the same names Order Entry uses
+      // (Shared/salesOrderHeader). A blank need-by is '' — never invented.
+      needBy: '',
+      productionNotes: '',
       shippingMethod: 'SAVED',
       shippingAddressId: '',
       shippingAmount: '',
@@ -840,6 +846,8 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                       sidemark: reopen.sidemark || '',
                       poNumber: reopen.poNumber || '',
                       internalMemo: reopen.internalMemo || '',
+                      needBy: reopen.needBy || '',
+                      productionNotes: reopen.productionNotes || '',
                       shippingMethod: reopen.shippingMethod || 'SAVED',
                       shippingAddressId: reopen.shippingAddressId || '',
                       shippingAmount: reopen.shippingAmount || '',
@@ -1015,6 +1023,18 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       const seen = new Set(checkout.map(e => e.id));
       return [...checkout, ...fees.filter(e => !seen.has(e.id))];
   }, [libraryParts, addOnCustomer, jobData.customerId, priceLevel, outsourceFinishes, flowCollections, cpqFlows, activeFlowId]);
+
+  // ── THE READY DATE (Stuart 2026-09-03) ───────────────────────────────────────────────────
+  // What the finish class promises: painted 4 weeks, plated 6; the Rush fee at checkout shortens
+  // them to 2 and 4. Read off the cart's finish codes and the ticked add-ons — the same two
+  // things finalize stamps on the job and the SO (Shared/salesOrderHeader.readyDateOf), so the
+  // panel and the paperwork can never say different dates.
+  const cartFinishCodes = useCallback((items) => [
+      ...(items || []).flatMap(it => (it && it.finishes) || []).map(f => f && f.code),
+      ...(items || []).flatMap(it => (it && it.pricingBreakdown) || []).map(l => l && l.finishCode),
+  ].filter(Boolean), []);
+  const rushTicked = useCallback((sel) => Object.entries(sel || {}).some(([id, v]) => v && isRushFeeItem(libraryParts.find(p => p.id === id))), [libraryParts]);
+  const leadPreview = useMemo(() => readyDateOf({ codes: cartFinishCodes(cart), rush: rushTicked(addOnSel) }), [cart, addOnSel, cartFinishCodes, rushTicked]);
 
   // TRADE DISCOUNT (customer's CRM discountCode, e.g. D20 = less 20%). Applies per cart item,
   // AFTER the full pricing chain, display-side only: STANDARD-level items only (Fabricut levels
@@ -2800,6 +2820,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
       // The cart survives (localStorage draft / Resume Draft); offline or local dev never blocks.
       if (!(await assertFreshBundle(saveAs === 'SALES_ORDER' ? 'save the sales order' : 'save the quote'))) return;
 
+      // ── THE PROMISE, BEFORE THE SAVE (Stuart 2026-09-03) ──────────────────────────────────
+      // The ready date follows the finish class (painted 4 wk / plated 6 wk; Rush fee → 2 / 4).
+      // A need-by earlier than the ready date without the Rush fee is a promise the floor cannot
+      // keep — say so here, while the fee can still be added, rather than on the floor.
+      const rushApplied = rushTicked(addOnSel);
+      const lead = readyDateOf({ codes: cartFinishCodes(cart), rush: rushApplied });
+      const needByTyped = String(jobData.needBy || '').trim();
+      if (needByTyped && lead.readyDate && needByTyped < lead.readyDate && !rushApplied) {
+          if (!window.confirm(`⚠ Need-by ${needByTyped} is BEFORE the ready date ${lead.readyDate} (${lead.leadWeeks} weeks for a ${lead.leadBasis === 'PLATED' ? 'plated' : 'painted'} finish).\n\nTo shorten it, add the Rush fee under Add-ons & fees (then ${lead.leadBasis === 'PLATED' ? 4 : 2} weeks).\n\nSave anyway with the need-by as typed?`)) return;
+      }
+
       const targetJobId = cart[0].masterQuoteId || activeMasterQuoteId || `QUOTE-${Date.now()}`;
       const customerName = combinedCustomers.find(c => c.id === jobData.customerId)?.name || jobData.customerId;
 
@@ -2876,6 +2907,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                   clientSku: line.clientSku || null,
                   isFee: !!line.isFee,
                   isSizeRow: !!line.isSizeRow,
+                  // The finish THIS line wears (the TAGS engine writes it per line) — carried so
+                  // the split, the pick list and the plating gate read it off cpqData.breakdown
+                  // without going back to the cart item. Absent = the line wears nothing (mill).
+                  ...(line.finishCode ? { finishCode: line.finishCode, finishLabel: line.finishLabel || line.finishCode } : {}),
                   // Per-foot stamps must survive the merge: money documents multiply qty by the
                   // feet, and the NetSuite push consumes rod stock by the foot off these two.
                   ...(line.perFoot ? { perFoot: true, feet: Number(line.feet) || 0 } : {}),
@@ -2953,16 +2988,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           // Shipping charge rides OUTSIDE cpqData.totalPrice: the push writes it to the NetSuite
           // estimate header (shippingcost), never a line — keeps the rollup balance math intact.
           shippingAmount: parseFloat(jobData.shippingAmount) || 0,
+          // THE ONE HEADER (Brief E, Q9): the customer's date and the production notes, under the
+          // names Order Entry already uses; the ready date the finish class promises (Q1 answer,
+          // 2026-09-03). Written every save — a cleared date is a cleared date.
+          needBy: needByTyped,
+          productionNotes: String(jobData.productionNotes || '').trim(),
+          leadBasis: lead.leadBasis, leadWeeks: lead.leadWeeks, readyDate: lead.readyDate, rushApplied,
 
           // fsSafe hardens the whole blob — Vision-derived fields can carry undefined / NaN / nested
           // arrays that Firestore rejects ("cpqData contains an invalid nested entity").
           cpqData: fsSafe({
               totalPrice: grandTotal,
               appliedRules: engineFlags.warnings,
-              breakdown: mergedBreakdown,
+              // finishOutsourced on every line that carries a finish (Q10 / B §8 answer 2): the
+              // one shared test, so the split can drop the finishing doc for a plated line and
+              // the WMS label can say FROM PLATING — without a local regex anywhere.
+              breakdown: stampLineFinishRouting(mergedBreakdown, outsourceFinishes),
               // tradeDiscount stamped per item (always set, so a re-finalize after the code
               // changed can't keep a stale stamp). finalPrice stays GROSS per-unit; net derives.
-              cartItems: cart.map(it => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null })),
+              cartItems: cart.map(it => ({ ...it, tradeDiscount: tradeDiscountFor(it) || null, pricingBreakdown: stampLineFinishRouting(it.pricingBreakdown || [], outsourceFinishes) })),
               // Consumed by ERPPushPullTab to map lines -> physical NetSuite inventory.
               configuration: mergedConfiguration,
               quantities: mergedQuantities,
@@ -2972,6 +3016,17 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           dispatchStatus: { nsSalesOrder: false, fabrication: false, finishing: false, sewing: false, packing: false },
           dateSaved: new Date().toISOString().split('T')[0], author: currentUser, createdAt: serverTimestamp()
       };
+
+      // ── THE FINISH, STAMPED AT SAVE (Q10) + THE ONE SO HEADER (Q9) ───────────────────────
+      // RTG's five-source recipe scan now runs HERE, once, and the answer rides the job and the
+      // sales order (recipe = a code, recipeLabel = the words, recipeSource = which source hit,
+      // or 'none' so PENDING-RECIPE explains itself). B's release reads so.recipe first.
+      const soHeader = soHeaderOf({
+          door: 'CPQ', job: { ...payload, id: targetJobId },
+          customer: combinedCustomers.find(c => c.id === jobData.customerId) || { id: jobData.customerId, name: customerName },
+          finishes: [...globalFinishes, ...outsourceFinishes], outsourceFinishes, by: currentUser || '',
+      });
+      Object.assign(payload, { recipe: soHeader.recipe, recipeLabel: soHeader.recipeLabel, recipeSource: soHeader.recipeSource, recipes: soHeader.recipes });
 
       // Silent safety net: warn only if a Firestore-unsafe value ever slips past fsSafe (no console spam).
       const _viol = findFsViolation(payload.cpqData, 'cpqData') || findFsViolation(payload.engineeringNotes, 'engineeringNotes');
@@ -3007,13 +3062,16 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               const jobForTx = { ...payload, id: targetJobId };
               if (saveAs === 'SALES_ORDER') {
                   const soDocId = `SO-APP-${String(mintedQuoteNo || payload.quoteNo || targetJobId).replace(/[^A-Za-z0-9-]/g, '')}`;
+                  // ONE header, whichever door (Shared/salesOrderHeader): customer, PO, sidemark,
+                  // needBy (the customer's date or '' — the +14-day fiction is gone), ready date,
+                  // shipTo, production notes, the stamped recipe. reqDate / needByDate ride as
+                  // aliases for one release while RTG / WMS / Order Entry Needs switch readers.
                   await setDoc(doc(db, 'hq_sales_orders', soDocId), {
-                      id: soDocId, soId: soDocId, appCreated: true, brand: activeBrand,
-                      customer: customerName, status: 'Approved', type: 'Custom',
-                      hqJobId: targetJobId, memo: payload.sidemark || payload.jobName || '',
-                      recipe: 'PENDING-RECIPE', totalParts: 1, length: 0, width: 0, height: 0,
-                      reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-                      createdAt: Date.now(), createdBy: currentUser || ''
+                      id: soDocId, soId: soDocId, brand: activeBrand,
+                      status: 'Approved', type: 'Custom',
+                      ...soHeader,
+                      totalParts: 1, length: 0, width: 0, height: 0,
+                      createdAt: Date.now(),
                   }, { merge: true });
                   const res = await queueNsTransaction({
                       job: jobForTx, asType: 'salesorder', brand: activeBrand, data: txData, ctx,
@@ -3074,7 +3132,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           localStorage.removeItem('hq_global_cart');
           localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote');
           setShowCheckoutModal(false);
-          setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
+          setJobData({ customerId: '', jobName: '', sidemark: '', needBy: '', productionNotes: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } });
           setActiveMasterQuoteId(null);
 
       } catch (err) { 
@@ -4140,7 +4198,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                 Checkout ({cart.length} Items)
             </button>
             <button onClick={() => setShowCloneModal(true)} style={{ padding: '16px 24px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>Resume Draft</button>
-            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setLineTag(''); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
+            <button onClick={() => { setActiveFlowId(""); setDynamicConfigParams({}); setStepQuantities({}); setDimensionInputs({}); setCurrentStepIndex(0); setActiveAssemblyId(""); setProductType(""); setActiveDraftId(null); setActiveDraftSvg(null); setLineTag(''); setCart([]); localStorage.removeItem('hq_global_cart'); localStorage.removeItem('hq_active_quote_session'); localStorage.removeItem('hq_reopen_quote'); setAssemblyQty(1); setActiveMasterQuoteId(null); setJobData({ customerId: '', jobName: '', sidemark: '', needBy: '', productionNotes: '', shippingMethod: 'SAVED', shippingAddressId: '', shippingAmount: '', customShippingAddress: { attention: '', addressee: '', addr1: '', addr2: '', city: '', state: '', zip: '', country: 'US' } }); }} style={{ padding: '16px 24px', background: 'transparent', color: 'var(--ink-soft)', border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'all 0.2s' }} onMouseOver={e => e.currentTarget.style.color='var(--ink)'} onMouseOut={e => e.currentTarget.style.color='var(--ink-soft)'}>Clear All</button>
         </div>
       </div>
 
@@ -5338,6 +5396,28 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                 title="Pushes to NetSuite's Internal Memo (custbody_bit_internalmemo). Never prints on customer documents."
                                 style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
                         </div>
+                    </div>
+
+                    {/* NEED-BY + PRODUCTION NOTES (Brief E, 2026-09-03): the same two fields Order
+                        Entry carries, so both doors write one header. The ready date beneath is what
+                        the finish class promises; the Rush fee below shortens it. */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+                        <div>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Need-by date (customer's, optional)</label>
+                            <input type="date" value={jobData.needBy || ''} onChange={e => setJobData({...jobData, needBy: e.target.value})}
+                                title="The date the customer asked for. Rides the sales order, the RTG board and every work order this order fires. Leave blank if none was given — the app never invents one."
+                                style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: `1px solid ${jobData.needBy && leadPreview.readyDate && jobData.needBy < leadPreview.readyDate && !leadPreview.rushApplied ? '#d9534f' : 'var(--line)'}`, outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
+                        </div>
+                        <div>
+                            <label style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', display: 'block', marginBottom: '8px' }}>Production notes (rides to the floor, optional)</label>
+                            <input type="text" placeholder="e.g. match sample on file · ship complete" value={jobData.productionNotes || ''} onChange={e => setJobData({...jobData, productionNotes: e.target.value})}
+                                title="Read by the finishing floor, the shop and the pack station. Never prints on customer documents."
+                                style={{ width: '100%', padding: '12px', fontFamily: 'var(--sans)', fontSize: '1rem', border: '1px solid var(--line)', outline: 'none', boxSizing: 'border-box', background: '#fff' }} />
+                        </div>
+                    </div>
+                    <div style={{ marginTop: '10px', fontFamily: 'var(--mono)', fontSize: '11px', letterSpacing: '.03em', color: leadPreview.leadBasis ? 'var(--ink)' : 'var(--ink-soft)' }}>
+                        🗓 {leadText(leadPreview)}
+                        {jobData.needBy && leadPreview.readyDate && jobData.needBy < leadPreview.readyDate && !leadPreview.rushApplied ? <span style={{ color: '#d9534f' }}> ⚠ Need-by {jobData.needBy} is before the ready date.</span> : null}
                     </div>
 
                     {/* ADD-ONS — the last step before committing. Fees that nobody wants to model as

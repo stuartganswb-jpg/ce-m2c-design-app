@@ -65,6 +65,10 @@ export const reopenQuoteInCpq = (job) => {
                 sidemark: job.orderSidemark || '',
                 poNumber: job.poNumber || '',
                 internalMemo: job.internalMemo || '',
+                // The one header's two sales-side fields (Brief E): a quote saved before they
+                // existed reopens blank — never with an invented date.
+                needBy: job.needBy || '',
+                productionNotes: job.productionNotes || '',
                 // Portal checkout add-ons → CPQ's AddOnPicker selections (keyed by part doc id,
                 // the same key addOnSel uses), so staff land at checkout with the customer's
                 // picks already ticked instead of re-reading them from the request panel.
