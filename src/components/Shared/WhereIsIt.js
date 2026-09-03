@@ -25,6 +25,7 @@ const NEXT_MOVE = {
     SETUP: 'Stage it to the floor and start the first coat.',
     PAINTING: 'Finish the coat, then press the coat advance — that is what moves it on.',
     OVEN: 'The bake finishes, then stop the step and advance the coat.',
+    PLATING: 'The plater returns the parts — the WMS Plating receipt marks them complete, then pack.',
     FINISHED: 'WMS picks it.',
     PICKING: 'Pick the lines, then scan the labels to stage it.',
     PICKED: 'Scan both labels at the Staging Handshake.',

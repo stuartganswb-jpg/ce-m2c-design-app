@@ -23,6 +23,9 @@
 export const STAGES = {
     RELEASED: { rank: 10, label: 'Released', hint: 'Dispatched — not started' },
     SHOP: { rank: 20, label: 'Shop', hint: 'Custom fabrication in progress' },
+    // 'Sent to Plating' (Brief B5, Stuart 2026-09-02): the custom half is OUT at the plater. It is
+    // past the shop and nowhere near packable — the pack gate waits on it (customPartsReady).
+    PLATING: { rank: 25, label: 'At the plater', hint: 'Custom parts out at the plater — not ready to pack' },
     SETUP: { rank: 30, label: 'Setup queue', hint: 'On the floor, not started' },
     PAINTING: { rank: 40, label: 'Painting', hint: 'Being sprayed or hand finished' },
     OVEN: { rank: 45, label: 'In oven', hint: 'Baking' },
@@ -44,11 +47,34 @@ export const stageTone = (code) => {
     if (code === 'CLOSED') return '#9b968c';
     if (code === 'SHELVED' || code === 'SHIPPED' || code === 'PACKED') return '#3a7d44';
     if (code === 'FINISHED' || code === 'PICKED' || code === 'STAGED') return '#3f7fc4';
-    if (code === 'PAINTING' || code === 'OVEN' || code === 'SHOP') return '#b08d57';
+    if (code === 'PAINTING' || code === 'OVEN' || code === 'SHOP' || code === 'PLATING') return '#b08d57';
     return '#524e46';
 };
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
+// ── THE CUSTOM HALF (customFabStatus) ────────────────────────────────────────────────────────
+// Four states, set by the shop and the WMS, mirrored onto the fin doc by workOrderContract's
+// mirrorCustomStatusToSibling (which also stamps customFabAt):
+//   'Pending'          nothing started
+//   'In Process'       the shop operator pressed START (this releases the small-parts pick)
+//   'Sent to Plating'  shop complete, parts OUT at the plater (C stamps it at Complete & Label)
+//   'Complete'         parts here and finished — the WMS receipt stamps it for plated orders
+// The PACK GATE is the reason the third state exists: a plated custom order used to read
+// 'Complete' the moment the shop finished, so the small parts could be packed while the poles
+// were at the plater (audit P0 #3). Every reader of "may this be packed?" asks customPartsReady.
+const shortDate = (ms) => {
+    const t = typeof ms === 'object' && ms && ms.toMillis ? ms.toMillis() : Number(ms);
+    return Number.isFinite(t) && t > 0 ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+};
+export const customPartsReady = (wo) => !wo || !wo.hasCustomSibling || wo.customFabStatus === 'Complete';
+// The words, once — the Setup Queue chip, the shop card and RTG all say the same thing.
+export const customFabLabel = (wo) => {
+    const cf = (wo && wo.customFabStatus) || 'Pending';
+    if (cf !== 'Sent to Plating') return cf;
+    const d = shortDate(wo.customFabAt);
+    return d ? `At the plater since ${d}` : 'At the plater';
+};
 const hasPoles = (wo) => num(wo?.totalPoles) > 0 || num(wo?.poles?.qty) > 0 || wo?.type === 'Poles';
 const TASK_LABEL = { spinSetup: 'sled setup', spinSpray: 'spray', spinBake: 'bake', poleSpray: 'pole spray', poleBake: 'pole bake', hand: 'hand finish' };
 
@@ -137,8 +163,11 @@ export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
     // CUSTOM SHOP runs alongside finishing on orders that have a shop sibling — the half that most
     // often holds an order up while the small parts look finished.
     if (wo.hasCustomSibling) {
-        streams.push(wo.customFabStatus === 'Complete'
+        const cf = wo.customFabStatus;
+        streams.push(cf === 'Complete'
             ? { key: 'CUSTOM', label: 'Custom shop', stage: 'FINISHED', detail: 'fabrication done' }
+            : cf === 'Sent to Plating'
+            ? { key: 'CUSTOM', label: 'Custom shop', stage: 'PLATING', detail: shortDate(wo.customFabAt) ? `since ${shortDate(wo.customFabAt)}` : '', since: wo.customFabAt || null }
             : { key: 'CUSTOM', label: 'Custom shop', stage: 'SHOP', detail: 'fabricating' });
     }
 
@@ -167,3 +196,4 @@ export const statusLine = (st) =>
     [...(st.streams || []), ...(st.fulfilment ? [st.fulfilment] : [])]
         .map(s => `${s.label}: ${stageLabel(s.stage).toLowerCase()}${s.detail ? ` (${s.detail})` : ''}`)
         .join(' · ');
+

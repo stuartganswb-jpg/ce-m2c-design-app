@@ -21,13 +21,30 @@ export const makeFullTasks = () => ({
     poleHand:  { status: 'Pending', assignedTo: null }
 });
 
-// §5: mirror a shop custom order's progress onto its sibling fin work order so the
-// Setup Queue can show custom-part status without a cross-collection query.
-// No-op when the shop order has no linked sibling (manual/legacy orders).
+// §5: the custom half's status, mirrored onto the sibling fin work order so the Setup Queue,
+// the WMS pack gate and RTG read it without a cross-collection query. FOUR states (Brief B5,
+// Stuart 2026-09-02 — "sent to plating never needs to hit finishing"):
+//   PENDING → IN_PROCESS (shop START; releases the small-parts pick)
+//           → SENT_TO_PLATING (shop Complete & Label when the finish is outsourced — the parts are
+//                              OUT at the plater; the pack gate waits: orderStatus.customPartsReady)
+//           → COMPLETE (in-house: shop Complete & Label; plated: the WMS plating RECEIPT)
+// Before the third state the shop mirrored 'Complete' whether or not the parts went to the
+// plater, so a plated order's small parts could be packed while its poles were away (P0 #3).
+// Only `finSiblingId` is read off the first argument — a bare { finSiblingId } link is enough.
+// No-op when there is no linked sibling (manual/legacy orders); an unknown status is REFUSED
+// and logged, never written — a misspelt state on the pack gate is worse than none.
+export const CUSTOM_FAB_STATUS = Object.freeze({
+    PENDING: 'Pending', IN_PROCESS: 'In Process', SENT_TO_PLATING: 'Sent to Plating', COMPLETE: 'Complete',
+});
+const CUSTOM_FAB_VALUES = Object.values(CUSTOM_FAB_STATUS);
 export const mirrorCustomStatusToSibling = async (shopOrder, customFabStatus) => {
     if (!shopOrder || !shopOrder.finSiblingId) return;
+    if (!CUSTOM_FAB_VALUES.includes(customFabStatus)) {
+        console.error(`mirrorCustomStatusToSibling: '${customFabStatus}' is not a customFabStatus (${CUSTOM_FAB_VALUES.join(' | ')}) — nothing written`);
+        return;
+    }
     try {
-        await updateDoc(doc(db, "fin_workorders", shopOrder.finSiblingId), { customFabStatus });
+        await updateDoc(doc(db, "fin_workorders", shopOrder.finSiblingId), { customFabStatus, customFabAt: Date.now() });
     } catch (e) {
         console.error("mirrorCustomStatusToSibling failed:", e);
     }

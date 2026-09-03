@@ -110,7 +110,41 @@ Keep the existing fields `ShopFloor.js` reads (`woNum, item, partNum, qty, cutLe
 
 ---
 
-## 5. Cross-floor status mirror (Setup Queue shows custom-part status)
+## 5. Cross-floor status mirror — the custom half (`customFabStatus`)
+
+**As of 2026-09-02 (Brief B5).** The shop's progress on a split order is mirrored onto the
+sibling `fin_workorders` doc by ONE helper, `mirrorCustomStatusToSibling(shopOrderOrLink, status)`
+in `Shared/workOrderContract.js`. It reads only `finSiblingId` off its first argument (a bare
+`{ finSiblingId }` link is enough), refuses and logs an unknown status without writing, and stamps
+`customFabAt` beside `customFabStatus` on every write. The states, exported as `CUSTOM_FAB_STATUS`:
+
+| value | set by | meaning | pack? |
+|---|---|---|---|
+| `'Pending'` | the writer (split / park) | nothing started | no |
+| `'In Process'` | Shop **START** (`ShopFloor.js handleStartProcess`) — this also releases the small-parts pick (`releaseSiblingToPickPack`) | fabricating | no |
+| `'Sent to Plating'` | Shop **Complete & Label** when the finish is outsourced (`toPlating`) | parts are **out at the plater** | **no** |
+| `'Complete'` | Shop Complete & Label (in-house finish); the **WMS plating receipt / build-back** (plated) | parts here and finished | yes |
+
+**`'Sent to Plating'` is a pack-gate state read by the WMS and RTG — never a finishing state.**
+An outsourced finish never enters the finishing floor (Stuart, 2026-09-02); the Setup Queue shows
+this chip only on a MIXED order whose in-house small parts are on the floor while its custom pole
+is away.
+
+**One test for "may this be packed?"**: `customPartsReady(wo)` in `Shared/orderStatus.js` =
+`!wo.hasCustomSibling || wo.customFabStatus === 'Complete'`. The WMS pack gate, its pending
+window and its pack list all ask this; nothing compares the string itself.
+
+**One wording**: `customFabLabel(wo)` → `'Pending' | 'In Process' | 'At the plater since <date>' |
+'Complete'`. `orderStatusOf` reports the custom stream as stage `PLATING` ("At the plater") while
+the parts are away; RTG's red-row rule for a receipt with no build-back reads the hq record's
+`floorPhase === 'Plating Received'` (D stamps it via `propagateFloorState`, then `'Plated'` at
+build-back).
+
+**Why the third state exists (audit P0 #3):** the shop used to mirror `'Complete'` the moment
+fabrication finished, before the `toPlating` branch, so a plated order's small parts could be
+packed while its poles were at the plater.
+
+<details><summary>Origin (2026-06-10 text, superseded above)</summary>
 
 Requirement: the small-parts job window in the Setup Queue shows the matching custom-parts status (Pending → In Process when the shop operator starts).
 
@@ -120,6 +154,10 @@ Requirement: the small-parts job window in the Setup Queue shows the matching cu
 - Centralize the dual-write in one helper, e.g. `mirrorCustomStatusToSibling(shopOrder, status)`, so it can't drift.
 
 **Remove the dead banner:** `SetupQueue.js:34` reads `shop_finishing_alerts`, which nothing writes (audit P0-#1). Delete that banner and its query — the `customFabStatus` mirror replaces its intent.
+
+---
+
+</details>
 
 ---
 

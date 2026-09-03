@@ -18,6 +18,7 @@ import { closeOrderEverywhere, propagateFloorState } from '../Shared/orderLifecy
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips from '../Shared/OrderStatusChips';
+import { customFabLabel } from '../Shared/orderStatus';
 
 // Brand → NetSuite map (keep in sync with PickPackApp/NetSuiteSync/ERPPushPull/AdminTab/RTG).
 // Finishing converts only ever run for the shop brands.
@@ -788,12 +789,14 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                 </div>
 
                 {wo.hasCustomSibling && (() => {
+                    // 'Sent to Plating' (Brief B5): the custom half is OUT at the plater. Seen here only
+                    // on a MIXED order — in-house small parts on this floor, the custom pole away.
                     const cf = wo.customFabStatus || 'Pending';
-                    const cfColor = cf === 'Complete' ? 'var(--ink)' : (cf === 'In Process' ? 'var(--brass)' : 'var(--ink-soft)');
+                    const cfColor = cf === 'Complete' ? 'var(--ink)' : cf === 'Sent to Plating' ? '#3f7fc4' : (cf === 'In Process' ? 'var(--brass)' : 'var(--ink-soft)');
                     return (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '14px', padding: '10px 12px', background: 'var(--paper-2)', border: '1px solid var(--line)', borderRadius: '2px' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--ink-soft)' }}>Custom Parts (Shop)</span>
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', fontWeight: 600, color: cfColor }}>● {cf}</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', fontWeight: 600, color: cfColor }}>● {customFabLabel(wo)}</span>
                         </div>
                     );
                 })()}
