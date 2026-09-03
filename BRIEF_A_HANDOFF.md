@@ -98,6 +98,18 @@ B has edited nothing yet (B5 part 1 + B2 drafted and node-tested in scratch); wa
 line in B's session. Session keys as of now: A = -11, B = -d6, D = -5a, E = -3e, F = -15,
 integration = -46 (they re-key on restart — ListAgents before messaging).
 
+## 3d. Brief E hand-offs taken
+
+- **`needBy`, the alias window** (E1, `eb5cb6b`): every sales-order door writes `needBy`; the older
+  `needByDate` is written equal to it for one release, then stops. Order Entry Needs read the old
+  name in five places and would have gone blind — `2325ff3` routes all five through one reader,
+  `soNeedBy(so)` (new name first, legacy for older orders). `productionNotes` unchanged. E can close
+  the window whenever the other consumers are done; nothing of A's breaks.
+- **Available on the header, not yet read here**: `so.recipes[]`, `so.recipe` (when there is exactly
+  one), `so.readyDate`, `so.leadWeeks` (painted 4 wk / plated 6 wk; rush 2 / 4). Candidate use: show
+  `readyDate` beside need-by on the Needs board, and skip the review's finish lookup when
+  `so.recipe` is set. Neither done — ask Stuart first.
+
 ## 4. Blocked / waiting on others
 
 - Writer 7 on B's B1 (`buildFinDoc`). B will send the hash.
