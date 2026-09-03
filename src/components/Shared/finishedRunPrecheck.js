@@ -324,9 +324,16 @@ export const releaseFinWoToFloor = async (hqWo, by = '') => {
 
 // Called by the WMS after a convert_demand carrying a finWoId completes (the demand doc is deleted
 // by then — pass the data captured before the delete). The gate opens only when no OTHER open
-// demand still points at the same work order. An AUTO-FLOW work order (Order Entry) then releases
-// itself straight to the finishing floor — raw was made, /P now exists, finishing is next; no
-// human hop in between. Returns 'released' | 'cleared' | false.
+// demand still points at the same work order. A SALES-typed auto-flow work order (Order Entry)
+// then releases itself straight to the finishing floor — raw was made, /P now exists, finishing
+// is next; no human hop in between. Returns 'released' | 'cleared' | false.
+//
+// STOCK orders are NOT released from here (Brief A, 2026-09-02). Every parked stock order now
+// carries autoFlow:true (Shared/workOrderCreate), and this self-release copies the payload to the
+// floor WITHOUT Route A — the NetSuite work order RTG queues at release. A stock order released
+// here would reach the floor unanchored, so the cleared gate hands it to RTG's auto-release
+// effect, which releases AND anchors. Only the sales path keeps the direct release, because its
+// NetSuite record is the sales order / its FLOW anchor, opened at creation.
 export const clearConvertGate = async (demand, operatorName = '') => {
     const finWoId = demand && demand.finWoId;
     if (!finWoId) return false;
@@ -338,7 +345,7 @@ export const clearConvertGate = async (demand, operatorName = '') => {
     try {
         const woSnap = await getDoc(doc(db, 'hq_work_orders', finWoId));
         const wo = woSnap.exists() ? { id: woSnap.id, ...woSnap.data() } : null;
-        if (wo && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && !wo.awaitingSoAccept && !wo.awaitingRodCut
+        if (wo && (wo.orderType === 'sales' || wo.orderClass === 'ORDER_ENTRY') && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && !wo.awaitingSoAccept && !wo.awaitingRodCut
             && !(wo.awaitingNsWo && !wo.nsWoId) && !(wo.awaitingComponents && !wo.componentsDone)) {
             const released = await releaseFinWoToFloor(wo, operatorName || 'convert-complete');
             if (released) return 'released';
