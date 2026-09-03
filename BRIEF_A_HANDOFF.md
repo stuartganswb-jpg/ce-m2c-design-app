@@ -74,6 +74,30 @@ Setup Queue showing the recipe group with pulls, and no Push to Shop offered on 
    - the tier/raw generator alerts that still say "Push to Shop there" are corrected when A4
      touches those functions (Stuart: "correct").
 
+## 3c. Alignment check with Brief B (Stuart's request, 2026-09-02 late) — all six YES
+
+1. **Stamps**: B's `buildFinDoc` reads the parked `finPayload` verbatim (+ the board's urgent, `nsWoId`,
+   holds); `buildShopDoc` reads `intent/routeTo/memo/finSiblingId/orderType`; nothing re-derived.
+   B adds on the shop side: a caller-supplied shop id (the OE pair's `<woId>-C`) and the item's
+   `manufacturingSpecs.shopInstruction` copied onto the shop doc (instruction text, not routing);
+   `isOutsourced` from `isOutsourcedFinishCode(recipe)`, not the finish-name match.
+2. **Writer 7**: Library run keeps its direct write until B sends the `buildFinDoc` hash; A converts
+   the commit after.
+3. **Writer 10 + PO memo**: B's to land (BRIEF_B §B6), A's to not touch.
+4. **Gates**: `clearConvertGate` keeps its signature; A swaps to `isReleasable(wo)` the commit after
+   B2 lands. `awaitingComponents` on stock orders: no change on B's side.
+5. **A4 Approve = RTG's push**: A exports `buildPoNsPayload(po, brand)` from `Shared/purchaseOrders.js`
+   producing today's payload identically except the memo (subsidiary before location, dueDate, item
+   lines; the OAuth `!` path untouched — it lives in the proxy, not the payload). B's panel adopts it
+   in B's own commit; `enqueueNsWrite kind:'purchaseorder'` stays RTG's.
+6. **Plated work**: no A writer parks a finishing WO for an outsourced finish; B deletes the Setup
+   Queue's outsourced group only after watching it stay empty. `'Sent to Plating'` /
+   `customPartsReady` are B's contract, read by C and D; A reads nothing of it.
+
+B has edited nothing yet (B5 part 1 + B2 drafted and node-tested in scratch); waiting on Stuart's
+line in B's session. Session keys as of now: A = -11, B = -d6, D = -5a, E = -3e, F = -15,
+integration = -46 (they re-key on restart — ListAgents before messaging).
+
 ## 4. Blocked / waiting on others
 
 - Writer 7 on B's B1 (`buildFinDoc`). B will send the hash.
