@@ -14,10 +14,11 @@ import { woRefOf } from '../Shared/woRef';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
-import { planFinishedRun, isAssemblyPart } from '../Shared/finishedGoodsRun';
+import { isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { runBatchPrecheck, executeMakeupActions, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, finishSuffixOf, millBaseOf } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
+import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
 import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from '../Shared/nsWorkOrder';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
@@ -678,125 +679,65 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     else pre.results.forEach(res => preByKey.set(res.key, res));
                 } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
             }
+            // ── THE ONE WRITER (Brief A, A1 step 2 — 2026-09-02). The same call the Sales Snapshot
+            // makes: identity, route, the COMPLETE pre-built finishing doc, the pre-check gates, the
+            // rod cut and the anchor policy all come from Shared/workOrderCreate — so a grid order
+            // and a Snapshot order for the same item are the same document (only `source` and the
+            // ids differ). What changes for this screen, named:
+            //   · it pre-builds the finishing payload instead of being enriched at release
+            //   · a 4/6 ft stocked pole gets its rod cut + awaitingRodCut here too (it never did)
+            //   · a /P row becomes a Convert to-do (phosphating is a bulk WMS convert), not a
+            //     route-open work order carrying an invented recipe
+            //   · an outsourced-finish row (…/EP1) is refused — never a finishing job; until A3
+            //     wires the plating demand here, use the PO builder's plating split
+            //   · a component shop WO still milling gates the order (awaitingComponents)
             const madeUp = [];
+            const reqDate = woNeedBy || new Date(Date.now() + 12096e5).toISOString().split('T')[0];
+            let n = 0;
             for (let key = 0; key < prepped.length; key++) {
                 const { part, erpId, qty, pins } = prepped[key];
                 const pre = preByKey.get(key) || null;
-                // /P components short + the raw read down = routing undecidable (the 2026-08-29
-                // TRAVLB trap). This row's WO is NOT created — retry Generate when NetSuite answers.
-                if (pre && pre.rawUnknown) {
-                    addLog(`⛔ ${erpId}: /P components short but the RAW availability read failed — WO NOT created (a convert against unverified raw silently skips milling). Retry Generate.`, 'error');
-                    madeUp.push(`⛔ ${erpId}: SKIPPED — raw read failed, retry Generate`);
+                const erp = String(erpId).toUpperCase();
+                if (routeForCode(erp).refuse === REFUSE_PHOSPHATE) {
+                    const baseErp = millBaseOf(erp);
+                    const basePart = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === baseErp) || null;
+                    await createConvertDemands([{
+                        r: { itemid: erp, internalId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null },
+                        info: { part, available: nsStock[erp]?.available ?? 0, minOnHand: part.manufacturingSpecs?.reorderPoint ?? 0 },
+                        qty: Number(qty), baseErp,
+                        baseInfo: { part: basePart, iid: basePart?.netSuiteInternalId ? String(basePart.netSuiteInternalId) : null, available: nsStock[baseErp]?.available ?? null },
+                    }]);
+                    madeUp.push(`⇄ ${erp}: Convert to-do ${baseErp} → ${erp} ×${qty} (WMS Convert tab) — a /P is phosphated, never work-ordered`);
                     continue;
                 }
-
-                const isPhosphate = erpId.toUpperCase().endsWith('/P');
-                const isPlating = /EP[1-6]$/i.test(erpId.toUpperCase());
-
-                const rootErpId = erpId.replace(/\/(P|EP[1-6])$/i, '');
-                const rootPart = hqParts.find(p => (p.legacyErpId || p.itemId || '').toUpperCase() === rootErpId) || part;
-
-                let bomLines = [];
-                if (isAssemblyPart(part) && pins.length) {
-                    bomLines = (pre && pre.plan.exploded) ? pre.plan.lines
-                        : planFinishedRun({ part, qty: Number(qty), pins, inventory: hqParts }).lines;
-                }
-
-                // Firestore doc ids can't contain "/" — finished variants carry it (e.g. H1-138BF/EP1). Sanitize
-                // it out of the DOC id; keep the true code on the record (woDisplayId / variantErpId) for display.
-                const stamp = Date.now().toString().slice(-6);
-                const safeErp = String(erpId).replace(/[^A-Za-z0-9]+/g, '-');
-                const newWoId = `WO-${safeErp}-${stamp}`;
-                // Make-up orders BEFORE the WO write, so the WO carries its gate from birth and
-                // the demands carry this WO's id (the WMS clears the gate through that link).
-                let gate = {};
-                if (pre && pre.actions.length) {
-                    try {
-                        const exec = await executeMakeupActions({
-                            actions: pre.actions, brandId: activeBrand, finWoId: newWoId, finWoErpId: erpId,
-                            createdBy: currentUser || '', inventory: hqParts, source: 'stockview-precheck',
-                            reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-                        });
-                        gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds } : {}) };
-                        exec.made.forEach(m => madeUp.push(`${erpId}: ${m}`));
-                        addLog(`🧩 ${erpId} component pre-check: ${exec.made.join(' · ')}${exec.gateFields.awaitingConvert ? ' — WO gated until the convert posts.' : ''}`, 'warn');
-                    } catch (e) {
-                        const perm = /permission|insufficient/i.test(String(e.message || e));
-                        addLog(`⚠ ${erpId}: component make-up orders FAILED (${e.message || e})${perm ? ' — publish the convert_demand firestore rule (Cloud Shell: firebase deploy --only firestore:rules).' : ''} WO created un-gated.`, 'error');
+                try {
+                    const res = await parkWorkOrder({
+                        intent: finishCodeFromErp(erp) ? INTENT.STOCK_FINISH : INTENT.STOCK_MILL,
+                        part, qty: Number(qty), brand: activeBrand, createdBy: currentUser || '',
+                        reqDate, needBy: woNeedBy || '', urgent: !!woUrgent,
+                        note: `Stock View grid · ${erp} ×${qty}${pre && pre.plan && pre.plan.exploded ? ` · BOM pull: ${pre.plan.lines.map(l => `${l.quantity}×${l.legacyErpId}`).join(', ')}` : ''}`,
+                        source: 'STOCKVIEW_GRID', precheck: pre, pins, inventory: hqParts,
+                        locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17',
+                    });
+                    res.made.forEach((m, i) => {
+                        madeUp.push(`${erp}: ${m}`);
+                        addLog(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'success' : (/^[⚠✂⇄🏭]/.test(m) ? 'warn' : 'info'));
+                    });
+                    n++;
+                } catch (e) {
+                    // A refusal is the writer saying this row is not a work order: nothing was
+                    // written, say so, next row.
+                    if (e instanceof ParkRefusal) {
+                        addLog(`⛔ ${erp}: ${e.message}`, 'error');
+                        madeUp.push(`⛔ ${erp}: SKIPPED — ${e.message}`);
+                        continue;
                     }
+                    throw e;
                 }
-                // Source numbers only (2026-07-17): app id until the NetSuite WO posts, then nsWoTran.
-                await setDoc(doc(db, "hq_work_orders", newWoId), withItemCode({
-                    id: newWoId,
-                    woId: newWoId,
-                    woDisplayId: `WO-${erpId}-${stamp}`,
-                    brand: activeBrand,
-                    status: "Approved",
-                    customer: "Internal Stock",
-                    // Component pre-check gate — RTG's release and ⚡ auto-release respect it the
-                    // same way they respect awaitingRodCut.
-                    ...gate,
-                    hqJobId: rootPart.id,
-                    originalVariantId: part.id,
-                    variantErpId: erpId,
-                    totalParts: Number(qty),
-                    reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-                    // The ITEM, not the category — the floor card reads `type` (Stuart 2026-08-17).
-                    // variantErpId/rootItem were already here; `type` said "Stock Build", which is
-                    // what every screen ended up showing instead of the pattern number.
-                    type: String(erpId || "Stock Build"),
-                    // NO PUSH-TO-SHOP ON A FINISHING JOB (Eric 2026-08-25: "there is also an
-                    // erroneous Push to Shop button"). RTG offers that button whenever routeTo is
-                    // not FINISHING, and this path never set it — so a finished item advertised a
-                    // route into the milling queue, which it has no business taking. An item with a
-                    // finish suffix is finishing work; a RAW one can still legitimately go to shop,
-                    // so the flag is set from the code rather than assumed.
-                    ...(finishCodeFromErp(erpId) ? { routeTo: 'FINISHING' } : {}),
-                    itemName: part.itemName || '',
-                    ...(part.netSuiteInternalId ? { stockInternalId: String(part.netSuiteInternalId) } : {}),
-                    // The finish the floor batches on. Omitted here until 2026-08-17, which left
-                    // RTG's release to fall through to PENDING-RECIPE — the finish was in the item
-                    // code the whole time. Raw and /P codes have no finish suffix and stay unset.
-                    ...(finishCodeFromErp(erpId) ? { recipe: finishCodeFromErp(erpId) } : {}),
-                    // ⚡ The urgent tick above the Generate button applies to THIS push too — it was
-                    // the one WO-creating path here that ignored it (2026-08-17).
-                    ...(woUrgent ? { urgent: true, urgentAck: false, needBy: woNeedBy || new Date(Date.now() + 12096e5).toISOString().split('T')[0], urgentBy: currentUser || '', urgentAt: Date.now() } : {}),
-                    ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
-                    // ── A POLE IS NOT A SLED (Sandra 2026-09-01, WO11535 · HCUMP415/N25) ────────
-                    // "Keep showing on finishing stage because say the order has small parts." Her
-                    // order ran POLE SPRAY and POLE BAKE to completion, then sat forever on SLED
-                    // SPRAY and SLED BAKE — steps that can never finish, because there are no small
-                    // parts on it. It read "10 pcs · 0 pole(s)".
-                    //
-                    // This push stamped paintSize from the item master without ever asking what the
-                    // item IS, and stamped no pole count at all. RTG then expands a paintSize of
-                    // S/M/L into paintSizes with the full quantity on it, and on the floor ANY
-                    // non-zero sled size forces the small-parts stream on before the pole count is
-                    // even consulted. So the order carried both streams and could only ever half
-                    // finish. Poles are racked (8 to a rack), never sled-packed — a sled size on a
-                    // pole was always wrong, it just had nowhere to show until now.
-                    //
-                    // Same shape as the Setup Queue's `.includes('POLE')` that missed rods: a screen
-                    // deciding for itself what a pole is. It asks the one category test now.
-                    ...(isPoleCategory(part.manufacturingSpecs?.productType || part.productType)
-                        ? { poles: { qty: Number(qty), type: String(part.manufacturingSpecs?.productType || part.productType || 'POLE').toUpperCase() }, totalPoles: Number(qty), paintSize: null }
-                        : { paintSize: (part.manufacturingSpecs?.paintSize || '').toUpperCase() || null }),
-                    // Scheduler keys for the finishing time matrix (recipe × paintSize × productType).
-                    // Carried downstream by RTGDispatch.pushToFinishing onto the fin_workorder.
-                    productType: (part.manufacturingSpecs?.productType || part.productType || '').toUpperCase() || null,
-                    routingType: part.routingType || 'Standard',
-                    needsPhosphating: isPhosphate,
-                    isPlatingDemand: isPlating,
-                    rootItem: rootErpId,
-                    // Carried onto the fin work order by RTG's release. Absent (no pins) it stays
-                    // off the doc entirely, and the floor keeps the exact behaviour it had.
-                    ...(bomLines.length ? { partsList: bomLines, bomExploded: true } : {}),
-                    createdAt: Date.now()
-                }));
             }
-            
-            addLog(`✅ Pushed ${lineItems.length} Work Orders to RTG Dispatch!`, "success");
-            alert(`✅ Work Orders successfully pushed to RTG Dispatch!${madeUp.length ? `\n\nComponent pre-check raised:\n${madeUp.map(m => `• ${m}`).join('\n')}\n\nGated WOs wait in RTG until their convert posts on the WMS Convert tab.` : ''}`);
+
+            addLog(`✅ ${n} work order(s) parked in RTG Dispatch — routed, gated, released from there on their own.`, "success");
+            alert(`✅ ${n} work order(s) parked in RTG Dispatch.\n\nEach carries its route and its complete floor job; RTG releases it on its own once its gates are clear.${madeUp.length ? `\n\nWhat was raised:\n${madeUp.map(m => `• ${m}`).join('\n')}` : ''}`);
             setOrderDrafts({});
         } catch(e) {
             console.error("WO Push Error", e);
