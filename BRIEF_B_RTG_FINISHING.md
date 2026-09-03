@@ -390,6 +390,19 @@ finishing-floor explainer: no more Push buttons; what the status chip words mean
    date the stamped recipe lands.
 5. **Hand-offs in:** A's three (§4 B6). E's recipe date.
 
+   **From E, 2026-09-03 (landed — `c73263e` CPQ, `eb5cb6b` Order Entry, `efb4fd9` CRM approve):**
+   `hq_sales_orders` now carries, every door: `needBy` (ISO or '' — read FIRST; `reqDate` and
+   `needByDate` are written equal to it for one release, then stop), `readyDate / leadWeeks /
+   leadBasis ('PAINT'|'PLATED'|null) / rushApplied`, `recipe` (a CODE, '' when none),
+   `recipeLabel`, `recipeSource` ('finishes'|'finishLabel'|'configKey'|'lineCode'|'configValue'|
+   'mixed'|'none'), `recipes[]`, `productionNotes`, `customerPo`, `sidemark`, `shipTo[]`, `memo`,
+   `source`. On the job: `cpqData.breakdown[]` lines carry `finishCode/finishLabel` (TAGS lines;
+   absent = mill) and `finishOutsourced` on every line with a code. **Patch:** `autoSplitSalesOrder`
+   / `pushToFinishing` read `so.recipe` first, `fetchEnrichedJobData` only for docs saved before
+   `c73263e`, stamping `recipeSource` either way; fin/shop docs copy `reqDate` from `so.needBy`
+   ('' = no date; `fmtD` renders a dash); the split writes NO finishing doc for a line with
+   `finishOutsourced:true` (answer 2). RTG's own urgent-flag `needBy` is the same key.
+
 ---
 
 ## 8. Stuart's answers (2026-09-02) — settled, do not re-ask

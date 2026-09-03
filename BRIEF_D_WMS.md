@@ -322,6 +322,15 @@ Plus the repo guide. Listed in the handoff.
    per-brand class map. To **A** — the plating_demand shape is frozen by your reader.
 7. **Hand-offs in:** C's demand fields + mill stamps; B's state and `gatesOf`; Eric's two answers.
 
+   **From E, 2026-09-03 (landed):** the one `hq_sales_orders` header — every field the WMS reads
+   today keeps its name and value (`orderClass 'QUICKSHIP'`, status/pickStatus, `lines[]`
+   untouched). New on CPQ/CRM orders: `customerPo, shipTo[], productionNotes, needBy`, a real
+   `recipe`. **Patch (D7, `Shared/pickLines.js`):** the Quick Ship order table reads
+   `so.needBy || so.needByDate`; the pick-card "need by" chip reads the fin doc's `reqDate`,
+   which B sources from `so.needBy` at split. `needByDate` / `reqDate` stop being written after
+   the alias window — tell E if D7 lands after it closes. Class map for the SO push comes with
+   E3 once Eric answers (your fulfilment payload needs none).
+
 ---
 
 ## 8. Open questions (ask before the plan)

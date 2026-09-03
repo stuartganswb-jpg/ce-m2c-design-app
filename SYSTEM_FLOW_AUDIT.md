@@ -197,6 +197,18 @@ which scans `cartItems[].finishLabel`, `finishes[]`, `config` keys, `engineConfi
 `breakdown[].finishCode` against `master_finishes`. Five sources, one resolver, still reachable to
 `PENDING-RECIPE` if a quote carries none of them.
 
+> **State 2026-09-03 (Brief E shipped E1+E2, `c73263e` / `eb5cb6b` / `efb4fd9`):** both sales
+> shapes now write **one header** from `Shared/salesOrderHeader.soHeaderOf` — `customerPo,
+> sidemark, jobName, memo, needBy ('' when none; the +14-day `reqDate` fiction is gone),
+> readyDate/leadWeeks (painted 4 wk, plated 6, Rush → 2/4), shipTo[], productionNotes, recipe
+> (a CODE) / recipeLabel / recipeSource / recipes[], source` — and `finishOutsourced` rides
+> every CPQ breakdown line that carries a finish. The five-source recipe scan runs once at save
+> (`resolveJobRecipe`); RTG's copy becomes the fallback for older docs (B4). `reqDate` and
+> `needByDate` are written as aliases of `needBy` for one release while RTG (B), the WMS (D),
+> Order Entry Needs (A) and the portal function switch readers. Order Entry's line dialect and
+> direct-to-WMS path are unchanged (Q6). P2 #14 closes on the header; the line dialects stay.
+> The retired tab-7 generator (P2 #12) is deleted (`961de69`). Handoff: `BRIEF_E_HANDOFF.md`.
+
 ---
 
 ## 7. The floors — what each consumes, and the hang-up catalogue

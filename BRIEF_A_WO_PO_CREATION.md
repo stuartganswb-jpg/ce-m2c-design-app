@@ -397,6 +397,14 @@ no order created after your conversions carries a blank `source`.
 
 ---
 
+**From E, 2026-09-03 (landed — `eb5cb6b`):** `hq_sales_orders` carries `needBy` (ISO or '')
+and `productionNotes` on every door; `needByDate` is written equal to `needBy` for one release,
+then stops. **Patch (Order Entry Needs, StockViewTab ~:2157/:2199/:2337/:2516):** read
+`so.needBy || so.needByDate`; keep `productionNotes`. Also readable: `so.recipes[]` (the distinct
+finish codes of the to-be-finished lines), `so.recipe` when exactly one, `so.readyDate /
+leadWeeks` (painted 4 wk, plated 6, Rush → 2/4). `line.finishOutsourced` is on tab 7's lines
+as before, from the shared `Shared/salesOrderHeader.isFinishOutsourced`.
+
 ## 8. Open questions for Stuart (ask before the plan, not during)
 
 1. The "Plated items without a BOM core" report — 11.1 beside 🪝, or on Stock View's 3-tier bar?
