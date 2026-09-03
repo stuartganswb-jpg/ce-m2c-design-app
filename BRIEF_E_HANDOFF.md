@@ -178,26 +178,37 @@ orders. Recorded as ruled out, not merely unobserved.
 
 ### Named, not fixed — carry these forward
 
-1. **Wood + miter — CONDITIONAL on one piece of data, so read the condition first.**
-   `classifyLine` rule 1 (the ITEM's own `manufacturingSpecs.partHandling`) returns immediately;
-   the per-line flag at rule 2 is reached only when the item carries NO tag. Rules -1
-   (`customOverrideHandling`) and 0 (fee / return-name grammar) sit above it, so a mitered return
-   billed as a fee **does** escalate to Custom — the concern is not "the miter fails to escalate".
-   **THE CONDITION — check this before hunting anything:** does a wood pole's Master Library card
-   carry a Part Handling value?
-   - **Tagged `Small Parts`** → the defect is LIVE. On a wood + miter order the fee goes Custom to
-     the shop while the wood pole classifies by its item tag and goes to finishing: *the shop is
-     told to miter a pole it was never sent.* Silent at both ends — nothing compares the two floor
-     docs ("custom fab with no pole" is not a check that exists), and the WMS drops fee lines from
-     a finishing pick (`lineIsFeeish`), so the pole arrives as an ordinary pull with no trace a
-     miter was sold. Sandra would pack a straight pole and no screen would say otherwise (D).
-   - **No tag at all** → the mechanism works TODAY, and it works only through the *absence* of a
-     tag. The risk is then a future tagging sweep silently breaking Stuart's rule, so it wants a
-     comment on the item rather than a code fix.
-   Do not assume the first state: a reader who takes the defect as live may hunt a bug that does
-   not exist yet. NOT exercised 2026-09-03 — both wood orders are straight cuts, and the only
-   mitered order (H1-75 #1) is metal (P16 → applied paint → `handlingForErp` says Custom, so pole
-   and fee both reach the shop).
+1. **⚠ OBSERVED, LIVE: every wood pole line routes to the SHOP, straight ones included.**
+   Verified by me in the Master Library on 2026-09-03, after A opened the cards and D relayed it —
+   not taken on trust: **`H1-138WHTOAK-6` (1-3/8" × 72" White Oak Rod) carries PART HANDLING =
+   `Custom`.** So does the family (`H1-138WHTOAK` by-foot, `-4`, `-8`, `-10`). There is **no
+   stained wood pole item at all** — no `/S04`, no `/S11` variant — so a stained wood line resolves
+   to the RAW ROD, and `classifyLine` rule 1 returns that item's `Custom` immediately.
+   **Consequence:** Stuart's second-pass rule *"wood + straight → finishing"* **does not hold
+   today**. Tonight's H1-138 #1 (NATURAL OAK 72" ×2) and #2 (PURE OAK 72" ×2) will send their
+   POLES to the shop floor, not to the finishing Setup Queue. If that is seen during the run it is
+   THIS finding, not a new bug.
+   **Why it is not simply a mis-tag:** the rod is a mill code with no finish suffix, and the
+   settled rule (`handlingForErp`) makes a suffix-less mill code Custom — correctly, it is made to
+   order. So the wood rule cannot be satisfied by item-level tagging at all: the item is genuinely
+   Custom, and "straight → finishing" is a fact about the LINE (is it cut? is it mitered?), not
+   about the item. A is putting that to Stuart with options — keying the escalation to the CUT
+   (`fabMethod` / `qtyMiters`) rather than a generic partHandling stamp — and implementing nothing
+   tonight. Correct call.
+   **What the floors/WMS show** (D): the small-parts lines still reach the finishing pick on the
+   fin doc; the pole arrives as a custom sibling from the shop; the pack gate holds until
+   `customFabStatus` is Complete, so the order can still pack. The wrongness is upstream — a
+   straight oak pole sitting in custom fab instead of the stain line — and **nothing on any screen
+   says it is in the wrong place.**
+   *(Superseded: an earlier draft of this handoff said all four orders were safe, on the shared
+   assumption that wood pole items were tagged Small Parts. Both D and I assumed the data rather
+   than reading it. The corrected statement is above.)*
+
+1b. **Wood + miter — still hypothetical, and now differently framed.** The split I described with
+   D (fee escalates via rule 0, pole classifies by its item tag) cannot occur while wood rods are
+   tagged `Custom`, because pole and fee then BOTH go to the shop. It would become live only if
+   the wood rods were ever retagged `Small Parts`. Keep it recorded, but read item 1 first.
+
 2. **Order Entry pack path — fee lines reach the packer.** `packLinesOf` reads `job.lines` with
    no fee filter, so a fee line (e.g. `FEE-H1-MRPF`) is presented to the packer as a physical item
    and blocks pack completion. **D7 owns it.** **UNEXERCISED** on 2026-09-03 — never run, as
@@ -231,5 +242,6 @@ quotes, zero work orders created.** Setup reached — Fabricut (CUST-4720), pric
 Cost*, sidemark ROOM LEFT, flow H1-138, 18 steps loaded — and stopped there. Door plan: H1-138 #1
 and H1-75 #1 through **CPQ**; H1-138 #2 and H1-75 #2 through **Order Entry**. Stuart's rulings that
 bind the run: straight cuts need no Vision sheet; wood is Small Parts on the item and miters
-escalate per line (`ea04009`); wood lead time is 4 weeks.
+escalate per line (`ea04009`); wood lead time is 4 weeks. **But see §10 item 1 — the wood rods are
+tagged `Custom`, so the wood poles WILL go to the shop on this run regardless of that ruling.**
 
