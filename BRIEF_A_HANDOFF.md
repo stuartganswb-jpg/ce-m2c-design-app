@@ -14,7 +14,8 @@ of its §4 work. Decisions that changed the brief during the session are recorde
 | `646972d` | **A1 step 3.** Raw Cores (writer 4) + PO builder core-short (writer 2) converted; `INTENT.REISSUE` added; outsourced refusal names where to raise the item. | not yet |
 | `908a743` | Library card `createStockBuildWO` (writer 6) converted. | not yet |
 | `4364916` | `SYSTEM_FLOW_AUDIT.md` §2 table updated to the converted state. | — |
-| (next) | `UserGuideTab.js` Work Orders section updated (S2) — see §6. | — |
+| `73ab028` | `UserGuideTab.js` Work Orders section updated (S2) — see §6. | — |
+| (next) | **A1 step 4.** Order Entry Needs (writer 5) converted; builders gain the sales block + custom pair; test case added (6/6). | not yet — regression row §6 (`HCUMP810 + /N90` one WO; `+ /P01` the pair) |
 
 **No live run has happened yet.** Every conversion is build- and test-proven only. The acceptance
 rows in the brief's §6 that these commits cover (Snapshot finished item, Snapshot 4 ft pole, grid
@@ -31,7 +32,7 @@ Setup Queue showing the recipe group with pulls, and no Push to Shop offered on 
 | 4 | Raw Cores | **converted** (`646972d`) — unchanged behaviour + `memo` + `autoFlow` |
 | 2 | PO builder core-short | **converted** (`646972d`) — `source STOCKVIEW_PO_BUILDER`, `routeTo SHOP`, `forPlating`, root anchor at creation |
 | 6 | Library card make-up | **converted** (`908a743`) — always `STOCK_MILL` in practice; route-open parking ended |
-| 5 | Order Entry Needs | **not started** — `intent ORDER_ENTRY` with the `sales` block, FLOW1/FLOW2 anchors, the Custom sibling pair. `buildParkedWorkOrder` is stock-only today; the sales block (customer, soAppId, orderClass, awaitingNsWo, awaitingSoAccept, the `-C` shop sibling with `finSiblingId`) is the next extension |
+| 5 | Order Entry Needs | **converted** (A1 step 4) — `intent ORDER_ENTRY` + `sales` block; the FLOW1/FLOW2 anchors and the direct `releaseFinWoToFloor` stay in the executor exactly as b531f53 built them (anchor policy NONE in the writer). **No rod cut on a sales line** (as before) — whether a customer's stocked-length pole is cut here or by the shop pair is a question for Stuart, not derived. The finishing half now carries `orderType 'sales'` (it had none), which is what D's `onStockBuildDone` seam and RTG's `kind` guards read |
 | 7 | Library `releaseRunToFloor` | **waiting on B's `buildFinDoc`** (B1). Do not build around it |
 | 9 | pre-check component shop WO | **not started** — `COMPONENT_MILL`; needs a cycle-free shape (`finishedRunPrecheck` ↔ `workOrderCreate` import both ways); cleanest is `executeMakeupActions` calling `buildParkedWorkOrder` (pure, from `stockRun`) rather than `parkWorkOrder` |
 | 8 | Setup Queue re-make | retired for stock (B6) — B's |
@@ -71,8 +72,8 @@ mirror is wanted.
 ## 7. Next, in order
 
 1. Live runs with Stuart (§1 rows) — before anything else lands on these writers.
-2. Writer 5 (Order Entry Needs): extend `buildParkedWorkOrder` with the sales block; convert;
-   regression row in §6 (`HCUMP810 + /N90` and `/P01`, the pair as b531f53).
+2. Ask Stuart: should an Order Entry stocked-length pole line (4/6 ft, Small Parts finish) raise
+   the rod cut the way the Snapshot does? Today (and before) it does not.
 3. Writer 9 (`COMPONENT_MILL`, pure builder to avoid the import cycle).
 4. A4 `Shared/purchaseOrders.js` + `addToOpenPurchaseOrder` (S5, per-line `soAppId`), then A5
    Stock Build Needs, then A3 `Shared/platingDemand.js` (no PO), then the 11.1 BOM-core report.

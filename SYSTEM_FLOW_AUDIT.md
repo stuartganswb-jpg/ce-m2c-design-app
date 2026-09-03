@@ -67,7 +67,7 @@ process" is visible: the same intent — *make N of item X* — is expressed ten
 | 2 | Stock View plating base-short milling | `StockViewTab.js` PO builder (b) → **`parkWorkOrder`** (A1 step 3) | `STOCKVIEW_PO_BUILDER` | `SHOP` + `forPlating` | n/a | none | at creation (root) | stock | none |
 | 3 | **Sales Snapshot** | `StockViewTab.js` `createStockFinWOs` → **`parkWorkOrder`** (b6d0e36) | `SALES_SNAPSHOT` | stated: FINISHING / SHOP (raw rows no longer route-open); outsourced → refused | **yes** (builder) | rod cut + pre-check + components | at release (Route A) / SHOP at creation | stock | from the code |
 | 4 | Raw Cores | `StockViewTab.js` `createStockShopWOs` → **`parkWorkOrder`** (A1 step 3) | `RAW_CORES` | `SHOP` | n/a | none | at creation (root) | stock | none |
-| 5 | **Order Entry Needs** (live OE) | `StockViewTab.js:2410` (+`2446` shop sibling) | `ORDER_ENTRY` | `FINISHING` (+`SHOP` sibling when Custom) | **yes** | soAccept · nsWo · convert · components | at creation: FLOW2 on the variant, FLOW1 on the base assembly | **sales** | `finish` |
+| 5 | **Order Entry Needs** (live OE) | `StockViewTab.js` `executeOeReview` → **`parkWorkOrder`** (A1 step 4; anchors + direct release stay in the executor) | `ORDER_ENTRY` | `FINISHING` (+`SHOP` sibling when Custom) | **yes** (builder) | soAccept · nsWo · convert · components | at creation: FLOW2 on the variant, FLOW1 on the base assembly (executor) | **sales** (now on both halves) | `finish` |
 | 6 | **Master Library** card `createStockBuildWO` | `LibraryTab.js` → **`parkWorkOrder`** (A1 step 3) | `LIBRARY_MAKEUP` | `SHOP` (always raw here; finished codes are refused) | n/a | none | at creation (root) | stock | none |
 | 7 | Master Library `releaseRunToFloor` | `LibraryTab.js:1122` | — | writes hq **already Dispatched** + fin **directly** | n/a | own pre-check | own `enqueueNsWrite` (`:1300`) | stock | `recipe \|\| finishLabel \|\| PENDING` |
 | 8 | Setup Queue scrap re-make | `SetupQueue.js:508` | `SETUP_QUEUE_REMAKE` | `FINISHING` | yes | pre-check | at release | stock | `finishCodeFromErp` |
@@ -79,8 +79,7 @@ process" is visible: the same intent — *make N of item X* — is expressed ten
 > writer, `Shared/workOrderCreate.parkWorkOrder` (shape: `Shared/stockRun.buildParkedWorkOrder`,
 > node-tested). Every doc they write carries `source`, a stated `routeTo`, `orderType 'stock'`,
 > `autoFlow true`, `type` = the item code, and a complete `finPayload` on a finishing route.
-> Route-open parking is gone from those five. Still to convert: 5 (Order Entry Needs → intent
-> ORDER_ENTRY), 7 (the Library run — waits on B's builder), 9 (the pre-check's component shop WO →
+> Route-open parking is gone from those five. Also 5 (A1 step 4). Still to convert: 7 (the Library run — waits on B's builder), 9 (the pre-check's component shop WO →
 > COMPONENT_MILL). 8 is retired for stock (B6); 10 is B's, spec'd in BRIEF_B §B6 (INTENT.REISSUE).
 
 What the table says:
