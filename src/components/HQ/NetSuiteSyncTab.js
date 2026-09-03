@@ -6,7 +6,8 @@ import { parseFabricutWorkbook, buildFabricutPlan, buildPremiumTierRepairPlan } 
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { buildNsItemBody } from "../Shared/nsItemFields";
 import { isPoleCategory, autoFinishStream } from "../Shared/poleCut";
-import { handlingForErp, finishSuffixOf } from "../Shared/finishRouting";
+import { handlingForErp, finishSuffixOf, isOutsourcedErp, millBaseOf } from "../Shared/finishRouting";
+import { usablePin, pinErpOf, isAssemblyPart } from "../Shared/finishedGoodsRun";
 import { woItemCodeOf } from "../Shared/workOrderContract";
 import { SOURCING, sourcingOf } from "../Shared/sourcing";
 
@@ -519,6 +520,46 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
     // bent returns) and a bulk fix that quietly reversed someone's decision would be a worse bug
     // than the one it is fixing.
     const [poleFixBusy, setPoleFixBusy] = useState(false);
+    const [coreReportBusy, setCoreReportBusy] = useState(false);
+    // 🔍 PLATED ITEMS WITHOUT A BOM CORE (Brief A, A3 — Stuart 2026-09-02, §8 Q1: "11.1"). Every
+    // plated item is meant to be a complete assembly whose BOM names its mill core: that is what
+    // the plating demand pulls and what the NetSuite build consumes. This lists every library item
+    // with an outsourced suffix (EP*/MEP*/P25) that is NOT partClass Assembly, or has no
+    // assembly_pins, or whose pins never name millBaseOf(code). Report only — it changes nothing;
+    // the fix is NetSuite master data, done by a person.
+    const handlePlatedCoreReport = async () => {
+        setCoreReportBusy(true);
+        addLog('🔍 Plated items without a BOM core — scanning the library (report only, nothing is written)…', 'info');
+        try {
+            const [partsSnap, pinsSnap] = await Promise.all([getDocs(collection(db, 'Approved_Designs')), getDocs(collection(db, 'assembly_pins'))]);
+            const inventory = partsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const pinsByAssembly = new Map();
+            pinsSnap.docs.forEach(d => { const pin = d.data(); const k = String(pin.assemblyId || ''); if (!pinsByAssembly.has(k)) pinsByAssembly.set(k, []); pinsByAssembly.get(k).push(pin); });
+            let scanned = 0, bad = 0, logged = 0;
+            const LOG_CAP = 400;
+            const byReason = { 'not an Assembly': 0, 'no BOM pins': 0, 'pins do not name the core': 0 };
+            for (const part of inventory) {
+                const erp = String(part.legacyErpId || part.itemId || '').toUpperCase();
+                if (!erp || erp === 'PENDING' || !isOutsourcedErp(erp)) continue;
+                if (part.manufacturingSpecs?.isRetired === true) continue;
+                scanned++;
+                const core = millBaseOf(erp);
+                const pins = (pinsByAssembly.get(String(part.itemId || '')) || []).concat(pinsByAssembly.get(String(part.id)) || []).filter(usablePin);
+                let reason = '';
+                if (!isAssemblyPart(part)) reason = 'not an Assembly';
+                else if (!pins.length) reason = 'no BOM pins';
+                else if (!pins.some(pin => pinErpOf(pin, inventory) === core)) reason = 'pins do not name the core';
+                if (!reason) continue;
+                bad++; byReason[reason]++;
+                if (logged++ < LOG_CAP) addLog(`   ${erp} — ${reason}${reason === 'pins do not name the core' ? ` (core ${core}; pins: ${pins.map(pin => pinErpOf(pin, inventory)).join(', ')})` : reason === 'not an Assembly' ? ` (partClass ${part.partClass || '(blank)'})` : ''}`, 'warn');
+            }
+            if (logged > LOG_CAP) addLog(`   … and ${logged - LOG_CAP} more not listed (log capped).`, 'warn');
+            addLog(`Plated items: ${scanned} scanned · ${bad} without a BOM core — ${byReason['not an Assembly']} not an Assembly · ${byReason['no BOM pins']} no pins · ${byReason['pins do not name the core']} pins name something else. Nothing written.`, bad ? 'warn' : 'success');
+            alert(`🔍 Plated items without a BOM core\n\n${scanned} plated items scanned\n${bad} need fixing in NetSuite:\n   • ${byReason['not an Assembly']} not an Assembly\n   • ${byReason['no BOM pins']} no BOM pins\n   • ${byReason['pins do not name the core']} pins do not name the mill core\n\nThe full list is in the log below. Nothing was changed.`);
+        } catch (e) {
+            addLog(`Report failed: ${e.message || e}`, 'error');
+        } finally { setCoreReportBusy(false); }
+    };
     const [stampBusy, setStampBusy] = useState(false);
     const handleForcePoleTags = async () => {
         const dry = !window.confirm('FORCE POLE TAGS\n\nEvery item categorised POLE or ROD gets:\n   • Finish Stream = POLES\n   • Part Handling BY ITS FINISH SUFFIX — mill code or an applied finish (/P, /P01, /EP3, /MEP2, /P25) = Custom; a complete assembly (/BS, /N90, /CP) = Small Parts\n\nOpen finishing work orders for those items are repaired too, so orders already on the floor pick up the pole recipe.\n\nAn item explicitly set to SMALL is left alone.\n\nOK = apply · Cancel = dry run (report only, changes nothing)');
@@ -1672,6 +1713,7 @@ const NetSuiteSyncTab = ({ currentUser, activeBrand }) => {
                         <SyncButton onClick={handleSyncVendors} disabled={isSyncing} label="Sync Active Vendors" sub="SuiteQL: Pulls all active external vendors/co-ops." />
                         <SyncButton onClick={handleSyncItems} disabled={isSyncing} label="Sync Master Library (Items, Kits & BOMs)" sub="SuiteQL: Single-pass sync. Pulls all Inventory, Assemblies, active BOM Revisions, and component mappings." />
                         <SyncButton onClick={handleForcePoleTags} disabled={isSyncing || poleFixBusy} label="🪝 Force Pole / Rod Tags" sub="Every item categorised POLE or ROD gets Finish Stream = POLES and Part Handling = Small Parts (stocked). Repairs open finishing work orders too, so orders already on the floor run the pole recipe. Explicit SMALL is never overridden. Cancel at the prompt for a dry run." />
+                        <SyncButton onClick={handlePlatedCoreReport} disabled={isSyncing || coreReportBusy} label="🔍 Plated Items Without a BOM Core" sub="Report only. Lists every plated item (EP / MEP / P25 suffix) that is not an Assembly, has no BOM pins, or whose pins never name its mill core — the core the plating demand pulls and the NetSuite build consumes. Fix the item in NetSuite, then re-sync. Nothing is written." />
                         <SyncButton onClick={handleStampItemCodes} disabled={isSyncing || stampBusy} label="🪪 Stamp Canonical Item Codes" sub="Backfills `itemCode` onto every existing work order (hq + finishing, parked payloads included) using the same resolver every screen reads. Orders whose identity can't be resolved are reported, never guessed. Cancel at the prompt for a dry run." />
                         <FieldFlags
                             title="NetSuite may overwrite…"
