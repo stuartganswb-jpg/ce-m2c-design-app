@@ -19,7 +19,14 @@ for f in traverseTags traverseFlow traverseKitImport nodeList priceLevels kitCod
         -e "s#from '\./traverseExplode'#from './traverseExplode.mjs'#" \
         "$ROOT/src/components/Shared/$f.js" > "$OUT/$f.mjs"
 done
-cp "$ROOT"/scripts/*.test.mjs "$OUT/"
+# TWO KINDS OF TEST FILE (Brief F, 2026-09-03). The traverse family imports the STAGED copies
+# ('./traverseFlow.mjs'); every newer suite imports the source directly ('../src/components/…js')
+# and must run from the REPO ROOT, where that path exists. Copying the second kind in here made
+# fifteen suites fail on path alone while every one of them passed from the root.
+ROOTTESTS=""
+for t in "$ROOT"/scripts/*.test.mjs; do
+    if grep -q "from '\.\./src/" "$t"; then ROOTTESTS="$ROOTTESTS $t"; else cp "$t" "$OUT/"; fi
+done
 
 # The kit-import tests run against the REAL Fabricut sheet when it is present — extracted to JSON
 # here because node has no xlsx reader. Absent sheet = those tests skip, the rest still run.
@@ -41,4 +48,7 @@ json.dump(sheets, open(sys.argv[2], 'w'), default=str)
 PYEOF
 fi
 
-cd "$OUT" && node --test ./*.test.mjs
+status=0
+(cd "$OUT" && node --test ./*.test.mjs) || status=1
+if [ -n "$ROOTTESTS" ]; then (cd "$ROOT" && node --test $ROOTTESTS) || status=1; fi
+exit $status
