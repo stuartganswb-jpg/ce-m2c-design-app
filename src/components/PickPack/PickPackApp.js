@@ -8,7 +8,7 @@ import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
-import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction } from "firebase/firestore";
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { signInWithCustomToken } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
@@ -651,6 +651,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             setPlatingMemo(`Backorder ${packRef(job)} — ${sh.code} short ${sh.short}${uncovered > 0 ? `, ${coverable} from mill` : ''}`);
             setPlatingWO(packRef(job));
             setPlatingDemandId(demandId);
+            releaseClaim(job, 'pick');
             setActivePickJob(null);
             setActiveTab('PLATING');
         } catch (e) {
@@ -731,6 +732,70 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return out.map(l => ({ ...l, cat: packCatOf(l) }));
     };
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : woRefOf(j);
+
+    // ── ONE ORDER, ONE PAIR OF HANDS (Stuart 2026-09-02: "make sure each is gated so once a user
+    // starts a pick another user sees that and does not start to pick") ─────────────────────────
+    // Starting a pick (and opening an order to pack) used to live only in this tablet's React
+    // state. Nothing was written, so the same card stayed live on every other tablet and two
+    // people could walk the rack for one order's parts. Now the start is a CLAIM on the order doc:
+    //   pickInProgress / packInProgress = { by, startedAt }
+    // written in a transaction (two simultaneous taps cannot both win), shown on every queue card
+    // ("Sandra is picking this since 10:14"), and refused to anyone else. The same person can
+    // resume their own claim (line progress restarts — it was never persisted). Complete and abort
+    // clear it. Nothing clears on its own: a tablet that died mid-pick leaves the order claimed,
+    // the card says so after CLAIM_STALE_MS, and an admin releases it with a reason that is logged.
+    // The claim carries the NAME only — the hq_users doc id is the PIN and never leaves the login.
+    const CLAIM_STALE_MS = 4 * 60 * 60 * 1000;
+    const claimFieldOf = (kind) => kind === 'pack' ? 'packInProgress' : 'pickInProgress';
+    const claimVerbOf = (kind) => kind === 'pack' ? 'packing' : 'picking';
+    const claimOf = (job, kind) => (job && job[claimFieldOf(kind)] && job[claimFieldOf(kind)].by) ? job[claimFieldOf(kind)] : null;
+    const claimIsMine = (c) => !!c && !!operator?.name && String(c.by || '').trim() === String(operator.name).trim();
+    const claimIsStale = (c) => !!c && (Date.now() - (Number(c.startedAt) || 0)) > CLAIM_STALE_MS;
+    const claimBlocks = (job, kind) => { const c = claimOf(job, kind); return !!c && !claimIsMine(c); };
+    const claimSince = (c) => new Date(Number(c.startedAt) || 0).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const claimOrder = async (job, kind) => {
+        const me = String(operator?.name || '').trim();
+        if (!me) throw new Error('No operator signed in.');
+        const field = claimFieldOf(kind);
+        return runTransaction(db, async (tx) => {
+            const snap = await tx.get(packDocOf(job));
+            if (!snap.exists()) throw new Error('This order no longer exists.');
+            const cur = snap.data()[field];
+            if (cur && cur.by && String(cur.by).trim() !== me) return { ok: false, claim: cur };
+            const resumed = !!(cur && cur.by);
+            tx.update(packDocOf(job), { [field]: { by: me, startedAt: resumed ? (Number(cur.startedAt) || Date.now()) : Date.now() } });
+            return { ok: true, resumed };
+        });
+    };
+    const releaseClaim = async (job, kind) => {
+        try { await updateDoc(packDocOf(job), { [claimFieldOf(kind)]: null }); }
+        catch (e) { console.warn('claim release failed (the order stays claimed by its operator):', e); }
+    };
+    // Admin/supervisor release — a STATEMENT with a reason, on the order and in the log, so an
+    // order taken off someone can always be accounted for.
+    const adminReleaseClaim = async (job, kind) => {
+        const c = claimOf(job, kind);
+        if (!c) return;
+        const why = window.prompt(`${c.by} has ${packRef(job)} open for ${claimVerbOf(kind)} since ${claimSince(c)}${claimIsStale(c) ? ' (no activity for 4+ hours)' : ''}.\n\nReleasing lets someone else start it — ${c.by}'s tablet will lose it.\n\nWhy? (recorded against the order)`, '');
+        if (why === null) return;
+        const reason = String(why).trim();
+        if (!reason) return alert('A reason is needed — nothing was changed.');
+        try {
+            await updateDoc(packDocOf(job), { [claimFieldOf(kind)]: null, [`${claimFieldOf(kind)}Released`]: { by: operator?.name || '', at: Date.now(), was: c, reason } });
+            writeLog(`${kind === 'pack' ? 'Pack' : 'Pick'} claim released on ${packRef(job)} (was ${c.by} since ${claimSince(c)}): ${reason}`, 'wms');
+        } catch (e) { alert('Could not release: ' + (e.message || e)); }
+    };
+    const renderClaimLine = (job, kind) => {
+        const c = claimOf(job, kind);
+        if (!c) return null;
+        const mine = claimIsMine(c), stale = claimIsStale(c);
+        return (
+            <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: mine ? '#3a7d44' : (stale ? '#d9534f' : theme.brass) }}>
+                <span>{mine ? `🔒 ${t(kind === 'pack' ? 'You are packing this' : 'You are picking this')}` : `🔒 ${c.by} ${t(kind === 'pack' ? 'is packing this' : 'is picking this')}`} · {t('since')} {claimSince(c)}{stale ? ` · ${t('no activity for 4+ hours')}` : ''}</span>
+                {!mine && isPlatingAdmin && <button onClick={(e) => { e.stopPropagation(); adminReleaseClaim(job, kind); }} style={{ padding: '3px 8px', background: 'transparent', border: `1px solid ${stale ? '#d9534f' : theme.line}`, color: stale ? '#d9534f' : theme.inkSoft, cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' }}>{t('Release (admin)')}</button>}
+            </div>
+        );
+    };
     // Resolve a raw fin/hq WO id to the honest reference (NetSuite number first) via the
     // unfiltered fin list this screen already holds; falls back to the id itself.
     const finRefOf = (id) => { const f = id && finAll.find(x => x.id === id); return f ? woRefOf(f) : (id || ''); };
@@ -913,7 +978,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     ].sort((a, b) => (a.packedReadyAt || a.completedAt || a.createdAt || 0) - (b.packedReadyAt || b.completedAt || b.createdAt || 0));
     const packedRecent = [...finAll, ...quickShipOrders].filter(j => j.packStatus === 'Packed').sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)).slice(0, 6);
 
-    const openPackOrder = (job) => {
+    const openPackOrder = async (job) => {
+        // Same gate as the pick: the order doc says who has it open, everyone else is refused.
+        let r;
+        try { r = await claimOrder(job, 'pack'); } catch (err) { return alert('Could not open the order: ' + (err.message || err)); }
+        if (!r.ok) return alert(`${r.claim.by} ${t('is packing this')} — ${t('since')} ${claimSince(r.claim)}.\n\n${t('Pick a different order, or ask them (or an admin) to release it.')}`);
         setPackOrderId(job.id);
         const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
         const small = brandBoxes.find(b => /small/i.test(b.name || ''));
@@ -1222,7 +1291,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!window.confirm(confirmMsg)) return;
         packCompletingRef.current = true;
         try {
-            await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer',
+            await updateDoc(packDocOf(job), { packStatus: 'Packed', packedAt: Date.now(), packedBy: operator?.name || 'Packer', packInProgress: null,
                 ...(job.hasCustomSibling && !job.packCustomMatchedAt ? { packCustomMatchedAt: Date.now(), packCustomMatchedBy: operator?.name || '', packCustomMatchedScan: custMatch } : {}),
                 ...(isStockPutaway ? { putawayBin: bin, packMode: 'PUTAWAY' } : { packBoxes: packBoxSel }) });
             setPackCustomScan('');
@@ -2553,7 +2622,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
     const completePick = (skips, shorts) => {
         setShowNacho(true);
         setTimeout(async () => {
-            const patch = { pickStatus: 'Picked_Awaiting_Staging' };
+            const patch = { pickStatus: 'Picked_Awaiting_Staging', pickInProgress: null, pickedBy: operator?.name || '', pickedAt: Date.now() };
             if (skips && skips.length) { patch.pickSkips = skips; patch.pickHadSkips = true; }
             if (shorts && shorts.length) { patch.pickShorts = shorts; patch.pickHadShorts = true; }
             await updateDoc(doc(db, "fin_workorders", activePickJob.id), patch);
@@ -3195,7 +3264,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             <div style={{ position: 'fixed', inset: 0, backgroundColor: theme.paper, color: theme.ink, zIndex: 9999, display: 'flex', flexDirection: 'column', padding: '40px', fontFamily: theme.sans }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: `1px solid ${theme.line}`, paddingBottom: '20px', marginBottom: '40px' }}>
                     <h1 title={activePickJob.id} style={{ margin: 0, fontSize: '2.5rem', fontFamily: theme.serif, fontWeight: 500, color: theme.ink }}>Picking: {packRef(activePickJob)}{pickSkips.length > 0 && <span style={{ fontFamily: theme.mono, fontSize: '0.9rem', color: '#d9534f', marginLeft: '16px' }}>⚠ {pickSkips.length} SKIPPED</span>}</h1>
-                    <button onClick={() => { setActivePickJob(null); setPickSkips([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); }} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
+                    <button onClick={() => { releaseClaim(activePickJob, 'pick'); setActivePickJob(null); setPickSkips([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); }} style={{ background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, padding: '15px 30px', fontFamily: theme.mono, fontSize: '11px', letterSpacing: '.1em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s' }} onMouseOver={(e) => { e.currentTarget.style.color = theme.ink; e.currentTarget.style.borderColor = theme.ink; }} onMouseOut={(e) => { e.currentTarget.style.color = theme.inkSoft; e.currentTarget.style.borderColor = theme.line; }}>ABORT PICK</button>
                 </div>
 
                 {showNacho ? (
@@ -3420,9 +3489,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                     </div>
                                                 )}
                                                 <OrderStatusChips wo={job} style={{ marginTop: '8px' }} />
+                                                {renderClaimLine(job, 'pick')}
                                                 <div style={{ color: theme.inkSoft, fontFamily: theme.mono, fontSize: '11px', marginTop: '5px' }}>{pickable.length} Line Item{pickable.length === 1 ? '' : 's'}{grouping.changed ? ` (${grouping.from} BOM lines grouped into ${grouping.to} picks)` : ''}{rawPickable.length !== (job.partsList?.length || 0) ? ` · ${(job.partsList?.length || 0) - rawPickable.length} return/fee line(s) ride the shop order` : ''} · tap for parts</div>
                                             </div>
-                                            <button onClick={(e) => { e.stopPropagation(); setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setPickShorts([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '10px 20px', background: theme.ink, color: '#fff', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', cursor: 'pointer', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => e.currentTarget.style.background = theme.brass} onMouseOut={(e) => e.currentTarget.style.background = theme.ink}>
+                                            <button disabled={claimBlocks(job, 'pick')} onClick={async (e) => { e.stopPropagation();
+                                                // CLAIM FIRST — the pick opens only once the order doc says it is ours.
+                                                let r;
+                                                try { r = await claimOrder(job, 'pick'); } catch (err) { return alert('Could not start the pick: ' + (err.message || err)); }
+                                                if (!r.ok) return alert(`${r.claim.by} ${t('is picking this')} — ${t('since')} ${claimSince(r.claim)}.\n\n${t('Pick a different order, or ask them (or an admin) to release it.')}`);
+                                                setActivePickJob({ ...job, partsList: pickable }); setCurrentPickLine(0); setPickSkips([]); setPickShorts([]); setValidation({ bin: '', qty: '' }); fetchLiveBins(pickable.map(l => l.legacyErpId || l.partId)); }} style={{ padding: '10px 20px', background: claimBlocks(job, 'pick') ? theme.paper2 : theme.ink, color: claimBlocks(job, 'pick') ? theme.inkSoft : '#fff', cursor: claimBlocks(job, 'pick') ? 'not-allowed' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', border: 'none', transition: 'background 0.2s', whiteSpace: 'nowrap' }} onMouseOver={(e) => { if (!claimBlocks(job, 'pick')) e.currentTarget.style.background = theme.brass; }} onMouseOut={(e) => { if (!claimBlocks(job, 'pick')) e.currentTarget.style.background = theme.ink; }}>
                                                 START PICKING
                                             </button>
                                         </div>
@@ -3771,7 +3846,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const done = jl.filter(l => j.packedLines && j.packedLines[l.key]).length;
                                     const active = packOrderId === j.id;
                                     return (
-                                        <button key={j.id} onClick={() => active ? setPackOrderId(null) : openPackOrder(j)} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
+                                        <button key={j.id} onClick={() => { if (active) { releaseClaim(j, 'pack'); setPackOrderId(null); } else openPackOrder(j); }} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
                                             {!active && <OrderStatusChips wo={j} showWho={false} style={{ marginBottom: '6px' }} />}
                                             {/* A paint run looks like a stock build until you read the code — say so. */}
                                             {isPaintOnlyOrder(j) && <div title={`Legacy NetSuite item ${j.jfpItemCode || ''} — no assembly. Scanning the bin adjusts the painted pieces into it.`} style={{ display: 'inline-block', marginBottom: '6px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE} · {j.jfpItemCode || ''}</div>}
@@ -3779,6 +3854,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             <div style={{ fontFamily: theme.sans, fontSize: '0.75rem', color: active ? 'rgba(255,255,255,0.75)' : theme.inkSoft }}>
                                                 {j.customerName || j.clientName || j.customer || '—'} · {jl.length} line{jl.length === 1 ? '' : 's'}{done > 0 ? ` · ${done}/${jl.length} packed` : ''}
                                             </div>
+                                            {!active && renderClaimLine(j, 'pack')}
                                         </button>
                                     );
                                 })}
