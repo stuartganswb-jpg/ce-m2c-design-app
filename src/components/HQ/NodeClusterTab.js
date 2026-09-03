@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, Bounds } from '@react-three/drei';
 import { isSheet2dAssembly, Sheet2DRegionEditor, regionNodeId } from '../Shared/sheet2d';
+import { slotGroupsOf, nodesOfGroup, slotGaps } from '../Shared/slotGroups';
 
 // --- HIERARCHY CASCADE HELPERS ---
 const findNodeByName = (tree, name) => {
@@ -379,6 +380,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [highlightUnassigned, setHighlightUnassigned] = useState(false);
     const [locatingClusterId, setLocatingClusterId] = useState(null); // visual confirm: isolate a saved cluster in 3D
     const [hoveredClusterId, setHoveredClusterId] = useState(null); // hover a saved cluster row -> glow its meshes
+    // SLOT LOCATOR (Stuart 2026-09-03): the 1.6 slots, listed here in load order; hovering one
+    // glows EVERY cluster it loaded, Locate locks it. Same interaction language as the cluster rows.
+    const [locatingSlotKey, setLocatingSlotKey] = useState(null);
+    const [hoveredSlotKey, setHoveredSlotKey] = useState(null);
+    const [openSlots, setOpenSlots] = useState(() => new Set());
 
     // --- AUTO-GROUP STATE ---
     const [cadComponents, setCadComponents] = useState([]); // raw top-level subassemblies from the model
@@ -639,6 +645,12 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const existingClusters = useMemo(() => activeAssembly?.nodeClusters || [], [activeAssembly?.nodeClusters]);
     const locatingNodes = existingClusters.find(c => c.id === locatingClusterId)?.nodes || [];
     const hoveredClusterNodes = existingClusters.find(c => c.id === hoveredClusterId)?.nodes || [];
+    // Clusters grouped by the 1.6 slot they came from (stamped fields → cluster-id parse → S<n>
+    // prefix → Ungrouped, never hidden). Pure, node-tested: Shared/slotGroups.js.
+    const slotGroups = useMemo(() => slotGroupsOf(existingClusters), [existingClusters]);
+    const slotNodesOf = (key) => nodesOfGroup(slotGroups.find(g => g.key === key));
+    const hoveredSlotNodes = hoveredSlotKey ? slotNodesOf(hoveredSlotKey) : [];
+    const locatingSlotNodes = locatingSlotKey ? slotNodesOf(locatingSlotKey) : [];
 
     // Normalized lookup of library components for fast name / ERP matching.
     const libraryIndex = useMemo(() => libraryParts.map(part => {
@@ -1125,7 +1137,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         onMeshClick={handleMeshClick}
                                         onLoaded={setSceneGraph}
                                         onComponents={setCadComponents}
-                                        locatingNodes={(showAutoPanel && glowNodes.length) ? glowNodes : (hoveredClusterNodes.length ? hoveredClusterNodes : locatingNodes)}
+                                        locatingNodes={(showAutoPanel && glowNodes.length) ? glowNodes : (hoveredClusterNodes.length ? hoveredClusterNodes : (hoveredSlotNodes.length ? hoveredSlotNodes : (locatingNodes.length ? locatingNodes : locatingSlotNodes)))}
                                         colorGroups={showAutoPanel && showGroupColors && !glowNodes.length ? colorGroups : []}
                                         onHoverMesh={showAutoPanel ? handleAutoMeshHover : undefined}
                                     />
@@ -1177,6 +1189,57 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                 </div>
                             </div>
                             </>)}
+
+                            {/* SLOTS — the 1.6 load, one row per slot (Stuart 2026-09-03: "display the same
+                                slots and when selected there the items in that slot would be the ones that
+                                glow"). Hover glows the whole slot, Locate locks it, ▸ lists its clusters with
+                                the per-cluster Locate that already exists below. Ungrouped = clusters no 1.6
+                                slot claims (hand-made, AUTO-, 2D regions): shown, never guessed into a slot. */}
+                            {existingClusters.length > 0 && (
+                            <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                    <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Slots ({slotGroups.filter(g => g.source !== 'ungrouped').length})</h3>
+                                    {locatingSlotKey && <button onClick={() => setLocatingSlotKey(null)} style={{ background: '#fff', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}>clear locate</button>}
+                                </div>
+                                <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginBottom: '14px', lineHeight: 1.4 }}>The slots 1.6 loaded, in load order — the number is the S&lt;n&gt; on every node name. Hover a slot to glow everything it loaded; Locate keeps it lit; ▸ lists its clusters.</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {slotGroups.map(g => {
+                                        const on = locatingSlotKey === g.key;
+                                        const isUn = g.source === 'ungrouped';
+                                        const open = openSlots.has(g.key);
+                                        const gaps = slotGaps(g);
+                                        const tagLine = [...new Set(g.clusters.map(c => [c.category, c.position, c.location].filter(Boolean).join(' · ')))].filter(Boolean).join('  |  ');
+                                        return (
+                                        <div key={g.key} onMouseEnter={() => setHoveredSlotKey(g.key)} onMouseLeave={() => setHoveredSlotKey(prev => prev === g.key ? null : prev)} style={{ border: `1px solid ${(on || hoveredSlotKey === g.key) ? 'var(--brass)' : 'var(--line)'}`, background: on ? 'var(--paper-2)' : (isUn ? '#fff' : 'var(--paper)'), padding: '10px 12px', borderLeft: `2px solid ${isUn ? 'var(--line)' : 'var(--brass)'}` }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                                                <button onClick={() => setOpenSlots(prev => { const n = new Set(prev); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); return n; })} title={open ? 'Collapse' : 'List this slot\'s clusters'} style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '10px', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>{open ? '▾' : '▸'}</button>
+                                                <span title={isUn ? 'No 1.6 slot claims these clusters' : `Load order #${g.order} — read from ${g.source === 'stamp' ? 'the cluster record' : g.source === 'id' ? 'the cluster id' : 'the S<n> node prefix'}`} style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 600, minWidth: '34px', textAlign: 'center', padding: '3px 6px', border: `1px solid ${isUn ? 'var(--line)' : 'var(--brass)'}`, background: isUn ? '#fff' : 'var(--brass)', color: isUn ? 'var(--ink-soft)' : '#fff', flexShrink: 0 }}>{isUn ? '—' : (g.order != null ? `#${g.order}` : '?')}</span>
+                                                <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}</span>
+                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{g.clusters.length} cluster{g.clusters.length === 1 ? '' : 's'} · {nodesOfGroup(g).length}n</span>
+                                                {gaps.length > 0 && <span title={gaps.join(' · ')} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#b00020', whiteSpace: 'nowrap' }}>⚠ {gaps.join(' · ')}</span>}
+                                                {!isUn && <button onClick={() => setLocatingSlotKey(on ? null : g.key)} title="Light up every cluster this slot loaded, fade the rest" style={{ background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink)', border: '1px solid var(--brass)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', flexShrink: 0 }}>{on ? '◉ Locating' : 'Locate'}</button>}
+                                            </div>
+                                            {tagLine && <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)', marginTop: '6px', paddingLeft: '34px' }}>{tagLine}</div>}
+                                            {open && (
+                                                <div style={{ marginTop: '8px', paddingLeft: '34px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                    {g.clusters.map(cl => {
+                                                        const cOn = locatingClusterId === cl.id;
+                                                        return (
+                                                        <div key={cl.id} onMouseEnter={() => setHoveredClusterId(cl.id)} onMouseLeave={() => setHoveredClusterId(prev => prev === cl.id ? null : prev)} style={{ display: 'flex', alignItems: 'center', gap: '8px', border: `1px solid ${(cOn || hoveredClusterId === cl.id) ? 'var(--brass)' : 'var(--line)'}`, background: '#fff', padding: '5px 8px' }}>
+                                                            <span style={{ fontSize: '0.85rem', color: 'var(--ink)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cl.name}</span>
+                                                            <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', color: (!cl.category || String(cl.category).toUpperCase() === 'OTHER' || !cl.position) ? '#b00020' : 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{cl.category || '— no category'} · {cl.position || '— no position'}{cl.location ? ` · ${cl.location}` : ''} · {(cl.nodes || []).length}n</span>
+                                                            <button onClick={() => setLocatingClusterId(cOn ? null : cl.id)} title="Highlight just this cluster in the 3D view" style={{ background: cOn ? 'var(--brass)' : '#fff', color: cOn ? '#fff' : 'var(--ink)', border: '1px solid var(--brass)', padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: '8px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', flexShrink: 0 }}>{cOn ? '◉' : 'Locate'}</button>
+                                                        </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                            )}
 
                             <div style={{ background: '#fff', border: '1px solid var(--line)', padding: '30px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
