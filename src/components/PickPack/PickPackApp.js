@@ -5551,6 +5551,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                                     </div>
                                                                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                                                         <input type="number" min="0" max={l.qty} value={cartQty[l.id] != null ? cartQty[l.id] : ''} onChange={(e) => setCartQty(p => ({ ...p, [l.id]: e.target.value }))} placeholder={String(l.qty)} title="Good pieces off the pallet — leave blank for all of them" style={{ ...inp, width: '92px', textAlign: 'center' }} />
+                                                                        {/* ITEM LABELS AT THE DOCK (Stuart 2026-09-03) — the PLATED code, because that is
+                                                                            what the pieces are now and what goes on the shelf. One per piece, for the
+                                                                            quantity in the box beside it (or all of them if it is blank). */}
+                                                                        <button disabled={!tgt} title={tgt ? `Print ${Math.max(1, Math.min(50, parseInt(cartQty[l.id] || l.qty) || 1))} × ${tgt} item label(s)` : 'This line has no plated code yet'}
+                                                                            onClick={() => printStockItemLabels({ itemId: tgt, itemName: l.itemName || '', uom: 'EA', woNum: l.shipmentId || l.woNum || '', copies: Math.max(1, Math.min(50, parseInt(cartQty[l.id] || l.qty) || 1)) })}
+                                                                            style={{ ...btn('transparent', tgt ? theme.ink : theme.inkSoft), border: `1px solid ${theme.line}`, fontSize: '13px', padding: '8px 12px' }}>🖨</button>
                                                                         <button disabled={!tgt || isSyncing} onClick={() => receiveToCart(l, g.lines)} style={btn(!tgt ? theme.paper2 : theme.brass, !tgt ? theme.inkSoft : '#fff')}>{tgt ? t('Add to cart') : t('No finish')}</button>
                                                                     </div>
                                                                 </div>
