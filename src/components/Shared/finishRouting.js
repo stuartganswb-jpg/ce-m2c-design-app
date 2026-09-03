@@ -68,8 +68,23 @@ export const tierOfErp = (erpId) => {
 // finishing job on a stocked part — including the ones rod cuts produce, which arrive as exactly
 // that. The suffix is the whole test.
 const APPLIED_PAINT_RE = /^P\d*$/i;                 // P (the rollup), P01…P24, P25 is plated below
+// ── WOOD STAIN IS A THIRD CLASS (Stuart 2026-09-03) ────────────────────────────────────────────
+// The rule above was written from his words about PAINT and PLATING — "/P is our control for
+// finishes that we always apply custom … all EP and MEP are outsourced custom. All other colors
+// like CP, SG, N90, etc. are all small parts." Wood stains (S04 Natural Oak, S11 Pure Oak — the
+// CPQ finish panel's WOOD group) are named nowhere in that sentence, so they fell to "all other
+// colors" and a 72" stained wood pole classified as SMALL PARTS: one finishing job, and the shop
+// never saw the cut. Asked rather than derived, because this rule was derived wrong twice before
+// (POLE_ROUTING_HANDOFF_BRIEF §1). His answer: "stained wood can go to custom to be cut then
+// finished." So a stain is an APPLIED finish — the piece is cut to order and finished after.
+//
+// S FOLLOWED BY DIGITS, deliberately: 'SG' (Satin Gold) is one of the small-parts colours he named
+// himself, and it must keep falling through. A wood code that is not S + digits is NOT caught here
+// — if more turn up, name them rather than widening this to /^S/.
+const WOOD_STAIN_RE = /^S\d+$/i;
+export const isWoodStainCode = (code) => WOOD_STAIN_RE.test(String(code || '').trim());
 export const isAppliedFinishCode = (code) =>
-    isOutsourcedFinishCode(code) || APPLIED_PAINT_RE.test(String(code || '').trim());
+    isOutsourcedFinishCode(code) || APPLIED_PAINT_RE.test(String(code || '').trim()) || isWoodStainCode(code);
 
 /**
  * Part Handling from the item code alone: 'Custom' or 'Small Parts'.

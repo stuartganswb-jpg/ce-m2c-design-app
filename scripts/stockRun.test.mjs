@@ -11,7 +11,7 @@ import {
     routeForCode, floorFieldsOf, buildStockFinPayload, buildParkedWorkOrder,
     ROUTE_FINISHING, ROUTE_SHOP, REFUSE_PHOSPHATE, REFUSE_OUTSOURCED,
 } from '../src/components/Shared/stockRun.js';
-import { tierOfErp, TIER } from '../src/components/Shared/finishRouting.js';
+import { tierOfErp, TIER, handlingForErp, isAppliedFinishCode, isWoodStainCode } from '../src/components/Shared/finishRouting.js';
 import { sourcesForLength, cutPlanFromSource } from '../src/components/Shared/poleCut.js';
 
 const TASKS = { spinSetup: 'Pending' };   // stand-in for makeFullTasks(); the shape is the contract's
@@ -36,6 +36,26 @@ test('route: stated for sprayed finishes and raw codes, refused for /P and outso
     // the -N new-item marker and -10/-12 pack sizes are not part of the finish
     assert.equal(routeForCode('X/BL-N').finish, 'BL');
     assert.equal(routeForCode('X/CP-10').finish, 'CP');
+});
+
+test('part handling: wood stain is CUSTOM, and the colours Stuart named stay SMALL PARTS', () => {
+    // Stuart 2026-09-03: "stained wood can go to custom to be cut then finished." S04 Natural Oak
+    // and S11 Pure Oak are the CPQ WOOD group; before this they fell to "all other colors" and a
+    // 72" stained pole was one finishing job with no shop cut.
+    assert.equal(isWoodStainCode('S04'), true);
+    assert.equal(isWoodStainCode('S11'), true);
+    assert.equal(handlingForErp('H1-138WR/S04'), 'Custom');
+    assert.equal(handlingForErp('H1-138WR/S11'), 'Custom');
+    // SG is one of the small-parts colours he named himself — S + a LETTER must keep falling through.
+    assert.equal(isWoodStainCode('SG'), false);
+    assert.equal(isWoodStainCode('S'), false);
+    assert.equal(handlingForErp('HCUMP810/SG'), 'Small Parts');
+    assert.equal(handlingForErp('HCUMP810/N90'), 'Small Parts');
+    assert.equal(handlingForErp('HCUMP810/CP'), 'Small Parts');
+    // and the paint/plate rules are untouched
+    ['P', 'P01', 'P25', 'EP3', 'MEP2'].forEach(c => assert.equal(isAppliedFinishCode(c), true, c));
+    assert.equal(handlingForErp('HCUMP810/P01'), 'Custom');
+    assert.equal(handlingForErp('HCUMP810'), 'Custom');          // a mill code is made to order
 });
 
 test('tier: raw / P / PLATE / FIN from the canonical vocabulary, one reader for Stock View and 4.5', () => {
