@@ -168,6 +168,238 @@ const slotChoiceNames = (scene) => {
 };
 const allNodeNames = (obj) => { const n = []; obj.traverse(o => { if (o.name) n.push(o.name); }); return [...new Set(n)]; };
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// ONE TAG ROW FOR BOTH SCREENS (Stuart 2026-09-03: "on 1.6 when using the extend feature the
+// designer does not see the same tag choices as i do when i load choices on already built").
+// The Load Choices row and the slot (Build / Extend) row are two renderers of the SAME choice
+// object, written through two writers that already persist every field below — so a tag the
+// designer could not reach (traverse role, drive, setup, tier, passing, always, no plate, the
+// materials chips, the per-rod projection grammar) was unreachable, not unsupported. This is
+// the Load Choices flags cell, lifted verbatim, driven by props for the few things that differ:
+// how a patch is applied, which category the row's cluster/slot carries, and which collar
+// candidates are in scope. A new tag added here reaches both screens in one edit.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+function ChoiceTagControls({ c, category, onPatch, dictLists, custList, ensureCustomers, collarCands, inp }) {
+    return (
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: '7px 18px', alignItems: 'center', minWidth: 0 }}>
+            <label title="Fee choice (e.g. a french-return bend): shows this geometry as a selectable option, bills as a fee — no item # / BOM line. Position comes from the cluster's tag." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={!!c.isFee} onChange={e => onPatch({ isFee: e.target.checked, ...(e.target.checked ? { isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                fee
+            </label>
+            <label title="Hide this node in EVERY configuration (stray/duplicate geometry that should never render). Takes effect after regenerating the flow." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={!!c.isHidden} onChange={e => onPatch({ isHidden: e.target.checked, ...(e.target.checked ? { isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                hide
+            </label>
+            <label title="BASIC = ONE PIECE. The arm and the backplate are combined into a single part, so there is no plate left to choose — the picker greys out and stays None. Tag it wherever the part is filed: the tag is what is watched, not whether the cluster says arm or base." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={!!c.isBasic} onChange={e => onPatch({ isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                basic
+            </label>
+            <label title="NO PLATE. This end treatment mounts without a backplate, so the plate picker is not offered while it is chosen. Use it where the SAME kind of end differs by rod: a solid french/miter return bolts to the wall and takes a plate, the traverse one clamps to the fascia and does not. Only the item knows which — nothing is derived from the rod type." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.noBackplate ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={!!c.noBackplate} onChange={e => onPatch({ noBackplate: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                no plate
+            </label>
+            <label title="INLINE BRACKET (the bracket-side sibling of the basic tag): while this In Line arm is the selected bracket, the plate picker shows the INLINE plates (inl-only copies) — or the RETURN plates when the flow has no inline copies. This tag is how the system knows a bracket is In Line." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.usesReturnPlates ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={!!c.usesReturnPlates} onChange={e => onPatch({ usesReturnPlates: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                inl-bkt
+            </label>
+            {/* 🧊 TAKES NO FINISH (Stuart 2026-08-17). The renderer used to decide "this is
+                acrylic" by matching MESH NAMES against a hardcoded list of item codes in the
+                render loop — which is why an acrylic ball rendered clear while the acrylic gem
+                and knob rendered as metal: their mesh names were not on the list. A list that
+                must be edited and deployed for every new acrylic part is not a rule. This is
+                the rule: the DESIGNER says which parts take no finish, once, here. */}
+            {/* 🧪 WHAT THIS PART IS MADE IN (Stuart 2026-08-17). Replaces the no-finish
+                checkbox with the fuller fact: a part is made in one or more MATERIALS,
+                and it wears only finishes belonging to those. METAL is the default and
+                the first choice; CLEAR (NO FINISH) is what the checkbox used to say,
+                now one material among several rather than a special case. Tick more
+                than one where a part is genuinely offered in several. */}
+            <span title="MATERIALS — everything this part is made in. It will only be offered finishes whose material matches. Blank reads as METAL. CLEAR (NO FINISH) means it never takes a finish — the acrylic top of a two-part finial, whose metal collar is tagged METAL separately. The list is the MATERIALS Master Dictionary in 4.5." style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center', border: `1px solid ${c.materials ? 'var(--brass)' : 'var(--line)'}`, padding: '2px 4px' }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>made in:</span>
+                {(((dictLists && dictLists.materials) || []).length ? dictLists.materials : ['METAL', 'WOOD', 'CLEAR (NO FINISH)']).map(mt => {
+                    const val = String(mt).toUpperCase();
+                    const cur = String(c.materials || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+                    const on = cur.includes(val) || (!cur.length && val === 'METAL');
+                    return (
+                        <button key={mt} type="button" onClick={() => {
+                            const base = cur.length ? cur : ['METAL'];
+                            const next = base.includes(val) ? base.filter(x => x !== val) : [...base, val];
+                            onPatch({ materials: next.join(','), noFinish: next.length === 1 && /CLEAR|NO FINISH/.test(next[0]) });
+                        }} style={{ fontFamily: 'var(--mono)', fontSize: '8px', padding: '1px 4px', cursor: 'pointer', background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}` }}>{mt}</button>
+                    );
+                })}
+            </span>
+            {/* TRAVERSE (Stuart 2026-08-03). A traverse system is a different grammar, not a
+                pole with different parts: the FASCIA is chosen first, the TRACK is a finish
+                choice whose CUT depends on the drive, and the CARRIERS ride inside and are
+                never chosen at all. Blank on every other assembly, so nothing changes for
+                pole flows. */}
+            <select value={c.traverseRole || ''} title="TRAVERSE ROLE — FASCIA (the track face, chosen first) · TRACK (finish choice; its cut length differs by drive) · CARRIER (rides inside, never offered) · BRACKET / BACKPLATE (mixed assemblies, e.g. H1-138: traverse-ONLY attachments — offered only while the traverse unit, a pole choice tagged fascia/track, is selected; the standard brackets hide in their place, and swap back on a standard rod). Leave blank on pole assemblies." onChange={e => { const tr = e.target.value; onPatch({ traverseRole: tr, ...(['CARRIER', 'FCLIP'].includes(tr) ? { alwaysShown: true, isHidden: false, isFee: false } : {}) }); }} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.traverseRole ? 'var(--brass)' : 'var(--line)', color: c.traverseRole ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                <option value="">trv: — none —</option>
+                {TRAVERSE_ROLES.map(t => <option key={t} value={t}>trv: {t === 'TRV_END' ? 'end' : t === 'TRV_BRACKET' ? 'bracket' : t === 'TRV_BACKPLATE' ? 'backplate' : t === 'TRV_PART' ? 'trv-only' : t === 'STD_ONLY' ? 'std-only' : t.toLowerCase()}</option>)}
+            </select>
+            <select value={c.driveType || ''} title="DRIVE — MOTORIZED or MANUAL. Blank = BOTH, which is the common case (a fascia is a fascia however the track is driven), so the default costs nothing. The generator only adds a Motorised/Manual step when an assembly actually carries choices for BOTH." onChange={e => onPatch({ driveType: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.driveType ? 'var(--brass)' : 'var(--line)', color: c.driveType ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                <option value="">drive: — both —</option>
+                {DRIVE_TYPES.map(d => <option key={d} value={d}>drive: {d.toLowerCase()}</option>)}
+            </select>
+            {/* SINGLE vs DOUBLE — a double is two tracks on one bracket, so the bracket
+                IS a different part and only one of the two tracks exists on a single.
+                Blank = suits both, which is most things. */}
+            <select value={c.trvSetup || ''} title="SINGLE / DOUBLE — tag a bracket for the setup it fits, and each track for the setup it belongs to (front = single, rear = double). Blank = suits both. The Single-or-Double step is only asked when the assembly carries choices for BOTH." onChange={e => onPatch({ trvSetup: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.trvSetup ? 'var(--brass)' : 'var(--line)', color: c.trvSetup ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                <option value="">setup: — both (shared) —</option>
+                {TRV_SETUPS.map(t => <option key={t} value={t}>setup: {t.toLowerCase()}</option>)}
+            </select>
+            {/* WHICH ROD OF A DOUBLE (Stuart 2026-08-17). Front and back are not "where along
+                the rod" — that is left/center/right, and a back rod's left finial is BOTH at
+                once. Leave it blank and the part serves every rod, which is what a shared
+                bracket and a finial style used front and back genuinely are. */}
+            <select value={c.tier || ''} title="FRONT / BACK — which rod of a DOUBLE this part belongs to. The rod itself, its finials, its returns and its rings are asked once per rod, so tag them. The BRACKET and BACKPLATE carry both rods and are asked once — leave those blank. Blank also means 'serves both rods', which is right for a finial style used front and back. ⚠ Do NOT use projection to mean front/back: projection is what depths a part is MADE IN, and tagging the rods differently would offer them as alternatives — pick one and the other rod disappears." onChange={e => onPatch({ tier: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '104px', maxWidth: '104px', borderColor: c.tier ? 'var(--brass)' : 'var(--line)', color: c.tier ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                <option value="">rod: — both —</option>
+                <option value="FRONT">rod: front</option>
+                <option value="BACK">rod: back</option>
+            </select>
+            {/* PASSING (Stuart 2026-08-22). "standard rings can not pass at all and
+                passing rings can only pass when used with passing brackets." Two parts,
+                one decision — so it is one answer that filters the centre bracket AND
+                the rings, and a mismatched pair cannot be assembled.
+                ⚠ LEAVE THE LEFT AND RIGHT ARMS BLANK. Passing brackets are only ever
+                used in the centre, so the end arms must suit either order — and blank
+                already means that. Tagging an end arm STANDARD deletes it from every
+                passing order, which is the one way to get this wrong. */}
+            <select value={c.passing || ''} title="STANDARD / PASSING — only the CENTRE bracket and the rings. A passing ring only slides past a passing centre bracket; a standard ring cannot pass at all. ⚠ Leave the LEFT and RIGHT arms blank: they are used on both kinds of order, and blank means 'suits either'. Tagging an end arm STANDARD would delete it from every passing order. Blank on everything that is not a centre bracket or a ring." onChange={e => onPatch({ passing: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '104px', maxWidth: '104px', borderColor: c.passing ? 'var(--brass)' : 'var(--line)', color: c.passing ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                <option value="">pass: — n/a —</option>
+                <option value="STANDARD">pass: standard</option>
+                <option value="PASSING">pass: passing</option>
+            </select>
+            <label title="ALWAYS SHOWN — present in every configuration, never offered, never swapped. A REAL part: it bills and it renders (grey). This is what carriers need — 'hide' is its opposite and means never render at all." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.alwaysShown ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                <input type="checkbox" checked={!!c.alwaysShown} onChange={e => onPatch({ alwaysShown: e.target.checked, ...(e.target.checked ? { isHidden: false, isFee: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                always
+            </label>
+            {normalizeCategory(c.catOverride || category) === 'FINIAL' && (
+                <label title="COLLAR — this choice is the metal collar of a TWO-PART finial: companion geometry, never offered as its own option. Pair each top to it via the tops' collar: dropdown; on regenerate the collar renders WITH those tops (the step's metal finish lands on the collar; the AC chip keeps an acrylic top clear)." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isCollar ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={!!c.isCollar} onChange={e => onPatch({ isCollar: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, requiresCollar: '' } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                    collar
+                </label>
+            )}
+            <select disabled={!!c.isFee} value={c.isFee ? '' : ((c.custIds && c.custIds[0]) || '')} title={c.isFee ? "Not available on a FEE choice — customer scope is not saved for fees (the pin drops it). Put the customer's pricing on the fee ITEM in the Master Library instead." : "CUSTOMER-ONLY choice: pick a customer and this option shows on the CPQ (and their portal) ONLY when that customer is selected — everyone else never sees it. '— all —' = visible to every customer (poles, rings, common parts)."} onFocus={() => ensureCustomers()} onChange={e => { const id = e.target.value; const nm = ((custList || []).find(x => x.id === id) || {}).name || ''; onPatch({ custIds: id ? [id] : [], custNames: id ? [nm] : [] }); }} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: (c.custIds && c.custIds.length) ? 'var(--brass)' : 'var(--line)', color: (c.custIds && c.custIds.length) ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                <option value="">cust: all</option>
+                {(custList || []).map(cu => <option key={cu.id} value={cu.id}>{cu.name}</option>)}
+                {c.custIds && c.custIds[0] && !(custList || []).some(x => x.id === c.custIds[0]) && <option value={c.custIds[0]}>{(c.custNames && c.custNames[0]) || c.custIds[0]}</option>}
+            </select>
+            {normalizeCategory(c.catOverride || category) === 'FINIAL' && !c.isCollar && (
+                <select value={c.requiresCollar || ''} title="PAIR WITH COLLAR (two-part finial top): pick the COLLAR-flagged choice (its item #) this top renders WITH — the generated option shows top+collar together, same side preferred. '— none —' = a one-piece finial. A ⚠ row = a choice ticked COLLAR that still needs its item # typed in." onChange={e => onPatch({ requiresCollar: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.requiresCollar ? 'var(--brass)' : 'var(--line)', color: c.requiresCollar ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                    <option value="">collar: — none —</option>
+                    {collarCands.codes.map(code => <option key={code} value={code}>{code}</option>)}
+                    {collarCands.pending.map((lbl, i) => <option key={`pend-${i}`} value="" disabled>⚠ {lbl} — needs item #</option>)}
+                    {c.requiresCollar && !collarCands.codes.some(code => code.toUpperCase() === String(c.requiresCollar).toUpperCase()) && <option value={c.requiresCollar}>{c.requiresCollar}</option>}
+                </select>
+            )}
+            {/* PROJECTION ON END CHOICES TOO (Stuart 2026-08-04: "i would need to add
+                them to the projections to the miter returns and return arms to help limit
+                the choices to match"). A traverse RETURN ARM is tagged FINIAL — it sits in
+                the finial position — so the dropdown was hidden on exactly the rows whose
+                projection has to match the bracket's. Any tagged end treatment gets it. */}
+            {/* BACKPLATES tag proj: too (Stuart 2026-08-14, H1-138: a backplate per bracket per projection).
+                🎯 EVERY PROJECTION THIS PART IS MADE IN (Stuart 2026-08-17): "can you make that
+                one multi select so we select all the ones it is available in — as in this case
+                the 1-3/8 diameter it is only available in 6 but a .75 pole is available in
+                4-5/8". This retires the MINIMUM-depth reading returns got from a single tag:
+                that rule existed only because availability could not be STATED. Now it is.
+                Tick none = made in every projection. Stored comma-joined, so a single existing
+                value still reads correctly. */}
+            {(['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || category)) || !!String(c.endTreatment || '').trim()) && (
+                <span title="PROJECTIONS — tick EVERY projection this part is made in. A bracket ticked 6&quot; only appears at 6&quot;; a return ticked 4-5/8&quot; and 6&quot; appears at both. Nothing ticked = available at every projection.&#10;&#10;PER ROD: a DOUBLE bracket does not have a projection, it has two — one for the front rod and one for the rear — and they arrive together as a property of that bracket. Switch to 'per rod' and set each. The bracket then becomes the projection question: the Projection step disappears, the bracket is asked before the ends, and each rod's parts are judged at ITS depth. Do not use the plain list for a double — two numbers there read as alternatives, and the bracket would appear twice, each time judged against the wrong rod." style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center', border: `1px solid ${c.projInches ? 'var(--brass)' : 'var(--line)'}`, padding: '2px 4px' }}>
+                    {(() => {
+                        const raw = String(c.projInches || '');
+                        const perRod = raw.includes(':');
+                        const projList = (dictLists && dictLists.projections) || [];
+                        const tierVal = (t) => {
+                            const hit = raw.split(',').map(x => x.trim()).find(x => x.toUpperCase().startsWith(`${t}:`));
+                            return hit ? hit.split(':').slice(1).join(':').trim().toUpperCase() : '';
+                        };
+                        const setTier = (t, v) => {
+                            const other = t === 'FRONT' ? 'BACK' : 'FRONT';
+                            const keep = tierVal(other);
+                            const parts = [];
+                            if (t === 'FRONT') { if (v) parts.push(`FRONT:${v}`); if (keep) parts.push(`BACK:${keep}`); }
+                            else { if (keep) parts.push(`FRONT:${keep}`); if (v) parts.push(`BACK:${v}`); }
+                            onPatch({ projInches: parts.join(',') });
+                        };
+                        const chip = (on) => ({ fontFamily: 'var(--mono)', fontSize: '8px', padding: '1px 4px', cursor: 'pointer', background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}` });
+                        return (
+                            <>
+                                <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>proj:</span>
+                                {!perRod && projList.map(pj => {
+                                    const val = String(pj).toUpperCase();
+                                    const on = raw.split(',').map(x => x.trim().toUpperCase()).filter(Boolean).includes(val);
+                                    return (
+                                        <button key={pj} type="button" onClick={() => {
+                                            const cur = raw.split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+                                            onPatch({ projInches: (on ? cur.filter(x => x !== val) : [...cur, val]).join(',') });
+                                        }} style={chip(on)}>{pj}"</button>
+                                    );
+                                })}
+                                {perRod && ['FRONT', 'BACK'].map(t => (
+                                    <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--brass)' }}>{t.toLowerCase()}</span>
+                                        {projList.map(pj => {
+                                            const val = String(pj).toUpperCase();
+                                            const on = tierVal(t) === val;
+                                            return <button key={`${t}-${pj}`} type="button" onClick={() => setTier(t, on ? '' : val)} style={chip(on)}>{pj}"</button>;
+                                        })}
+                                    </span>
+                                ))}
+                                {!raw.trim() && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)' }}>any</span>}
+                                {/* A double bracket's two depths are one fact, not two options. */}
+                                <button type="button" title={perRod ? 'Back to one depth for the whole part' : 'This part carries a DIFFERENT depth for the front rod and the rear — a double bracket'}
+                                    onClick={() => onPatch({ projInches: perRod ? '' : 'FRONT:' })}
+                                    style={{ fontFamily: 'var(--mono)', fontSize: '7.5px', padding: '1px 4px', cursor: 'pointer', background: 'transparent', color: 'var(--ink-faint)', border: '1px dashed var(--line)' }}>
+                                    {perRod ? 'one depth' : 'per rod'}
+                                </button>
+                            </>
+                        );
+                    })()}
+                </span>
+            )}
+            {/* BACKPLATES tag mount: too (ceiling backplates — Stuart 2026-08-14). */}
+            {['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || category)) && !c.isFee && (
+                <select value={c.mountType || ''} title="BRACKET MOUNT TYPE — the 4.5 Master-Dictionary list (BRACKET MOUNT TYPES); saved on the pin in the same vocabulary the Library editor + Vision engine use." onChange={e => onPatch({ mountType: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.mountType ? 'var(--brass)' : 'var(--line)', color: c.mountType ? 'var(--brass)' : 'var(--ink-soft)' }}>
+                    <option value="">mount: — any —</option>
+                    {((dictLists && dictLists.bracketMounts) || []).map(m => <option key={m} value={String(m).toUpperCase()}>mount: {m}</option>)}
+                </select>
+            )}
+            {/* An inside-mount bracket IS an end treatment (the H2-138 arrangement = canonical):
+                the generator re-homes it into this side's End Treatment step on Regenerate. Say so. */}
+            {normalizeCategory(c.catOverride || category) === 'BRACKET' && !c.isFee && normalizeLocation(c.mountType) === 'END' && (
+                <span title="Inside mount = an END TREATMENT: on Regenerate this choice pools into this side's End Treatment step tagged INSIDE MOUNT — it replaces the bracket (no separate bracket pick), excludes the finial, and the long rod stays. Same behavior as loading it in the END slot (the H2-138 arrangement)." style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>→ end treatment</span>
+            )}
+            <select value={c.catOverride || ''} title="CATEGORY OVERRIDE — re-homes this choice into another pool at generate: a return backplate the designer dropped into a FINIAL slot pools with the BACKPLATES once set. Blank = the cluster's own category. No re-upload needed." onChange={e => onPatch({ catOverride: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.catOverride ? '#d9534f' : 'var(--line)', color: c.catOverride ? '#d9534f' : 'var(--ink-soft)' }}>
+                <option value="">cat: cluster</option>
+                {['BRACKET', 'BACKPLATE', 'FINIAL', 'POLE', 'RING'].map(k => <option key={k} value={k}>cat: {k.toLowerCase()}</option>)}
+            </select>
+            {normalizeCategory(c.catOverride || category) === 'BRACKET' && (
+                <label title="END RETURN ARM (Flat Iron pattern): this bracket IS the end treatment — selecting it greys that side's finial / inside-mount step; its backplate stays choosable (unless basic). Auto-detected when the library part is flagged isReturnBracket; check here to force it." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isReturnArm ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={!!c.isReturnArm} onChange={e => onPatch({ isReturnArm: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                    end-arm
+                </label>
+            )}
+            {['BACKPLATE', 'POLE'].includes(normalizeCategory(c.catOverride || category)) && (
+                <label title="RETURN-ONLY: offered/drawn ONLY with a french/miter return or an end-return arm — the regular copies hide then (and this one hides otherwise). On a BACKPLATE: the plates that pair with the return/arm. On a POLE: the special rear pole cut short for a double return, so it does not protrude past the return (tag it double + back + rtn-only)." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.returnOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={!!c.returnOnly} onChange={e => onPatch({ returnOnly: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                    rtn-only
+                </label>
+            )}
+            {normalizeCategory(c.catOverride || category) === 'BACKPLATE' && (
+                <label title="INLINE BACKPLATE: the INLINE-bracket copy of a shared return-style plate — offered ONLY while an inl-bkt (In Line) bracket is selected; the return-position copies (rtn-only) show for actual returns. Flows without inl-only plates fall back to rtn-only for In Line brackets." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.inlineOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={!!c.inlineOnly} onChange={e => onPatch({ inlineOnly: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
+                    inl-only
+                </label>
+            )}
+        </span>
+    );
+}
+
+
 function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const [assemblyName, setAssemblyName] = useState('');
     const [template, setTemplate] = useState('standard');
@@ -2624,222 +2856,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                                         {END_TREATMENTS.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
                                                     </select>
                                                 ))}
-                                                {/* WRAPPING flags cell — same fix as the slot rows (Liesl 2026-08-12). */}
-                                                <span style={{ display: 'flex', flexWrap: 'wrap', gap: '7px 18px', alignItems: 'center', minWidth: 0 }}>
-                                                    <label title="Fee choice (e.g. a french-return bend): shows this geometry as a selectable option, bills as a fee — no item # / BOM line. Position comes from the cluster's tag." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isFee ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.isFee} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isFee: e.target.checked, ...(e.target.checked ? { isHidden: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                        fee
-                                                    </label>
-                                                    <label title="Hide this node in EVERY configuration (stray/duplicate geometry that should never render). Takes effect after regenerating the flow." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isHidden ? '#d9534f' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.isHidden} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isHidden: e.target.checked, ...(e.target.checked ? { isFee: false, isBasic: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                        hide
-                                                    </label>
-                                                    <label title="BASIC = ONE PIECE. The arm and the backplate are combined into a single part, so there is no plate left to choose — the picker greys out and stays None. Tag it wherever the part is filed: the tag is what is watched, not whether the cluster says arm or base." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isBasic ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.isBasic} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isBasic: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, usesReturnPlates: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                        basic
-                                                    </label>
-                                                    <label title="NO PLATE. This end treatment mounts without a backplate, so the plate picker is not offered while it is chosen. Use it where the SAME kind of end differs by rod: a solid french/miter return bolts to the wall and takes a plate, the traverse one clamps to the fascia and does not. Only the item knows which — nothing is derived from the rod type." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.noBackplate ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.noBackplate} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { noBackplate: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                        no plate
-                                                    </label>
-                                                    <label title="INLINE BRACKET (the bracket-side sibling of the basic tag): while this In Line arm is the selected bracket, the plate picker shows the INLINE plates (inl-only copies) — or the RETURN plates when the flow has no inline copies. This tag is how the system knows a bracket is In Line." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.usesReturnPlates ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.usesReturnPlates} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { usesReturnPlates: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, isBasic: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                        inl-bkt
-                                                    </label>
-                                                    {/* 🧊 TAKES NO FINISH (Stuart 2026-08-17). The renderer used to decide "this is
-                                                        acrylic" by matching MESH NAMES against a hardcoded list of item codes in the
-                                                        render loop — which is why an acrylic ball rendered clear while the acrylic gem
-                                                        and knob rendered as metal: their mesh names were not on the list. A list that
-                                                        must be edited and deployed for every new acrylic part is not a rule. This is
-                                                        the rule: the DESIGNER says which parts take no finish, once, here. */}
-                                                    {/* 🧪 WHAT THIS PART IS MADE IN (Stuart 2026-08-17). Replaces the no-finish
-                                                        checkbox with the fuller fact: a part is made in one or more MATERIALS,
-                                                        and it wears only finishes belonging to those. METAL is the default and
-                                                        the first choice; CLEAR (NO FINISH) is what the checkbox used to say,
-                                                        now one material among several rather than a special case. Tick more
-                                                        than one where a part is genuinely offered in several. */}
-                                                    <span title="MATERIALS — everything this part is made in. It will only be offered finishes whose material matches. Blank reads as METAL. CLEAR (NO FINISH) means it never takes a finish — the acrylic top of a two-part finial, whose metal collar is tagged METAL separately. The list is the MATERIALS Master Dictionary in 4.5." style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center', border: `1px solid ${c.materials ? 'var(--brass)' : 'var(--line)'}`, padding: '2px 4px' }}>
-                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>made in:</span>
-                                                        {(((dictLists && dictLists.materials) || []).length ? dictLists.materials : ['METAL', 'WOOD', 'CLEAR (NO FINISH)']).map(mt => {
-                                                            const val = String(mt).toUpperCase();
-                                                            const cur = String(c.materials || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
-                                                            const on = cur.includes(val) || (!cur.length && val === 'METAL');
-                                                            return (
-                                                                <button key={mt} type="button" onClick={() => {
-                                                                    const base = cur.length ? cur : ['METAL'];
-                                                                    const next = base.includes(val) ? base.filter(x => x !== val) : [...base, val];
-                                                                    setChoicePatch(r.clusterId, c.nodeName, { materials: next.join(','), noFinish: next.length === 1 && /CLEAR|NO FINISH/.test(next[0]) });
-                                                                }} style={{ fontFamily: 'var(--mono)', fontSize: '8px', padding: '1px 4px', cursor: 'pointer', background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}` }}>{mt}</button>
-                                                            );
-                                                        })}
-                                                    </span>
-                                                    {/* TRAVERSE (Stuart 2026-08-03). A traverse system is a different grammar, not a
-                                                        pole with different parts: the FASCIA is chosen first, the TRACK is a finish
-                                                        choice whose CUT depends on the drive, and the CARRIERS ride inside and are
-                                                        never chosen at all. Blank on every other assembly, so nothing changes for
-                                                        pole flows. */}
-                                                    <select value={c.traverseRole || ''} title="TRAVERSE ROLE — FASCIA (the track face, chosen first) · TRACK (finish choice; its cut length differs by drive) · CARRIER (rides inside, never offered) · BRACKET / BACKPLATE (mixed assemblies, e.g. H1-138: traverse-ONLY attachments — offered only while the traverse unit, a pole choice tagged fascia/track, is selected; the standard brackets hide in their place, and swap back on a standard rod). Leave blank on pole assemblies." onChange={e => { const tr = e.target.value; setChoicePatch(r.clusterId, c.nodeName, { traverseRole: tr, ...(['CARRIER', 'FCLIP'].includes(tr) ? { alwaysShown: true, isHidden: false, isFee: false } : {}) }); }} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.traverseRole ? 'var(--brass)' : 'var(--line)', color: c.traverseRole ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                        <option value="">trv: — none —</option>
-                                                        {TRAVERSE_ROLES.map(t => <option key={t} value={t}>trv: {t === 'TRV_END' ? 'end' : t === 'TRV_BRACKET' ? 'bracket' : t === 'TRV_BACKPLATE' ? 'backplate' : t === 'TRV_PART' ? 'trv-only' : t === 'STD_ONLY' ? 'std-only' : t.toLowerCase()}</option>)}
-                                                    </select>
-                                                    <select value={c.driveType || ''} title="DRIVE — MOTORIZED or MANUAL. Blank = BOTH, which is the common case (a fascia is a fascia however the track is driven), so the default costs nothing. The generator only adds a Motorised/Manual step when an assembly actually carries choices for BOTH." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { driveType: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.driveType ? 'var(--brass)' : 'var(--line)', color: c.driveType ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                        <option value="">drive: — both —</option>
-                                                        {DRIVE_TYPES.map(d => <option key={d} value={d}>drive: {d.toLowerCase()}</option>)}
-                                                    </select>
-                                                    {/* SINGLE vs DOUBLE — a double is two tracks on one bracket, so the bracket
-                                                        IS a different part and only one of the two tracks exists on a single.
-                                                        Blank = suits both, which is most things. */}
-                                                    <select value={c.trvSetup || ''} title="SINGLE / DOUBLE — tag a bracket for the setup it fits, and each track for the setup it belongs to (front = single, rear = double). Blank = suits both. The Single-or-Double step is only asked when the assembly carries choices for BOTH." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { trvSetup: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '112px', maxWidth: '112px', borderColor: c.trvSetup ? 'var(--brass)' : 'var(--line)', color: c.trvSetup ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                        <option value="">setup: — both (shared) —</option>
-                                                        {TRV_SETUPS.map(t => <option key={t} value={t}>setup: {t.toLowerCase()}</option>)}
-                                                    </select>
-                                                    {/* WHICH ROD OF A DOUBLE (Stuart 2026-08-17). Front and back are not "where along
-                                                        the rod" — that is left/center/right, and a back rod's left finial is BOTH at
-                                                        once. Leave it blank and the part serves every rod, which is what a shared
-                                                        bracket and a finial style used front and back genuinely are. */}
-                                                    <select value={c.tier || ''} title="FRONT / BACK — which rod of a DOUBLE this part belongs to. The rod itself, its finials, its returns and its rings are asked once per rod, so tag them. The BRACKET and BACKPLATE carry both rods and are asked once — leave those blank. Blank also means 'serves both rods', which is right for a finial style used front and back. ⚠ Do NOT use projection to mean front/back: projection is what depths a part is MADE IN, and tagging the rods differently would offer them as alternatives — pick one and the other rod disappears." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { tier: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '104px', maxWidth: '104px', borderColor: c.tier ? 'var(--brass)' : 'var(--line)', color: c.tier ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                        <option value="">rod: — both —</option>
-                                                        <option value="FRONT">rod: front</option>
-                                                        <option value="BACK">rod: back</option>
-                                                    </select>
-                                                    {/* PASSING (Stuart 2026-08-22). "standard rings can not pass at all and
-                                                        passing rings can only pass when used with passing brackets." Two parts,
-                                                        one decision — so it is one answer that filters the centre bracket AND
-                                                        the rings, and a mismatched pair cannot be assembled.
-                                                        ⚠ LEAVE THE LEFT AND RIGHT ARMS BLANK. Passing brackets are only ever
-                                                        used in the centre, so the end arms must suit either order — and blank
-                                                        already means that. Tagging an end arm STANDARD deletes it from every
-                                                        passing order, which is the one way to get this wrong. */}
-                                                    <select value={c.passing || ''} title="STANDARD / PASSING — only the CENTRE bracket and the rings. A passing ring only slides past a passing centre bracket; a standard ring cannot pass at all. ⚠ Leave the LEFT and RIGHT arms blank: they are used on both kinds of order, and blank means 'suits either'. Tagging an end arm STANDARD would delete it from every passing order. Blank on everything that is not a centre bracket or a ring." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { passing: e.target.value })} style={{ ...inp, padding: '3px 5px', fontSize: '9px', fontFamily: 'var(--mono)', width: '104px', maxWidth: '104px', borderColor: c.passing ? 'var(--brass)' : 'var(--line)', color: c.passing ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                        <option value="">pass: — n/a —</option>
-                                                        <option value="STANDARD">pass: standard</option>
-                                                        <option value="PASSING">pass: passing</option>
-                                                    </select>
-                                                    <label title="ALWAYS SHOWN — present in every configuration, never offered, never swapped. A REAL part: it bills and it renders (grey). This is what carriers need — 'hide' is its opposite and means never render at all." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.alwaysShown ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                        <input type="checkbox" checked={!!c.alwaysShown} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { alwaysShown: e.target.checked, ...(e.target.checked ? { isHidden: false, isFee: false } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                        always
-                                                    </label>
-                                                    {normalizeCategory(c.catOverride || r.category) === 'FINIAL' && (
-                                                        <label title="COLLAR — this choice is the metal collar of a TWO-PART finial: companion geometry, never offered as its own option. Pair each top to it via the tops' collar: dropdown; on regenerate the collar renders WITH those tops (the step's metal finish lands on the collar; the AC chip keeps an acrylic top clear)." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isCollar ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                            <input type="checkbox" checked={!!c.isCollar} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isCollar: e.target.checked, ...(e.target.checked ? { isFee: false, isHidden: false, requiresCollar: '' } : {}) })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                            collar
-                                                        </label>
-                                                    )}
-                                                    <select disabled={!!c.isFee} value={c.isFee ? '' : ((c.custIds && c.custIds[0]) || '')} title={c.isFee ? "Not available on a FEE choice — customer scope is not saved for fees (the pin drops it). Put the customer's pricing on the fee ITEM in the Master Library instead." : "CUSTOMER-ONLY choice: pick a customer and this option shows on the CPQ (and their portal) ONLY when that customer is selected — everyone else never sees it. '— all —' = visible to every customer (poles, rings, common parts)."} onFocus={() => ensureCustomers()} onChange={e => { const id = e.target.value; const nm = ((custList || []).find(x => x.id === id) || {}).name || ''; setChoicePatch(r.clusterId, c.nodeName, { custIds: id ? [id] : [], custNames: id ? [nm] : [] }); }} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: (c.custIds && c.custIds.length) ? 'var(--brass)' : 'var(--line)', color: (c.custIds && c.custIds.length) ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                        <option value="">cust: all</option>
-                                                        {(custList || []).map(cu => <option key={cu.id} value={cu.id}>{cu.name}</option>)}
-                                                        {c.custIds && c.custIds[0] && !(custList || []).some(x => x.id === c.custIds[0]) && <option value={c.custIds[0]}>{(c.custNames && c.custNames[0]) || c.custIds[0]}</option>}
-                                                    </select>
-                                                    {normalizeCategory(c.catOverride || r.category) === 'FINIAL' && !c.isCollar && (
-                                                        <select value={c.requiresCollar || ''} title="PAIR WITH COLLAR (two-part finial top): pick the COLLAR-flagged choice (its item #) this top renders WITH — the generated option shows top+collar together, same side preferred. '— none —' = a one-piece finial. A ⚠ row = a choice ticked COLLAR that still needs its item # typed in." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { requiresCollar: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.requiresCollar ? 'var(--brass)' : 'var(--line)', color: c.requiresCollar ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                            <option value="">collar: — none —</option>
-                                                            {assignCollarCands.codes.map(code => <option key={code} value={code}>{code}</option>)}
-                                                            {assignCollarCands.pending.map((lbl, i) => <option key={`pend-${i}`} value="" disabled>⚠ {lbl} — needs item #</option>)}
-                                                            {c.requiresCollar && !assignCollarCands.codes.some(code => code.toUpperCase() === String(c.requiresCollar).toUpperCase()) && <option value={c.requiresCollar}>{c.requiresCollar}</option>}
-                                                        </select>
-                                                    )}
-                                                    {/* PROJECTION ON END CHOICES TOO (Stuart 2026-08-04: "i would need to add
-                                                        them to the projections to the miter returns and return arms to help limit
-                                                        the choices to match"). A traverse RETURN ARM is tagged FINIAL — it sits in
-                                                        the finial position — so the dropdown was hidden on exactly the rows whose
-                                                        projection has to match the bracket's. Any tagged end treatment gets it. */}
-                                                    {/* BACKPLATES tag proj: too (Stuart 2026-08-14, H1-138: a backplate per bracket per projection).
-                                                        🎯 EVERY PROJECTION THIS PART IS MADE IN (Stuart 2026-08-17): "can you make that
-                                                        one multi select so we select all the ones it is available in — as in this case
-                                                        the 1-3/8 diameter it is only available in 6 but a .75 pole is available in
-                                                        4-5/8". This retires the MINIMUM-depth reading returns got from a single tag:
-                                                        that rule existed only because availability could not be STATED. Now it is.
-                                                        Tick none = made in every projection. Stored comma-joined, so a single existing
-                                                        value still reads correctly. */}
-                                                    {(['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || r.category)) || !!String(c.endTreatment || '').trim()) && (
-                                                        <span title="PROJECTIONS — tick EVERY projection this part is made in. A bracket ticked 6&quot; only appears at 6&quot;; a return ticked 4-5/8&quot; and 6&quot; appears at both. Nothing ticked = available at every projection.&#10;&#10;PER ROD: a DOUBLE bracket does not have a projection, it has two — one for the front rod and one for the rear — and they arrive together as a property of that bracket. Switch to 'per rod' and set each. The bracket then becomes the projection question: the Projection step disappears, the bracket is asked before the ends, and each rod's parts are judged at ITS depth. Do not use the plain list for a double — two numbers there read as alternatives, and the bracket would appear twice, each time judged against the wrong rod." style={{ display: 'inline-flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center', border: `1px solid ${c.projInches ? 'var(--brass)' : 'var(--line)'}`, padding: '2px 4px' }}>
-                                                            {(() => {
-                                                                const raw = String(c.projInches || '');
-                                                                const perRod = raw.includes(':');
-                                                                const projList = (dictLists && dictLists.projections) || [];
-                                                                const tierVal = (t) => {
-                                                                    const hit = raw.split(',').map(x => x.trim()).find(x => x.toUpperCase().startsWith(`${t}:`));
-                                                                    return hit ? hit.split(':').slice(1).join(':').trim().toUpperCase() : '';
-                                                                };
-                                                                const setTier = (t, v) => {
-                                                                    const other = t === 'FRONT' ? 'BACK' : 'FRONT';
-                                                                    const keep = tierVal(other);
-                                                                    const parts = [];
-                                                                    if (t === 'FRONT') { if (v) parts.push(`FRONT:${v}`); if (keep) parts.push(`BACK:${keep}`); }
-                                                                    else { if (keep) parts.push(`FRONT:${keep}`); if (v) parts.push(`BACK:${v}`); }
-                                                                    setChoicePatch(r.clusterId, c.nodeName, { projInches: parts.join(',') });
-                                                                };
-                                                                const chip = (on) => ({ fontFamily: 'var(--mono)', fontSize: '8px', padding: '1px 4px', cursor: 'pointer', background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', border: `1px solid ${on ? 'var(--brass)' : 'var(--line)'}` });
-                                                                return (
-                                                                    <>
-                                                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)', letterSpacing: '.05em' }}>proj:</span>
-                                                                        {!perRod && projList.map(pj => {
-                                                                            const val = String(pj).toUpperCase();
-                                                                            const on = raw.split(',').map(x => x.trim().toUpperCase()).filter(Boolean).includes(val);
-                                                                            return (
-                                                                                <button key={pj} type="button" onClick={() => {
-                                                                                    const cur = raw.split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
-                                                                                    setChoicePatch(r.clusterId, c.nodeName, { projInches: (on ? cur.filter(x => x !== val) : [...cur, val]).join(',') });
-                                                                                }} style={chip(on)}>{pj}"</button>
-                                                                            );
-                                                                        })}
-                                                                        {perRod && ['FRONT', 'BACK'].map(t => (
-                                                                            <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-                                                                                <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--brass)' }}>{t.toLowerCase()}</span>
-                                                                                {projList.map(pj => {
-                                                                                    const val = String(pj).toUpperCase();
-                                                                                    const on = tierVal(t) === val;
-                                                                                    return <button key={`${t}-${pj}`} type="button" onClick={() => setTier(t, on ? '' : val)} style={chip(on)}>{pj}"</button>;
-                                                                                })}
-                                                                            </span>
-                                                                        ))}
-                                                                        {!raw.trim() && <span style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--ink-soft)' }}>any</span>}
-                                                                        {/* A double bracket's two depths are one fact, not two options. */}
-                                                                        <button type="button" title={perRod ? 'Back to one depth for the whole part' : 'This part carries a DIFFERENT depth for the front rod and the rear — a double bracket'}
-                                                                            onClick={() => setChoicePatch(r.clusterId, c.nodeName, { projInches: perRod ? '' : 'FRONT:' })}
-                                                                            style={{ fontFamily: 'var(--mono)', fontSize: '7.5px', padding: '1px 4px', cursor: 'pointer', background: 'transparent', color: 'var(--ink-faint)', border: '1px dashed var(--line)' }}>
-                                                                            {perRod ? 'one depth' : 'per rod'}
-                                                                        </button>
-                                                                    </>
-                                                                );
-                                                            })()}
-                                                        </span>
-                                                    )}
-                                                    {/* BACKPLATES tag mount: too (ceiling backplates — Stuart 2026-08-14). */}
-                                                    {['BRACKET', 'BACKPLATE'].includes(normalizeCategory(c.catOverride || r.category)) && !c.isFee && (
-                                                        <select value={c.mountType || ''} title="BRACKET MOUNT TYPE — the 4.5 Master-Dictionary list (BRACKET MOUNT TYPES); saved on the pin in the same vocabulary the Library editor + Vision engine use." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { mountType: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.mountType ? 'var(--brass)' : 'var(--line)', color: c.mountType ? 'var(--brass)' : 'var(--ink-soft)' }}>
-                                                            <option value="">mount: — any —</option>
-                                                            {((dictLists && dictLists.bracketMounts) || []).map(m => <option key={m} value={String(m).toUpperCase()}>mount: {m}</option>)}
-                                                        </select>
-                                                    )}
-                                                    {/* An inside-mount bracket IS an end treatment (the H2-138 arrangement = canonical):
-                                                        the generator re-homes it into this side's End Treatment step on Regenerate. Say so. */}
-                                                    {normalizeCategory(c.catOverride || r.category) === 'BRACKET' && !c.isFee && normalizeLocation(c.mountType) === 'END' && (
-                                                        <span title="Inside mount = an END TREATMENT: on Regenerate this choice pools into this side's End Treatment step tagged INSIDE MOUNT — it replaces the bracket (no separate bracket pick), excludes the finial, and the long rod stays. Same behavior as loading it in the END slot (the H2-138 arrangement)." style={{ fontFamily: 'var(--mono)', fontSize: '8px', color: 'var(--brass)', textTransform: 'uppercase', letterSpacing: '.05em', whiteSpace: 'nowrap' }}>→ end treatment</span>
-                                                    )}
-                                                    <select value={c.catOverride || ''} title="CATEGORY OVERRIDE — re-homes this choice into another pool at generate: a return backplate the designer dropped into a FINIAL slot pools with the BACKPLATES once set. Blank = the cluster's own category. No re-upload needed." onChange={e => setChoicePatch(r.clusterId, c.nodeName, { catOverride: e.target.value })} style={{ ...inp, padding: '3px 4px', fontSize: '9px', fontFamily: 'var(--mono)', width: '110px', maxWidth: '110px', borderColor: c.catOverride ? '#d9534f' : 'var(--line)', color: c.catOverride ? '#d9534f' : 'var(--ink-soft)' }}>
-                                                        <option value="">cat: cluster</option>
-                                                        {['BRACKET', 'BACKPLATE', 'FINIAL', 'POLE', 'RING'].map(k => <option key={k} value={k}>cat: {k.toLowerCase()}</option>)}
-                                                    </select>
-                                                    {normalizeCategory(c.catOverride || r.category) === 'BRACKET' && (
-                                                        <label title="END RETURN ARM (Flat Iron pattern): this bracket IS the end treatment — selecting it greys that side's finial / inside-mount step; its backplate stays choosable (unless basic). Auto-detected when the library part is flagged isReturnBracket; check here to force it." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.isReturnArm ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                            <input type="checkbox" checked={!!c.isReturnArm} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { isReturnArm: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                            end-arm
-                                                        </label>
-                                                    )}
-                                                    {['BACKPLATE', 'POLE'].includes(normalizeCategory(c.catOverride || r.category)) && (
-                                                        <label title="RETURN-ONLY: offered/drawn ONLY with a french/miter return or an end-return arm — the regular copies hide then (and this one hides otherwise). On a BACKPLATE: the plates that pair with the return/arm. On a POLE: the special rear pole cut short for a double return, so it does not protrude past the return (tag it double + back + rtn-only)." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.returnOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                            <input type="checkbox" checked={!!c.returnOnly} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { returnOnly: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                            rtn-only
-                                                        </label>
-                                                    )}
-                                                    {normalizeCategory(c.catOverride || r.category) === 'BACKPLATE' && (
-                                                        <label title="INLINE BACKPLATE: the INLINE-bracket copy of a shared return-style plate — offered ONLY while an inl-bkt (In Line) bracket is selected; the return-position copies (rtn-only) show for actual returns. Flows without inl-only plates fall back to rtn-only for In Line brackets." style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.05em', textTransform: 'uppercase', color: c.inlineOnly ? 'var(--brass)' : 'var(--ink-soft)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                                                            <input type="checkbox" checked={!!c.inlineOnly} onChange={e => setChoicePatch(r.clusterId, c.nodeName, { inlineOnly: e.target.checked })} style={{ cursor: 'pointer', width: '15px', height: '15px', margin: 0, flexShrink: 0 }} />
-                                                            inl-only
-                                                        </label>
-                                                    )}
-                                                </span>
+                                                <ChoiceTagControls c={c} category={r.category} onPatch={p => setChoicePatch(r.clusterId, c.nodeName, p)} dictLists={dictLists} custList={custList} ensureCustomers={ensureCustomers} collarCands={assignCollarCands} inp={inp} />
                                                 <span style={{ display: 'flex', gap: '2px' }}>
                                                     <button onClick={() => moveChoice(r.clusterId, c.nodeName, -1)} title="Move up — order is saved and drives the option order in the configurator (match Left/Right sides)" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▲</button>
                                                     <button onClick={() => moveChoice(r.clusterId, c.nodeName, 1)} title="Move down" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '9px', padding: '2px 5px', borderRadius: '2px' }}>▼</button>
