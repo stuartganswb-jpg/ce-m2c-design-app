@@ -38,6 +38,20 @@ const shopItemCodeOf = (o) => woItemCodeOf(o)
 // RTG's job log sorts on updatedAt — every shop write stamps it (2026-08-26).
 const touched = (p) => ({ ...p, updatedAt: serverTimestamp() });
 
+// A CPQ pole order whose cut sheet never arrived (Brief C · C7 — SO60147, 2026-09-03). RTG's
+// split always writes a fabNotes object from the job's Vision specs; when every engineered field
+// is empty and the pole still has a cut length, the specs were missing when the line was quoted.
+// The card used to render that as a bare "FABRICATION" header, which read as a choice. An order
+// with NO fabNotes at all (Order Entry, pushToShop) is not this case: it never had geometry by
+// design and carries the item's Shop Instruction instead. Reads the doc; decides nothing.
+const n0 = (v) => Number(v) || 0;
+const cutSheetMissing = (o) => {
+    const f = o?.fabNotes;
+    if (!f || typeof f !== 'object' || o?.fabMethod || !o?.cutLength) return false;
+    return !f.shape && !n0(f.poleO2O) && !n0(f.totalSystemO2O) && !n0(f.pole1) && !n0(f.pole2) && !n0(f.pole3)
+        && !n0(f.rawLeft) && !n0(f.rawCenter) && !n0(f.rawRight) && !n0(f.qtyBends) && !n0(f.qtySplices) && !n0(f.qtyMiters);
+};
+
 // The shop doc's OWN lifecycle as a chip (the sibling OrderStatusChips covers the finishing
 // half). Tone rules follow Shared/orderStatus: grey = waiting, brass = in work, blue = off to
 // the next station, green = done, faint = closed.
@@ -1204,6 +1218,9 @@ const ShopFloor = () => {
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', marginBottom: '10px' }}>
                     {(c => c ? `${c} · ` : '')(shopItemCodeOf(order))}SO {soNumOf(order)} · Qty {order.qty}{order.cutLength ? ` · Cut ${order.cutLength}"` : ''}{order.clientName ? ` · ${order.clientName}` : ''}{order.isOutsourced ? ' · PLATED (outsourced)' : ''}
                 </div>
+                {cutSheetMissing(order) && (
+                    <div style={{ marginBottom: '10px', padding: '6px 10px', background: '#fdf2f2', border: '1px solid #d9534f', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#d9534f', fontWeight: 700 }}>⚠ No cut sheet from Vision — confirm the numbers with HQ before starting</div>
+                )}
                 {finSibs[order.finSiblingId] && <div style={{ marginBottom: '10px' }}><OrderStatusChips wo={finSibs[order.finSiblingId]} showWho={false} /></div>}
                 <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={() => startOrder(order)} style={{ flex: 1.4, background: 'var(--ink)', color: '#fff', border: 'none', padding: '10px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>▶ Start</button>
@@ -1490,7 +1507,15 @@ const ShopFloor = () => {
                         ))}
                     </div>
 
-                    {(order.fabMethod || order.fabNotes) && (
+                    {cutSheetMissing(order) && (
+                        <div style={{ marginBottom: '20px', padding: '12px 16px', background: '#fdf2f2', border: '2px solid #d9534f' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 700, color: '#d9534f' }}>⚠ NO CUT SHEET FROM VISION</div>
+                            <div style={{ fontFamily: 'var(--sans)', fontSize: '0.88rem', color: 'var(--ink)', marginTop: '4px', lineHeight: 1.45 }}>
+                                O2O, raw cut lengths and bends were not engineered for this order — the Vision specs were missing when it was quoted. The {order.cutLength}" cut-to above is the only figure this card has. Confirm the numbers with HQ before cutting; 🔍 View Item shows the configured shape.
+                            </div>
+                        </div>
+                    )}
+                    {!cutSheetMissing(order) && (order.fabMethod || order.fabNotes) && (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '20px', padding: '12px 16px', background: 'var(--ink)', color: '#fff' }}>
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>
                                 {order.fabMethod === 'BEND' ? '↳ BEND THE POLE' : order.fabMethod === 'SPLICE' ? '✂ SPLICE THE POLE' : order.fabMethod === 'MITER' ? '∠ MITER THE POLE' : 'FABRICATION'}

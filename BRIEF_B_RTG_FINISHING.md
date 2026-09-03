@@ -422,3 +422,20 @@ in §4 B1's table, what is waiting on A / C / D / E, anything named and not fixe
 `SYSTEM_FLOW_AUDIT.md` §4 and §5 to the new state, and `WORK_ORDER_CONTRACT.md` to the contract
 as it now is (the 06-10 text is the origin story, not the spec). **The guide (S2):** the sections
 in B9, listed.
+
+### Hand-off from C (2026-09-03) — the split says when a pole has no cut sheet
+
+**Context.** SO60147 (Brimar, HBR1-1INPOLE, quote 25234) reached the shop with `fabNotes` present
+and every field null: the job's `engineeringNotes` was empty when the line was quoted (a Vision
+draft with no `specs.engineeringNotes`). Stuart: leave SO60147 as is; **fix for the future**. E has
+the source-side prevention (refuse a Vision pole line with no O2O at add-to-cart / finalize); C
+shipped the shop-card notice ("No cut sheet from Vision"). B's half, at the split:
+
+**Spec (`autoSplitSalesOrder`, where `fabNotes` is built from `job.engineeringNotes || {}`):**
+when a custom line carries a `cutLength` and `eng` has no `shape`, no `poleO2O` and no
+`pole1/2/3` → (1) `addLog` a **warn** on the board: "⚠ SO … : custom pole with NO cut sheet —
+the job has no Vision engineering specs; the shop card will say so", and (2) stamp the shop doc
+`cutSheetMissing: true` (and the fin sibling the same) so RTG's board and Where-is-it can show it.
+The shop card already derives the same state from the empty `fabNotes` (Shared read would be
+better: if you extract `buildFabNotes(eng)` to Shared, C reads `cutSheetMissing` off the doc
+instead of re-deriving). No route change, no refusal — the order still splits.
