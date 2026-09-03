@@ -50,3 +50,27 @@ In-app: `UserGuideTab.js` — **Shop Floor section added** (`ShopFloorGuide`: th
 ## 6. Session map (2026-09-02 only)
 
 A = ce-m2c-design-app-29 · B = -4a · D = -85 · integration = -89 · C (this) = -b5.
+
+## 7. 2026-09-03 — the SO60147 cut-sheet incident (live, Stuart pinned in)
+
+**Symptom.** Stuart: "new Brimar work orders no longer have the shop drawings, O2O and C2C."
+**Read on the floor.** Eight Brimar orders in process (SO60147/51/52/58/66/68/69/70, all
+HBR1-1INPOLE); seven carry full cut sheets. **Only SO60147** (quote 25234, job
+`QUOTE-1788187683465`, created 08-31 10:48) is bare: `fabNotes` present with every field null,
+viewer says "No engineering specs recorded", yet the 3D render shows the bend and a bracket note
+exists → the Vision draft was loaded but `draft.specs.engineeringNotes` was empty (E's trace).
+Not a code regression: RTG's split unchanged since 09-01; E/A/D proved by diff nothing touched
+the job's notes. Stuart: **leave SO60147 as is; fix for the future.**
+
+**Shipped:** `4f17eb7` — the card says "NO CUT SHEET FROM VISION" (active card + staged row) when
+a CPQ pole order has a `cutLength` and an empty `fabNotes` object; orders with no `fabNotes` at
+all (Order Entry / pushToShop) untouched. `cutSheetMissing` in ShopFloor.js.
+**Handed off:** E — refuse a Vision pole line with no O2O at add-to-cart / finalize (source
+prevention); **also from Stuart, via me:** Reopen-in-Vision does nothing ("nothing pushes, loses
+its link?"), and the sales forms have regressed to GLB node names instead of descriptions +
+customer part #s. B — split-time warn + `cutSheetMissing` stamp (spec at the end of BRIEF_B).
+**Note:** "shop drawings" on the card = the 📄 Drawing / 📋 SOP buttons, shown only when the
+library item carries `staticShopDrawing` / SOP pages; none of the HBR1-1INPOLE cards show one.
+Multi-config cards show the FIRST configuration's cut sheet only (`mergedNotesObj` = first item);
+the other configurations are reachable via their row's 🔍 View Item. Stuart did not ask for that
+to change.
