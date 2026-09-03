@@ -96,9 +96,38 @@ const DOUBLE_SLOTS = [
     SPEC_SLOT_DEF,
 ];
 
+// TRAVERSE (Stuart 2026-09-03: "it is best to build it right"). A traverse system is a different
+// grammar — fascia first, a track whose cut follows the drive, carriers that ride inside and are
+// never offered, ends that ARE the drive answer — and every one of those facts is a TAG on the
+// choice. Until now the designer loaded H1-2TRV into custom OTHER/SHARED slots and Stuart re-tagged
+// every row afterwards. Each slot here carries `defaults`: the tags a choice uploaded into it is
+// born with (applied by the three slot seeds, editable on the row like any other tag). The
+// designer still ticks what genuinely varies per choice — DRIVE on the ends, SETUP on the brackets.
+const TRAVERSE_SLOTS = [
+    { id: 'trv_fascia', label: 'Fascia', category: 'POLE', position: 'CENTER', location: '', desc: 'The face of the track — chosen first, like a pole. Stack the wood + metal fascia choices in one file.', defaults: { traverseRole: 'FASCIA' } },
+    { id: 'trv_track', label: 'Track', category: 'POLE', position: 'CENTER', location: '', desc: 'The base extrusion, present on single AND double. Its finish is the choice; its cut follows the drive.', defaults: { traverseRole: 'TRACK' } },
+    { id: 'trv_rear_track', label: 'Rear Track — double only', category: 'POLE', position: 'CENTER', location: '', desc: 'The track a DOUBLE adds behind the base one. Rides the Double answer; never a picker option.', defaults: { traverseRole: 'TRACK', trvSetup: 'DOUBLE', tier: 'BACK' } },
+    { id: 'trv_carriers', label: 'Carriers', category: 'POLE', position: 'CENTER', location: '', desc: 'Ride inside the track — never offered, always built, counted by length.', defaults: { traverseRole: 'CARRIER', alwaysShown: true } },
+    { id: 'trv_fclips', label: 'F-Clips', category: 'POLE', position: 'CENTER', location: '', desc: 'Attach the track to the fascia — never offered, always built.', defaults: { traverseRole: 'FCLIP', alwaysShown: true } },
+    { id: 'trv_left_end', label: 'Left End — manual + motorized ends', category: 'FINIAL', position: 'LEFT', location: '', desc: 'The traverse ends: plugs, pulleys, master carriers. Tick DRIVE on each choice (blank = both). A return arm loaded here ticks end-arm.', defaults: { traverseRole: 'TRV_END' } },
+    { id: 'trv_right_end', label: 'Right End — manual + motorized ends', category: 'FINIAL', position: 'RIGHT', location: '', desc: 'Same as the left end. The same plug pinned on both ends becomes ONE drive answer.', defaults: { traverseRole: 'TRV_END' } },
+    { id: 'trv_rear_ends', label: 'Rear Track Ends — double only', category: 'FINIAL', position: 'SHARED', location: '', desc: 'The rear track\'s ends. They render only while DOUBLE and their drive are both chosen.', defaults: { traverseRole: 'TRV_END', trvSetup: 'DOUBLE', tier: 'BACK' } },
+    { id: 'trv_left_bracket', label: 'Left Bracket', category: 'BRACKET', position: 'LEFT', location: 'WALL', desc: 'Tick SETUP single / double on each bracket choice — the double bracket is a different part.' },
+    { id: 'trv_center_bracket', label: 'Center Bracket', category: 'BRACKET', position: 'CENTER', location: 'WALL', desc: 'Centre / passing brackets. Tick SETUP per choice; PASSING only here and on the rings.' },
+    { id: 'trv_right_bracket', label: 'Right Bracket', category: 'BRACKET', position: 'RIGHT', location: 'WALL', desc: 'Tick SETUP single / double on each bracket choice.' },
+    { id: 'trv_left_backplate', label: 'Left Backplate', category: 'BACKPLATE', position: 'LEFT', location: 'WALL', desc: 'Rides as a 2nd chooser on the left bracket step.' },
+    { id: 'trv_center_backplate', label: 'Center Backplate', category: 'BACKPLATE', position: 'CENTER', location: 'WALL', desc: '2nd chooser on the centre bracket step.' },
+    { id: 'trv_right_backplate', label: 'Right Backplate', category: 'BACKPLATE', position: 'RIGHT', location: 'WALL', desc: 'Rides as a 2nd chooser on the right bracket step.' },
+    { id: 'trv_front_pole', label: 'Front Pole — double, front as rings', category: 'POLE', position: 'FRONT', location: '', desc: 'The decorative pole a DOUBLE may carry in place of the front track (Front Rail = ring).', defaults: { trvSetup: 'DOUBLE' } },
+    { id: 'trv_rings', label: 'Rings — front pole', category: 'RING', position: 'FRONT', location: '', desc: 'Rings ride the decorative FRONT pole only — the carriers do that job inside a track.' },
+    SOP_SLOT_DEF,
+    SPEC_SLOT_DEF,
+];
+
 const TEMPLATES = {
     standard: { label: 'Standard Bay', hint: 'Per-end pole: short center rod + long rod split into L/R halves; returns hide their half.', slots: STANDARD_SLOTS },
     double: { label: 'Double Bracket', hint: 'Two rows on one bracket: front pole + finials and back pole + finials.', slots: DOUBLE_SLOTS },
+    traverse: { label: 'Traverse', hint: 'Fascia first, then track(s); carriers ride inside; the ends are the drive. Each slot pre-tags its choices — tick drive on the ends and setup on the brackets.', slots: TRAVERSE_SLOTS },
 };
 
 // One shared loader (Draco-enabled) for parsing + merge.
@@ -764,7 +793,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const m = index ? matchItemByName(nm, index, normalizeCategory(slot.category) || slot.category) : null;
                 if (m) hit++;
                 const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', tier: '', alwaysShown: false, passing: '', noFinish: false, materials: '', noBackplate: false, parked: false, note: '', thumb: '' };
+                return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', tier: '', alwaysShown: false, passing: '', noFinish: false, materials: '', noBackplate: false, parked: false, note: '', thumb: '', ...(slot.defaults || {}) };
             });
             setLayers(prev => {
                 if (prev[slot.id]?.url) URL.revokeObjectURL(prev[slot.id].url);
@@ -853,7 +882,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices: prev[slotId].choices.flatMap(c => c.nodeName !== nodeName ? [c] : kids.map(nm => {
                     const m = index ? matchItemByName(nm, index, normalizeCategory(slotDef?.category) || slotDef?.category) : null;
                     const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', tier: '', alwaysShown: false, passing: '', noFinish: false, materials: '', noBackplate: false, parked: false, note: '', thumb: '' };
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: et === 'FRENCH_RETURN' || et === 'MITER_RETURN', isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', tier: '', alwaysShown: false, passing: '', noFinish: false, materials: '', noBackplate: false, parked: false, note: '', thumb: '', ...(slotDef?.defaults || {}) };
                 }))
             }
         } : prev);
@@ -1797,7 +1826,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const choices = names.map(nm => {
                     const m = index ? matchItemByName(nm, index, normalizeCategory(slot.category) || slot.category) : null;
                     const et = isEndSlot ? (suggestTagsFromName(nm).endTreatment || 'FINIAL') : '';
-                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', tier: '', alwaysShown: false, passing: '', noFinish: false, materials: '', noBackplate: false, parked: false, note: '', thumb: '' };
+                    return { nodeName: nm, label: nm, itemNo: m ? m.code : '', endTreatment: et, isFee: false, isHidden: false, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: [], custNames: [], traverseRole: '', driveType: '', trvSetup: '', tier: '', alwaysShown: false, passing: '', noFinish: false, materials: '', noBackplate: false, parked: false, note: '', thumb: '', ...(slot.defaults || {}) };
                 });
                 const url = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
                 setLayers(prev => ({ ...prev, [slot.id]: { scene, url, fileName: file.name, choices, offset: { x: 0, y: 0, z: 0 } } }));
