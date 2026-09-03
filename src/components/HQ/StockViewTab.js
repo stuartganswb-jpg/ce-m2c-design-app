@@ -16,6 +16,7 @@ import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
 import { issuePlatedDemand } from '../Shared/platingDemand';
+import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf } from '../Shared/purchaseOrders';
 import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal } from '../Shared/workOrderCreate';
@@ -129,6 +130,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [woUrgent, setWoUrgent] = useState(false);
     const [woNeedBy, setWoNeedBy] = useState('');
     const [tierOrderQty, setTierOrderQty] = useState({}); // 3-Tier view: Order qty keyed by ERP (raw base AND each variant)
+    const [poReview, setPoReview] = useState(null);   // the DRAFT POs a press just created: preview → approve → NetSuite mints the number
     const [vendorModal, setVendorModal] = useState(null); // vendor confirmation before POs are cut {buy, make, shop, vendors, picks}
 
     // BUILDER STATE
@@ -546,6 +548,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
         try {
             let platingCount = 0, millingCount = 0;
+            const draftPos = [];
 
             // THE PLATED TRIPLE, ISSUED ONCE (Brief A, A3): the demand for the core and — when the
             // core is short — the milling order behind it, from Shared/platingDemand. No PO here:
@@ -562,45 +565,35 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 res.made.forEach(m => addLog(m, /^[⚠⛔]/.test(m) ? 'warn' : 'info'));
             }
 
-            let poCreated = false;
+            let poCreated = 0;
             if (directBuyLines.length > 0) {
                 // Vendor aligned at creation (VEND-<nsid> CRM record) — same rule as the snapshot's
                 // per-vendor POs, so the RTG → NetSuite push can't mis-resolve the vendor.
-                const vendors = await loadNsVendors();
-                const rec = resolveVendorRec(vendors, activeVendor)
-                    || resolveVendorByNsId(vendors, consensusVendorNsId(directBuyLines.map(l => l.part)));
-                if (!rec) {
+                // ONE PO WRITER (Brief A, A4): a DRAFT per vendor, previewed and approved before
+                // anything reaches NetSuite. This path never checked the vendor's subsidiary and
+                // never stamped a source; both come with the shared writer.
+                const res = await createDraftPurchaseOrders({
+                    lines: directBuyLines.map(l => ({ part: l.part, qty: l.qty, vendorName: activeVendor, from: 'STOCKVIEW_PO_BUILDER' })),
+                    brand: activeBrand, createdBy: String(currentUser?.name || currentUser || ''),
+                    source: 'STOCKVIEW_PO_BUILDER', note: 'Stock replenishment',
+                });
+                if (!res.pos.length) {
                     alert(`⚠️ Vendor "${activeVendor}" doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors) — PO not created. Fix the vendor name or sync vendors, then retry.`);
                 } else {
-                    const nsVendorId = String(rec.id || '').replace(/^VEND-/, '');
-                    // Easy-to-speak reference (PO-1044) as the id; legacy vendor-stamp fallback.
-                    let newPoId;
-                    try { newPoId = await reserveShortNo('PO'); }
-                    catch (e) { newPoId = `PO-${(activeVendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0, 5)}-${Date.now().toString().slice(-6)}`; }
-                    const items = directBuyLines.map(({ part, qty }) => ({
-                        itemId: part.legacyErpId || part.itemId,
-                        nsItemId: part.netSuiteInternalId ? String(part.netSuiteInternalId) : null,
-                        vendorPart: part.manufacturingSpecs?.vendorId || 'N/A',
-                        quantity: qty, rate: poRateOf(part),
-                        description: part.manufacturingSpecs?.purchaseDescription || part.itemName
-                    }));
-                    await setDoc(doc(db, "hq_purchase_orders", newPoId), {
-                        id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
-                        vendor: rec.name || activeVendor, nsVendorId, vendorCrmId: rec.id, items,
-                        reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], createdAt: Date.now()
-                    });
-                    poCreated = true;
-                    addLog(`✅ Purchase Order ${newPoId} (${items.length} line${items.length === 1 ? '' : 's'}, NS vendor ${nsVendorId}) pushed.`, "success");
+                    draftPos.push(...res.pos);
+                    poCreated = res.pos.length;
+                    res.pos.forEach(po => addLog(`🧾 DRAFT ${po.poId} → ${po.vendor} (${po.items.length} line${po.items.length === 1 ? '' : 's'}, NS vendor ${po.nsVendorId}) — review and approve to send it to NetSuite.`, 'info'));
                 }
             }
 
             const summary = [];
             if (platingCount) summary.push(`${platingCount} plated item${platingCount === 1 ? '' : 's'} → PickPack "Needs Plating"`);
             if (millingCount) summary.push(`${millingCount} milling WO${millingCount === 1 ? '' : 's'} for the raw base → RTG Dispatch`);
-            if (poCreated) summary.push(`1 vendor PO`);
+            if (poCreated) summary.push(`${poCreated} DRAFT purchase order${poCreated === 1 ? '' : 's'} — review and approve below`);
             if (!summary.length) return alert("Nothing dispatched.");
             alert(`✅ Dispatched:\n\n• ${summary.join('\n• ')}` + (platingCount ? `\n\n(If "Needs Plating" looks empty, publish the plating_demand firestore rule.)` : ''));
             setOrderDrafts({});
+            if (draftPos.length) setPoReview({ pos: draftPos, busy: false });
         } catch(e) {
             console.error("PO/Plating Push Error", e);
             alert("Failed to dispatch. Check console.");
@@ -1439,109 +1432,30 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // (crm_records VEND-<netsuite id>, from 11.1 "Sync Active Vendors"). The vendor's INTERNAL id
     // is stamped on the PO at CREATION, so the NetSuite push can never mis-resolve — an unmatched
     // vendor blocks that PO with a fix-it message instead of erroring downstream.
-    const vendorsCacheRef = useRef(null);
-    const loadNsVendors = async () => {
-        if (vendorsCacheRef.current) return vendorsCacheRef.current;
-        const snap = await getDocs(query(collection(db, 'crm_records'), where('type', '==', 'VENDOR')));
-        vendorsCacheRef.current = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        return vendorsCacheRef.current;
-    };
-    const normVend = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const resolveVendorRec = (vendors, name) => {
-        const n = normVend(name);
-        if (!n) return null;
-        return vendors.find(v => normVend(v.name) === n)
-            || vendors.find(v => normVend(v.name).startsWith(n) || n.startsWith(normVend(v.name)))
-            || null;
-    };
-    // NAME MATCHING IS THE FALLBACK NOW, NOT THE MECHANISM (2026-08-15). The item sync carries the
-    // vendor's NetSuite internal id (`manufacturingSpecs.vendorNsId`, from the ItemVendor sublist),
-    // so a PO no longer depends on a library vendor name spelling its way to a CRM record — a
-    // near-miss used to produce NO PO at all. The name still wins when it resolves (an operator's
-    // vendor override is a deliberate choice); the id only rescues what the name drops.
-    const resolveVendorByNsId = (vendors, nsId) => {
-        const id = String(nsId || '').replace(/^VEND-/, '').trim();
-        if (!id) return null;
-        return vendors.find(v => String(v.id) === `VEND-${id}`) || null;
-    };
-    // The id most of the group's items agree on — one straggler with a stale vendor can't hijack it.
-    const consensusVendorNsId = (parts) => {
-        const tally = {};
-        parts.forEach(p => { const id = p?.manufacturingSpecs?.vendorNsId; if (id) tally[id] = (tally[id] || 0) + 1; });
-        return Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-    };
-    // CAN THIS SUBSIDIARY BUY FROM THIS VENDOR? (Eric, 2026-08-15) A PO carries the BUYING company's
-    // subsidiary, but NetSuite only accepts a vendor assigned to it — and ours are routinely assigned
-    // the other way round (The Generator's primary subsidiary is M2C Studio, Dayton Grey's is
-    // Classical Elements). Unchecked, that surfaces at push time as a confusing complaint about the
-    // *location* field. An empty list means the vendor sync couldn't read the assignments, which is
-    // silence, not a denial — so it never warns on missing data.
-    const vendorSubsidiaryGap = (rec, subsidiaryId) => {
-        const subs = Array.isArray(rec?.nsSubsidiaries) ? rec.nsSubsidiaries.map(String) : [];
-        if (!subs.length || !subsidiaryId) return null;
-        return subs.includes(String(subsidiaryId)) ? null : subs;
-    };
-    // What the vendor actually charges, in the order NetSuite knows it: the vendor sublist's own
-    // purchase price, then the item's purchase price (Eric's `cost`), then average cost — which is
-    // a costing artefact and was silently rating every PO line until 2026-08-15.
-    const poRateOf = (part) => {
-        const s = part?.manufacturingSpecs || {};
-        return parseFloat(s.vendorPurchasePrice) || parseFloat(s.purchasePrice) || parseFloat(s.cost) || 0;
-    };
-    // One app PO per vendor (same doc shape as the grid's PO builder — lands in RTG Dispatch, which
-    // pushes it to NetSuite). Lines carry the NetSuite ITEM internal id; the doc carries the
-    // NetSuite VENDOR internal id. Returns { made, unmatched }.
+    // The vendor helpers moved to Shared/purchaseOrders (Brief A, A4): one resolution, one
+    // subsidiary check and one rate rule for all three PO writers on this screen.
+
+    // DRAFT POs, ONE PER VENDOR, FROM ONE PRESS (Brief A, A4 — Stuart 2026-09-02: "operator opens
+    // snapshot and enters in orders for 50 different items, if 20 are for the same vendor they are
+    // put together on po. the po is saved but not yet sent"). Nothing is pushed here: the preview
+    // that follows is where the operator approves, and approval is what mints the NetSuite number.
     const createStockPOs = async (buyList) => {
-        const vendors = await loadNsVendors();
-        const byVendor = new Map();
-        buyList.forEach(x => {
-            // x.vendorOverride = the vendor CONFIRMED in the vendor modal; the item's stored
-            // vendorName is only the default. Grouping is by the confirmed name, so a batch of 30
-            // items across several vendors still collapses to ONE PO per vendor.
-            const v = String(x.vendorOverride || x.info.part?.manufacturingSpecs?.vendorName || '').trim();
-            if (!byVendor.has(v)) byVendor.set(v, []);
-            byVendor.get(v).push(x);
+        const res = await createDraftPurchaseOrders({
+            lines: buyList.map(x => ({
+                part: x.info.part || { legacyErpId: x.r.itemid, netSuiteInternalId: x.r.internalId },
+                qty: x.qty,
+                // The confirmed vendor from the modal wins; the item's stored name is a default.
+                vendorName: String(x.vendorOverride || x.info.part?.manufacturingSpecs?.vendorName || '').trim(),
+                from: 'SALES_SNAPSHOT',
+            })),
+            brand: activeBrand, createdBy: currentUser || '', source: 'SALES_SNAPSHOT',
+            reqDate: woNeedBy || '', note: 'Stock replenishment',
         });
-        const made = [], unmatched = [], wrongSub = [];
-        const poSubsidiary = (BRAND_NETSUITE_MAP[activeBrand] || {}).subsidiary || '';
-        for (const [vendor, list] of byVendor.entries()) {
-            const rec = resolveVendorRec(vendors, vendor)
-                || resolveVendorByNsId(vendors, consensusVendorNsId(list.map(x => x.info.part)));
-            if (!rec) { unmatched.push({ vendor, items: list.map(x => x.r.itemid) }); continue; }
-            const nsVendorId = String(rec.id || '').replace(/^VEND-/, '');
-            // Short human reference (PO-1042) as the id itself — unique via the atomic counter;
-            // falls back to the legacy vendor-stamp format if the counter isn't reachable.
-            let newPoId;
-            try { newPoId = await reserveShortNo('PO'); }
-            catch (e) { newPoId = `PO-${(vendor || 'VEND').replace(/[^a-zA-Z0-9]/g, '').substring(0, 5)}-${Date.now().toString().slice(-6)}`; }
-            const items = list.map(({ r, info, qty }) => ({
-                itemId: info.part?.legacyErpId || info.part?.itemId || r.itemid,
-                nsItemId: String(r.internalId),   // NetSuite item internal id — the push builds real lines from this
-                vendorPart: info.part?.manufacturingSpecs?.vendorId || 'N/A',
-                quantity: qty, rate: poRateOf(info.part),
-                description: info.part?.manufacturingSpecs?.purchaseDescription || info.part?.itemName || r.itemid
-            }));
-            // The PO is still created — this is NetSuite master-data to fix, not a reason to lose the
-            // buy list. It's stamped so RTG can say the same thing before pushing.
-            const gap = vendorSubsidiaryGap(rec, poSubsidiary);
-            if (gap) wrongSub.push({ vendor: rec.name || vendor, has: gap, poId: newPoId });
-            await setDoc(doc(db, "hq_purchase_orders", newPoId), {
-                id: newPoId, poId: newPoId, brand: activeBrand, status: "Approved",
-                vendor: rec.name || vendor, nsVendorId, vendorCrmId: rec.id,
-                nsSubsidiary: poSubsidiary, vendorSubsidiaryGap: gap ? gap.join(',') : '',
-                items, source: 'SALES_SNAPSHOT',
-                reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0], createdAt: Date.now(), createdBy: currentUser || ''
-            });
-            made.push({ vendor: rec.name || vendor, lines: items.length });
-            addLog(`✅ PO ${newPoId} → ${rec.name || vendor} (NS vendor ${nsVendorId}, ${items.length} line${items.length === 1 ? '' : 's'})${gap ? ` ⚠ vendor is not assigned to subsidiary ${poSubsidiary}` : ''}.`, gap ? 'warn' : 'success');
+        res.pos.forEach(po => addLog(`🧾 DRAFT ${po.poId} → ${po.vendor} (${po.items.length} line${po.items.length === 1 ? '' : 's'}) — review and approve to send it to NetSuite.`, 'info'));
+        if (res.unmatched.length) {
+            alert(`⚠️ NO PO created for ${res.unmatched.length} vendor(s) — the name on the items doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors):\n\n${res.unmatched.map(u => `• "${u.vendor || '(blank)'}" — ${u.items.slice(0, 6).join(', ')}${u.items.length > 6 ? '…' : ''}`).join('\n')}\n\nTwo ways to fix it: re-run 11.1 → Sync Master Library (the item sync carries the vendor's NetSuite internal id, which resolves these without the name matching at all), or correct the vendor name in the Master Library. Then re-generate those items.`);
         }
-        if (unmatched.length) {
-            alert(`⚠️ NO PO created for ${unmatched.length} vendor(s) — the name on the items doesn't match any NetSuite-synced vendor (11.1 → Sync Active Vendors):\n\n${unmatched.map(u => `• "${u.vendor || '(blank)'}" — ${u.items.slice(0, 6).join(', ')}${u.items.length > 6 ? '…' : ''}`).join('\n')}\n\nTwo ways to fix it: re-run 11.1 → Sync Master Library (the item sync now carries the vendor's NetSuite internal id, which resolves these without the name matching at all), or correct the vendor name in the Master Library. Then re-generate those items.`);
-        }
-        if (wrongSub.length) {
-            alert(`⚠️ ${wrongSub.length} PO(s) were created, but NetSuite will refuse them as they stand:\n\n${wrongSub.map(w => `• ${w.poId} — ${w.vendor} is assigned to subsidiary ${w.has.join(' / ')}, not ${poSubsidiary}`).join('\n')}\n\nThis PO is issued by subsidiary ${poSubsidiary}, and NetSuite only lets a subsidiary buy from a vendor assigned to it. NetSuite reports this as an "Invalid Field Value … for the following field: location" error, which is misleading — the location is fine.\n\nFix in NetSuite: add subsidiary ${poSubsidiary} to those vendor records, then re-run 11.1 → Sync Active Vendors and push.`);
-        }
-        return { made, unmatched, wrongSub };
+        return { made: res.pos.map(p => ({ vendor: p.vendor, lines: p.items.length })), unmatched: res.unmatched, wrongSub: res.gaps, pos: res.pos };
     };
     // ONE snapshot filter predicate, shared by the Finished table, the Raw Cores rollup and the CSV
     // (Stuart 2026-07-28: "when i switch view to raw the filter no longer really filters" — the
@@ -2285,25 +2199,29 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 }
             }
             // PO drafts — one per vendor per SO, exactly as reviewed (qtys already MOQ-adjusted).
+            // ONE PO WRITER (Brief A, A4): the component buys a review approved become DRAFT POs,
+            // one per vendor, each line carrying the sales order that wants it (Stuart: "the sales
+            // order #'s should stay aligned"). They are previewed and approved like any other.
+            const oeDraftPos = [];
             for (const bucket of Object.values(poBuckets)) {
                 const { vendorName, so, lines } = bucket;
-                const vendors = await loadNsVendors();
-                const rec = resolveVendorRec(vendors, vendorName) || resolveVendorByNsId(vendors, consensusVendorNsId(lines.map(l => l.part)));
-                if (!rec) { addLog(`⛔ PO skipped — no NetSuite-synced vendor matches "${vendorName}". Sync vendors (11.1), then Generate again.`, 'error'); continue; }
-                let poId; try { poId = await reserveShortNo('PO'); } catch (e) { poId = `PO-OE-${Date.now().toString().slice(-6)}`; }
-                await setDoc(doc(db, 'hq_purchase_orders', poId), {
-                    id: poId, poId, brand: activeBrand, status: 'Approved',
-                    vendor: rec.name || vendorName, nsVendorId: String(rec.id || '').replace(/^VEND-/, ''), vendorCrmId: rec.id,
-                    soAppId: so.id, soRef: so.soId || so.id, customer: so.customer || '',
-                    items: lines.map(l => ({ itemId: l.code, nsItemId: l.part?.netSuiteInternalId ? String(l.part.netSuiteInternalId) : null, vendorPart: l.part?.manufacturingSpecs?.vendorId || 'N/A', quantity: l.qty, rate: poRateOf(l.part), description: `${l.part?.manufacturingSpecs?.purchaseDescription || l.part?.itemName || l.code} — ${l.reason} · Order Entry ${so.soId || so.id}` })),
-                    reqDate: soNeedBy(so) || new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                const res = await createDraftPurchaseOrders({
+                    lines: lines.map(l => ({
+                        part: l.part, qty: Number(l.editQty ?? l.qty) || l.qty, vendorName,
+                        reason: l.reason, from: 'OE_REVIEW',
+                        soAppId: so.id, soRef: so.soId || so.id,
+                    })),
+                    brand: activeBrand, createdBy: currentUser || '', source: 'OE_REVIEW',
+                    reqDate: soNeedBy(so) || '',
                     note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · component make-up (review-approved)`,
-                    createdAt: Date.now(), createdBy: currentUser || '',
                 });
-                addLog(`✅ PO ${poId} → ${rec.name}: ${lines.map(l => `${l.qty} × ${l.code}`).join(', ')} (SO ${so.soId || so.id}) — on the vendor's CRM card; push to NetSuite from RTG.`, 'success');
+                if (!res.pos.length) { addLog(`⛔ PO skipped — no NetSuite-synced vendor matches "${vendorName}". Sync vendors (11.1), then Generate again.`, 'error'); continue; }
+                oeDraftPos.push(...res.pos);
+                res.pos.forEach(po => addLog(`🧾 DRAFT ${po.poId} → ${po.vendor}: ${po.items.map(l => `${l.quantity} × ${l.itemId}`).join(', ')} (SO ${so.soId || so.id}) — review and approve to send it to NetSuite.`, 'info'));
             }
             setOeReview(null);
             await loadOeNeeds();
+            if (oeDraftPos.length) setPoReview({ pos: oeDraftPos, busy: false });
         } catch (e) {
             addLog(`Review execute failed partway: ${e.message || e} — re-open Generate; existing links show on the board.`, 'error');
             alert('Execute failed partway:\n\n' + (e.message || e) + '\n\nThe board shows what was created — Generate again covers only what is still missing.');
@@ -3316,6 +3234,83 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 a PO exists. The stored vendor is only a default; the operator confirms it, can switch
                 to any NetSuite-synced vendor, or send the core to the shop floor instead. The live
                 grouping preview shows exactly how many POs the batch will produce. */}
+            {/* ── PREVIEW → APPROVE → SEND (Brief A, A4 — Stuart 2026-09-02) ─────────────────────
+                "after saving the operator previews the enter set of purchase orders created (5
+                 vendors, 50 items, each purchase order with items only assigned to that vendor).
+                 after review and approval po is sent … the po before sending once approved should
+                 send to netsuite to get actual po# — only netsuite can generate the po#."
+                So: the set is shown back exactly as saved, approving pushes every line to NetSuite,
+                and the number comes back on its own. Sending to the vendor happens afterwards, from
+                the vendor's own page on tab 10, once the number is on the document. */}
+            {poReview && (() => {
+                const mono9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
+                const pos = poReview.pos || [];
+                const grand = pos.reduce((s, p) => s + (p.items || []).reduce((t, l) => t + (Number(l.quantity) || 0) * (Number(l.rate) || 0), 0), 0);
+                const approveAll = async () => {
+                    setPoReview(pr => ({ ...pr, busy: true }));
+                    let ok = 0;
+                    for (const po of pos) {
+                        try { await approvePurchaseOrder({ po, brand: activeBrand, createdBy: currentUser || '' }); ok++; addLog(`📤 ${po.poId} → ${po.vendor}: queued to NetSuite; its PO number stamps back within about a minute.`, 'success'); }
+                        catch (e) { addLog(`⛔ ${po.poId} → ${po.vendor}: ${e.message || e}`, 'error'); }
+                    }
+                    setPoReview(null);
+                    alert(`📤 ${ok} of ${pos.length} purchase order(s) queued to NetSuite.\n\nNetSuite mints the PO number and it stamps back onto each one (watch 11.1 → NetSuite Sync Queue). Once a PO has its number, open it on the vendor's page in 10. External Co-Op to send it and to record the vendor's acknowledgement.`);
+                };
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.55)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <div style={{ background: 'var(--paper-2)', border: '1px solid var(--line)', width: 'min(1000px, 96vw)', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ padding: '18px 26px', borderBottom: '1px solid var(--line)' }}>
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>Review &amp; Approve — Purchase Orders</div>
+                                <div style={{ ...mono9, color: 'var(--ink-soft)', marginTop: '4px' }}>
+                                    {pos.length} purchase order{pos.length === 1 ? '' : 's'} · {pos.reduce((n, p) => n + (p.items || []).length, 0)} line{pos.reduce((n, p) => n + (p.items || []).length, 0) === 1 ? '' : 's'} · ${grand.toFixed(2)} · SAVED AS DRAFT — nothing has been sent
+                                </div>
+                            </div>
+                            <div style={{ padding: '18px 26px', overflowY: 'auto', flex: 1 }}>
+                                {pos.map(po => {
+                                    const total = (po.items || []).reduce((t, l) => t + (Number(l.quantity) || 0) * (Number(l.rate) || 0), 0);
+                                    const min = po.minimum || vendorMinimumOf(po.vendorRec, po.items);
+                                    return (
+                                        <div key={po.id} style={{ border: '1px solid var(--line)', marginBottom: '14px', background: 'var(--paper)' }}>
+                                            <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+                                                <span><b style={{ fontFamily: 'var(--mono)' }}>{po.poId}</b> · {po.vendor}</span>
+                                                <span style={{ ...mono9, color: 'var(--ink-soft)' }}>{(po.items || []).length} line(s) · ${total.toFixed(2)}{po.reqDate ? ` · req ${po.reqDate}` : ''}</span>
+                                            </div>
+                                            {po.vendorSubsidiaryGap && (
+                                                <div style={{ margin: '8px 14px', padding: '8px 10px', background: '#fdf0ef', border: '1px solid #d9534f', color: '#d9534f', fontSize: '0.8rem' }}>
+                                                    ⚠ {po.vendor} is assigned to NetSuite subsidiary {String(po.vendorSubsidiaryGap).split(',').join(' / ')}, not {po.nsSubsidiary}. NetSuite will refuse this PO and blame the LOCATION field, which is not the problem — add the subsidiary to the vendor record, re-run 11.1 → Sync Active Vendors, then approve.
+                                                </div>
+                                            )}
+                                            {min && min.short > 0 && (
+                                                <div style={{ margin: '8px 14px', padding: '8px 10px', border: '1px dashed var(--brass)', color: 'var(--brass)', fontSize: '0.8rem' }}>
+                                                    ⚖ Vendor minimum ${min.minimum.toFixed(2)} — this PO is ${min.short.toFixed(2)} under it. Add to it before approving, or send it knowing the vendor may hold it.
+                                                </div>
+                                            )}
+                                            {(po.items || []).map((l, li) => (
+                                                <div key={li} style={{ display: 'flex', gap: '12px', padding: '6px 14px', borderTop: '1px solid rgba(28,26,22,.06)', fontSize: '0.84rem', flexWrap: 'wrap' }}>
+                                                    <span style={{ fontFamily: 'var(--mono)', minWidth: '150px' }}>{l.itemId}</span>
+                                                    <span style={{ ...mono9, paddingTop: '2px' }}>{l.quantity} × ${Number(l.rate || 0).toFixed(2)}</span>
+                                                    <span style={{ flex: 1, minWidth: '200px', color: 'var(--ink-soft)' }}>{l.description}</span>
+                                                    {l.soRef && <span style={{ ...mono9, color: 'var(--brass)' }}>SO {l.soRef}</span>}
+                                                    {!l.nsItemId && <span style={{ ...mono9, color: '#d9534f' }}>NO NETSUITE ITEM ID</span>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            <div style={{ padding: '14px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                <span style={{ ...mono9, color: 'var(--ink-soft)' }}>Approving pushes every line to NetSuite, which mints the PO number. Sending to the vendor happens after, from 10. External Co-Op.</span>
+                                <span style={{ display: 'flex', gap: '10px' }}>
+                                    <button onClick={() => setPoReview(null)} disabled={poReview.busy} style={{ ...mono9, padding: '12px 18px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Leave as drafts</button>
+                                    <button onClick={approveAll} disabled={poReview.busy || !pos.length} style={{ ...mono9, padding: '12px 22px', background: poReview.busy ? 'var(--ink-soft)' : '#3a7d44', color: '#fff', border: 'none', cursor: poReview.busy ? 'wait' : 'pointer' }}>
+                                        {poReview.busy ? 'Approving…' : `Approve ${pos.length} PO${pos.length === 1 ? '' : 's'} → NetSuite`}
+                                    </button>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
             {vendorModal && (() => {
                 const picks = vendorModal.buy;
                 const kept = picks.filter(x => x.vendorOverride !== '__MAKE__');
