@@ -1985,7 +1985,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // hiding ⚙ Generate): only LIVE purchase orders cover a line.
                 ps.docs.forEach(d => { const p = { id: d.id, ...d.data() }; if (!p.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(p.status || ''))) (poBySo[p.soAppId] = poBySo[p.soAppId] || []).push(p); });
             }
-            sos.sort((a, b) => String(a.needByDate || '9999').localeCompare(String(b.needByDate || '9999')) || (b.createdAt || 0) - (a.createdAt || 0));
+            // NEED-BY, ONE NAME (Brief E, eb5cb6b — hand-off to A): every door now writes `needBy`
+            // on hq_sales_orders; the legacy spelling is written EQUAL to it for ONE release and
+            // then stops. Read the new name first here, or this board goes blind next release.
+            sos.sort((a, b) => String(soNeedBy(a) || '9999').localeCompare(String(soNeedBy(b) || '9999')) || (b.createdAt || 0) - (a.createdAt || 0));
             setOeNeeds({ loading: false, orders: sos.map(o => ({ so: o, wos: woBySo[o.id] || [], pos: poBySo[o.id] || [] })) });
         } catch (e) { setOeNeeds({ loading: false, orders: [], error: e.message || String(e) }); }
     };
@@ -2007,6 +2010,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // customer code carried ON a real record (clientPricing / fabricut aliases), then an Alias
     // doc dereferenced to its real item. The alias stays for display; stock, BOM and the WO
     // identity are always the REAL item (the app-wide alias rule, Shared/aliasIdentity).
+    // The need-by a sales order states, whichever door wrote it (Brief E's alias window, eb5cb6b):
+    // `needBy` is the name from now on; the older spelling still sits on orders saved before it.
+    const soNeedBy = (so) => String((so && (so.needBy || so.needByDate)) || '');
+
     const resolveOePart = (erp) => {
         const direct = partByKey['erp:' + erp];
         let part = direct || hqParts.find(it => customerCodesOf(it).some(c => String(c).toUpperCase() === erp)) || null;
@@ -2027,7 +2034,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const qty = Number(line.qty) || 0;
         if (!qty) return alert('Line has no quantity.');
         const specs = part.manufacturingSpecs || {};
-        const needBy = so.needByDate || '';
+        const needBy = soNeedBy(so);
         const prodNote = so.productionNotes || '';
         setGenBusy(true);
         try {
@@ -2163,7 +2170,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const erp = String(part.legacyErpId || part.itemId || '').toUpperCase();
                 const finishedErp = job.finishedErp;
                 const specs = part.manufacturingSpecs || {};
-                const needBy = so.needByDate || '';
+                const needBy = soNeedBy(so);
                 const prodNote = so.productionNotes || '';
                 const woId = `WO-OE-${erp.replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now()}-${job.key}${job.__tag || ''}`;
                 const { makeup, poLines } = actionsOfReviewedJob(job);
@@ -2274,7 +2281,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     vendor: rec.name || vendorName, nsVendorId: String(rec.id || '').replace(/^VEND-/, ''), vendorCrmId: rec.id,
                     soAppId: so.id, soRef: so.soId || so.id, customer: so.customer || '',
                     items: lines.map(l => ({ itemId: l.code, nsItemId: l.part?.netSuiteInternalId ? String(l.part.netSuiteInternalId) : null, vendorPart: l.part?.manufacturingSpecs?.vendorId || 'N/A', quantity: l.qty, rate: poRateOf(l.part), description: `${l.part?.manufacturingSpecs?.purchaseDescription || l.part?.itemName || l.code} — ${l.reason} · Order Entry ${so.soId || so.id}` })),
-                    reqDate: so.needByDate || new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                    reqDate: soNeedBy(so) || new Date(Date.now() + 12096e5).toISOString().split('T')[0],
                     note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · component make-up (review-approved)`,
                     createdAt: Date.now(), createdBy: currentUser || '',
                 });
@@ -2686,7 +2693,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '8px 18px', padding: '12px 18px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
                                                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.15rem', fontWeight: 500, color: 'var(--ink)' }}>{so.customer || 'Customer'}</span>
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink-soft)' }}>SO {so.soId || so.id}{so.jobName ? ` · ${so.jobName}` : ''} · {so.createdAt ? new Date(so.createdAt).toLocaleDateString() : ''}</span>
-                                                        {so.needByDate && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 700, color: '#d9534f', letterSpacing: '.05em' }}>NEED BY {so.needByDate}</span>}
+                                                        {soNeedBy(so) && <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 700, color: '#d9534f', letterSpacing: '.05em' }}>NEED BY {soNeedBy(so)}</span>}
                                                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', padding: '3px 8px', border: '1px solid var(--line)', color: 'var(--ink-soft)', marginLeft: 'auto' }}>{so.status === 'NS_QUEUED' ? 'AWAITING NETSUITE' : (so.status || 'Pending')}</span>
                                                     </div>
                                                     {so.productionNotes && <div style={{ padding: '8px 18px', borderBottom: '1px solid var(--paper-2)', fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)' }}>📝 {so.productionNotes}</div>}
