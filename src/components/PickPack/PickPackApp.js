@@ -222,6 +222,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [shipCosts, setShipCosts] = useState({}); // {plating_shipments docId: plating $/ea string}
     const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
     const [expandedShip, setExpandedShip] = useState({}); // out-at-plater shipments: collapsed by default
+    // ── THE RECEIVING STATION (Stuart 2026-09-03, receiving PLT-CE-1782150374239) ──────────────
+    // Scan to find, receive to a cart, put the cart away — and the BUILD POSTS AT THE BIN SCAN.
+    const [platingScan, setPlatingScan] = useState('');        // the find box (scanner or typing)
+    const [platingFocusId, setPlatingFocusId] = useState(null); // the line the scan found
+    const [cartQty, setCartQty] = useState({});                 // lineId → good pieces off the pallet
+    const [openCartPanel, setOpenCartPanel] = useState(null);   // cartId being put away
+    const [paLineId, setPaLineId] = useState('');               // the line scanned at put-away
+    const [paBins, setPaBins] = useState([{ bin: '', qty: '' }]); // where it physically went
+    const [paMulti, setPaMulti] = useState(false);              // the rare split across bins
 
     // Counting Filter State
     const [searchQuery, setSearchQuery] = useState("");
@@ -2437,8 +2446,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
 
     // Reverse a plating line's Phase-2 status move: WIP-Plating(13)@platingBin → Good(1)@fromBin. Shared by
     // build-back (Phase 4b) and cancel-pull. Same status-aware adjustment the pull used, with signs flipped.
-    const reversePlatingWip = async (line, nsConfig, memo) => {
-        const qty = parseInt(line.qty) || 0;
+    // qtyOverride (2026-09-03): a short return reverses only the pieces that came BACK; the
+    // missing ones are scrapped out of WIP-Plating separately. Omitted = the whole line, which is
+    // what cancel-pull has always done.
+    const reversePlatingWip = async (line, nsConfig, memo, qtyOverride) => {
+        const qty = qtyOverride != null ? (parseInt(qtyOverride) || 0) : (parseInt(line.qty) || 0);
         const payload = {
             targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment`,
             method: 'POST',
@@ -2487,61 +2499,172 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         }
     };
 
-    // --- PHASE 4b: BUILD BACK THE PLATED PART (received raw → finished plated assembly) ---
-    // Two NetSuite writes: (1) reverse the Phase-2 status move so the returned raw is available again
-    // (WIP-Plating(13)@platingBin → Good(1)@fromBin), then (2) assembly-build the plated finished good
-    // (targetErpId = erpId/finishCode, e.g. H1-138EC/EP1), which auto-consumes the raw from its BOM.
-    // The reversal is guarded by `wipReversed` so a retry after a failed build can't double-reverse.
-    const pushPlatingBuildBack = async (line) => {
-        if (!line) return;
-        const qty = parseInt(line.qty) || 0;
-        if (qty <= 0) return alert("This line has no quantity to build.");
+    // ══ THE RECEIVING STATION (Stuart 2026-09-03) ═══════════════════════════════════════════════
+    // He was receiving PLT-CE-1782150374239 at the dock and every build refused:
+    //   "Please configure the inventory detail for the assembly item."
+    // The plated assemblies are BIN-MANAGED, and the old build sent a bin only if the LIBRARY
+    // happened to carry one for `H1-138BS/EP1` — most carry none, so the payload had no inventory
+    // detail and NetSuite rejected it. Guessing a bin from a library record is the same mistake
+    // the stock build already stopped making (Stuart 2026-08-03: the build waits for the bin the
+    // packer actually scanned). So the bin is now CAPTURED PHYSICALLY, and the build posts with it:
+    //
+    //   scan to find  →  receive to a CART (qty off the pallet)  →  save the cart
+    //                 →  put away from the cart: scan item, scan BIN  →  the build posts
+    //
+    // A cart is a grouping on the shipment lines (cartId / cartLabel / cartStatus), not a new
+    // collection — one source of truth, no rules change. Several carts per PO.
+    // SHORT RETURNS (Stuart: "yes, scrape"): fewer pieces back than went out. The reversal and the
+    // build cover what CAME BACK; the difference is scrapped out of WIP-Plating, guarded, logged.
+    const platingCodesOf = (l) => [l.erpId, l.targetErpId, l.finishCode ? `${l.erpId}/${l.finishCode}` : '']
+        .map(c => String(c || '').toUpperCase().trim()).filter(Boolean);
+    const findPlatingLine = (code, lines) => {
+        const c = String(code || '').toUpperCase().trim();
+        if (!c) return null;
+        return lines.find(l => platingCodesOf(l).includes(c))
+            || lines.find(l => platingCodesOf(l).some(x => x.startsWith(c))) || null;
+    };
+    // Carts, derived from the lines themselves.
+    const cartsOfLines = (lines) => {
+        const m = {};
+        lines.filter(l => l.cartId).forEach(l => {
+            (m[l.cartId] = m[l.cartId] || { cartId: l.cartId, label: l.cartLabel || l.cartId, status: l.cartStatus || 'open', lines: [] }).lines.push(l);
+        });
+        return Object.values(m);
+    };
+    const nextCartFor = (shipmentId, lines) => {
+        const used = new Set(lines.filter(l => l.cartId).map(l => l.cartId));
+        let n = 1; while (used.has(`CART-${shipmentId}-${n}`)) n += 1;
+        return { cartId: `CART-${shipmentId}-${n}`, cartLabel: `Cart ${n}` };
+    };
+    const receiveToCart = async (line, shipLines) => {
+        const sent = parseInt(line.qty) || 0;
+        const got = parseInt(cartQty[line.id] != null && cartQty[line.id] !== '' ? cartQty[line.id] : sent) || 0;
+        if (got <= 0) return alert('Enter how many good pieces came back on the pallet.');
+        if (got > sent) return alert(`${sent} pcs went out — you cannot receive ${got}. Receive ${sent} or fewer; a plater never returns more than was sent.`);
+        const shipmentId = line.shipmentId || line.id;
+        const open = cartsOfLines(shipLines).find(c => c.status === 'open');
+        const cart = open ? { cartId: open.cartId, cartLabel: open.label } : nextCartFor(shipmentId, shipLines);
+        const scrap = sent - got;
+        try {
+            await updateDoc(doc(db, 'plating_shipments', line.id), {
+                cartId: cart.cartId, cartLabel: cart.cartLabel, cartStatus: 'open',
+                receivedQty: got, scrapQty: scrap,
+                receivedToCartAt: Date.now(), receivedToCartBy: operator?.name || '',
+            });
+            writeLog(`Plating receive: ${got}/${sent} × ${line.targetErpId || line.erpId} onto ${cart.cartLabel} (${shipmentId})${scrap > 0 ? ` — ${scrap} SHORT, to be scrapped at put-away` : ''}.`, 'wms');
+            setCartQty(p => ({ ...p, [line.id]: '' }));
+            setPlatingFocusId(null); setPlatingScan('');
+        } catch (e) { alert('Could not add it to the cart: ' + (e.message || e)); }
+    };
+    const removeFromCart = async (line) => {
+        try {
+            await updateDoc(doc(db, 'plating_shipments', line.id), { cartId: null, cartLabel: null, cartStatus: null, receivedQty: null, scrapQty: null });
+            writeLog(`Plating receive: ${line.targetErpId || line.erpId} taken back off ${line.cartLabel || 'the cart'}.`, 'wms');
+        } catch (e) { alert('Could not take it off the cart: ' + (e.message || e)); }
+    };
+    const saveCart = async (cart) => {
+        if (!cart || !cart.lines.length) return;
+        const pcs = cart.lines.reduce((a, l) => a + (parseInt(l.receivedQty) || 0), 0);
+        if (!window.confirm(`Save ${cart.label}?\n\n${cart.lines.length} line(s) · ${pcs} pcs.\n\nIt closes for receiving and becomes available to put away. Nothing is posted to NetSuite yet — that happens when you scan the bin.`)) return;
+        try {
+            await Promise.all(cart.lines.map(l => updateDoc(doc(db, 'plating_shipments', l.id), { cartStatus: 'saved', cartSavedAt: Date.now(), cartSavedBy: operator?.name || '' })));
+            writeLog(`Plating receive: ${cart.label} saved — ${cart.lines.length} line(s) / ${pcs} pcs, ready to put away.`, 'wms');
+            setOpenCartPanel(cart.cartId);
+        } catch (e) { alert('Could not save the cart: ' + (e.message || e)); }
+    };
+    // Is that a real bin here? Same question the pack put-away asks, same helpers, same rule: a
+    // validator refuses only on COMPLETE knowledge, and warns otherwise.
+    const platingBinCheck = async (bin) => {
+        const { list: known, complete } = await loadBinIndex();
+        if (!known.length || known.includes(bin)) return { ok: true };
+        const near = nearestBins(bin, known);
+        const elsewhere = await lookupBinAnywhere(bin);
+        const where = elsewhere.length ? `\n\nNetSuite has a bin by that name at: ${elsewhere.join(', ')} — not at this brand's location.` : '';
+        const msg = `"${bin}" is not a bin at this location.${where}\n\n${near.length ? `Did you mean:\n${near.map(b => `   ${b}`).join('\n')}` : 'Scan the bin label rather than typing it.'}`;
+        if (complete && !elsewhere.length) return { ok: false, hard: true, msg: `${msg}\n\nNothing was posted — NetSuite rejects an unknown bin and the build would be lost.` };
+        return { ok: window.confirm(`${msg}\n\n(The bin list here may be incomplete, so this is a warning, not a refusal.)\n\nPut away to "${bin}" anyway?`) };
+    };
+    // PUT AWAY = the whole NetSuite close for one line, in order, each step guarded:
+    //   1 reversal  WIP-Plating → Good, for the pieces that came back
+    //   2 scrap     the pieces that did not come back, out of WIP-Plating   (only when short)
+    //   3 build     the plated assembly, INTO THE SCANNED BIN(S)
+    // (The build is also the seam where the receipt will later tell the order it is ready to pack.)
+    const putAwayFromCart = async (line, placements) => {
+        const got = parseInt(line.receivedQty) || 0;
+        const scrap = parseInt(line.scrapQty) || 0;
         const target = line.targetErpId || (line.finishCode ? `${line.erpId}/${String(line.finishCode).toUpperCase()}` : '');
-        if (!target) return alert("This line has no plated finish/target assembly — it predates finish assignment. Reset & re-pull it with a finish.");
+        if (!target) return alert('This line has no plated finish/target assembly — reset and re-pull it with a finish.');
+        if (got <= 0) return alert('This line has no received quantity — receive it to a cart first.');
         const nsConfig = BRAND_NETSUITE_MAP[activeBrand];
-        if (!nsConfig) return alert("NetSuite routing configuration missing for this brand.");
-        if (!window.confirm(`Build back ${qty} × ${target}?\n\nReturns the plated raw ${line.erpId} to Good (from WIP-Plating) and builds the finished assembly, consuming the raw.`)) return;
+        if (!nsConfig) return alert('NetSuite routing configuration missing for this brand.');
+        const bins = placements.map(p => ({ bin: normalizeBin(p.bin), qty: parseInt(p.qty) || 0 })).filter(p => p.bin);
+        if (!bins.length) return alert('Scan the bin the pieces were placed in.');
+        const placed = bins.reduce((a, p) => a + p.qty, 0);
+        if (placed !== got) return alert(`The bins add up to ${placed}, but ${got} pcs were received. They must match — every piece has to be somewhere.`);
+        for (const p of bins) {
+            const chk = await platingBinCheck(p.bin);
+            if (!chk.ok) return alert(chk.hard ? chk.msg : 'Nothing was posted.');
+        }
+        if (!window.confirm(`Put away ${got} × ${target}?\n\n${bins.map(p => `   ${p.qty} → ${p.bin}`).join('\n')}${scrap > 0 ? `\n\n⚠ ${scrap} pc(s) did NOT come back and will be SCRAPPED out of WIP-Plating.` : ''}\n\nThis posts to NetSuite: the plated raw returns to Good${scrap > 0 ? ', the short pieces are adjusted out' : ''}, and the finished assembly is built into the bin(s) above.`)) return;
         try {
             setIsSyncing(true);
-            // 1) Reverse the status move (guarded so a retry can't double-reverse) — WIP-Plating@platingBin → Good@fromBin.
+            // 1 — reverse only what came back.
             if (!line.wipReversed) {
-                await reversePlatingWip(line, nsConfig, `Plating return → Good (${line.finishCode || ''}) ${line.erpId}`);
-                await updateDoc(doc(db, "plating_shipments", line.id), { wipReversed: true }).catch(() => {});
+                await reversePlatingWip(line, nsConfig, `Plating return → Good (${line.finishCode || ''}) ${line.erpId}`, got);
+                await updateDoc(doc(db, 'plating_shipments', line.id), { wipReversed: true, wipReversedQty: got }).catch(() => {});
             }
-            // 2) Build the plated assembly (auto-consumes the now-Good raw from its BOM). Plated assemblies are
-            // bin-managed (the bin syncs from NetSuite into the app), so assign the built units to that bin.
+            // 2 — the pieces that never came back leave WIP-Plating. Guarded: never scrapped twice.
+            if (scrap > 0 && !line.scrapPosted) {
+                const sp = {
+                    targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/inventoryadjustment',
+                    method: 'POST',
+                    payload: {
+                        account: { id: '254' }, subsidiary: { id: nsConfig.subsidiary },
+                        memo: nsMemo(`Plating short ${line.erpId} ×${scrap}`),
+                        inventory: { items: [{ item: { id: line.netSuiteInternalId }, location: { id: nsConfig.location }, adjustQtyBy: -scrap,
+                            inventoryDetail: { quantity: -scrap, inventoryAssignment: { items: [{ binNumber: { refName: line.platingBin }, inventoryStatus: { id: '13' }, quantity: -scrap }] } } }] }
+                    }
+                };
+                const sr = await nsProxyFetch(sp);
+                const sb = await sr.json().catch(() => ({}));
+                if (!sr.ok) throw new Error('Short-piece scrap failed: ' + (typeof sb === 'object' ? JSON.stringify(sb) : String(sb)));
+                await updateDoc(doc(db, 'plating_shipments', line.id), { scrapPosted: true, scrapPostedAt: Date.now() }).catch(() => {});
+                writeLog(`Plating short: ${scrap} × ${line.erpId} scrapped out of WIP-Plating @ ${line.platingBin} (${line.shipmentId || line.id}).`, 'wms');
+            }
+            // 3 — the build, into the bin that was actually scanned.
             const assembly = await resolveItemDetail(target);
             if (!assembly) throw new Error(`Couldn't find ${target} in NetSuite by item id. Confirm the plated assembly exists with ${line.erpId} as a BOM component.`);
-            if (assembly.type && !/assembl/i.test(assembly.type)) throw new Error(`${target} is type "${assembly.type}" in NetSuite, not an Assembly. It needs to be an Assembly/BOM with ${line.erpId} as a component.`);
-            const targetPart = hqParts.find(p => erpOf(p) === target.toUpperCase());
-            const targetBin = targetPart ? binOf(targetPart) : '';
-            const buildPayload = {
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild`,
+            if (assembly.type && !/assembl/i.test(assembly.type)) throw new Error(`${target} is type "${assembly.type}" in NetSuite, not an Assembly.`);
+            const br = await nsProxyFetch({
+                targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild',
                 method: 'POST',
                 payload: {
-                    item: { id: assembly.id },
-                    subsidiary: { id: nsConfig.subsidiary },
-                    quantity: qty,
+                    item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: got,
                     location: { id: nsConfig.location },
-                    memo: `Plating build-back ${target} (${line.finishCode || ''})${line.shipmentId ? ` — shipment ${line.shipmentId}` : ''}`,
-                    // bin-managed finished assembly → place the built units into its synced bin
-                    ...(targetBin && targetBin !== 'UNASSIGNED' ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: targetBin }, quantity: qty }] } } } : {})
+                    memo: `Plating build-back ${target} (${line.finishCode || ''})${line.shipmentId ? ` — ${line.shipmentId}` : ''} → ${bins.map(p => `${p.qty}@${p.bin}`).join(' + ')}`,
+                    inventoryDetail: { quantity: got, inventoryAssignment: { items: bins.map(p => ({ binNumber: { refName: p.bin }, quantity: p.qty })) } }
                 }
-            };
-            const br = await nsProxyFetch(buildPayload);
+            });
             const bb = await br.json().catch(() => ({}));
-            if (!br.ok) throw new Error("Assembly build failed: " + (typeof bb === 'object' ? JSON.stringify(bb) : String(bb)));
-            await updateDoc(doc(db, "plating_shipments", line.id), { status: 'built', builtAt: serverTimestamp(), builtAssemblyId: bb.id ? String(bb.id) : null }).catch(() => {});
-            alert(`✅ Built back ${qty} × ${target} — plated raw returned to Good and consumed into the finished assembly.`);
-            writeLog(`Plating build-back: ${qty} ${target} (raw ${line.erpId}) built; WIP-Plating → Good reversed.`, 'wms');
+            if (!br.ok) throw new Error('Assembly build failed: ' + (typeof bb === 'object' ? JSON.stringify(bb) : String(bb)));
+            await updateDoc(doc(db, 'plating_shipments', line.id), {
+                status: 'built', builtAt: serverTimestamp(), builtAssemblyId: bb.id ? String(bb.id) : null,
+                binPlacements: bins, putAwayAt: Date.now(), putAwayBy: operator?.name || '',
+            }).catch(() => {});
+            writeLog(`Plating put-away: ${got} × ${target} built into ${bins.map(p => `${p.qty}@${p.bin}`).join(' + ')} by ${operator?.name || 'Unknown'} (${line.cartLabel || 'cart'}, ${line.shipmentId || line.id}).`, 'wms');
+            alert(`✅ ${got} × ${target} put away and built.\n\n${bins.map(p => `   ${p.qty} → ${p.bin}`).join('\n')}${scrap > 0 ? `\n\n${scrap} short piece(s) scrapped out of WIP-Plating.` : ''}`);
+            setPaLineId(''); setPaBins([{ bin: '', qty: '' }]); setPaMulti(false); setPlatingScan(''); setPlatingFocusId(null);
             pullNetSuiteStock();
         } catch (e) {
-            console.error("Plating build-back failed:", e);
-            alert("❌ Build-back problem:\n\n" + (e.message || e) + "\n\nThe WIP→Good reversal is guarded, so retrying won't double-reverse. If it says \"configure the inventory detail\", either the plated assembly's bin didn't resolve (sync/map its bin in the library) or it's also lot-numbered — paste the message and I'll adjust.");
-        } finally {
-            setIsSyncing(false);
-        }
+            console.error('Plating put-away failed:', e);
+            alert('❌ Put-away problem:\n\n' + (e.message || e) + '\n\nEach step is guarded, so retrying cannot double-post the reversal or the scrap. If NetSuite still says "configure the inventory detail", the assembly is also lot-numbered — paste the message.');
+        } finally { setIsSyncing(false); }
     };
+    // The old one-button build-back lived here. It sent inventory detail ONLY when the LIBRARY
+    // happened to carry a bin for the plated assembly, so on 2026-09-03 every line of
+    // PLT-CE-1782150374239 failed with "Please configure the inventory detail for the assembly
+    // item". It is gone rather than patched: the bin is not a lookup, it is where the pieces were
+    // physically put — putAwayFromCart above is now the ONE place that posts this build.
 
     const handlePickValidation = async (e) => {
         e.preventDefault();
@@ -5364,39 +5487,122 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             );
                         })()}
 
-                        {/* RETURNED FROM PLATER — BUILD BACK (Phase 4b) */}
+                        {/* RETURNED FROM PLATER — THE RECEIVING STATION (Phase 4b) */}
+                        {/* Scan to find · receive to a cart · put the cart away, which is when the
+                            build posts — into the bin that was actually scanned (Stuart 2026-09-03). */}
                         {platingReceived.length > 0 && (() => {
                             const groups = Object.values(platingReceived.reduce((a, l) => { (a[l.shipmentId || l.id] = a[l.shipmentId || l.id] || { shipmentId: l.shipmentId || l.id, lines: [] }).lines.push(l); return a; }, {}));
+                            const rowBox = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: `1px solid ${theme.line}`, paddingTop: '8px', flexWrap: 'wrap' };
+                            const inp = { padding: '9px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '12px', background: '#fff', color: theme.ink };
+                            const btn = (bg, fg) => ({ padding: '9px 14px', background: bg, color: fg, border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' });
                             return (
                                 <div style={{ background: '#fff', border: `1px solid #7d9a6f`, padding: '20px' }}>
-                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Returned — ready to build back · {platingReceived.length} line{platingReceived.length === 1 ? '' : 's'}</div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>Receiving station — {platingReceived.length} line{platingReceived.length === 1 ? '' : 's'} back from the plater · scan → cart → bin</div>
+
+                                    {/* SCAN TO FIND — the label, not a scroll through every green row. */}
+                                    <form onSubmit={(e) => { e.preventDefault();
+                                        const hit = findPlatingLine(platingScan, platingReceived);
+                                        if (!hit) return alert(`Nothing on this PO matches "${platingScan}".\n\nScan the raw code (H1-138BS) or the plated code (H1-138BS/EP1).`);
+                                        setPlatingFocusId(hit.id);
+                                        if (hit.cartId && hit.cartStatus === 'saved') { setOpenCartPanel(hit.cartId); setPaLineId(hit.id); setPaBins([{ bin: '', qty: String(hit.receivedQty || '') }]); setPaMulti(false); }
+                                    }} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+                                        <input autoFocus value={platingScan} onChange={(e) => setPlatingScan(e.target.value)} placeholder={t('Scan or type the item — raw or plated code')} style={{ ...inp, flex: 1, minWidth: '260px', fontSize: '15px', padding: '12px' }} />
+                                        <button type="submit" style={btn(theme.ink, '#fff')}>{t('Find')}</button>
+                                        {(platingScan || platingFocusId) && <button type="button" onClick={() => { setPlatingScan(''); setPlatingFocusId(null); }} style={{ ...btn('transparent', theme.inkSoft), border: `1px solid ${theme.line}` }}>{t('Clear')}</button>}
+                                    </form>
+
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                        {groups.map(g => (
+                                        {groups.map(g => {
+                                            const carts = cartsOfLines(g.lines);
+                                            const openCart = carts.find(c => c.status === 'open');
+                                            const savedCarts = carts.filter(c => c.status === 'saved');
+                                            const toReceive = g.lines.filter(l => !l.cartId);
+                                            return (
                                             <div key={g.shipmentId} style={{ border: `1px solid ${theme.line}`, padding: '14px' }}>
                                                 <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink, marginBottom: '8px' }}>{g.shipmentId} · {g.lines.length} line{g.lines.length === 1 ? '' : 's'}</div>
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                    {g.lines.map(l => {
-                                                        const tgt = l.targetErpId || (l.finishCode ? `${l.erpId}/${String(l.finishCode).toUpperCase()}` : '');
-                                                        // Preflight: does the plated assembly exist in the brand library (synced from NS), and what bin?
-                                                        const tgtPart = tgt ? hqParts.find(p => erpOf(p) === tgt.toUpperCase()) : null;
-                                                        const tgtBin = tgtPart ? binOf(tgtPart) : '';
-                                                        return (
-                                                            <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: `1px solid ${theme.line}`, paddingTop: '8px' }}>
-                                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
-                                                                    {l.erpId} → <span style={{ color: theme.brass }}>{tgt || '— no finish on line'}</span> · {l.qty} pcs{l.wipReversed ? ' · ✓ back in Good' : ''}
-                                                                    {tgt && (tgtPart
-                                                                        ? <span style={{ color: theme.inkSoft }}> · → {tgtBin && tgtBin !== 'UNASSIGNED' ? `bin ${tgtBin}` : <span style={{ color: '#c0392b' }}>no bin ⚠</span>}</span>
-                                                                        : <span style={{ color: '#c0392b' }}> · ⚠ assembly not in library — sync from NetSuite first</span>)}
+
+                                                {/* 1 — OFF THE PALLET, ONTO A CART. Nothing posts here. */}
+                                                {toReceive.length > 0 && (
+                                                    <div style={{ marginBottom: '14px' }}>
+                                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '6px' }}>{t('To receive')} · {toReceive.length}</div>
+                                                        {toReceive.map(l => {
+                                                            const tgt = l.targetErpId || (l.finishCode ? `${l.erpId}/${String(l.finishCode).toUpperCase()}` : '');
+                                                            const dim = !!platingFocusId && platingFocusId !== l.id;
+                                                            const hit = platingFocusId === l.id;
+                                                            return (
+                                                                <div key={l.id} style={{ ...rowBox, opacity: dim ? 0.28 : 1, background: hit ? '#fdf6e3' : 'transparent', padding: hit ? '8px' : undefined, borderLeft: hit ? `3px solid ${theme.brass}` : undefined }}>
+                                                                    <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                                                        {l.erpId} → <span style={{ color: theme.brass }}>{tgt || '— no finish on line'}</span> · {t('sent')} {l.qty} pcs
+                                                                    </div>
+                                                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                                        <input type="number" min="0" max={l.qty} value={cartQty[l.id] != null ? cartQty[l.id] : ''} onChange={(e) => setCartQty(p => ({ ...p, [l.id]: e.target.value }))} placeholder={String(l.qty)} title="Good pieces off the pallet — leave blank for all of them" style={{ ...inp, width: '92px', textAlign: 'center' }} />
+                                                                        <button disabled={!tgt || isSyncing} onClick={() => receiveToCart(l, g.lines)} style={btn(!tgt ? theme.paper2 : theme.brass, !tgt ? theme.inkSoft : '#fff')}>{tgt ? t('Add to cart') : t('No finish')}</button>
+                                                                    </div>
                                                                 </div>
-                                                                <button onClick={() => pushPlatingBuildBack(l)} disabled={isSyncing || !tgt} style={{ padding: '10px 16px', background: !tgt ? theme.paper2 : '#5e7d54', color: !tgt ? theme.inkSoft : '#fff', border: 'none', cursor: isSyncing ? 'wait' : (!tgt ? 'not-allowed' : 'pointer'), fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>
-                                                                    {isSyncing ? '…' : (tgt ? `Build ${tgt}` : 'No finish')}
-                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+
+                                                {/* 2 — THE OPEN CART. */}
+                                                {openCart && (
+                                                    <div style={{ marginBottom: '14px', border: `1px solid ${theme.brass}`, padding: '10px' }}>
+                                                        <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '6px' }}>{openCart.label} · {t('open')} · {openCart.lines.length} {t('line(s)')} · {openCart.lines.reduce((a, l) => a + (parseInt(l.receivedQty) || 0), 0)} pcs</div>
+                                                        {openCart.lines.map(l => (
+                                                            <div key={l.id} style={rowBox}>
+                                                                <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{l.targetErpId || l.erpId} · {l.receivedQty}/{l.qty} pcs{(parseInt(l.scrapQty) || 0) > 0 ? <span style={{ color: '#c0392b' }}> · {l.scrapQty} {t('short')}</span> : ''}</span>
+                                                                <button onClick={() => removeFromCart(l)} style={{ ...btn('transparent', theme.inkSoft), border: `1px solid ${theme.line}` }}>{t('Remove')}</button>
                                                             </div>
-                                                        );
-                                                    })}
-                                                </div>
+                                                        ))}
+                                                        <button onClick={() => saveCart(openCart)} style={{ ...btn(theme.ink, '#fff'), marginTop: '10px' }}>{t('Save cart')}</button>
+                                                    </div>
+                                                )}
+
+                                                {/* 3 — PUT AWAY FROM A SAVED CART: scan the item, scan the bin, the build posts. */}
+                                                {savedCarts.map(c => {
+                                                    const isOpen = openCartPanel === c.cartId;
+                                                    const sel = isOpen ? c.lines.find(l => l.id === paLineId) : null;
+                                                    const placed = paBins.reduce((a, p) => a + (parseInt(p.qty) || 0), 0);
+                                                    return (
+                                                    <div key={c.cartId} style={{ border: `1px solid ${theme.line}`, marginBottom: '8px' }}>
+                                                        <div onClick={() => { setOpenCartPanel(isOpen ? null : c.cartId); setPaLineId(''); setPaBins([{ bin: '', qty: '' }]); setPaMulti(false); }} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', cursor: 'pointer', background: isOpen ? theme.paper2 : 'transparent', fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                                            <span>{isOpen ? '▾' : '▸'} {c.label} · {t('saved')} · {c.lines.length} {t('line(s)')} · {c.lines.reduce((a, l) => a + (parseInt(l.receivedQty) || 0), 0)} pcs</span>
+                                                            <span style={{ color: theme.inkSoft }}>{t('put away')}</span>
+                                                        </div>
+                                                        {isOpen && (
+                                                            <div style={{ padding: '12px', borderTop: `1px solid ${theme.line}` }}>
+                                                                {c.lines.map(l => (
+                                                                    <div key={l.id} onClick={() => { setPaLineId(l.id); setPaBins([{ bin: '', qty: String(l.receivedQty || '') }]); setPaMulti(false); }} style={{ ...rowBox, cursor: 'pointer', background: paLineId === l.id ? '#fdf6e3' : 'transparent', borderLeft: paLineId === l.id ? `3px solid ${theme.brass}` : undefined, padding: paLineId === l.id ? '8px' : undefined }}>
+                                                                        <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>{l.targetErpId || l.erpId} · {l.receivedQty} pcs{(parseInt(l.scrapQty) || 0) > 0 ? <span style={{ color: '#c0392b' }}> · {l.scrapQty} {t('short — will be scrapped')}</span> : ''}</span>
+                                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft }}>{paLineId === l.id ? t('selected') : t('tap to put away')}</span>
+                                                                    </div>
+                                                                ))}
+                                                                {sel && (
+                                                                    <div style={{ marginTop: '12px', borderTop: `1px solid ${theme.line}`, paddingTop: '12px' }}>
+                                                                        <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>{t('Where did they go?')} — {sel.targetErpId || sel.erpId} · {sel.receivedQty} pcs</div>
+                                                                        {paBins.map((p, i) => (
+                                                                            <div key={i} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
+                                                                                <input value={p.bin} onChange={(e) => setPaBins(arr => arr.map((x, k) => k === i ? { ...x, bin: e.target.value } : x))} placeholder={t('Scan the bin')} style={{ ...inp, flex: 1, minWidth: '200px', fontSize: '15px', padding: '12px' }} />
+                                                                                {paMulti && <input type="number" min="0" value={p.qty} onChange={(e) => setPaBins(arr => arr.map((x, k) => k === i ? { ...x, qty: e.target.value } : x))} placeholder="qty" style={{ ...inp, width: '92px', textAlign: 'center' }} />}
+                                                                                {paMulti && paBins.length > 1 && <button onClick={() => setPaBins(arr => arr.filter((x, k) => k !== i))} style={{ ...btn('transparent', theme.inkSoft), border: `1px solid ${theme.line}` }}>−</button>}
+                                                                            </div>
+                                                                        ))}
+                                                                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                                                            {!paMulti && <button onClick={() => { setPaMulti(true); setPaBins([{ bin: paBins[0].bin, qty: '' }, { bin: '', qty: '' }]); }} style={{ ...btn('transparent', theme.inkSoft), border: `1px solid ${theme.line}` }}>{t('Multiple bins')}</button>}
+                                                                            {paMulti && <button onClick={() => setPaBins(arr => [...arr, { bin: '', qty: '' }])} style={{ ...btn('transparent', theme.inkSoft), border: `1px solid ${theme.line}` }}>+ {t('another bin')}</button>}
+                                                                            {paMulti && <span style={{ fontFamily: theme.mono, fontSize: '10px', color: placed === (parseInt(sel.receivedQty) || 0) ? '#3a7d44' : '#c0392b' }}>{placed} / {sel.receivedQty} {t('placed')}</span>}
+                                                                            <button disabled={isSyncing} onClick={() => putAwayFromCart(sel, paMulti ? paBins : [{ bin: paBins[0].bin, qty: sel.receivedQty }])} style={{ ...btn('#5e7d54', '#fff'), marginLeft: 'auto' }}>{isSyncing ? '…' : t('Put away & build')}</button>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    );
+                                                })}
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </div>
                             );
