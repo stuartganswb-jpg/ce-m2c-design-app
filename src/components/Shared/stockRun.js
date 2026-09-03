@@ -81,19 +81,25 @@ export function buildStockFinPayload({
     woId, part, qty, finishLabel, brand, createdBy, reqDate, note, tasks, extra = {}, now,
     type, stockInternalId, productType, paintSize, paintSizes, poles, totalPoles, finishStream,
     partsList, bomExploded, urgent, needBy, urgentBy, urgentAt, convertSuggestion, releasedDirect = true,
+    // A SALES-typed payload (Order Entry, writer 5): the item code is the finished variant the
+    // customer ordered (raw + applied finish), the order keys off the sales order, and the custom
+    // pair names its shop sibling. `code` overrides the part's own id; `sales` overrides the
+    // stock header. Absent, the payload is the stock payload exactly as before.
+    code, sales = null,
 }) {
     const t = Number(now) || 0;
-    const erp = String((part && (part.legacyErpId || part.itemId)) || '').toUpperCase();
+    const erp = String(code || (part && (part.legacyErpId || part.itemId)) || '').toUpperCase();
     const n = Math.max(1, Math.floor(Number(qty) || 1));
+    const cust = sales ? String(sales.customer || '') : 'Internal Stock';
     return {
         id: woId, displayId: woId, woNum: woId,
-        orderKey: woId,
-        quoteId: (part && part.id) || null,
-        salesOrderId: null, estimateId: null,
-        orderType: 'stock',
-        soId: null, soNum: null,
-        customerId: null,
-        customerName: 'Internal Stock', customer: 'Internal Stock', clientName: 'Internal Stock',
+        orderKey: sales ? (sales.soAppId || woId) : woId,
+        quoteId: sales ? null : ((part && part.id) || null),
+        salesOrderId: sales ? (sales.soAppId || null) : null, estimateId: null,
+        orderType: sales ? 'sales' : 'stock',
+        soId: sales ? (sales.soId || null) : null, soNum: sales ? (sales.soId || null) : null,
+        customerId: sales ? (sales.customerId || null) : null,
+        customerName: cust, customer: cust, clientName: cust,
         stockErpId: erp || null,
         // Canonical identity (2026-08-25) — same field every writer stamps; see workOrderContract.
         ...(erp ? { itemCode: erp } : {}),
@@ -125,8 +131,10 @@ export function buildStockFinPayload({
         // A stock build has nothing to pick — the finished goods go to the shelf at packing.
         sentToPickPack: false,
         pickStatus: 'Pending',
-        shopSiblingId: null,
-        hasCustomSibling: false,
+        // §A1 (Shared/workOrderContract): a paired order's small-parts pick is released by the
+        // shop operator STARTING the custom job — they meet again at staging.
+        shopSiblingId: sales && sales.custom && sales.shopWoId ? `SHOP-${sales.shopWoId}` : null,
+        hasCustomSibling: !!(sales && sales.custom),
         customFabStatus: 'Pending',
         brand: brand || null,
         createdAt: t, updatedAt: t,
@@ -160,30 +168,47 @@ export const buildParkedWorkOrder = ({
     intent, woId, part, qty, brand, createdBy = '', reqDate = '', needBy = '', urgent = false, note = '',
     source, routeTo, finish = '', partsList = [], bomExploded = false, gate = {},
     replaces = null, forPlating = null, convertSuggestion = null, tasks, now,
+    // ORDER ENTRY (writer 5): `code` is the finished variant (raw + applied finish); `sales` =
+    // { soAppId, soId, customerId, customer, rawErp, aliasErp, soAccepted, flow2, stockInternalId,
+    //   custom, shopWoId } — the header, the SO link, the FLOW2 wait and the custom pair.
+    code = '', sales = null,
 }) => {
     const t = Number(now) || 0;
-    const erp = String((part && (part.legacyErpId || part.itemId)) || '').toUpperCase();
+    const erp = String(code || (part && (part.legacyErpId || part.itemId)) || '').toUpperCase();
     const n = Math.max(1, Math.floor(Number(qty) || 1));
     const ff = floorFieldsOf(part, n);
     const finishing = routeTo === ROUTE_FINISHING;
-    const nsId = part && part.netSuiteInternalId != null && part.netSuiteInternalId !== '' ? String(part.netSuiteInternalId) : null;
+    // A sales order's NetSuite item is the FLOW2 assembly when there is one, never the raw part's.
+    const nsId = sales ? (sales.stockInternalId ? String(sales.stockInternalId) : null)
+        : (part && part.netSuiteInternalId != null && part.netSuiteInternalId !== '' ? String(part.netSuiteInternalId) : null);
     const urgentBlock = urgent ? { urgent: true, urgentAck: false, needBy: needBy || reqDate, urgentBy: createdBy, urgentAt: t } : {};
     const finPayload = !finishing ? null : buildStockFinPayload({
         woId, part, qty: n, finishLabel: finish, brand, createdBy, reqDate, note, tasks, now: t,
-        type: erp, stockInternalId: nsId,
+        type: erp, stockInternalId: nsId, code: erp, sales,
         productType: ff.productType, paintSize: ff.paintSize, paintSizes: ff.paintSizes,
         poles: ff.poles, totalPoles: ff.totalPoles, finishStream: ff.finishStream,
         partsList, bomExploded, urgent, needBy, convertSuggestion, releasedDirect: false,
-        extra: { orderKey: woId },
+        extra: sales ? { itemName: (part && part.itemName) || '' } : { orderKey: woId },
     });
+    const salesHeader = sales ? {
+        orderClass: 'ORDER_ENTRY', soAppId: sales.soAppId || null, soId: sales.soId || null,
+        customerId: sales.customerId || null, customer: String(sales.customer || ''),
+        ...(sales.aliasErp ? { aliasErp: sales.aliasErp } : {}),
+        soAccepted: !!sales.soAccepted,
+        // FLOW2: the floor waits for the NetSuite work-order number (Stuart 2026-08-29).
+        ...(sales.flow2 ? { awaitingNsWo: true } : {}),
+    } : {};
     const hq = {
         id: woId, woId, woDisplayId: woId,
-        brand, status: 'Approved', customer: 'Internal Stock',
-        source, intent, routeTo, orderType: 'stock', autoFlow: true,
-        type: erp, erpId: erp, partErpId: erp, variantErpId: erp, rootItem: erp,
+        brand, status: 'Approved', customer: sales ? String(sales.customer || '') : 'Internal Stock',
+        source, intent, routeTo, orderType: sales ? 'sales' : 'stock', autoFlow: true,
+        type: erp, erpId: erp, partErpId: erp, variantErpId: erp, rootItem: sales ? String(sales.rawErp || erp).toUpperCase() : erp,
         itemName: (part && part.itemName) || '',
-        hqJobId: (part && part.id) || null, originalVariantId: (part && part.id) || null,
+        // The library lookups (RTG's enrich path reads hqJobId as a CPQ job on a sales order —
+        // so a sales doc carries none, exactly as Order Entry wrote it).
+        ...(sales ? {} : { hqJobId: (part && part.id) || null, originalVariantId: (part && part.id) || null }),
         ...(nsId ? { stockInternalId: nsId, nsItemId: nsId } : {}),
+        ...salesHeader,
         productType: ff.productType, paintSize: ff.paintSize,
         ...(ff.poles ? { poles: ff.poles, totalPoles: ff.totalPoles } : {}),
         ...(ff.finishStream ? { finishStream: ff.finishStream } : {}),
@@ -202,5 +227,25 @@ export const buildParkedWorkOrder = ({
         ...(forPlating ? { forPlating } : {}),
         createdAt: t, createdBy,
     };
-    return { hq, finPayload, erp, floor: ff };
+    // THE CUSTOM HALF (Stuart 2026-09-01, b531f53): a mill code plus an applied finish is made
+    // to order — the shop sibling is parked exactly like its twin, routed SHOP, and the two ids
+    // point at each other (finSiblingId is what workOrderContract keys on). The gates are
+    // per-LINE, so the same gate object rides both halves.
+    const shopSibling = sales && sales.custom && sales.shopWoId ? {
+        id: sales.shopWoId, woId: sales.shopWoId, woDisplayId: sales.shopWoId,
+        brand, status: 'Approved', customer: String(sales.customer || ''),
+        source, intent, routeTo: ROUTE_SHOP, orderType: 'sales', autoFlow: true,
+        finSiblingId: woId, hasSmallSibling: true,
+        type: erp, erpId: erp, partErpId: erp, variantErpId: erp, rootItem: String(sales.rawErp || erp).toUpperCase(),
+        itemName: (part && part.itemName) || '',
+        ...salesHeader,
+        ...(finishing ? { recipe: finish } : {}),
+        qty: n, totalParts: n, reqDate,
+        ...(needBy ? { needBy } : {}),
+        ...urgentBlock,
+        note, memo: note,
+        ...gate,
+        createdAt: t, createdBy,
+    } : null;
+    return { hq, finPayload, shopSibling, erp, floor: ff };
 };

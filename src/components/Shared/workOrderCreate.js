@@ -30,7 +30,7 @@ import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from './nsWorkOrder';
 
 // REISSUE (RTG's balance close, writer 10 — B's file calls it): the route is decided by the code,
 // exactly as STOCK_FINISH / STOCK_MILL would decide it, plus the lineage stamp (`replaces`).
-export const INTENT = { STOCK_FINISH: 'STOCK_FINISH', STOCK_MILL: 'STOCK_MILL', COMPONENT_MILL: 'COMPONENT_MILL', REISSUE: 'REISSUE' };
+export const INTENT = { STOCK_FINISH: 'STOCK_FINISH', STOCK_MILL: 'STOCK_MILL', COMPONENT_MILL: 'COMPONENT_MILL', REISSUE: 'REISSUE', ORDER_ENTRY: 'ORDER_ENTRY' };
 export const ANCHOR = { AT_CREATION: 'AT_CREATION', AT_RELEASE: 'AT_RELEASE', NONE: 'NONE' };
 
 // A refusal is a typed error so a batch caller can log the row and carry on with the next.
@@ -44,7 +44,7 @@ const SOURCE_LABEL = {
     SALES_SNAPSHOT: 'Sales Snapshot', STOCKVIEW_GRID: 'Stock View grid', RAW_CORES: 'raw core replenish',
     STOCKVIEW_PO_BUILDER: 'PO builder, core short for plating', LIBRARY_MAKEUP: 'library make-up',
     PRECHECK_MAKEUP: 'component make-up', PLATING: 'core short for plating', STOCK_BUILD_NEEDS: 'Stock Build Needs',
-    RTG_REISSUE: 're-issue of a short balance',
+    RTG_REISSUE: 're-issue of a short balance', ORDER_ENTRY: 'Order Entry',
 };
 
 let seq = 0;
@@ -72,8 +72,13 @@ export const parkWorkOrder = async ({
     intent, part, qty, brand, createdBy = '', reqDate = '', needBy = '', urgent = false, note = '',
     source, precheck = null, pins = [], inventory = [], locationId, nsIdOf = null,
     anchor, woId, replaces = null, forPlating = null, convertSuggestion = null, soRef = '',
+    // ORDER_ENTRY (writer 5): `code` = the finished variant the customer ordered (the part is the
+    // RAW record), `sales` = the header/pair block (see buildParkedWorkOrder), `partsList` = the
+    // review's pull lines verbatim (Model B renames the self-pull to the raw code), `makeup` =
+    // how component shop WOs dispatch (Order Entry sends them straight to the shop).
+    code = '', sales = null, partsList: partsListOverride = null, makeup = {},
 }) => {
-    const erp = erpOf(part);
+    const erp = String(code || erpOf(part) || '').toUpperCase();
     if (!erp || erp === 'PENDING') throw new ParkRefusal(REFUSAL.NO_PART, 'No item code on the part — sync or save it with an ERP id first.');
     const n = Math.max(1, Math.floor(Number(qty) || 1));
 
@@ -82,7 +87,9 @@ export const parkWorkOrder = async ({
     if (route.refuse === REFUSE_PHOSPHATE) throw new ParkRefusal(REFUSAL.PHOSPHATE, `${erp} is a phosphated core: phosphating raw → /P is a bulk WMS convert (raise a Convert to-do), never a work order.`);
     if (route.refuse === REFUSE_OUTSOURCED) throw new ParkRefusal(REFUSAL.OUTSOURCED, `${erp} is plated (/${route.finish}) — never a finishing work order. Raise it as a PLATING DEMAND: Stock View → PO builder's plating split, the Snapshot's plated tier, or the Library card's outsourced path.`);
     const isReissue = intent === INTENT.REISSUE;
-    const wantFinishing = isReissue ? route.routeTo === ROUTE_FINISHING : intent === INTENT.STOCK_FINISH;
+    const isSales = intent === INTENT.ORDER_ENTRY;
+    if (isSales && !sales) throw new ParkRefusal(REFUSAL.INTENT, `${erp}: ORDER_ENTRY needs its sales block (the SO link).`);
+    const wantFinishing = isReissue ? route.routeTo === ROUTE_FINISHING : (intent === INTENT.STOCK_FINISH || isSales);
     if (!isReissue && wantFinishing && route.routeTo !== ROUTE_FINISHING) throw new ParkRefusal(REFUSAL.INTENT, `${erp} has no finish suffix — it is shop work (STOCK_MILL), not a finishing run.`);
     if (!isReissue && !wantFinishing && route.routeTo !== ROUTE_SHOP) throw new ParkRefusal(REFUSAL.INTENT, `${erp} carries finish /${route.finish} — it is finishing work (STOCK_FINISH), not a milling order.`);
     if (precheck && precheck.rawUnknown) throw new ParkRefusal(REFUSAL.RAW_UNKNOWN, `${erp}: /P components are short but the RAW availability read failed — a convert against unverified raw silently skips milling. Retry when NetSuite answers.`);
@@ -92,7 +99,7 @@ export const parkWorkOrder = async ({
 
     // 2. PULL LINES — the pre-check's plan when it ran, else the planner on the pins.
     const plan = (precheck && precheck.plan) || (pins.length ? planFinishedRun({ part, qty: n, pins, inventory }) : null);
-    const partsList = plan && plan.exploded ? plan.lines : [];
+    const partsList = Array.isArray(partsListOverride) ? partsListOverride : (plan && plan.exploded ? plan.lines : []);
 
     // 3. GATES FROM BIRTH — make-up orders first, so the demands carry this WO's id and the WO
     //    carries its gate when it is written. A component shop WO still milling gates the order
@@ -103,6 +110,7 @@ export const parkWorkOrder = async ({
         const exec = await executeMakeupActions({
             actions: precheck.actions, brandId: brand, finWoId: id, finWoErpId: erp,
             createdBy, inventory, source: `${String(source || 'precheck').toLowerCase()}-precheck`, reqDate, soRef,
+            dispatchShop: !!makeup.dispatchShop, customerName: makeup.customerName || '',
         });
         gate = {
             ...exec.gateFields,
@@ -113,8 +121,10 @@ export const parkWorkOrder = async ({
 
     // 4. A STOCKED POLE IS CUT BEFORE IT IS FINISHED (Stuart 2026-08-19): a 4/6 ft order raises a
     //    cut from 8 ft rods and waits on it; the cut prints this order's finishing label.
+    // NOT on a sales line: Order Entry never raised a cut (b531f53) and whether a stocked-length
+    // pole ordered by a customer is cut here or by the shop pair is Stuart's call, not derived.
     let rodCut = null;
-    if (wantFinishing) {
+    if (wantFinishing && !isSales) {
         const ptype = String((part.manufacturingSpecs && part.manufacturingSpecs.productType) || part.productType || '');
         const cut = poleCutPlan(erp, n, { productType: ptype });
         if (cut) {
@@ -140,9 +150,14 @@ export const parkWorkOrder = async ({
         source, routeTo: route.routeTo, finish: route.finish,
         partsList, bomExploded: !!(plan && plan.exploded), gate, replaces, forPlating, convertSuggestion,
         tasks: wantFinishing ? makeFullTasks() : null, now: Date.now(),
+        code: erp, sales,
     });
     const hq = withItemCode({ ...built.hq, ...(built.finPayload ? { finPayload: withItemCode(built.finPayload) } : {}) });
     await setDoc(doc(db, 'hq_work_orders', id), hq, { merge: true });
+    if (built.shopSibling) {
+        await setDoc(doc(db, 'hq_work_orders', built.shopSibling.id), withItemCode(built.shopSibling), { merge: true });
+        made.push(`🔧 ${erp} is an applied finish — custom: shop job ${built.shopSibling.id} + finishing job ${id}, linked`);
+    }
     if (rodCut) {
         await setDoc(doc(db, 'rod_cut_orders', rodCut.cutId), {
             id: rodCut.cutId, brand, status: 'OPEN',
@@ -186,5 +201,5 @@ export const parkWorkOrder = async ({
     }
 
     made.unshift(`${route.routeTo === ROUTE_FINISHING ? '🎨' : '🏭'} ${id} — ${n} × ${erp}${route.finish ? ` (${route.finish})` : ''} → RTG, route ${route.routeTo}${Object.keys(gate).length ? ' · gated: ' + Object.keys(gate).filter(k => /^awaiting/.test(k) && gate[k]).map(k => k.replace(/^awaiting/, '').toLowerCase()).join(' + ') : ' · auto-release when clear'}`);
-    return { woId: id, routeTo: route.routeTo, finish: route.finish, gate, made, finPayload: hq.finPayload || null, rodCut };
+    return { woId: id, routeTo: route.routeTo, finish: route.finish, gate, made, finPayload: hq.finPayload || null, rodCut, shopWoId: built.shopSibling ? built.shopSibling.id : null };
 };

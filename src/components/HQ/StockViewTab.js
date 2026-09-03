@@ -5,7 +5,7 @@ import { collection, onSnapshot, query, where, getDocs, doc, setDoc, getDoc, upd
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { printItemLabel, printBinLabel, printItemLabels, printBinLabels } from '../Shared/labelPrint';
 import { SOURCING, sourcingOf } from '../Shared/sourcing';
-import { makeFullTasks, withItemCode, woItemCodeOf } from '../Shared/workOrderContract';
+import { makeFullTasks, woItemCodeOf } from '../Shared/workOrderContract';
 import { SIZE_CAPACITY, lookupCapacity, finishCodeFromErp } from '../Shared/finishingTime';
 import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifecycle';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
@@ -15,9 +15,9 @@ import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualC
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { isAssemblyPart } from '../Shared/finishedGoodsRun';
-import { runBatchPrecheck, executeMakeupActions, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
-import { isOutsourcedFinishCode, handlingForErp, finishSuffixOf, millBaseOf } from '../Shared/finishRouting';
-import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
+import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
+import { isOutsourcedFinishCode, handlingForErp, millBaseOf } from '../Shared/finishRouting';
+import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
 import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
@@ -2191,111 +2191,43 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         ? `🎨 ${erp} ×${qty}: START NOW from stock — finishing WO releases and picks from the shelf.`
                         : `🎨 ${erp} ×${qty}: TO BE FINISHED — creating the finishing WO now; it waits at the pick until the material arrives.`, 'info');
                 }
-                let gate = {};
-                if (makeup.length) {
-                    const exec = await executeMakeupActions({ actions: makeup, brandId: activeBrand, finWoId: woId, finWoErpId: finishedErp, createdBy: currentUser || '', inventory: hqParts, source: 'oe-review', reqDate: needBy, dispatchShop: true, soRef: so.soId || so.id, customerName: so.customer || '' });
-                    gate = { ...exec.gateFields, ...(exec.shopWoIds.length ? { componentShopWoIds: exec.shopWoIds, awaitingComponents: true } : {}) };
-                    addLog(`🧩 ${finishedErp}: ${exec.made.join(' · ')}`, 'warn');
-                }
                 const flow2 = job.nsPlan && job.nsPlan.flow === 'FLOW2';
                 const planLines = (job.plan?.lines || []).map(pl => String(pl.legacyErpId || '').toUpperCase() === finishedErp
                     ? { ...pl, legacyErpId: erp, partId: erp, partName: `${part.itemName || erp} — raw pull (no /P record)` } : pl);
-                const ptype = String(specs.productType || '').toUpperCase();
-                // ONE POLE TEST (sweep 2026-09-01, after Sandra's WO11535). Was /POLE|ROD/ here —
-                // equivalent today, and exactly the kind of local copy that drifts: the Setup
-                // Queue's own copy could not see a ROD, and RTG had no copy at all.
-                const isPole = isPoleCategory(ptype);
-                // ── CUSTOM LINES GET A SHOP SIBLING (Stuart 2026-09-01) ────────────────────────
-                // A mill code plus an applied finish (/P01, /EP3) is made to order — his rule:
-                // "the cpq and/or order entry apply the finish /P01, /EP1, etc. these all are
-                // routed to custom". Order Entry raised ONE finishing WO for those, so the custom
-                // half of the work had no home and the shop never saw it. A complete assembly
-                // (/BS, /N90) is unchanged: one finishing WO, exactly as before.
-                //
-                // The PAIR is the same shape RTG's autoSplitSalesOrder builds for a CPQ order, and
-                // Shared/workOrderContract keys entirely off finSiblingId — so shop-start pick
-                // release, the customFabStatus mirror and PickPack's pack gate all come for free
-                // once the two ids point at each other. Both halves are STAGED in hq_work_orders
-                // and released by RTG, never written to a floor directly: these lines carry
-                // awaitingNsWo / awaitingConvert / awaitingComponents gates that only RTG clears.
+                // ONE POLE TEST (sweep 2026-09-01) — Shared/poleCut is the single answer; the
+                // CUSTOM PAIR rule (Stuart 2026-09-01, b531f53): a mill code plus an applied finish
+                // is made to order and gets a shop sibling; a complete assembly (/BS, /N90) is one
+                // finishing WO. Both decided here, built by the one writer below.
+                const isPole = isPoleCategory(String(specs.productType || '').toUpperCase());
                 const custom = isPole && handlingForErp(finishedErp) === 'Custom';
                 const shopWoId = `${woId}-C`;
-                const size = String(specs.paintSize || '').toUpperCase();
-                const finPayload = withItemCode({
-                    id: woId, orderKey: so.id, quoteId: null, salesOrderId: so.id, estimateId: null,
-                    orderType: 'sales', soId: so.soId || so.id, soNum: so.soId || so.id,
-                    customerId: so.customerId || null, customerName: so.customer || '', customer: so.customer || '', clientName: so.customer || '',
-                    recipe: finish, reqDate: needBy, type: finishedErp, totalParts: qty,
-                    itemName: part.itemName || '',
-                    stockErpId: finishedErp, stockInternalId: flow2 ? job.nsPlan.assemblyInternalId : null,
-                    paintSize: isPole ? null : (size || null), productType: ptype || null,
-                    paintSizes: (!isPole && ['S', 'M', 'L'].includes(size)) ? { S: 0, M: 0, L: 0, [size]: qty } : null,
-                    ...(isPole ? { poles: { qty, type: ptype || 'POLE' }, totalPoles: qty } : {}),
-                    ...(specs.finishStream ? { finishStream: String(specs.finishStream).toUpperCase() } : {}),
-                    note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${job.aliasNote ? ` · 🔗 ${job.aliasNote}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
-                    cpqSpecs: {}, imageUrl: part.finalImageUrl || null,
-                    dimensions: { length: 0, width: 0, height: 0 },
-                    partsList: planLines, ...(job.plan?.exploded ? { bomExploded: true } : {}),
-                    currentPhase: 'Setup', stepStatus: 'Pending', currentStepIndex: 0,
-                    tasks: makeFullTasks(),
-                    machineAssigned: null, redlineAlert: false, sentToPickPack: false, pickStatus: 'Pending',
-                    // §A1 (Shared/workOrderContract): a paired order's small-parts pick is released
-                    // by the shop operator STARTING the custom job — they meet again at staging.
-                    shopSiblingId: custom ? `SHOP-${shopWoId}` : null, hasCustomSibling: custom, customFabStatus: 'Pending',
-                    brand: activeBrand, createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser || ''
-                });
-                await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
-                    id: woId, woId, brand: activeBrand, type: finishedErp, status: 'Approved',
-                    source: 'ORDER_ENTRY', routeTo: 'FINISHING', finPayload, autoFlow: true,
-                    orderClass: 'ORDER_ENTRY', soAppId: so.id, customerId: so.customerId || null,
-                    customer: so.customer || '', recipe: finish, erpId: finishedErp, partErpId: finishedErp, rootItem: erp,
-                    // The customer's code when the line came in under an alias — the Needs board
-                    // matches the line back to this WO through it (rootItem is the REAL item).
-                    ...(job.aliasNote ? { aliasErp: job.lineErp } : {}),
-                    itemName: part.itemName || '',
-                    qty, totalParts: qty, reqDate: needBy, ...(needBy ? { needBy } : {}),
-                    soAccepted: !!so.nsInternalId,
-                    // FLOW2: the floor waits for the NetSuite work-order number (Stuart 2026-08-29:
-                    // "nothing should go to the floor until the NetSuite work orders are obtained").
-                    ...(flow2 ? { awaitingNsWo: true } : {}),
-                    // Component shop WOs still milling → the floor waits for them too via
-                    // gate.awaitingComponents (Stuart 2026-08-30: "components in stock → RELEASED"
-                    // was a lie while the raw milled). RTG clears componentsDone when the shop
-                    // finishes and the release follows.
-                    ...gate,
-                    createdAt: Date.now(), createdBy: currentUser || ''
-                }), { merge: true });
-
-                // ── THE CUSTOM HALF ────────────────────────────────────────────────────────────
-                // Parked exactly like its sibling, released by RTG to the SHOP. orderType is what
-                // tells pushToShop this is a customer job and not a stock build — without it the
-                // order lands in the Stock Milling backlog instead of Custom Fabrication. It is
-                // read as `wo.orderType || 'stock'`, so every order written before this field
-                // existed keeps behaving exactly as it did.
-                //
-                // finSiblingId is the whole point: workOrderContract's releaseSiblingToPickPack
-                // and mirrorCustomStatusToSibling both return early without it, which is how a
-                // shop order ends up an orphan that never releases its own pick.
-                //
-                // The gates are per-LINE, not per-floor — short components mean neither half is
-                // ready — so the same gate object rides both.
-                if (custom) {
-                    await setDoc(doc(db, 'hq_work_orders', shopWoId), withItemCode({
-                        id: shopWoId, woId: shopWoId, brand: activeBrand, type: finishedErp, status: 'Approved',
-                        source: 'ORDER_ENTRY', routeTo: 'SHOP', autoFlow: true, orderType: 'sales',
-                        orderClass: 'ORDER_ENTRY', soAppId: so.id, soId: so.soId || so.id,
-                        finSiblingId: woId, hasSmallSibling: true,
-                        customerId: so.customerId || null, customer: so.customer || '',
-                        recipe: finish, erpId: finishedErp, partErpId: finishedErp, rootItem: erp,
-                        ...(job.aliasNote ? { aliasErp: job.lineErp } : {}),
-                        itemName: part.itemName || '',
-                        qty, totalParts: qty, reqDate: needBy, ...(needBy ? { needBy } : {}),
-                        soAccepted: !!so.nsInternalId,
-                        ...(flow2 ? { awaitingNsWo: true } : {}),
-                        ...gate,
-                        createdAt: Date.now(), createdBy: currentUser || ''
-                    }), { merge: true });
-                    addLog(`🔧 ${finishedErp} is an applied finish (/${finishSuffixOf(finishedErp)}) — custom: shop job ${shopWoId} + finishing job ${woId}, linked.`, 'info');
+                // ── THE ONE WRITER (Brief A, A1 step 4 — 2026-09-02). Intent ORDER_ENTRY: the
+                // document, the pre-built finishing payload, the pre-check gates (component shop
+                // WOs dispatched straight to the shop, as before) and the custom sibling all come
+                // from Shared/workOrderCreate. The FLOW1/FLOW2 NetSuite anchors and the direct
+                // release below stay exactly as b531f53 built them — anchor policy NONE here.
+                let gate = {}, finPayload = null;
+                try {
+                    const res = await parkWorkOrder({
+                        intent: INTENT.ORDER_ENTRY, part, code: finishedErp, qty, brand: activeBrand, createdBy: currentUser || '',
+                        reqDate: needBy, needBy,
+                        note: `Order Entry ${so.soId || so.id} · ${so.customer || ''} · ${erp} in ${finish}${job.aliasNote ? ` · 🔗 ${job.aliasNote}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
+                        source: 'ORDER_ENTRY', precheck: { plan: job.plan, actions: makeup }, partsList: planLines,
+                        inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17',
+                        makeup: { dispatchShop: true, customerName: so.customer || '' }, soRef: so.soId || so.id,
+                        anchor: ANCHOR.NONE, woId,
+                        sales: {
+                            soAppId: so.id, soId: so.soId || so.id, customerId: so.customerId || null, customer: so.customer || '',
+                            rawErp: erp, aliasErp: job.aliasNote ? job.lineErp : null, soAccepted: !!so.nsInternalId,
+                            flow2, stockInternalId: flow2 ? job.nsPlan.assemblyInternalId : null,
+                            custom, shopWoId,
+                        },
+                    });
+                    gate = res.gate; finPayload = res.finPayload;
+                    res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'success' : (/^[⚠✂⇄🏭🧩]/.test(m) ? 'warn' : 'info')));
+                } catch (e) {
+                    if (e instanceof ParkRefusal) { addLog(`⛔ ${finishedErp} (SO ${so.soId || so.id}): ${e.message}`, 'error'); continue; }
+                    throw e;
                 }
                 if (flow2) {
                     try {

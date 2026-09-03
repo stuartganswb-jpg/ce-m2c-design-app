@@ -122,6 +122,63 @@ test('parked shop order: route SHOP, no recipe, no payload, memo for the shop ca
     assert.equal(hq.hqJobId, 'doc3');
 });
 
+test('Order Entry custom pair: sales header, finished code, raw rootItem, linked shop sibling', () => {
+    const rawPole = { id: 'doc9', legacyErpId: 'HCUMP810', itemName: '8ft pole', netSuiteInternalId: 12500,
+        manufacturingSpecs: { productType: 'POLES' } };
+    const sales = { soAppId: 'so-app-1', soId: 'SO-77', customerId: 'cust-1', customer: 'Acme', rawErp: 'HCUMP810',
+        aliasErp: null, soAccepted: true, flow2: true, stockInternalId: '99001', custom: true, shopWoId: 'WO-OE-HCUMP810-1-C' };
+    const { hq, finPayload, shopSibling } = buildParkedWorkOrder({
+        intent: 'ORDER_ENTRY', woId: 'WO-OE-HCUMP810-1', part: rawPole, code: 'HCUMP810/P01', qty: 4, brand: 'ce', createdBy: 'stuart',
+        reqDate: '2026-09-20', needBy: '2026-09-20', note: 'Order Entry SO-77 · Acme · HCUMP810 in P01',
+        source: 'ORDER_ENTRY', routeTo: ROUTE_FINISHING, finish: 'P01',
+        partsList: [{ legacyErpId: 'HCUMP810', quantity: 4 }], bomExploded: false,
+        gate: { awaitingComponents: true, componentShopWoIds: ['WO-CMP-1'] }, sales, tasks: TASKS, now: NOW,
+    });
+    // the finishing half
+    assert.equal(hq.orderType, 'sales');
+    assert.equal(hq.orderClass, 'ORDER_ENTRY');
+    assert.equal(hq.soAppId, 'so-app-1');
+    assert.equal(hq.customer, 'Acme');
+    assert.equal(hq.type, 'HCUMP810/P01');
+    assert.equal(hq.erpId, 'HCUMP810/P01');
+    assert.equal(hq.rootItem, 'HCUMP810');          // the raw code — the OE Needs board matches on it
+    assert.equal(hq.recipe, 'P01');
+    assert.equal(hq.awaitingNsWo, true);            // FLOW2 waits for its NetSuite number
+    assert.equal(hq.soAccepted, true);
+    assert.equal(hq.awaitingComponents, true);
+    assert.equal('hqJobId' in hq, false);           // never a CPQ-job lookup key on a sales doc
+    assert.equal(hq.stockInternalId, '99001');      // the FLOW2 assembly, not the raw part's id
+    assert.equal(finPayload.orderType, 'sales');
+    assert.equal(finPayload.orderKey, 'so-app-1');
+    assert.equal(finPayload.salesOrderId, 'so-app-1');
+    assert.equal(finPayload.soId, 'SO-77');
+    assert.equal(finPayload.customerName, 'Acme');
+    assert.equal(finPayload.stockErpId, 'HCUMP810/P01');
+    assert.equal(finPayload.stockInternalId, '99001');
+    assert.equal(finPayload.shopSiblingId, 'SHOP-WO-OE-HCUMP810-1-C');
+    assert.equal(finPayload.hasCustomSibling, true);
+    assert.equal(finPayload.totalPoles, 4);
+    assert.equal(finPayload.finishStream, 'POLES');
+    assert.equal(finPayload.partsList[0].legacyErpId, 'HCUMP810');
+    // the custom half
+    assert.equal(shopSibling.id, 'WO-OE-HCUMP810-1-C');
+    assert.equal(shopSibling.routeTo, 'SHOP');
+    assert.equal(shopSibling.orderType, 'sales');
+    assert.equal(shopSibling.finSiblingId, 'WO-OE-HCUMP810-1');
+    assert.equal(shopSibling.hasSmallSibling, true);
+    assert.equal(shopSibling.awaitingComponents, true);   // the same gate rides both halves
+    assert.equal(shopSibling.awaitingNsWo, true);
+    assert.equal(shopSibling.rootItem, 'HCUMP810');
+    assert.equal(shopSibling.memo, hq.note);
+    assert.equal('finPayload' in shopSibling, false);
+    // a complete assembly (/N90) is one finishing WO — no sibling
+    const single = buildParkedWorkOrder({ intent: 'ORDER_ENTRY', woId: 'WO-OE-2', part: rawPole, code: 'HCUMP810/N90', qty: 1, brand: 'ce',
+        source: 'ORDER_ENTRY', routeTo: ROUTE_FINISHING, finish: 'N90', sales: { ...sales, custom: false, shopWoId: null }, tasks: TASKS, now: NOW });
+    assert.equal(single.shopSibling, null);
+    assert.equal(single.finPayload.hasCustomSibling, false);
+    assert.equal(single.finPayload.shopSiblingId, null);
+});
+
 test('Library run payload is unchanged by the new parameters', () => {
     const before = {
         id: 'WO-X', displayId: 'WO-X', woNum: 'WO-X', orderKey: 'WO-X', quoteId: 'doc2', salesOrderId: null, estimateId: null,
