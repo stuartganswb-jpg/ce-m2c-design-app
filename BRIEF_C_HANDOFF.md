@@ -17,7 +17,7 @@ stale — locate by symbol.*
 
 ## 2. Stuart's decisions this session (relayed through the integration session — he said relayed approvals count)
 
-- **Q1** — the shop instruction lives **on the item** (Library card + 4.5 Mass Update); the card shows it when there is no cut list. Field: `manufacturingSpecs.shopInstruction`, plain string. **The editors are a hand-off to A/F** (routed via the integration session); until one lands, the card is silent for a no-cut-list order.
+- **Q1** — the shop instruction lives **on the item** (Library card + 4.5 Mass Update); the card shows it when there is no cut list. Field: `manufacturingSpecs.shopInstruction`, plain string. **Editors shipped by A as `4ae891e`** (Library card text box under Manufacturing Specs + a 4.5 Mass Update "Overwrite Shop Instruction" panel). The strings still have to be typed on the items (Stuart/Eric) — until then the card is silent for a no-cut-list order.
 - **Q2** — START message only when a finishing sibling exists. Shipped.
 - **Q3** (root-build N) and **Q4** (20 ft stick family) — he could not answer from the batch. One-liners with defaults sent: "N = 3 unless you say otherwise"; "H1-1R only, 20 ft, offcuts kept, home bin = library bin — confirm or list others". **Unanswered at handoff.**
 - **C2** approved as put; fold-in (b) zero-good = Failed included; fold-in (a) custom-card COMPLETE stamping `floorPhase` **declined by me** — from a custom-fab spine the resolver lands on the finishing half's record or the sales order, so the stamp would lie. The honest fix is on the WMS pre-pack confirm (D's screen) reading `customFabStatus`; spec not yet written.
