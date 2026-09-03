@@ -781,6 +781,18 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
     const addSlot = () => setSlots(s => [...s, { id: `slot_${Date.now()}`, label: 'New Slot', category: 'OTHER', position: 'SHARED', location: '', desc: 'Type a descriptive label (e.g. "Left Return Backplate") — category & position tag themselves from it.' }]);
     const patchSlot = (id, patch) => setSlots(s => s.map(x => x.id === id ? { ...x, ...patch } : x));
     const removeSlot = (id) => { removeLayer(id); setSlots(s => s.filter(x => x.id !== id)); };
+    // LOAD ORDER IS THE ON-SCREEN ORDER (Stuart 2026-09-03: "label each slot with the load order and
+    // arrange on 1.6 in the order that she loads them"). Build mints each slot's S<n> prefix from its
+    // index among the FILLED merge slots, in this list's order — nothing is minted before Build, so
+    // moving a row here is honest: the badge and the eventual node names move together.
+    const moveSlot = (id, dir) => setSlots(prev => {
+        const i = prev.findIndex(x => x.id === id);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= prev.length) return prev;
+        const next = [...prev];
+        [next[i], next[j]] = [next[j], next[i]];
+        return next;
+    });
 
     // Smart "+ Slot": infer category/position from the label as it's typed ("Left Return Backplate" →
     // BACKPLATE · LEFT) so custom slots never ship with the OTHER/SHARED default mis-tag. Stops
@@ -954,10 +966,12 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 if (existingNames.has(pretty)) warnings.push(`• ${slot.label}: this assembly ALREADY has a "${pretty}" cluster — extending ADDS A SECOND copy of its geometry (it never replaces). Fix choices via Load Choices instead, unless a second copy is intended.`);
             });
         }
-        const summary = mergeSlots.map(s => {
+        // The same numbers the slot rows show — the last screen before the names are minted.
+        const preOffset = extendTarget ? ((extendInfo?.clusters || extendTarget.nodeClusters || []).length) : 0;
+        const summary = mergeSlots.map((s, i) => {
             const ch = layers[s.id].choices || [];
             const pinned = ch.filter(c => (c.itemNo && c.itemNo.trim()) || c.isFee || c.isHidden).length;
-            return `• ${s.label}: ${ch.length} choice(s) — ${pinned} pinned (item/fee/hide), ${ch.length - pinned} blank`;
+            return `• #${preOffset + i} ${s.label}: ${ch.length} choice(s) — ${pinned} pinned (item/fee/hide), ${ch.length - pinned} blank`;
         }).join('\n');
         if (!window.confirm(`${extendTarget ? `ADD ${mergeSlots.length} slot(s) to "${extendTarget.itemName}" (existing slots/pins untouched)` : `Build "${assemblyName}" from ${mergeSlots.length} slot file(s)`}?\n\nPREFLIGHT\n${summary}\n${warnings.length ? `\n⚠ CHECK FIRST\n${warnings.join('\n')}\n` : '\n✓ No issues detected.\n'}${sopLayer ? '\n+ SOP/instructions model attached as its OWN .glb (not merged).\n' : ''}\nBlank choices stay as always-visible shared geometry. Continue?`)) return;
         setBusy('build');
@@ -1027,7 +1041,11 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 const clusterId = `CLUSTER-${slot.id}-${Date.now()}`;
                 // Cluster tags are written CANONICAL (normalize the slot template values) so 1.5 /
                 // tab 2 / the generator / Vision all read the same vocabulary.
-                clusters.push({ id: clusterId, name: pretty, nodes: [prefix, ...allNodeNames(g)], category: normalizeCategory(slot.category) || slot.category, position: normalizePosition(slot.position) || slot.position, location: normalizeLocation(slot.location) || '' });
+                // slotId / slotLabel / slotOrder (2026-09-03): the slot this cluster was loaded from and
+                // its load-order number, written so 1.5 can group by slot without parsing the id or
+                // the S<n> prefix. Additive — every reader ignores keys it does not know; existing
+                // clusters are NOT rewritten (the parse covers them).
+                clusters.push({ id: clusterId, name: pretty, nodes: [prefix, ...allNodeNames(g)], category: normalizeCategory(slot.category) || slot.category, position: normalizePosition(slot.position) || slot.position, location: normalizeLocation(slot.location) || '', slotId: slot.id, slotLabel: slot.label, slotOrder: slotOffset + slotIdx });
                 // Full pin schema — identical to the assign tool, so a built assembly needs NO
                 // follow-up pass: item / fee / hidden / basic flags + the arrow order (choiceSort).
                 (layer.choices || []).forEach((ch, idx) => {
@@ -2900,14 +2918,26 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     </div>
                     {slots.map(slot => {
                         const layer = layers[slot.id];
+                        // The number Build will mint: this slot's index among the filled merge slots
+                        // (SOP / spec attach, they are not merged) plus the existing cluster count on
+                        // Extend — the same arithmetic as the S<n> prefix, so the badge IS the name.
+                        const orderList = filledSlots.filter(s => s.id !== 'sop' && s.id !== 'spec');
+                        const orderIdx = orderList.findIndex(s => s.id === slot.id);
+                        const isAttach = slot.id === 'sop' || slot.id === 'spec';
+                        const loadNo = orderIdx < 0 ? null : (extendId ? (extendInfo?.clusters || []).length : 0) + orderIdx;
                         return (
                             <div key={slot.id} style={{ border: `1px solid ${layer ? 'var(--brass)' : 'var(--line)'}`, background: layer ? 'var(--paper)' : '#fff', padding: '12px', borderRadius: '2px' }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 0.9fr auto', gap: '8px', alignItems: 'center' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1.4fr 1fr 1fr 0.9fr auto auto', gap: '8px', alignItems: 'center' }}>
+                                    <span title={isAttach ? 'Attached as its own file — never merged, never numbered.' : (loadNo == null ? 'Gets its load-order number when a file is uploaded. Numbers follow the on-screen order (▲▼) and become the S<n> prefix on every node name at Build.' : `Load order #${loadNo} — Build names every node in this slot S${loadNo}…; 1.5 groups the cluster under this number.`)} style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 600, letterSpacing: '.05em', minWidth: '34px', textAlign: 'center', padding: '4px 6px', border: `1px solid ${loadNo != null ? 'var(--brass)' : 'var(--line)'}`, background: loadNo != null ? 'var(--brass)' : '#fff', color: loadNo != null ? '#fff' : 'var(--ink-soft)' }}>{isAttach ? 'attach' : (loadNo != null ? `#${loadNo}` : '—')}</span>
                                     <input value={slot.label} onChange={e => patchSlotLabel(slot.id, e.target.value)} style={{ ...inp, padding: '6px 8px', fontSize: '0.8rem', fontWeight: 500 }} />
                                     <select value={slot.category} onChange={e => patchSlot(slot.id, { category: e.target.value, manualMeta: true })} style={sel}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select>
                                     <select value={slot.position} onChange={e => patchSlot(slot.id, { position: e.target.value, manualMeta: true })} style={sel}>{POSITIONS.map(c => <option key={c}>{c}</option>)}</select>
                                     <select value={slot.location} onChange={e => patchSlot(slot.id, { location: e.target.value, manualMeta: true })} style={sel}>{LOCATIONS.map(c => <option key={c} value={c}>{c || '—'}</option>)}</select>
                                     <button onClick={() => removeSlot(slot.id)} title="Remove slot" style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '1.1rem' }}>×</button>
+                                    <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                        <button onClick={() => moveSlot(slot.id, -1)} title="Move this slot up — the load-order numbers follow the on-screen order" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '8px', padding: '1px 4px', borderRadius: '2px' }}>▲</button>
+                                        <button onClick={() => moveSlot(slot.id, 1)} title="Move this slot down" style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '8px', padding: '1px 4px', borderRadius: '2px' }}>▼</button>
+                                    </span>
                                 </div>
                                 {slot.desc && (
                                     <div style={{ marginTop: '6px', fontFamily: 'var(--sans)', fontSize: '0.78rem', lineHeight: 1.4, color: 'var(--ink-soft)' }}>
@@ -2997,9 +3027,9 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             {extendInfo?.error && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f' }}>⚠ {extendInfo.error}</div>}
                             {!extendInfo?.loading && (extendInfo?.clusters || []).length > 0 && (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                                    {extendInfo.clusters.map(c => (
-                                        <span key={c.id} style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: '#fff', border: '1px solid var(--line)', padding: '3px 8px', color: 'var(--ink)' }}>
-                                            {c.name || c.id}{c.category ? ` · ${c.category}` : ''}{c.position ? ` · ${c.position}` : ''}{(c.nodes || []).length ? ` · ${(c.nodes || []).length}n` : ''}
+                                    {extendInfo.clusters.map((c, i) => (
+                                        <span key={c.id} title={`Existing slot #${i} — new slots continue from #${extendInfo.clusters.length}`} style={{ fontFamily: 'var(--mono)', fontSize: '9px', background: '#fff', border: '1px solid var(--line)', padding: '3px 8px', color: 'var(--ink-soft)' }}>
+                                            <b style={{ color: 'var(--ink)' }}>#{c.slotOrder ?? i}</b> {c.name || c.id}{c.category ? ` · ${c.category}` : ''}{c.position ? ` · ${c.position}` : ''}{(c.nodes || []).length ? ` · ${(c.nodes || []).length}n` : ''}
                                         </span>
                                     ))}
                                 </div>
