@@ -2601,6 +2601,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!bins.length) return alert('Scan the bin the pieces were placed in.');
         const placed = bins.reduce((a, p) => a + p.qty, 0);
         if (placed !== got) return alert(`The bins add up to ${placed}, but ${got} pcs were received. They must match — every piece has to be somewhere.`);
+        // One row per bin: the retry guard below skips bins already built, so the same bin twice
+        // would be ambiguous. Combine them instead.
+        if (new Set(bins.map(p => p.bin)).size !== bins.length) return alert('The same bin is listed twice. Put the whole quantity for a bin on one row.');
         for (const p of bins) {
             const chk = await platingBinCheck(p.bin);
             if (!chk.ok) return alert(chk.hard ? chk.msg : 'Nothing was posted.');
@@ -2631,24 +2634,36 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 await updateDoc(doc(db, 'plating_shipments', line.id), { scrapPosted: true, scrapPostedAt: Date.now() }).catch(() => {});
                 writeLog(`Plating short: ${scrap} × ${line.erpId} scrapped out of WIP-Plating @ ${line.platingBin} (${line.shipmentId || line.id}).`, 'wms');
             }
-            // 3 — the build, into the bin that was actually scanned.
+            // 3 — the build, THROUGH THE CONVERT RESTLET (Stuart 2026-09-03, second attempt).
+            // Putting the scanned bin on the build header got past the first refusal and straight
+            // into the next one: "configure the inventory detail in line 1 of the component list".
+            // The plain REST record API cannot set the consume-from bin on the COMPONENT sublist —
+            // it is static and unpopulated at create time. That is the entire reason the /P convert
+            // runs through the RESTlet, which lets NetSuite source the BOM and then sets
+            // componentinventorydetail on every bin-tracked component. The plated build-back is the
+            // same shape: consume the raw from `fromBin` (where step 1 just returned it to Good),
+            // receive the finished assembly into the bin that was SCANNED.
             const assembly = await resolveItemDetail(target);
             if (!assembly) throw new Error(`Couldn't find ${target} in NetSuite by item id. Confirm the plated assembly exists with ${line.erpId} as a BOM component.`);
             if (assembly.type && !/assembl/i.test(assembly.type)) throw new Error(`${target} is type "${assembly.type}" in NetSuite, not an Assembly.`);
-            const br = await nsProxyFetch({
-                targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/assemblybuild',
-                method: 'POST',
-                payload: {
-                    item: { id: assembly.id }, subsidiary: { id: nsConfig.subsidiary }, quantity: got,
-                    location: { id: nsConfig.location },
-                    memo: `Plating build-back ${target} (${line.finishCode || ''})${line.shipmentId ? ` — ${line.shipmentId}` : ''} → ${bins.map(p => `${p.qty}@${p.bin}`).join(' + ')}`,
-                    inventoryDetail: { quantity: got, inventoryAssignment: { items: bins.map(p => ({ binNumber: { refName: p.bin }, quantity: p.qty })) } }
-                }
-            });
-            const bb = await br.json().catch(() => ({}));
-            if (!br.ok) throw new Error('Assembly build failed: ' + (typeof bb === 'object' ? JSON.stringify(bb) : String(bb)));
+            // The RESTlet receives into ONE bin, so a split posts one build per bin. Each build is
+            // recorded the moment it lands, so a failure part-way through can never rebuild a bin
+            // that already went in.
+            const already = Array.isArray(line.builtPlacements) ? line.builtPlacements : [];
+            const placements = [...already];
+            for (const p of bins) {
+                if (already.some(d => String(d.bin || '').toUpperCase() === p.bin)) continue;
+                const res = await postConvertBuild({
+                    itemId: String(assembly.id), quantity: p.qty,
+                    subsidiary: nsConfig.subsidiary, location: nsConfig.location,
+                    bin: line.fromBin, toBin: p.bin,
+                    memo: nsMemo(`Plating back ${target} ${p.qty}@${p.bin}`),
+                });
+                placements.push({ bin: p.bin, qty: p.qty, nsId: res && res.id ? String(res.id) : null });
+                await updateDoc(doc(db, 'plating_shipments', line.id), { builtPlacements: placements }).catch(() => {});
+            }
             await updateDoc(doc(db, 'plating_shipments', line.id), {
-                status: 'built', builtAt: serverTimestamp(), builtAssemblyId: bb.id ? String(bb.id) : null,
+                status: 'built', builtAt: serverTimestamp(), builtAssemblyId: (placements[0] && placements[0].nsId) || null,
                 binPlacements: bins, putAwayAt: Date.now(), putAwayBy: operator?.name || '',
             }).catch(() => {});
             writeLog(`Plating put-away: ${got} × ${target} built into ${bins.map(p => `${p.qty}@${p.bin}`).join(' + ')} by ${operator?.name || 'Unknown'} (${line.cartLabel || 'cart'}, ${line.shipmentId || line.id}).`, 'wms');
@@ -2657,7 +2672,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             pullNetSuiteStock();
         } catch (e) {
             console.error('Plating put-away failed:', e);
-            alert('❌ Put-away problem:\n\n' + (e.message || e) + '\n\nEach step is guarded, so retrying cannot double-post the reversal or the scrap. If NetSuite still says "configure the inventory detail", the assembly is also lot-numbered — paste the message.');
+            alert('❌ Put-away problem:\n\n' + (e.message || e) + '\n\nEvery step is guarded — the reversal, the scrap and each bin already built are recorded, so retrying re-posts none of them. If the RESTlet names a step or an item id, paste it.');
         } finally { setIsSyncing(false); }
     };
     // The old one-button build-back lived here. It sent inventory detail ONLY when the LIBRARY
