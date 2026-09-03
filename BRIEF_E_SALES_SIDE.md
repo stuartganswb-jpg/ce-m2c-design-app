@@ -338,6 +338,50 @@ repo guide. Listed in the handoff.
    list.
 5. **Hand-offs in:** D's class-map request; B's date for reading `so.recipe`.
 
+### Hand-off in from F — the kit bill shape (Stuart's decision, 2026-09-03; patch spec, F does not edit these files)
+
+**Decision (Q1 of Brief F §8, answered in the F session):** ONE shape on BOTH doors — tab 7 and
+CPQ must "be aligned and appear the same". Customer paperwork (quote, SO, packing slip, invoice),
+in this order:
+
+1. the **kit code + first 4 ft**, at the kit price (the customer's kit row); the **motor folds into
+   this line at the per-motor code** (tab 7's way — H1-2TRV-4M/P-35C, not "kit + motor");
+2. **additional feet** immediately below, at the billable per-foot rate (the row's `perFootPrice`);
+3. any **additional billable components added in CPQ** (extra brackets, a finial, rings above the
+   chart…) next, at their billable rate;
+4. then **every included kit component at $0.00** (the chart's brackets, carriers, end stops, the
+   feet inside the kit — the packing slip still lists them).
+
+**NetSuite:** every item pushes at **$0.00** and the **total per configuration (kit + extras)
+rolls up into ONE line.** Neither today's shape is it exactly: tab 7 puts the traverse $ on the
+CE-TRV-SYSTEM holder with components at $0 (close — but the kit's paperwork order and the
+per-config total need checking); the engine puts the kit $ on the generic CPQ rollup (61502) and
+pushes the fascia at qty × feet at its rate and every component at its own rate (wrong under the
+decision — components must be $0).
+
+**Split of the work.**
+- **F (kitSeed.applyKitPricing, its own module):** emit `lines` already in the order above; mark
+  every included component `inKit: true, total: 0` (included = in `explodeTraverse(kit, length)`
+  up to the chart qty — counts above it bill the difference, as the components chart already
+  does); fold the motor into the kit line (`billedId` = the per-motor code, price from
+  `kitMotorCodes`); keep `feet`/`cutLength` untouched (the bench reads them). Node-tested with
+  prod-shaped fixtures. Stuart's 1a/1b: projection stays asked; seed, never lock.
+- **E (nsTransmit, the TAGS branch ~:153):** when the cart carries a kit (`cart.kit` / a line with
+  `isKit`), push **every** component line at rate 0 (still qty × billed feet for per-foot items, so
+  stock relieves correctly) and put the **whole configuration total** on ONE holder line. Use the
+  same holder both doors use — tab 7's **CE-TRV-SYSTEM** (fallback 61502 exactly as tab 7 does)
+  — with the description carrying the kit code / per-motor code so Eric can read it. Today's
+  "kit dollars ride the rollup, components at their rates" must go; otherwise the SO total is the
+  kit + the parts.
+- **E (customer documents):** print `pricingBreakdown` in the order F emits it; no re-sorting.
+  Tab 7's traverse mirror (`trvDocLines`) already prints kit → parts; align its order to 1-4 too.
+- **Prove on tab 12** with one kit-seeded CPQ order and the same kit on tab 7: identical line
+  order on paper, identical NetSuite payload shape (one holder at the config total, N lines at $0).
+
+**Q3 confirmed the same day:** E owns the 58034 double-push + the past TRACK list; F owns the
+components step and will name the engine's splice source (`HardwareConfigurator` spliceCodes /
+the Vision seed's `seed.splices`) when E asks.
+
 ---
 
 ## 8. Open questions (ask before the plan)
