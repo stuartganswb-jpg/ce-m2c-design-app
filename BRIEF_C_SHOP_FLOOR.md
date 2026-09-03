@@ -43,7 +43,7 @@ session, `find`→ref, never credentials. To see the HQ side (RTG, the Library) 
 gates too; ask.
 
 **Vercel.** `curl -s https://www.4cosworkcenter.com/version.json` → stamp after commit time.
-**ShopFloor is a lazy chunk** — sweep `/asset-manifest.json`, string-literal markers only.
+**ShopFloor compiles into `main.*.js`** (verified live by the C session 09-02 — not a lazy chunk); grep main for string-literal markers.
 
 **Cloud Shell.** Rules are deployed (Stuart, 09-02) — including the `isShopEngineer` gate the
 catch-up brief parked; **verify it works** (§4 C6). Nothing in this brief needs a rules change.
