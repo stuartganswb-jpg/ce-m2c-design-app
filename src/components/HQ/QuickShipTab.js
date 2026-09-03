@@ -775,7 +775,7 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             const it = byCode(cl.code);
             if (!it) { missing++; return; }
             const row = findClientPriceRow(it.clientPricing, custKeys);
-            pushLine(it, cl.qty, `${cl.why}${trvCfg?.finish ? ` · ${trvCfg.finish}` : ''} [${trvCfg?.kitCode || 'traverse'}]`, null, { noPack: true, rateOverride: cl.billable ? cl.rate : 0, aliasErp: row?.clientSku || '' });
+            pushLine(it, cl.qty, `${cl.why}${trvCfg?.finish ? ` · ${trvCfg.finish}` : ''} [${trvCfg?.kitCode || 'traverse'}]`, null, { noPack: true, rateOverride: cl.billable ? cl.rate : 0, aliasErp: row?.clientSku || '', trvOfKit: trvCfg?.kitCode || 'traverse' });
         });
         if (missing) alert(`${missing} component code(s) not in the library — not added. Check the rules doc against the Master Library.`);
         setTrvCfg(null);
@@ -811,6 +811,9 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
             ...(opts && opts.finishCode ? { finishCode: opts.finishCode } : {}),
             ...(opts && opts.toBeFinished ? { toBeFinished: true } : {}),
             ...(opts && opts.feeRule ? { feeRule: opts.feeRule } : {}),
+            // A traverse components-configurator line names the KIT it belongs to, so the save-time
+            // explosion never consumes the same component a second time (E6.1, 2026-09-03).
+            ...(opts && opts.trvOfKit ? { trvOfKit: opts.trvOfKit } : {}),
             ...(opts && opts.perFoot ? { perFoot: true, feetPer: parseFloat(opts.feetPer) || 1 } : {}),
             // Kit lines carry their kit identity so pricedCart can apply KIT pricing live.
             kitKey: kitMeta?.kitKey || null, kitName: kitMeta?.kitName || null, kitBrand: kitMeta?.kitBrand || null, kitFinish: kitMeta?.kitFinish || ''
@@ -1257,9 +1260,26 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     // bracket item in the library having had the checkbox ticked — the item flag
                     // still counts, it is just no longer the only way to be right.
                     const finObj = finishList.find(f => f.code === String(l.trvFinish || '').toUpperCase());
+                    // ── ONE OWNER PER COMPONENT (E6.1, Stuart 2026-09-03) ───────────────────────
+                    // The components configurator already put its picks on the cart as ordinary
+                    // lines (the chart-included splice among them, at $0) — and this explosion
+                    // adds the splice from the usage table too. Item 58034 therefore reached
+                    // NetSuite twice at $0 on every traverse order that walked the modal: a real
+                    // double stock relief. The configurator's line is the owner: any code the cart
+                    // already carries for THIS kit (stamped trvOfKit, or the [KITCODE] tag in the
+                    // note for carts saved before the stamp) is not consumed here again. Skip the
+                    // modal and the explosion still adds the chart splice, as it always did.
+                    const kitCodeU = String(l.trvKitCode || '').toUpperCase();
+                    const cfgCodes = new Set(pricedCart
+                        .filter(x => !x.trvKitCode && ((x.trvOfKit && String(x.trvOfKit).toUpperCase() === kitCodeU) || String(x.note || '').toUpperCase().includes(`[${kitCodeU}]`)))
+                        .map(x => String(x.erp || '').toUpperCase()).filter(Boolean));
                     ex.lines.forEach(c => {
                         const { part: cd, suffix: codeSub } = resolveComponent(c.code);
                         if (!cd) { addLog(`Component ${c.code} is not in the Master Library — NOT consumed (${c.why}). Check the code, or the traverse rules doc.`, 'warn'); return; }
+                        if (cfgCodes.has(String(c.code).toUpperCase()) || cfgCodes.has(String(cd.legacyErpId || '').toUpperCase())) {
+                            addLog(`${cd.legacyErpId || c.code} (${c.why}) is already on the order from the components configurator — not consumed twice.`, 'info');
+                            return;
+                        }
                         if (!cd.netSuiteInternalId) { addLog(`Component ${cd.legacyErpId || c.code} has no NetSuite ID — NOT consumed (${c.why}).`, 'warn'); return; }
                         if (codeSub) addLog(`${c.code} → consuming ${cd.legacyErpId || c.code} (the /${codeSub} is the sub finish it is made in, not a separate item).`, 'info');
                         const takesSub = !!cd?.manufacturingSpecs?.usesSubFinish || !!c.subFinish;
