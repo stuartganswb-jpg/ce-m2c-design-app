@@ -32,6 +32,7 @@ import { queueNsAssemblyWorkOrder, pickNsWoItem, isNsAssemblyRec } from './nsWor
 import { db } from '../../firebase';
 import { doc, setDoc, updateDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { withItemCode } from './workOrderContract';
+import { buildParkedWorkOrder, ROUTE_SHOP } from './stockRun.js';
 
 // ── PURE PLANNING ──────────────────────────────────────────────────────────────────────────────
 
@@ -238,19 +239,19 @@ export const executeMakeupActions = async ({ actions = [], brandId, finWoId, fin
             const stamp = Date.now().toString().slice(-6);
             const safe = String(a.code).replace(/[^A-Za-z0-9]+/g, '-');
             const woId = `WO-CMP-${safe}-${stamp}-${++seq}`;
-            await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
-                id: woId, woId, brand: brandId, type: 'Stock', status: dispatchShop ? 'Dispatched' : 'Approved',
-                source: 'PRECHECK_MAKEUP', routeTo: 'SHOP',
-                ...(dispatchShop ? { pushedToShop: true, dispatchedAt: Date.now(), dispatchedBy: createdBy || 'auto-flow' } : {}),
-                erpId: a.code, partErpId: a.code, rootItem: a.code,
-                itemName: p.itemName || '',
-                nsItemId: p.netSuiteInternalId ? String(p.netSuiteInternalId) : null,
-                hqJobId: p.id || null,
-                qty: a.qty, totalParts: a.qty, reqDate: reqDate || '',
-                customer: 'Internal Stock',
-                routingType: p.routingType || 'Standard',
+            // THE ONE SHAPE (Brief A, A1 step 5 — writer 9). The pure builder from Shared/stockRun,
+            // not parkWorkOrder: this module is what parkWorkOrder calls for the gates, so the
+            // executor cannot import it back. Same document every other stock writer parks
+            // (routeTo SHOP, source, intent COMPONENT_MILL, autoFlow, type = the code, memo for
+            // the shop card); the auto-flow's straight-to-shop dispatch stamps ride on top.
+            const built = buildParkedWorkOrder({
+                intent: 'COMPONENT_MILL', woId, part: p, qty: a.qty, brand: brandId, createdBy, reqDate: reqDate || '',
                 note: `Component make-up for ${finWoErpId || finWoId || 'finished run'} — ${a.reason || 'short'}${soRef ? ` · SO ${soRef}` : ''}`,
-                createdAt: Date.now(), createdBy,
+                source: 'PRECHECK_MAKEUP', routeTo: ROUTE_SHOP, finish: '', tasks: null, now: Date.now(),
+            });
+            await setDoc(doc(db, 'hq_work_orders', woId), withItemCode({
+                ...built.hq,
+                ...(dispatchShop ? { status: 'Dispatched', pushedToShop: true, dispatchedAt: Date.now(), dispatchedBy: createdBy || 'auto-flow' } : {}),
             }), { merge: true });
             // ORDER ENTRY AUTO-FLOW (Stuart 2026-08-28): the system already knows the route — a
             // component milling WO goes STRAIGHT to the shop's milling intake instead of parking
