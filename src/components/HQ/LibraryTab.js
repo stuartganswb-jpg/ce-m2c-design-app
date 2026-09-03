@@ -2,11 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage, isInheritedFromBase, splitCode, imageUpdate, IMG_GALLERY } from '../Shared/partImage';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { buildStockFinPayload } from '../Shared/stockRun';
-import { finishCodeFromErp } from '../Shared/finishingTime';
+import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
 import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
-import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from '../Shared/nsWorkOrder';
 import { makeFullTasks, withItemCode } from '../Shared/workOrderContract';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { PLATE_ROLES, pairedBackplateCode } from '../Shared/plateRules';
@@ -1050,58 +1049,22 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       }
   };
 
-  // Build an "Approved" Stock Build WO for a part and push it to RTG Dispatch. Returns the WO id.
-  // Firestore doc ids can't contain "/", and finished assemblies carry it (e.g. H1-138BF/EP1) — sanitize it
-  // out of the DOC id while keeping the real part number on the record (woDisplayId / partErpId) for display.
+  // A raw make-up order for a part, parked in RTG. Returns the WO id.
+  // THE ONE WRITER (Brief A, A1 step 3 — 2026-09-02): Shared/workOrderCreate.parkWorkOrder decides
+  // identity, route (a raw code → SHOP; a finished code is refused here — the card already sends
+  // in-house finished items to the finishing run and outsourced ones to plating), the root's own
+  // NetSuite work order at creation, and stamps source / autoFlow so RTG releases it on its own.
+  // This used to park route-open (no routeTo), which is why RTG offered "Push to Shop" on it and
+  // auto-release never took it (audit §2 writer 6, P0 #1).
   const createStockBuildWO = async (part, qty) => {
-      const stamp = Date.now().toString().slice(-6);
-      const safeErp = String(part.legacyErpId).replace(/[^A-Za-z0-9]+/g, '-');
-      const newWoId = `WO-${safeErp}-${stamp}`;
-      // THE FINISH CODE TRAVELS WITH THE ORDER (Stuart 2026-08-17). This wrote no `recipe` at all,
-      // so RTG's release fell through to PENDING-RECIPE and the finishing floor grouped a whole
-      // batch as un-runnable work — while the finish was right there in the item code all along
-      // (HCUMB410/BS is a BS order). A raw part with no finish suffix still has none, and is still
-      // shop work rather than a finishing job.
-      const recipe = finishCodeFromErp(part.legacyErpId);
-      // Source numbers only (2026-07-17): app id until the NetSuite WO posts, then nsWoTran.
-      await setDoc(doc(db, "hq_work_orders", newWoId), withItemCode({
-          id: newWoId, woId: newWoId,
-          woDisplayId: `WO-${part.legacyErpId}-${stamp}`, partErpId: part.legacyErpId,
-          brand: activeBrand, status: "Approved", customer: "Internal Stock",
-          hqJobId: part.id, totalParts: Number(qty),
+      const res = await parkWorkOrder({
+          intent: INTENT.STOCK_MILL, part, qty: Number(qty), brand: activeBrand,
+          createdBy: (currentUser && (currentUser.name || currentUser.email)) || '',
           reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-          ...(recipe ? { recipe } : {}),
-          ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
-          // THE ITEM TRAVELS TOO (Stuart 2026-08-17: "no pattern# nothing, they are all blank").
-          // `type: "Stock Build"` is a CATEGORY, and the floor card reads `type` as the item — so
-          // every order raised here reached the floor unidentifiable. The Sales Snapshot has always
-          // put the real code in this field; match it, and carry the rest of the identity the floor
-          // and the NetSuite work order need (name, internal id, product type, paint size).
-          type: String(part.legacyErpId || part.itemId || 'Stock Build'),
-          rootItem: String(part.legacyErpId || part.itemId || '').toUpperCase(),
-          itemName: part.itemName || '',
-          ...(part.netSuiteInternalId ? { stockInternalId: String(part.netSuiteInternalId) } : {}),
-          ...(part.manufacturingSpecs?.productType ? { productType: String(part.manufacturingSpecs.productType).toUpperCase() } : {}),
-          ...(part.manufacturingSpecs?.paintSize ? { paintSize: String(part.manufacturingSpecs.paintSize).toUpperCase() } : {}),
-          source: 'LIBRARY_MAKEUP',
-          createdAt: Date.now()
-      }));
-      // THE ROOT'S OWN ANCHOR (2026-08-31 "both" model): a milled root that is a NetSuite
-      // assembly opens its work order WITH the milling WO — the number stamps back onto this
-      // record and RTG's ⛏ Mill Build closes it (createdfrom) when the shop finishes.
-      if (isNsAssemblyRec(part)) {
-          try {
-              await queueNsAssemblyWorkOrder({
-                  brandId: activeBrand, assemblyInternalId: String(part.netSuiteInternalId),
-                  erp: String(part.legacyErpId).toUpperCase(), qty: Number(qty),
-                  memo: `mill ${String(part.legacyErpId).toUpperCase()} · library make-up`,
-                  writeBacks: [{ collection: 'hq_work_orders', docId: newWoId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
-                  sourceApp: 'LIBRARY_MAKEUP', createdBy: (currentUser && (currentUser.name || currentUser.email)) || '',
-              });
-              await updateDoc(doc(db, 'hq_work_orders', newWoId), { nsWoQueued: true });
-          } catch (e) { console.warn('root NS WO queue failed', part.legacyErpId, e); }
-      }
-      return newWoId;
+          note: `Library make-up · ${String(part.legacyErpId || part.itemId || '').toUpperCase()} ×${qty}`,
+          source: 'LIBRARY_MAKEUP', inventory,
+      });
+      return res.woId;
   };
 
   // ONE RELEASE PATH — RTG keeps the record, the floor gets the job (Stuart 2026-08-03: "it should
@@ -1489,11 +1452,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       if (!window.confirm(`Generate a Stock Build Work Order for ${qty}x ${erp}?`)) return;
       try {
           const woId = await createStockBuildWO(activePart, qty);
-          alert(`✅ Work Order ${woId} successfully pushed to RTG Dispatch!`);
+          alert(`✅ Work Order ${woId} parked in RTG Dispatch — routed to the shop, released from there on its own.`);
           setWoTargetQty(1);
       } catch (err) {
           console.error("WO Generation Error:", err);
-          alert("Failed to generate Work Order. Check console.");
+          // A refusal says why in its own words (a /P core, an outsourced finish); anything else is a real failure.
+          alert(err && err.name === 'ParkRefusal' ? `⛔ ${err.message}` : "Failed to generate Work Order. Check console.");
       }
   };
 
