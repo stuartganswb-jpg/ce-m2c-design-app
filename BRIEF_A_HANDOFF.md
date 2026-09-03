@@ -110,6 +110,39 @@ integration = -46 (they re-key on restart — ListAgents before messaging).
   `readyDate` beside need-by on the Needs board, and skip the review's finish lookup when
   `so.recipe` is set. Neither done — ask Stuart first.
 
+## 3e. Q5 and A4 — shipped (Stuart approved in-session 2026-09-02 late)
+
+**Q5 — a pole is cut or waited for, never milled** (`8a361aa`). `poleCut.sourcesForLength(ft)`
+reads the saw's own `CUT_OPTIONS` backwards (which sticks yield this length, how many per stick,
+what else the cut leaves); `cutPlanFromSource` builds the plan for the stick the operator chose.
+The OE review attaches `poleChoice` to a pole/rod job whose pull is short — live stock per
+candidate stick, rods needed, whether there are enough — and **withdraws** any SHOP action the
+router raised for that pull. Default is BACK ORDER. A cut writes the same `rod_cut_orders` doc and
+`awaitingRodCut` gate the Snapshot writes; a back order stamps `backOrdered`/`backOrderReason` and
+the job waits at the WMS pick like a bought line. Only the shortfall is cut.
+
+**A4 — the purchase order's whole life** (`ded2917`, `fc9de99`, `fb14248`). `Shared/purchaseOrders.js`
+is the one writer; the six vendor helpers moved out of `StockViewTab`, so all three paths get the
+subsidiary check, vendor-by-nsId, `source`, and the vendor minimum.
+- **Create**: `createDraftPurchaseOrders` groups a press by vendor → one **Draft** PO each. The SO
+  number stays **on the line**; the header lists the distinct ones (`soAppIds`/`soRefs`). Two demands
+  for one code from one SO merge; from different orders they stay apart.
+- **Preview**: every PO, lines, total, subsidiary warning, vendor minimum. "Leave as drafts" is a
+  real answer — the Stock View toolbar keeps a live 🧾 draft count that reopens the same preview.
+- **Approve**: `approvePurchaseOrder` pushes every line through the existing outbox using
+  `buildPoNsPayload` (today's payload exactly; only the memo changed). NetSuite mints the number and
+  it stamps back. A line with no NetSuite item id refuses the whole PO.
+- **Send / Ack**: on the vendor's card in tab 10 — now ONE list of every PO for that vendor (E asked
+  for one list, not a second). Send is refused until the NetSuite number exists. The acknowledgement
+  is header-level: vendor's order #, **`vendorReadyDate`** (deliberately not `readyDate` — E's
+  sales-order header promises that to the *customer*), note, who and when.
+- **Not built, by decision**: the plater PO stays with the WMS weekly shipment (kind `plating` keeps
+  its own actions on the same card, no approve/send offered). **Receiving is Brief D's** — the WMS
+  Receiving tab reads `items[].received`, `vendorAck`, `soAppIds`.
+
+**Also**: the tier/raw/finished generator alerts no longer name buttons that are gone (Stuart:
+"correct") — 8 strings, no logic. The User Guide gains "How a purchase order goes out" (S2).
+
 ## 4. Blocked / waiting on others
 
 - Writer 7 on B's B1 (`buildFinDoc`). B will send the hash.
