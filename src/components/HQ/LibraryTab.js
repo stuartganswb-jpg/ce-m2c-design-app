@@ -3,6 +3,7 @@ import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage,
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { buildStockFinPayload } from '../Shared/stockRun';
 import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
+import { issuePlatedDemand } from '../Shared/platingDemand';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
 import { isOutsourcedFinishCode, millBaseOf, finishSuffixOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
@@ -1417,26 +1418,19 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               for (let i = 0; i < plan.lines.length; i++) {
                   const l = plan.lines[i];
                   const row = check.rows.find(r => r.code === l.legacyErpId);
-                  const basePart = partOfCode(l.legacyErpId);
                   // The plated target this core becomes: the BOM's stated code when it carries the
                   // suffix, else core + this run's finish.
                   const target = String(l.sourceComponent || '').includes('/') ? String(l.sourceComponent).toUpperCase() : `${l.legacyErpId}/${suffix}`;
-                  if (row && row.have >= l.quantity) {
-                      const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
-                      const woNum = `PLW-${activeBrand.toUpperCase()}-${Date.now().toString().slice(-6)}-${i}`;
-                      await setDoc(doc(db, "plating_demand", demandId), {
-                          id: demandId, brandId: activeBrand, status: 'open', woNum,
-                          baseItemId: basePart.id, baseErpId: l.legacyErpId, targetErpId: target,
-                          finishCode: suffix, finishName: outFinish.name || '',
-                          qty: l.quantity, source: 'library-wo', createdBy: currentUser?.name || 'Unknown', createdAt: Date.now(),
-                          ...(plan.exploded ? { parentAssemblyErp: erp, parentAssemblyQty: qty } : {}),
-                      });
-                      plated.push(`${l.quantity} × ${l.legacyErpId} → ${target} (WO ${woNum})`);
-                  } else {
-                      // Core short → shop-floor WO to build the raw stock first; plate it after.
-                      const woId = await createStockBuildWO(basePart, l.quantity);
-                      made.push(`${l.quantity} × ${l.legacyErpId} — have ${row ? row.have : 0}, shop WO ${woId}`);
-                  }
+                  // THE PLATED TRIPLE, ISSUED ONCE (Brief A, A3): the demand for every core line, and a
+                  // milling order for the SHORTFALL (was: a WO for the whole line and no demand when short).
+                  const res = await issuePlatedDemand({
+                      target, base: l.legacyErpId, qty: l.quantity, brand: activeBrand, from: 'library-wo',
+                      createdBy: currentUser?.name || 'Unknown', inventory, coreAvailable: row ? row.have : 0,
+                      finishName: outFinish.name || '',
+                      extra: plan.exploded ? { parentAssemblyErp: erp, parentAssemblyQty: qty } : {},
+                  });
+                  plated.push(`${l.quantity} × ${l.legacyErpId} → ${target} (WO ${res.woNum})`);
+                  if (res.shopWoId) made.push(`${l.quantity} × ${l.legacyErpId} — have ${row ? row.have : 0}, short ${res.coreShort}: shop WO ${res.shopWoId} (plate after)`);
               }
               alert(`${made.length ? '⚠️' : '✅'} ${erp} ×${qty} routed:${plated.length ? `\n\nTO PLATING (cores in stock):\n${plated.join('\n')}` : ''}${made.length ? `\n\nSHORT — shop-floor WOs raised to build the cores first (plate after):\n${made.join('\n')}` : ''}`);
               setWoTargetQty(1);

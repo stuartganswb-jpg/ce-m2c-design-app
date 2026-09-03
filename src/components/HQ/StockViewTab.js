@@ -14,7 +14,8 @@ import { woRefOf } from '../Shared/woRef';
 import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
-import { isAssemblyPart } from '../Shared/finishedGoodsRun';
+import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
+import { issuePlatedDemand } from '../Shared/platingDemand';
 import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal } from '../Shared/workOrderCreate';
@@ -546,48 +547,19 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         try {
             let platingCount = 0, millingCount = 0;
 
-            for (let i = 0; i < platedLines.length; i++) {
-                const pl = platedLines[i];
-                const basePart = hqParts.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === pl.baseErp);
-                const baseAvail = nsStock[pl.baseErp]?.available || 0;
-
-                // (a) Plated demand → PickPack "Needs Plating". Generate a plating WO# so the job/label has a
-                // reference to give the plating company (the label was blank without it).
-                const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
-                const woNum = `PLW-${activeBrand.toUpperCase()}-${(Date.now() + i).toString().slice(-6)}`;
-                await setDoc(doc(db, "plating_demand", demandId), {
-                    id: demandId, brandId: activeBrand, status: 'open', woNum,
-                    baseItemId: basePart?.id || null, baseErpId: pl.baseErp, targetErpId: pl.erp,
-                    finishCode: pl.finishCode, finishName: pl.finishName, qty: pl.qty,
-                    source: 'stockview', createdBy: currentUser?.name || 'Unknown', createdAt: Date.now()
+            // THE PLATED TRIPLE, ISSUED ONCE (Brief A, A3): the demand for the core and — when the
+            // core is short — the milling order behind it, from Shared/platingDemand. No PO here:
+            // the plater's PO is issued by the WMS at the weekly shipment. Core stock is the last
+            // "Pull NetSuite Stock" (pull first, or it reads zero — as before).
+            for (const pl of platedLines) {
+                const res = await issuePlatedDemand({
+                    target: pl.erp, base: pl.baseErp, qty: pl.qty, brand: activeBrand, from: 'stockview',
+                    createdBy: String(currentUser?.name || currentUser || ''), inventory: hqParts,
+                    coreAvailable: nsStock[pl.baseErp]?.available || 0, finishName: pl.finishName,
                 });
                 platingCount++;
-                addLog(`Plating demand ${pl.erp} ×${pl.qty} (base ${pl.baseErp} avail ${baseAvail}).`, 'info');
-
-                // (b) Raw base short → mill more base now. THE ONE WRITER (Brief A, A1 step 3):
-                // parked as STOCK_MILL with routeTo SHOP, source, autoFlow and the root's own
-                // NetSuite work order queued at creation when it is an assembly — this block used
-                // to park route-open with no source and no anchor (audit §2 writer 2). A3 folds
-                // the whole plating triple (demand + this core-short order) into one call.
-                if (basePart && baseAvail < pl.qty) {
-                    const shortfall = pl.qty - baseAvail;
-                    try {
-                        const res = await parkWorkOrder({
-                            intent: INTENT.STOCK_MILL, part: basePart, qty: shortfall, brand: activeBrand,
-                            createdBy: String(currentUser?.name || currentUser || ''),
-                            reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-                            note: `Raw core short for plating ${pl.erp} · avail ${baseAvail} · need ${pl.qty}`,
-                            source: 'STOCKVIEW_PO_BUILDER', forPlating: pl.erp, inventory: hqParts,
-                        });
-                        millingCount++;
-                        res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'warn' : 'info'));
-                    } catch (e) {
-                        if (e instanceof ParkRefusal) addLog(`⛔ ${pl.baseErp}: ${e.message}`, 'error');
-                        else throw e;
-                    }
-                } else if (!basePart) {
-                    addLog(`⚠️ base ${pl.baseErp} not in library — plating demand created, but no milling WO.`, 'warn');
-                }
+                if (res.shopWoId) millingCount++;
+                res.made.forEach(m => addLog(m, /^[⚠⛔]/.test(m) ? 'warn' : 'info'));
             }
 
             let poCreated = false;
@@ -1312,10 +1284,34 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const p = partByKey['erp:' + c];
             return (row && row.internalId) || (p && p.netSuiteInternalId) || null;
         };
+        // PLATED ROWS (Brief A, A3 — Stuart Q4: "if the root has no stock, a work order is created,
+        // again at the Snapshot"): one live read of the cores behind every plated row in the batch,
+        // consumed row by row, so the milling order covers exactly what the shelf cannot.
+        const platedRows = prepped.filter(x => isOutsourcedFinishCode(finishCodeFromErp(x.r.itemid)));
+        let coreAvail = null;
+        if (platedRows.length) {
+            try { coreAvail = await fetchAvailability([...new Set(platedRows.map(x => millBaseOf(x.r.itemid)))], (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); }
+            catch (e) { addLog(`⚠ Core stock read failed for the plated rows (${e.message || e}) — demands are raised, milling orders are not; order the cores on the RAW view.`, 'warn'); }
+        }
         let n = 0;
         for (let key = 0; key < prepped.length; key++) {
             const { r, info, qty, pins } = prepped[key];
             const pre = preByKey.get(key) || null;
+            if (isOutsourcedFinishCode(finishCodeFromErp(r.itemid))) {
+                const base = millBaseOf(r.itemid);
+                const suffix = finishSuffixOf(r.itemid);
+                const fin = outsourceFinishes.find(f => finishCodeOf(f) === suffix);
+                const res = await issuePlatedDemand({
+                    target: r.itemid, base, qty, brand: activeBrand, from: 'stockview', woSource: 'SALES_SNAPSHOT',
+                    createdBy: currentUser || '', inventory: hqParts, reqDate,
+                    coreAvailable: coreAvail ? (Number(coreAvail[base]) || 0) : null, finishName: (fin && fin.name) || '',
+                    note: `Stock replenish · avail ${info.available} · min ${info.minOnHand}`,
+                });
+                if (coreAvail) coreAvail[base] = Math.max(0, (Number(coreAvail[base]) || 0) - qty);
+                res.made.forEach((m, i) => { made.push(`${r.itemid}: ${m}`); addLog(`${i === 0 ? '' : '   '}${m}`, /^[⚠⛔]/.test(m) ? 'warn' : (i === 0 ? 'success' : 'info')); });
+                n++;
+                continue;
+            }
             // Planner's ⇄ convert suggestion (if attached on the snapshot row) rides along — the
             // Setup Queue operator sees it on the card and runs the actual conversion.
             const sug = convSugMap[r.itemid];
@@ -1771,21 +1767,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // pulled to WIP-Plating and ships to the plater), reusing that doc shape verbatim so PickPack
     // needs no new reader for it.
     const createPlatingDemands = async (rows) => {
+        // THE PLATED TRIPLE, ISSUED ONCE (Brief A, A3). `coreAvailable` is this view's own coverage
+        // arithmetic (on hand + inbound + the base row's typed order, less the converts that eat
+        // the same core), handed in so the milling order is raised only for what nothing covers —
+        // the base row is right here, and a silent duplicate order was the thing this view avoided.
         let n = 0;
-        for (let i = 0; i < rows.length; i++) {
-            const { r, qty, baseErp, baseInfo } = rows[i];
+        for (const { r, qty, baseErp, coreAvailable } of rows) {
             const erp = String(r.itemid).toUpperCase();
             const suffix = finishSuffixOf(erp);
             const fin = outsourceFinishes.find(f => finishCodeOf(f) === suffix);
-            const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
-            await setDoc(doc(db, 'plating_demand', demandId), {
-                id: demandId, brandId: activeBrand, status: 'open',
-                woNum: `PLW-${activeBrand.toUpperCase()}-${(Date.now() + i).toString().slice(-6)}`,
-                baseItemId: baseInfo?.part?.id || null, baseErpId: baseErp, targetErpId: erp,
-                finishCode: suffix, finishName: (fin && fin.name) || '', qty,
-                source: 'stockview', createdBy: String(currentUser?.name || currentUser || ''), createdAt: Date.now()
+            const res = await issuePlatedDemand({
+                target: erp, base: baseErp, qty, brand: activeBrand, from: 'stockview', woSource: 'SALES_SNAPSHOT',
+                createdBy: String(currentUser?.name || currentUser || ''), inventory: hqParts,
+                coreAvailable: coreAvailable == null ? null : coreAvailable, finishName: (fin && fin.name) || '',
+                note: `Stock replenish · ${erp}`,
             });
-            addLog(`⚡ Plating demand ${baseErp} → ${erp} ×${qty} (WMS Plating tab).`, 'info');
+            res.made.forEach(m => addLog(m, /^[⚠⛔]/.test(m) ? 'warn' : 'info'));
             n++;
         }
         return n;
@@ -1861,6 +1858,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const eats = [...conv, ...plate].filter(x => x.baseErp === g.base).reduce((s, x) => s + x.qty, 0);
             const coverage = (baseInfo.available || 0) + (baseInfo.onOrd || 0) + baseQty;
             if (eats > coverage) shortWarn.push(`${g.base}: ${eats} needed vs ${coverage} covered (short ${eats - coverage})`);
+            // What is left for the PLATING rows after the converts eat their share — issuePlatedDemand
+            // raises a milling order for whatever a plating row cannot cover from that remainder.
+            let coreLeft = Math.max(0, coverage - conv.filter(x => x.baseErp === g.base).reduce((s, x) => s + x.qty, 0));
+            plate.filter(x => x.baseErp === g.base).forEach(x => { x.coreAvailable = coreLeft; coreLeft = Math.max(0, coreLeft - x.qty); });
         });
         if (unlinked.length) alert(`⚠️ ${unlinked.length} row(s) have no Master Library part and were skipped:\n\n${unlinked.slice(0, 10).map(x => `• ${x}`).join('\n')}`);
         if (!buy.length && !shop.length && !conv.length && !plate.length && !fin.length) return alert('Enter an Order quantity on at least one tier row first.');
@@ -1870,7 +1871,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (conv.length) pieces.push(`${conv.length} /P item(s) → WMS Convert to-do (phosphate)`);
         if (plate.length) pieces.push(`${plate.length} plated item(s) → WMS Plating to-do`);
         if (fin.length) pieces.push(`${fin.length} finished item(s) → Finishing work order`);
-        const warn = shortWarn.length ? `\n\n⚠ RAW CORE SHORT for the convert/plating you're asking for:\n${shortWarn.map(s => `• ${s}`).join('\n')}\n\nOrder the raw base on its own row too, or the floor will run out mid-batch.` : '';
+        const warn = shortWarn.length ? `\n\n⚠ RAW CORE SHORT for the convert/plating you're asking for:\n${shortWarn.map(s => `• ${s}`).join('\n')}\n\nThe plating share that nothing covers gets a milling work order with its demand; converts still need the raw base ordered on its own row.` : '';
         if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}${warn}\n\nWork orders and POs stage in RTG Dispatch; convert/plating to-dos appear on the WMS tabs. Nothing reaches NetSuite until it's dispatched or the operator posts the move.`)) return;
         if (!buy.length) return executeTierOrders({ shop, conv, plate, fin });
         setGenBusy(true);
@@ -2032,17 +2033,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         try {
             // OUTSOURCED FINISH → the plater, linked to the SO (mirrors tab 7's routing).
             if (isOutsourcedFinishCode(finish)) {
-                const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}`;
-                await setDoc(doc(db, 'plating_demand', demandId), {
-                    id: demandId, brandId: activeBrand, status: 'open',
-                    woNum: `PLW-${activeBrand.toUpperCase()}-${Date.now().toString().slice(-6)}`,
-                    baseItemId: part.id || null, baseErpId: erp, targetErpId: `${erp}/${finish}`,
-                    finishCode: finish, finishName: finish, qty,
-                    source: 'oe-needs', soAppId: so.id, customerId: so.customerId || null, customerName: so.customer || '',
+                // THE PLATED TRIPLE, ISSUED ONCE (Brief A, A3). Core stock is not read on this path
+                // (as before) — the demand says so; the core is ordered from the Snapshot/RAW view.
+                const res = await issuePlatedDemand({
+                    target: `${erp}/${finish}`, base: erp, qty, brand: activeBrand, from: 'oe-needs',
+                    createdBy: currentUser || '', inventory: hqParts, coreAvailable: null, finishName: finish, reqDate: needBy,
                     note: `Order Entry ${so.soId || so.id} · ${so.customer || ''}${needBy ? ` · need by ${needBy}` : ''}${prodNote ? ` · 📝 ${prodNote}` : ''}`,
-                    createdBy: currentUser || '', createdAt: Date.now(),
+                    extra: { soAppId: so.id, customerId: so.customerId || null, customerName: so.customer || '' },
                 });
-                addLog(`⚡ ${erp}/${finish} ×${qty} → plating demand (linked to ${so.soId || so.id}).`, 'success');
+                res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}${i === 0 ? ` (linked to ${so.soId || so.id})` : ''}`, i === 0 ? 'success' : 'info'));
                 await loadOeNeeds(); setGenBusy(false); return;
             }
             // RAW ITEM WE BUY → a linked vendor PO (BOTH always asks, defaulted to make).
