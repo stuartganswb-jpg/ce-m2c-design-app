@@ -71,7 +71,7 @@ process" is visible: the same intent — *make N of item X* — is expressed ten
 | 6 | **Master Library** card `createStockBuildWO` | `LibraryTab.js` → **`parkWorkOrder`** (A1 step 3) | `LIBRARY_MAKEUP` | `SHOP` (always raw here; finished codes are refused) | n/a | none | at creation (root) | stock | none |
 | 7 | Master Library `releaseRunToFloor` | `LibraryTab.js:1122` | — | writes hq **already Dispatched** + fin **directly** | n/a | own pre-check | own `enqueueNsWrite` (`:1300`) | stock | `recipe \|\| finishLabel \|\| PENDING` |
 | 8 | Setup Queue scrap re-make | `SetupQueue.js:508` | `SETUP_QUEUE_REMAKE` | `FINISHING` | yes | pre-check | at release | stock | `finishCodeFromErp` |
-| 9 | Pre-check make-up (component shop WO) | `finishedRunPrecheck.js:241` | `PRECHECK_MAKEUP` | `SHOP` | no | — | at creation (root WO) | — | none |
+| 9 | Pre-check make-up (component shop WO) | `finishedRunPrecheck.js` `executeMakeupActions` → **`buildParkedWorkOrder`** (A1 step 5) | `PRECHECK_MAKEUP` | `SHOP` | n/a | — | at creation (root WO) | stock | none |
 | 10 | RTG balance re-issue | `RTGDispatchTab.js:1958` | `RTG_REISSUE` | **none (route-open)** | no | none | none | — | parent's |
 | ✗ | tab 7's own generator | `QuickShipTab.js:1680` | — | — | — | — | — | — | **dead** (`OE_SAVE_AUTOFIRE_RETIRED = true`, `:1541`) |
 
@@ -79,8 +79,8 @@ process" is visible: the same intent — *make N of item X* — is expressed ten
 > writer, `Shared/workOrderCreate.parkWorkOrder` (shape: `Shared/stockRun.buildParkedWorkOrder`,
 > node-tested). Every doc they write carries `source`, a stated `routeTo`, `orderType 'stock'`,
 > `autoFlow true`, `type` = the item code, and a complete `finPayload` on a finishing route.
-> Route-open parking is gone from those five. Also 5 (A1 step 4). Still to convert: 7 (the Library run — waits on B's builder), 9 (the pre-check's component shop WO →
-> COMPONENT_MILL). 8 is retired for stock (B6); 10 is B's, spec'd in BRIEF_B §B6 (INTENT.REISSUE).
+> Route-open parking is gone from those five. Also 5 (A1 step 4) and 9 (A1 step 5). Still to convert: 7 (the Library run — waits on B's
+> builder). 8 is retired for stock (B6); 10 is B's, spec'd in BRIEF_B §B6 (INTENT.REISSUE).
 
 What the table says:
 
