@@ -1,3 +1,5 @@
+import { findClientPriceRow } from './clientPricing';
+
 // Single source of truth for splitting a CPQ order line into the two
 // production divisions: 'small' (-> Finishing Floor) vs 'custom' (-> Shop Floor).
 //
@@ -69,8 +71,42 @@ const withLineFinish = (l, fallback) => {
  * that carry no per-line finish of their own — so EVERY document says what each line is finished
  * in, from one place, and no two forms can disagree about it.
  */
-export const customerDocLines = (lines = [], docType = '', finishFallback = '') => {
-    const real = (lines || []).filter(l => !isDisplayOnlyLine(l)).map(l => withLineFinish(l, finishFallback));
+// ── THE PAPER IS ONLY AS GOOD AS THE MOMENT IT WAS SAVED — UNLESS IT RE-RESOLVES ────────────
+// (Stuart 2026-09-03: "the sales forms need help, it is not showing the descriptions and customer
+// part#'s on the docs, it has once again ONCE AGAIN reverted to the designer's node files from
+// upload".) A breakdown line stores the name and the customer SKU it had at SAVE time. The
+// 2026-08-31 fix made a line take its name from the Master Library instead of the 1.6 node label
+// — but only for lines saved after it, so every earlier order (and any line whose part did not
+// resolve that day) prints "H21INPOLELEFT" on the customer's paper for ever. Re-resolving HERE,
+// at print time, repairs the paperwork of every order ever saved without touching stored data,
+// and is why this cannot regress a third time: the document no longer inherits a bad save.
+//
+// `opts.findPart(idOrCode)` → the Master Library part (by doc id, itemId or legacyErpId);
+// `opts.custKeys` → the customer's clientPricing keys (Shared/clientPricing.customerKeys).
+// Both optional: callers that pass neither (the floors, RTG) behave exactly as before.
+const NAME_PREFIX_RE = /^(\s*[-–—]\s*)(.*)$/;   // "  - H21INPOLELEFT" → indent survives, label is replaced
+const reResolve = (l, findPart, custKeys) => {
+    if (typeof findPart !== 'function' || l.isHeader) return l;
+    const part = findPart(l.partId) || findPart(l.legacyErpId);
+    if (!part) return l;
+    const out = { ...l };
+    // The LIBRARY's description is what a customer reads; the 1.6 node label never leaves 1.6.
+    if (part.itemName) {
+        const m = String(l.name || '').match(NAME_PREFIX_RE);
+        out.name = m ? `${m[1]}${part.itemName}` : part.itemName;
+    }
+    // Their part number, if this line was saved before clientSku was stamped on it.
+    if (!out.clientSku && custKeys && Array.isArray(part.clientPricing)) {
+        const row = findClientPriceRow(part.clientPricing, custKeys);
+        if (row && row.clientSku) out.clientSku = row.clientSku;
+    }
+    return out;
+};
+
+export const customerDocLines = (lines = [], docType = '', finishFallback = '', opts = {}) => {
+    const { findPart = null, custKeys = null } = opts || {};
+    const real = (lines || []).filter(l => !isDisplayOnlyLine(l))
+        .map(l => withLineFinish(reResolve(l, findPart, custKeys), finishFallback));
     if (!MONEY_DOC_TYPES.includes(String(docType || '').toUpperCase())) return real;
     // ── A POLE IS SOLD BY THE FOOT AND SHIPPED AS ONE PIECE (Stuart 2026-08-25) ──────────────
     // The engine pins a per-foot line's qty at 1 (one pole on the router) and multiplies the money

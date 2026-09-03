@@ -9,6 +9,7 @@ import { quoteDisplayNo, quoteAuthorLine } from '../Shared/quoteDisplay';
 import QuickShipInvoiceModal from '../Shared/QuickShipInvoiceModal';
 import FormPreview from '../Shared/FormPreview';
 import { customerDocLines, cartFinishLabelOf } from '../Shared/lineClassification';
+import { customerKeys } from '../Shared/clientPricing';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
 import { reopenQuoteInCpq, reopenQuoteInVision, reopenQuoteInOrderEntry } from '../Shared/reopenQuote';
@@ -714,6 +715,8 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
   const [activeAssemblyName, setActiveAssemblyName] = useState('');
   
   const [liveAssemblies, setLiveAssemblies] = useState([]);
+  // Master-Library index used ONLY to re-resolve document lines at print time (see the snapshot below).
+  const [docPartIndex, setDocPartIndex] = useState(new Map());
   
   const [activeDocJob, setActiveDocJob] = useState(null);
   const [activeDocType, setActiveDocType] = useState('FULL_PACKET');
@@ -820,6 +823,19 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
       const unsubAssemblies = onSnapshot(collection(db, "Approved_Designs"), (snap) => {
           const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
           setLiveAssemblies(docs.filter(d => ['Assembly', 'Master Assembly'].includes(d.partClass)));
+          // THE DOCUMENTS RE-RESOLVE AT PRINT TIME (Stuart 2026-09-03) — a slim index of the whole
+          // library keyed the way a stored line can point at a part (doc id / itemId / our code),
+          // carrying only what paper needs: the description and the customer's pricing rows. Built
+          // off the snapshot this tab already reads, so it costs no extra Firestore traffic.
+          const idx = new Map();
+          docs.forEach(p2 => {
+              const slim = { itemName: p2.itemName, clientPricing: p2.clientPricing };
+              [p2.id, p2.itemId, p2.legacyErpId].forEach(k => {
+                  const kk = String(k || '').trim().toUpperCase();
+                  if (kk && kk !== 'PENDING' && !idx.has(kk)) idx.set(kk, slim);
+              });
+          });
+          setDocPartIndex(idx);
       });
 
       const unsubCrm = onSnapshot(collection(db, "crm_records"), (snap) => {
@@ -1207,8 +1223,15 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
               .map(l => ({ item: '', desc: l.name, qty: l.qty || '', price: null, amount: null }))
           // Money documents drop BOM-only parts — the same rule the RTG forms use, from the same
           // helper so the two can never disagree about what a customer may read.
-          : customerDocLines(activeDocJob.cpqData?.breakdown || [], activeDocType, cartFinishLabelOf(activeDocJob.cpqData)).map(b => ({
-              item: b.isHeader ? '▶' : '',
+          : customerDocLines(activeDocJob.cpqData?.breakdown || [], activeDocType, cartFinishLabelOf(activeDocJob.cpqData), {
+              findPart: (id) => docPartIndex.get(String(id || '').trim().toUpperCase()) || null,
+              custKeys: customerKeys(activeDocJob.customer?.id || '', jobCrm || { name: activeDocJob.customer?.name || activeDocJob.clientName || '' }),
+          }).map(b => ({
+              // THEIR PART NUMBER, ON THEIR PAPER (Stuart 2026-09-03). customerDocLines already
+              // swaps the customer's clientSku into legacyErpId for money documents — and this
+              // column then threw it away, hardcoded blank, so no document has ever printed an
+              // item number at all. Ours prints where they have no code of their own.
+              item: b.isHeader ? '▶' : (b.legacyErpId || ''),
               desc: b.name,
               qty: (b.isDiscount || b.isNetLine || b.isHeader) ? '' : b.qty,
               price: (b.isDiscount || b.isNetLine || b.isHeader || b.qty == null || !b.qty) ? null : b.price,
