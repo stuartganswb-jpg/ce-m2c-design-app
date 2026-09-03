@@ -471,12 +471,48 @@ const ShopFloorGuide = () => (
     </div>
 );
 
+// ── 1.6 / 1.5 AUTHORING (Brief F, 2026-09-03) ────────────────────────────────────────────────
+const AuthoringGuide = () => (
+    <div>
+        <h2 style={S.h2}>The idea in one minute</h2>
+        <p style={S.p}>An assembly is built in <b>1.6 Assembly Builder</b> from <b>slots</b>: one .glb file per slot (the left bracket, the rings, the fascia, the rear track…), each holding every choice the customer can pick for that place on the product. Build merges the slot files into one model and writes a <b>section</b> per slot, with a <b>pin</b> per choice carrying its item # and its tags. Everything downstream — the CPQ questions, what the 3D render shows, the spec sheet's pages, the BOM, the floor's router — is read from those tags. So when a product behaves wrongly, the fix is almost always a tag here, not a change to the flow. <b>1.5 Node Grouping</b> is where you look at the model, check what each section claims, and re-tag a section as a whole.</p>
+
+        <h2 style={S.h2}>1.6 · Assembly Builder <span style={S.tabno}>(tab 1.6 — slots in, one assembly out)</span></h2>
+        <Screen title="Slots and the load order" tag="new 3 Sep">
+            <Path name="The number" goes="becomes the S-number on every node name at Build">Each slot row that holds a file shows a brass <b>#0, #1, #2…</b> badge. That is its <b>load order</b>, and it is the same number Build stamps into the model's node names, so "slot 4" means the same thing on the designer's screen, on Stuart's screen and in the file. SOP and Spec Sheet slots read <em>attach</em> — they ride alongside the model and are never numbered. An empty slot reads <em>—</em> until it holds a file.</Path>
+            <Path name="Arranging" goes="numbers follow the order on screen">▲▼ on each slot row moves it. Nothing is named until you press Build, so arrange the rows in the order she actually loads them and the numbers follow. The preflight confirm lists the same numbers as a last check.</Path>
+            <Path name="Extend" goes="new slots continue the count">Choosing an existing assembly under Extend shows its current sections with their numbers, greyed, and the new slot rows continue from the next number — so a slot reads as "#7, new" and cannot be mistaken for a re-upload of #3 (which Extend never replaces; it adds a second copy — the preflight warns).</Path>
+        </Screen>
+        <Screen title="One tag row, both screens" tag="new 3 Sep">
+            <p style={S.p}>The tag controls on a slot row (at upload / Extend) and on a <b>Load Choices</b> row (an already-built assembly) are now the <em>same</em> controls. Whatever the designer can tag at upload, Stuart sees identically on Load Choices, and the other way round — traverse role, drive, setup, front/back rod, passing, always-shown, no plate, the materials chips and the projection ticks (including the per-rod form for a double bracket). A tag ticked on either screen writes the same pin.</p>
+            <div style={S.note}><b>Basic</b> and <b>no plate</b> both stop the backplate question, but they say different things: <em>basic</em> means the arm and plate are one piece; <em>no plate</em> means this end treatment mounts without one. Tag the fact that is true — the render reads either.</div>
+            <div style={S.note}>Traverse tags: the <b>fascia</b> is chosen first; a <b>track</b> is a finish choice whose cut depends on the drive; <b>carriers</b> ride inside and are never offered (tick <em>always</em>, never <em>hide</em>); the <b>ends</b> are real parts that differ by drive. Blank drive or setup means "suits both" — only the genuinely exclusive pairs (single vs double bracket, front vs rear track) need the tag on both sides.</div>
+        </Screen>
+
+        <h2 style={S.h2}>1.5 · Node Grouping <span style={S.tabno}>(the slot locator)</span></h2>
+        <Screen title="Slots panel" tag="new 3 Sep">
+            <Path name="What it lists" goes="the same slots 1.6 loaded, in load order">Above <em>Saved BOM Bindings</em>, one row per slot with its number, its label, how many sections and nodes it holds, and the tags those sections carry. A ⚠ names what is still missing — sections with no category or no position — which on a multi-track assembly is exactly what you are hunting for.</Path>
+            <Path name="Finding it in the model" goes="hover glows, Locate locks">Hover a slot row and everything it loaded lights up brass while the rest fades; <b>Locate</b> keeps it lit while you work; ▸ opens the slot to list its sections, each with its own Locate as before. The single-section Locate, hover, Auto-Group and Highlight Unassigned all work exactly as they did.</Path>
+            <Path name="Ungrouped" goes="shown, never guessed">Sections no 1.6 slot claims — made by hand here, from Auto-Group, or 2D regions — sit under <em>Ungrouped</em> at the bottom. They are never hidden and never sorted into a slot by guesswork.</Path>
+        </Screen>
+
+        <h2 style={S.h2}>Edges to know</h2>
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            <li style={S.edge}>• <b>A wrong option on a flow is almost always a wrong tag here.</b> Check the pin on Load Choices (or the section in 1.5) before asking for a flow change.</li>
+            <li style={S.edge}>• <b>Extend adds, never replaces.</b> To fix choices in an existing section use Load Choices; re-uploading the slot makes a second copy of its geometry.</li>
+            <li style={S.edge}>• <b>The load-order number is minted at Build.</b> Reordering slots before Build is free; after Build the number is in the file and stays.</li>
+            <li style={S.edge}>• <b>Regenerate after tagging.</b> Tags are read when the flow is generated; the CPQ shows the new behaviour after the next Regenerate on tab 11.</li>
+        </ul>
+    </div>
+);
+
 const SECTIONS = [
     { key: 'WO', label: 'Work Orders', comp: WorkOrdersGuide },
     { key: 'OC', label: 'Orders & Customers', comp: OrdersCustomersGuide },
     { key: 'SF', label: 'Shop Floor', comp: ShopFloorGuide },
     { key: 'RP', label: 'Rod Pieces', comp: RodPiecesGuide },
     { key: 'APP', label: 'Working on the App', comp: AppWorkGuide },
+    { key: 'AU', label: '1.6 / 1.5 Authoring', comp: AuthoringGuide },
 ];
 
 const UserGuideTab = () => {
