@@ -28,7 +28,9 @@ import { executeMakeupActions } from './finishedRunPrecheck';
 import { poleCutPlan } from './poleCut.js';
 import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from './nsWorkOrder';
 
-export const INTENT = { STOCK_FINISH: 'STOCK_FINISH', STOCK_MILL: 'STOCK_MILL', COMPONENT_MILL: 'COMPONENT_MILL' };
+// REISSUE (RTG's balance close, writer 10 — B's file calls it): the route is decided by the code,
+// exactly as STOCK_FINISH / STOCK_MILL would decide it, plus the lineage stamp (`replaces`).
+export const INTENT = { STOCK_FINISH: 'STOCK_FINISH', STOCK_MILL: 'STOCK_MILL', COMPONENT_MILL: 'COMPONENT_MILL', REISSUE: 'REISSUE' };
 export const ANCHOR = { AT_CREATION: 'AT_CREATION', AT_RELEASE: 'AT_RELEASE', NONE: 'NONE' };
 
 // A refusal is a typed error so a batch caller can log the row and carry on with the next.
@@ -42,6 +44,7 @@ const SOURCE_LABEL = {
     SALES_SNAPSHOT: 'Sales Snapshot', STOCKVIEW_GRID: 'Stock View grid', RAW_CORES: 'raw core replenish',
     STOCKVIEW_PO_BUILDER: 'PO builder, core short for plating', LIBRARY_MAKEUP: 'library make-up',
     PRECHECK_MAKEUP: 'component make-up', PLATING: 'core short for plating', STOCK_BUILD_NEEDS: 'Stock Build Needs',
+    RTG_REISSUE: 're-issue of a short balance',
 };
 
 let seq = 0;
@@ -77,10 +80,11 @@ export const parkWorkOrder = async ({
     // 1. THE ROUTE — stated or refused, never open.
     const route = routeForCode(erp);
     if (route.refuse === REFUSE_PHOSPHATE) throw new ParkRefusal(REFUSAL.PHOSPHATE, `${erp} is a phosphated core: phosphating raw → /P is a bulk WMS convert (raise a Convert to-do), never a work order.`);
-    if (route.refuse === REFUSE_OUTSOURCED) throw new ParkRefusal(REFUSAL.OUTSOURCED, `${erp} carries an outsourced finish (/${route.finish}): it never enters the finishing floor — raise the plating demand instead.`);
-    const wantFinishing = intent === INTENT.STOCK_FINISH;
-    if (wantFinishing && route.routeTo !== ROUTE_FINISHING) throw new ParkRefusal(REFUSAL.INTENT, `${erp} has no finish suffix — it is shop work (STOCK_MILL), not a finishing run.`);
-    if (!wantFinishing && route.routeTo !== ROUTE_SHOP) throw new ParkRefusal(REFUSAL.INTENT, `${erp} carries finish /${route.finish} — it is finishing work (STOCK_FINISH), not a milling order.`);
+    if (route.refuse === REFUSE_OUTSOURCED) throw new ParkRefusal(REFUSAL.OUTSOURCED, `${erp} is plated (/${route.finish}) — never a finishing work order. Raise it as a PLATING DEMAND: Stock View → PO builder's plating split, the Snapshot's plated tier, or the Library card's outsourced path.`);
+    const isReissue = intent === INTENT.REISSUE;
+    const wantFinishing = isReissue ? route.routeTo === ROUTE_FINISHING : intent === INTENT.STOCK_FINISH;
+    if (!isReissue && wantFinishing && route.routeTo !== ROUTE_FINISHING) throw new ParkRefusal(REFUSAL.INTENT, `${erp} has no finish suffix — it is shop work (STOCK_MILL), not a finishing run.`);
+    if (!isReissue && !wantFinishing && route.routeTo !== ROUTE_SHOP) throw new ParkRefusal(REFUSAL.INTENT, `${erp} carries finish /${route.finish} — it is finishing work (STOCK_FINISH), not a milling order.`);
     if (precheck && precheck.rawUnknown) throw new ParkRefusal(REFUSAL.RAW_UNKNOWN, `${erp}: /P components are short but the RAW availability read failed — a convert against unverified raw silently skips milling. Retry when NetSuite answers.`);
 
     const id = woId || `WO-${safeCode(erp)}-${Date.now().toString().slice(-6)}-${++seq}`;

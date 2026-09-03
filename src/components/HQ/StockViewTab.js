@@ -20,7 +20,7 @@ import { isOutsourcedFinishCode, handlingForErp, finishSuffixOf, millBaseOf } fr
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
-import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from '../Shared/nsWorkOrder';
+import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
 import { assertFreshBundle } from '../Shared/UpdateBanner';
 
 const BRAND_NETSUITE_MAP = {
@@ -562,25 +562,27 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 platingCount++;
                 addLog(`Plating demand ${pl.erp} ×${pl.qty} (base ${pl.baseErp} avail ${baseAvail}).`, 'info');
 
-                // (b) Raw base short → mill more base now (routed to the shop floor by the base's routingType).
+                // (b) Raw base short → mill more base now. THE ONE WRITER (Brief A, A1 step 3):
+                // parked as STOCK_MILL with routeTo SHOP, source, autoFlow and the root's own
+                // NetSuite work order queued at creation when it is an assembly — this block used
+                // to park route-open with no source and no anchor (audit §2 writer 2). A3 folds
+                // the whole plating triple (demand + this core-short order) into one call.
                 if (basePart && baseAvail < pl.qty) {
                     const shortfall = pl.qty - baseAvail;
-                    const stamp = Date.now().toString().slice(-6);
-                    const safeErp = String(basePart.legacyErpId || basePart.itemId).replace(/[^A-Za-z0-9]+/g, '-');
-                    const woId = `WO-${safeErp}-${stamp}-${i}`;
-                    // Source numbers only (Stuart 2026-07-17): no invented short WO # — the app id
-                    // shows until a NetSuite WO posts, then nsWoTran takes over on every screen.
-                    await setDoc(doc(db, "hq_work_orders", woId), withItemCode({
-                        id: woId, woId, woDisplayId: `WO-${basePart.legacyErpId || basePart.itemId}-${stamp}`,
-                        partErpId: basePart.legacyErpId || basePart.itemId,
-                        brand: activeBrand, status: "Approved", customer: "Internal Stock",
-                        hqJobId: basePart.id, totalParts: shortfall,
-                        reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-                        type: "Stock Build", routingType: basePart.routingType || 'Standard',
-                        rootItem: pl.baseErp, forPlating: pl.erp, createdAt: Date.now()
-                    }));
-                    millingCount++;
-                    addLog(`Milling WO ${basePart.legacyErpId || basePart.itemId} ×${shortfall} (raw short for ${pl.erp}).`, 'warn');
+                    try {
+                        const res = await parkWorkOrder({
+                            intent: INTENT.STOCK_MILL, part: basePart, qty: shortfall, brand: activeBrand,
+                            createdBy: String(currentUser?.name || currentUser || ''),
+                            reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
+                            note: `Raw core short for plating ${pl.erp} · avail ${baseAvail} · need ${pl.qty}`,
+                            source: 'STOCKVIEW_PO_BUILDER', forPlating: pl.erp, inventory: hqParts,
+                        });
+                        millingCount++;
+                        res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'warn' : 'info'));
+                    } catch (e) {
+                        if (e instanceof ParkRefusal) addLog(`⛔ ${pl.baseErp}: ${e.message}`, 'error');
+                        else throw e;
+                    }
                 } else if (!basePart) {
                     addLog(`⚠️ base ${pl.baseErp} not in library — plating demand created, but no milling WO.`, 'warn');
                 }
@@ -1666,41 +1668,30 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // (routeTo MILLING for stock), unlike the finishing path which parks a verbatim finPayload.
     // The WO still lands in RTG first so ns_outbox serializes the NetSuite write.
     const createStockShopWOs = async (toMake) => {
+        // ── THE ONE WRITER (Brief A, A1 step 3). Same call as the Snapshot and the grid; this
+        // screen's intent is always STOCK_MILL (a raw core has no finish suffix) and the root's
+        // own NetSuite work order is queued at creation when it is a NetSuite assembly — the rule
+        // this screen already had, now the module's. New here: `memo` (the shop card's note) and
+        // `autoFlow` (RTG releases it, nobody presses Push to Shop).
         let n = 0;
         const reqDate = woNeedBy || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
         for (const { r, info, qty } of toMake) {
-            const stamp = Date.now().toString().slice(-6);
-            const safeErp = String(r.itemid).replace(/[^A-Za-z0-9]+/g, '-');
-            const woId = `WO-CORE-${safeErp}-${stamp}-${n}`;
-            await setDoc(doc(db, "hq_work_orders", woId), withItemCode({
-                id: woId, woId, brand: activeBrand, type: 'Stock', status: 'Approved',
-                source: 'RAW_CORES', routeTo: 'SHOP',
-                ...(woUrgent ? { urgent: true, needBy: woNeedBy || reqDate } : {}),
-                erpId: r.itemid, partErpId: r.itemid,
-                nsItemId: r.internalId ? String(r.internalId) : null,
-                hqJobId: info.part?.id || null,
-                qty, totalParts: qty, reqDate, customer: 'Internal Stock',
-                routingType: info.part?.routingType || 'Standard',
-                rootItem: r.itemid,
-                note: `Raw core replenish · avail ${info.available} · threshold ${info.threshold ?? info.minOnHand ?? 0}`,
-                createdAt: Date.now(), createdBy: currentUser || ''
-            }), { merge: true });
-            // THE ROOT'S OWN ANCHOR (2026-08-31 "both" model, same as executeMakeupActions): a
-            // milled root that is a NetSuite assembly opens its work order WITH the milling WO —
-            // number stamps back, RTG's ⛏ Mill Build closes it when the shop finishes.
-            if (isNsAssemblyRec(info.part)) {
-                try {
-                    await queueNsAssemblyWorkOrder({
-                        brandId: activeBrand, assemblyInternalId: String(info.part.netSuiteInternalId),
-                        erp: r.itemid, qty, reqDate,
-                        memo: `mill ${r.itemid} · raw core replenish`,
-                        writeBacks: [{ collection: 'hq_work_orders', docId: woId, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }],
-                        sourceApp: 'RAW_CORES', createdBy: currentUser || '',
-                    });
-                    await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
-                } catch (e) { console.warn('root NS WO queue failed', r.itemid, e); }
+            try {
+                const res = await parkWorkOrder({
+                    intent: INTENT.STOCK_MILL,
+                    part: info.part || { legacyErpId: r.itemid, netSuiteInternalId: r.internalId },
+                    qty, brand: activeBrand, createdBy: currentUser || '',
+                    reqDate, needBy: woNeedBy || '', urgent: !!woUrgent,
+                    note: `Raw core replenish · avail ${info.available} · threshold ${info.threshold ?? info.minOnHand ?? 0}`,
+                    source: 'RAW_CORES', inventory: hqParts,
+                    woId: `WO-CORE-${String(r.itemid).replace(/[^A-Za-z0-9]+/g, '-')}-${Date.now().toString().slice(-6)}-${n}`,
+                });
+                res.made.forEach((m, i) => addLog(`${i === 0 ? '' : '   '}${m}`, i === 0 ? 'success' : (/^[⚠✂⇄🏭]/.test(m) ? 'warn' : 'info')));
+                n++;
+            } catch (e) {
+                if (e instanceof ParkRefusal) { addLog(`⛔ ${r.itemid}: ${e.message}`, 'error'); continue; }
+                throw e;
             }
-            n++;
         }
         return n;
     };
