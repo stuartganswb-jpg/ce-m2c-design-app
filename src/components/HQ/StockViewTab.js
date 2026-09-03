@@ -71,6 +71,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         () => { }), []);
     // Finishing sled-capacity matrix (pieces/sled by size×type) drives the recommended production run.
     const [capacityMatrix, setCapacityMatrix] = useState({ rules: {}, default: null });
+    // DRAFTS ARE NOT LOST (Brief A, A4): a PO the operator left un-approved in the preview stays
+    // reachable from the toolbar until it is approved or deleted. Nothing else reads status Draft —
+    // RTG's board starts at Approved — so this is the one place they surface.
+    useEffect(() => onSnapshot(
+        query(collection(db, 'hq_purchase_orders'), where('status', '==', PO_STATUS.DRAFT), where('brand', '==', activeBrand)),
+        (snap) => setDraftPoList(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.deleted)),
+        () => setDraftPoList([])
+    ), [activeBrand]);
+
     useEffect(() => onSnapshot(doc(db, 'fin_config', 'capacityMatrix'),
         s => setCapacityMatrix(s.exists() ? s.data() : { rules: {}, default: null }), () => { }), []);
     const [orderQty, setOrderQty] = useState({});   // per-row entered production amount (keyed by internalId)
@@ -131,6 +140,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [woNeedBy, setWoNeedBy] = useState('');
     const [tierOrderQty, setTierOrderQty] = useState({}); // 3-Tier view: Order qty keyed by ERP (raw base AND each variant)
     const [poReview, setPoReview] = useState(null);   // the DRAFT POs a press just created: preview → approve → NetSuite mints the number
+    const [draftPoList, setDraftPoList] = useState([]); // every DRAFT PO for this brand, live — a draft left un-approved is still reachable
     const [vendorModal, setVendorModal] = useState(null); // vendor confirmation before POs are cut {buy, make, shop, vendors, picks}
 
     // BUILDER STATE
@@ -1714,12 +1724,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const finRes = fin.length ? await createStockFinWOs(fin) : { n: 0, made: [] };
             setTierOrderQty({});
             const lines = [
-                ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
-                ...(shopWos ? [`• ${shopWos} raw core work order(s) → RTG Dispatch (Push to Shop there)`] : []),
+                ...poResult.made.map(p => `• DRAFT PO → ${p.vendor} (${p.lines} lines) — review and approve in the window that follows; approving is what gets its NetSuite PO number`),
+                ...(shopWos ? [`• ${shopWos} raw core work order(s) → routed to the shop; RTG records them and releases them on its own`] : []),
                 ...(convN ? [`• ${convN} convert to-do(s) → WMS · Convert tab ("Needs Phosphating")`] : []),
                 ...(plateN ? [`• ${plateN} plating to-do(s) → WMS · Plating tab ("Needs Plating")`] : []),
                 ...(finRes.deferred ? ['• Finishing work orders → REVIEW MODAL open (approve or cancel there)'] : []),
-                ...(finRes.n ? [`• ${finRes.n} finishing work order(s) → RTG Dispatch (release to Finishing there)`] : []),
+                ...(finRes.n ? [`• ${finRes.n} finishing work order(s) → routed to finishing; RTG records them and releases each one as its gates clear`] : []),
                 ...(finRes.made.length ? [`• Component pre-check raised:`, ...finRes.made.map(m => `   ${m}`)] : []),
             ];
             if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
@@ -1786,7 +1796,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (plate.length) pieces.push(`${plate.length} plated item(s) → WMS Plating to-do`);
         if (fin.length) pieces.push(`${fin.length} finished item(s) → Finishing work order`);
         const warn = shortWarn.length ? `\n\n⚠ RAW CORE SHORT for the convert/plating you're asking for:\n${shortWarn.map(s => `• ${s}`).join('\n')}\n\nThe plating share that nothing covers gets a milling work order with its demand; converts still need the raw base ordered on its own row.` : '';
-        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}${warn}\n\nWork orders and POs stage in RTG Dispatch; convert/plating to-dos appear on the WMS tabs. Nothing reaches NetSuite until it's dispatched or the operator posts the move.`)) return;
+        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}${warn}\n\nPOs are saved as DRAFTS and previewed next; work orders route themselves and RTG releases them as their gates clear; convert/plating to-dos appear on the WMS tabs. Nothing reaches NetSuite until you approve it.`)) return;
         if (!buy.length) return executeTierOrders({ shop, conv, plate, fin });
         setGenBusy(true);
         let nsVendors = [];
@@ -1814,7 +1824,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (woMake.length) pieces.push(`${woMake.length} stock work order(s)`);
         if (conv.length) pieces.push(`${conv.length} /P item(s) → WMS Convert to-do (phosphate)`);
         if (!pieces.length) return alert('Nothing to generate.');
-        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}\n\nPOs and work orders land in RTG Dispatch for review: POs (one per vendor) push to NetSuite from there; work orders release to the floor from there. Convert to-dos appear on the WMS Convert tab. Nothing reaches NetSuite or the floor until dispatched or the operator posts the move.`)) return;
+        if (!window.confirm(`Generate:\n\n• ${pieces.join('\n• ')}\n\nPOs are saved as DRAFTS, one per vendor, and previewed next — approving one is what sends it to NetSuite for its PO number. Work orders route themselves and RTG releases them as their gates clear. Convert to-dos appear on the WMS Convert tab. Nothing reaches NetSuite until you approve it, and nothing reaches a floor until its gates are clear.`)) return;
         setGenBusy(true);
         try {
             const poResult = buy.length ? await createStockPOs(buy) : { made: [], unmatched: [] };
@@ -1823,7 +1833,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const convN = conv.length ? await createConvertDemands(conv) : 0;
             setOrderQty({});
             const lines = [
-                ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
+                ...poResult.made.map(p => `• DRAFT PO → ${p.vendor} (${p.lines} lines) — review and approve in the window that follows; approving is what gets its NetSuite PO number`),
                 ...poResult.unmatched.map(u => `• ⚠ NO PO for "${u.vendor || '(no vendor)'}" — no matching NetSuite vendor (11.1 → Sync Active Vendors): ${u.items.join(', ')}`),
                 ...(woRes.n ? [`• ${woRes.n} stock work order(s) → RTG Dispatch (release to the floor there)`] : []),
                 ...(convN ? [`• ${convN} convert to-do(s) → WMS · Convert tab ("Needs Phosphating")`] : []),
@@ -2246,8 +2256,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const wos = shop.length ? await createStockShopWOs(shop) : 0;
             setRawOrderQty({});
             const lines = [
-                ...poResult.made.map(p => `• PO → ${p.vendor} (${p.lines} lines) — push to NetSuite from RTG Dispatch`),
-                ...(wos ? [`• ${wos} core work order(s) → RTG Dispatch (Push to Shop there)`] : []),
+                ...poResult.made.map(p => `• DRAFT PO → ${p.vendor} (${p.lines} lines) — review and approve in the window that follows; approving is what gets its NetSuite PO number`),
+                ...(wos ? [`• ${wos} core work order(s) → routed to the shop; RTG records them and releases them on its own`] : []),
             ];
             if (lines.length) alert(`✅ Generated:\n${lines.join('\n')}`);
         } catch (e) { addLog(`Raw core orders failed: ${e.message}`, 'error'); alert('Failed to generate core orders:\n\n' + (e.message || e)); }
@@ -2549,6 +2559,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                     <button onClick={() => { setSnapView('TIER'); if (!rawStock) loadRawStock(); }} title="Three-tier items (Fabricut H1): the raw mill core, its /P phosphated base and the plated /EP tiers read together, each with its own Order column — raw → shop floor, /P → WMS Convert, plated → WMS Plating" style={{ padding: '9px 14px', background: snapView === 'TIER' ? 'var(--ink)' : '#fff', color: snapView === 'TIER' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>3-Tier (raw · /P · plated)</button>
                                     <button onClick={() => { setSnapView('OENEEDS'); loadOeNeeds(); }} title="Made-to-order lines from Order Entry sales orders — SO#, customer, need-by, notes; generate the linked work orders / POs from here. Client work keeps its sales link; the other views stay for STOCK." style={{ padding: '9px 14px', background: snapView === 'OENEEDS' ? 'var(--brass)' : '#fff', color: snapView === 'OENEEDS' ? '#fff' : 'var(--brass)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700 }}>🧾 Order Entry Needs</button>
                                 </div>
+                                {draftPoList.length > 0 && (
+                                    <button onClick={() => setPoReview({ pos: draftPoList, busy: false })}
+                                        title="Purchase orders saved as drafts and not yet approved. Approving one sends it to NetSuite, which mints its PO number; only then can it go to the vendor."
+                                        style={{ padding: '9px 14px', background: 'var(--brass)', color: '#fff', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                        🧾 {draftPoList.length} draft PO{draftPoList.length === 1 ? '' : 's'}
+                                    </button>
+                                )}
                                 <div style={{ display: 'flex', border: '1px solid var(--line)' }} title="Row order — Finish groups /SG · /N25 · … together so same-finish work orders go out as one batch">
                                     <button onClick={() => setSnapSort('item')} style={{ padding: '9px 14px', background: snapSort === 'item' ? 'var(--ink)' : '#fff', color: snapSort === 'item' ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Item #</button>
                                     <button onClick={() => setSnapSort('finish')} style={{ padding: '9px 14px', background: snapSort === 'finish' ? 'var(--ink)' : '#fff', color: snapSort === 'finish' ? '#fff' : 'var(--ink-soft)', border: 'none', borderLeft: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>Sort: Finish</button>
