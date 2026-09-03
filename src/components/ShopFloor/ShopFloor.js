@@ -38,16 +38,25 @@ const shopItemCodeOf = (o) => woItemCodeOf(o)
 // RTG's job log sorts on updatedAt — every shop write stamps it (2026-08-26).
 const touched = (p) => ({ ...p, updatedAt: serverTimestamp() });
 
-// A CPQ pole order whose cut sheet never arrived (Brief C · C7 — SO60147, 2026-09-03). RTG's
-// split always writes a fabNotes object from the job's Vision specs; when every engineered field
-// is empty and the pole still has a cut length, the specs were missing when the line was quoted.
-// The card used to render that as a bare "FABRICATION" header, which read as a choice. An order
-// with NO fabNotes at all (Order Entry, pushToShop) is not this case: it never had geometry by
-// design and carries the item's Shop Instruction instead. Reads the doc; decides nothing.
+// A pole order that went through Vision but whose cut sheet never arrived (Brief C · C7 —
+// SO60147, 2026-09-03). RTG's split writes fabNotes from the job's Vision specs; when the doc
+// carries Vision's notes (bracket/splice notes, canvas notes, hanger positions) but every
+// engineered field is empty, the draft was saved before it was engineered. The card used to
+// render that as a bare "FABRICATION" header, which read as a choice.
+// NOT flagged, by Stuart's ruling (2026-09-03, "fabricut cost no need for vision as it is straight
+// cuts"): a straight cut-to-length pole entered without Vision — its cut-to is the whole sheet.
+// Nor an order with no fabNotes at all (Order Entry, pushToShop): it carries the item's Shop
+// Instruction instead. A bend/return/splice configured WITHOUT Vision is stopped at the source
+// (E's guard at add-to-cart / finalize), not inferred here from item codes. Reads the doc;
+// decides nothing.
 const n0 = (v) => Number(v) || 0;
 const cutSheetMissing = (o) => {
     const f = o?.fabNotes;
     if (!f || typeof f !== 'object' || o?.fabMethod || !o?.cutLength) return false;
+    const visionUsed = (Array.isArray(o.bracketNotes) && o.bracketNotes.length > 0)
+        || (Array.isArray(o.visionNotes) && o.visionNotes.length > 0)
+        || (Array.isArray(f.hangerLocations) && f.hangerLocations.length > 0);
+    if (!visionUsed) return false;
     return !f.shape && !n0(f.poleO2O) && !n0(f.totalSystemO2O) && !n0(f.pole1) && !n0(f.pole2) && !n0(f.pole3)
         && !n0(f.rawLeft) && !n0(f.rawCenter) && !n0(f.rawRight) && !n0(f.qtyBends) && !n0(f.qtySplices) && !n0(f.qtyMiters);
 };

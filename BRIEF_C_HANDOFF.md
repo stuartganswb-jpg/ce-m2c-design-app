@@ -62,9 +62,17 @@ exists → the Vision draft was loaded but `draft.specs.engineeringNotes` was em
 Not a code regression: RTG's split unchanged since 09-01; E/A/D proved by diff nothing touched
 the job's notes. Stuart: **leave SO60147 as is; fix for the future.**
 
-**Shipped:** `4f17eb7` — the card says "NO CUT SHEET FROM VISION" (active card + staged row) when
-a CPQ pole order has a `cutLength` and an empty `fabNotes` object; orders with no `fabNotes` at
-all (Order Entry / pushToShop) untouched. `cutSheetMissing` in ShopFloor.js.
+**Shipped:** `4f17eb7` — the card says "NO CUT SHEET FROM VISION" (active card + staged row);
+**narrowed the same evening** on Stuart's ruling ("fabricut cost no need for vision as it is
+straight cuts"): fires only when the doc carries Vision evidence (`bracketNotes` / `visionNotes` /
+`fabNotes.hangerLocations`) AND every engineered field is empty. A straight cut-to-length pole
+with no Vision renders as ordinary work; orders with no `fabNotes` at all (Order Entry /
+pushToShop) untouched. `cutSheetMissing` in ShopFloor.js.
+**Correction to the SO60147 reading:** the viewer's "Splice 1 · 48\"" is CPQ's auto-centred splice
+(half of 96"), not a Vision placement, and the shop doc has no Vision notes — so SO60147 was most
+likely a **bent pole configured in CPQ with no Vision draft at all**. That case is E's guard
+(bend/return/splice in the configuration + no Vision O2O → stop at add-to-cart / finalize); the
+shop does not infer it from item codes.
 **Handed off:** E — refuse a Vision pole line with no O2O at add-to-cart / finalize (source
 prevention); **also from Stuart, via me:** Reopen-in-Vision does nothing ("nothing pushes, loses
 its link?"), and the sales forms have regressed to GLB node names instead of descriptions +
