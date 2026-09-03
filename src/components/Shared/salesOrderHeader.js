@@ -184,8 +184,11 @@ export const leadText = ({ leadBasis, leadWeeks, readyDate, rushApplied }) => {
 
 // ── THE ADDRESS LINES ────────────────────────────────────────────────────────────────────────
 
+// A custom drop-ship carries attention + addressee (both print); a saved NetSuite address-book
+// entry carries a label, which prints only when the entry has no street (Order Entry's rule).
 const fmtAddr = (a) => !a ? [] : [
-    a.addressee || a.attention || a.label,
+    a.attention, a.addressee,
+    (!a.addr1 && !a.addressee && !a.attention) ? a.label : '',
     a.addr1, a.addr2,
     [a.city, a.state].filter(Boolean).join(', ') + (a.zip ? ' ' + a.zip : ''),
 ].map(x => str(x)).filter(Boolean);
@@ -210,7 +213,7 @@ export function shipToLinesOf({ shippingMethod, shippingAddressId, customShippin
 /**
  * The one header block every door spreads into its hq_sales_orders doc.
  *
- * door 'CPQ' | 'PORTAL'  → from the JOB (jobs doc as saved by finalize / as approved in the CRM)
+ * door 'CPQ' | 'CRM'     → from the JOB (jobs doc as saved by finalize / as approved in the CRM)
  * door 'QUICKSHIP'       → from the Order Entry FORM: { soExtras, ship, jobName, lines }
  * `customer` = the CRM record (for the ship-to lines), `finishes` = master + outsourced finish
  * objects (for the recipe), `outsourceFinishes` = the hq_outsource_finishes list.
@@ -256,7 +259,7 @@ export function soHeaderOf({ door, job = null, form = null, customer = null, by 
             ...(j.readyDate !== undefined
                 ? { leadBasis: j.leadBasis || null, leadWeeks: j.leadWeeks || null, readyDate: str(j.readyDate), rushApplied: !!j.rushApplied }
                 : readyDateOf({ codes, rush: !!j.rushApplied, from: now })),
-            source: d === 'PORTAL' ? 'PORTAL' : 'CPQ', hqJobId: j.id || j.jobId || null, appCreated: true,
+            source: d, hqJobId: j.id || j.jobId || null, appCreated: true,
         };
     }
     const custName = str(customer && customer.name) || str(job && job.customer && job.customer.name) || str(form && form.customerName);

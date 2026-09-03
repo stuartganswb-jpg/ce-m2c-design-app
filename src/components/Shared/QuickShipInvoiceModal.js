@@ -120,7 +120,7 @@ const QuickShipInvoiceModal = ({ order, customer, brand, onClose }) => {
                                 {order.customerPo ? <div><span style={{ color: '#8a857c' }}>P.O.</span> {order.customerPo}</div> : null}
                                 {sidemark ? <div><span style={{ color: '#8a857c' }}>SIDEMARK</span> {sidemark}</div> : null}
                                 {customer?.terms ? <div><span style={{ color: '#8a857c' }}>TERMS</span> {customer.terms}</div> : null}
-                                {order.needByDate ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>NEED BY</span> {order.needByDate}</div> : null}
+                                {(order.needBy || order.needByDate) ? <div style={{ fontWeight: 700 }}><span style={{ color: '#8a857c', fontWeight: 400 }}>NEED BY</span> {(order.needBy || order.needByDate)}</div> : null}
                             </div>
                         </div>
                     </div>

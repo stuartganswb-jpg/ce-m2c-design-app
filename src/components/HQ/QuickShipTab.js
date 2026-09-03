@@ -3,7 +3,7 @@ import { isPoleCategory } from '../Shared/poleCut';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import { db } from '../../firebase';
 import { collection, doc, onSnapshot, setDoc, getDoc, updateDoc, query, where, serverTimestamp } from "firebase/firestore";
-import { isOutsourcedFinishCode } from '../Shared/finishRouting';
+import { soHeaderOf, isFinishOutsourced, isRushFeeItem } from '../Shared/salesOrderHeader';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
@@ -1357,6 +1357,13 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                     jobId: qJobId, brandId: activeBrand, status: 'CONFIGURED', source: 'QUICKSHIP',
                     customer: { id: customerId, name: selectedCustomer?.name || customerId },
                     jobName: jobName || '', sidemark: String(soExtras.sidemark || '').trim(),
+                    // The same header fields a CPQ job carries (Brief E), so a CRM Approve on this
+                    // quote builds the SO from one shape: orderSidemark = exactly as typed.
+                    orderSidemark: String(soExtras.sidemark || '').trim() || null,
+                    poNumber: String(soExtras.po || '').trim(), internalMemo: String(soExtras.internalMemo || '').trim(),
+                    needBy: String(soExtras.needBy || '').trim(), productionNotes: String(soExtras.prodNotes || '').trim(),
+                    shippingMethod: ship.method || 'SAVED', shippingAddressId: ship.addressId || null,
+                    customShippingAddress: ship.method === 'CUSTOM' ? (ship.custom || null) : null, shippingAmount: parseFloat(ship.amount) || 0,
                     createdBy: { name: currentUser || '', via: 'QUICKSHIP' },
                     cpqData: {
                         totalPrice: lines.reduce((sum, l) => sum + l.rate * l.eachQty, 0) + trvPushLines.reduce((sum, t) => sum + ((t.rate || 0) * (t.quantity || 1)), 0),
@@ -1429,37 +1436,35 @@ const QuickShipTab = ({ currentUser, activeBrand }) => {
                 setPushing(false); return;
             }
 
-            // IN-HOUSE vs OUTSOURCED — the routing authority is the outsource-finishes tab
-            // (hq_outsource_finishes feeds finishList's `outsourced` flag), backed by the canonical
-            // code vocabulary. 'P' is excluded by rule: phosphate is the CONVERT stage, never a
-            // finish, and a stray record coded P must not send an in-house item to the plater.
-            const isOutFinish = (code) => {
-                const c = String(code || '').trim().toUpperCase();
-                if (!c || c === 'P') return false;
-                const entry = finishList.find(f => f.code === c);
-                return entry ? entry.outsourced === true : isOutsourcedFinishCode(c);
-            };
+            // IN-HOUSE vs OUTSOURCED — the ONE shared test (Shared/salesOrderHeader.isFinishOutsourced,
+            // lifted from here 2026-09-03 so CPQ and Order Entry can never disagree): the outsource-
+            // finishes tab is the authority (finishList's `outsourced` flag), the canonical code
+            // vocabulary backs it, and 'P' is never outsourced — phosphate is the CONVERT stage.
+            const isOutFinish = (code) => isFinishOutsourced(code, finishList);
+            // A rush fee anywhere on the order shortens the ready date (Stuart 2026-09-03).
+            const rushOnOrder = pricedCart.some(l => isRushFeeItem(itemById(l.itemId)));
 
             const hqId = `QS-${stamp}`;
             await setDoc(doc(db, "hq_sales_orders", hqId), {
                 id: hqId, soId: hqId, nsInternalId: null, nsQueuedAt: stamp,
                 orderClass: 'QUICKSHIP', type: 'Stock',
                 brand: activeBrand,
-                customer: selectedCustomer?.name || nsCustomerId, customerId,
-                jobName: jobName || '', memo: memoText,
+                // ONE HEADER, WHICHEVER DOOR (Brief E, Q9/Q10 — Shared/salesOrderHeader): customer,
+                // customerPo, sidemark, jobName, needBy (the customer's date or ''), readyDate /
+                // leadWeeks (painted 4 wk, plated 6, rush 2 / 4), shipTo[], shipping, productionNotes,
+                // internalMemo, recipe / recipes[] (the to-be-finished lines' codes), memo, source.
                 // THE DOCUMENTS NEED THESE (Stuart 2026-08-30: "the sales order forms … must show
                 // the bill to address, the ship to address, the sidemark and the customer po").
-                customerPo: String(soExtras.po || '').trim(),
-                sidemark: String(soExtras.sidemark || '').trim(),
-                shipTo: (() => {
-                    if (ship.method === 'CUSTOM' && ship.custom.addr1) {
-                        const c = ship.custom;
-                        return [c.attention, c.addressee, c.addr1, c.addr2, [c.city, String(c.state || '').toUpperCase(), c.zip].filter(Boolean).join(', ')].filter(Boolean);
-                    }
-                    const a = (selectedCustomer?.shippingAddresses || []).find(x => String(x.addressBookId) === String(ship.addressId)) || (selectedCustomer?.shippingAddresses || [])[0] || null;
-                    return a ? [a.label, a.addr1, a.addr2, [a.city, a.state, a.zip].filter(Boolean).join(', ')].filter(Boolean).filter(x => x !== a.label || !a.addr1) : [];
-                })(),
-                needByDate: String(soExtras.needBy || '').trim(), productionNotes: String(soExtras.prodNotes || '').trim(),
+                // reqDate / needByDate ride as aliases of needBy for one release.
+                ...soHeaderOf({
+                    door: 'QUICKSHIP',
+                    form: { soExtras, ship, jobName, lines, rush: rushOnOrder, customerName: selectedCustomer?.name || nsCustomerId, customerId },
+                    customer: selectedCustomer, finishes: finishList, outsourceFinishes: finishList, by: currentUser || '',
+                }),
+                // Kept verbatim from before the shared header: the WMS and the CRM key on these exact
+                // values (the memo keeps its 'Quick Ship' fallback and 40-char cut for NetSuite).
+                customer: selectedCustomer?.name || nsCustomerId, customerId,
+                memo: memoText,
                 // NS_QUEUED until NetSuite accepts — the writeBack flips it to 'Pending' and the real
                 // SO number replaces the app id, and only then does WMS list it (uniform 2026-08-25).
                 status: 'NS_QUEUED', pickStatus: 'Pending',
