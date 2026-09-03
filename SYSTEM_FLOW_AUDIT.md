@@ -273,9 +273,10 @@ the custom parts are at the plater. **Question 2, §10.**
 
 **P0 — ghosts and dead ends (work disappears or stalls without saying so)**
 
-1. **Route-open parking of finished items** — writers #2, #6, #10 (§2). Never auto-release; RTG
-   offers Push to Shop on a finishing job. *Fix shape:* the grid's rule (`:753`,
-   `finishCodeFromErp → routeTo FINISHING`) applied at all three writers.
+1. ~~Route-open parking of finished items~~ — **CLOSED 09-02 evening by Brief A:** writers #2
+   (`646972d`) and #6 (`908a743`) now park through `parkWorkOrder` with a stated route; writer #10
+   (RTG re-issue) has `INTENT.REISSUE` ready and is B's patch spec. Push to Shop on a finishing job
+   is gone with it.
 2. **Order Entry anchor WOs have no closer** (§8). *Needs Eric's answer before any code.*
 3. **Plated custom parts read as complete on pack** (§8). *Fix shape:* mirror `'Sent to Plating'`
    not `'Complete'`, and let the WMS plating receipt mirror `'Complete'` — the field and the
