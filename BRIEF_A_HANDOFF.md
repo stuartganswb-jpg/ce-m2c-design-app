@@ -207,6 +207,65 @@ them. So: **do NOT retag the wood rods and do NOT ship a handlingForErp/classify
 these orders are in flight** — rerouting work already on the floor is worse than the fault. If he
 later approves the design, ask explicitly whether he means after these four are built.
 
+## 3h. RTG MUST SEE EVERY PO — the defect A4 introduced, and the agreed fix
+
+**Stuart, relayed 2026-09-03, binding on every brief:** *"no matter from cpq or order entry, i want
+all orders routed thru RTG then on to where they belong … EVERY ORDER via RTG always hard rule, it
+can 'auto send' to the operator they do not need to go to rtg to release any more, but it needs to
+go there as master single source control of all."* Auto-release stays OFF until orders stop turning
+up on floor tabs RTG never saw.
+
+**The defect, mine, introduced tonight by A4.** The board finds POs with
+`RTGDispatchTab :294 -> where("status","==","Approved")` and there is **no live PO mirror** (the
+`mk()` snapshots cover hq_sales_orders / hq_work_orders / shop_custom_orders / fin_workorders only,
+`:329`). Before A4 a PO was born `Approved`, so it appeared immediately. After A4 it is born
+`Draft` and approval sets `Queued to NetSuite` -> `Pushed to NetSuite` -> `Sent to Vendor`: it
+**never passes through `Approved` at all**, so a Stock View PO is invisible to RTG for its entire
+life. Same failure as the Order Entry sales orders D found, opposite direction - not "never
+arrives" but "stops being seen at the moment it becomes real".
+
+A's other writers pass: `parkWorkOrder` and `executeMakeupActions` stamp `Approved`/`Dispatched`
+with `brand`, so they hit both the board query and `liveWO`; `issuePlatedDemand` writes a
+`plating_demand` that RTG already mirrors (`mkB`), and its core-short order is an ordinary visible WO.
+
+**FIX BELONGS IN THE QUERY, NOT IN WHAT THE WRITERS STAMP.** Draft-vs-Approved is the distinction
+Stuart designed ("the po is saved but not yet sent ... after review and approval po is sent");
+flattening it to satisfy a reader destroys real information. And the board should not hard-code a
+status list at all - three collections with three hand-written predicates is how this drifted, and
+a fourth would be the same mistake with a newer date. `Shared/purchaseOrders.js` owns the
+vocabulary, so it exports the predicate and the board calls it - the same move B made with
+`isReleasable`.
+
+**The verified catalogue** (swept by D, re-verified independently here - every literal written to
+`hq_purchase_orders`):
+
+| status | written at | note |
+|---|---|---|
+| `Draft` | `purchaseOrders` createDraftPurchaseOrders | A4 |
+| `Approved` | legacy - pre-A4 POs still carry it; it is what the board queries | **must stay in the vocabulary** |
+| `Queued to NetSuite` | `purchaseOrders` approve; `RTGDispatchTab :275` **as a bare literal** | |
+| `Pushed to NetSuite` | outbox writeBack; `RTGDispatchTab :273` **as a bare literal** | |
+| `Sent to Vendor` | `purchaseOrders` markPoSent | |
+| `Sent to Plater` | `PickPackApp :2360` - D's weekly shipment creates AND sends in one act, legitimately skipping Draft/Approved | |
+| `Partially Received` | `ExternalCoopTab :1187` | **open - this is the one people chase** |
+| `Received` | `ExternalCoopTab :1187` | terminal for the board |
+| `Closed` | `ExternalCoopTab :660`, `orderLifecycle :113` | terminal |
+| `Deleted` | soft delete, filtered at `ExternalCoopTab :867` | terminal |
+
+(`ExternalCoopTab :936` also writes `Approved` but to **hq_sales_orders** - not a PO status, do not
+add it.)
+
+**The work, in order, AFTER the run - nothing tonight (freeze, real orders, B mid-edit in that file):**
+1. **A** extends `PO_STATUS` to describe what the collection actually contains (the ten above, not
+   the five A4 invented) and exports `isOpenPo(po)` / `PO_OPEN_STATUSES`. Open = everything except
+   `Received`, `Closed`, `Deleted` (and `po.deleted`). A sends D and B the hash.
+2. **D** maps `'Sent to Plater'` onto the shared vocabulary (their change; visible consequences are
+   the External Co-Op card wording and that it applies to future plating POs only).
+3. **B** swaps the board: `poQuery` uses `isOpenPo` instead of `status == 'Approved'`, adds a live
+   PO mirror beside the other four so a PO appears without pressing Refresh, and replaces the two
+   bare literals at `RTGDispatchTab :273/:275` with `PO_STATUS` - same values today, free to drift
+   tomorrow.
+
 ## 4. Blocked / waiting on others
 
 - Writer 7 on B's B1 (`buildFinDoc`). B will send the hash.
