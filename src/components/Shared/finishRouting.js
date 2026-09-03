@@ -68,23 +68,37 @@ export const tierOfErp = (erpId) => {
 // finishing job on a stocked part — including the ones rod cuts produce, which arrive as exactly
 // that. The suffix is the whole test.
 const APPLIED_PAINT_RE = /^P\d*$/i;                 // P (the rollup), P01…P24, P25 is plated below
-// ── WOOD STAIN IS A THIRD CLASS (Stuart 2026-09-03) ────────────────────────────────────────────
-// The rule above was written from his words about PAINT and PLATING — "/P is our control for
-// finishes that we always apply custom … all EP and MEP are outsourced custom. All other colors
-// like CP, SG, N90, etc. are all small parts." Wood stains (S04 Natural Oak, S11 Pure Oak — the
-// CPQ finish panel's WOOD group) are named nowhere in that sentence, so they fell to "all other
-// colors" and a 72" stained wood pole classified as SMALL PARTS: one finishing job, and the shop
-// never saw the cut. Asked rather than derived, because this rule was derived wrong twice before
-// (POLE_ROUTING_HANDOFF_BRIEF §1). His answer: "stained wood can go to custom to be cut then
-// finished." So a stain is an APPLIED finish — the piece is cut to order and finished after.
+// ── WOOD IS SMALL PARTS UNTIL THE ORDER SAYS OTHERWISE (Stuart 2026-09-03) ────────────────────
+// Asked twice and settled on the second pass. First answer: "stained wood can go to custom to be
+// cut then finished" — which read as "S-codes are an applied finish". Wrong place. He then gave
+// the actual rule:
 //
-// S FOLLOWED BY DIGITS, deliberately: 'SG' (Satin Gold) is one of the small-parts colours he named
-// himself, and it must keep falling through. A wood code that is not S + digits is NOT caught here
-// — if more turn up, name them rather than widening this to /^S/.
+//   "wood + miter → Custom, wood + straight → finishing is perfect. there will never be miter or
+//    custom bends/french returns on order entry, those will always come from cpq. so wood from
+//    order entry right to finishing. metal from order entry follows same rules as cpq."
+//
+// Straight-vs-miter is a fact about the ORDER LINE, not about the item: the same wood pole is
+// straight on one order and mitered on the next. So it cannot live in this function, which sees
+// only an item code — a wood stain stays SMALL PARTS here, the straight case, which is also what
+// Order Entry always wants because miters never come through that door.
+//
+// The miter escalation already has its home and needs nothing from this file:
+// Shared/lineClassification reads `manufacturingSpecs.partHandling` from the item and lets the
+// PER-LINE `partHandling` (propagated from the CPQ flow step) override it, and RTG's
+// autoSplitSalesOrder splits on that. A mitered CPQ line escalates there; a straight one does not.
+//
+// So `SG` (Satin Gold), `N90`, `CP` AND the wood stains `S04`/`S11` all fall through together —
+// which is what this function did before 224af1c, now deliberate and explained rather than
+// accidental.
+// WHAT A WOOD STAIN IS, for the screens that need to NAME it — not for routing. Brief E's
+// ready-date rule needs it (Stuart 2026-09-03: "for wood 4 weeks is lead time", and a stained
+// order must not read "painted finish"). S plus DIGITS: `SG` is a small-parts colour he named
+// himself and is not a stain. Deliberately NOT part of isAppliedFinishCode — see the note above.
 const WOOD_STAIN_RE = /^S\d+$/i;
 export const isWoodStainCode = (code) => WOOD_STAIN_RE.test(String(code || '').trim());
+
 export const isAppliedFinishCode = (code) =>
-    isOutsourcedFinishCode(code) || APPLIED_PAINT_RE.test(String(code || '').trim()) || isWoodStainCode(code);
+    isOutsourcedFinishCode(code) || APPLIED_PAINT_RE.test(String(code || '').trim());
 
 /**
  * Part Handling from the item code alone: 'Custom' or 'Small Parts'.

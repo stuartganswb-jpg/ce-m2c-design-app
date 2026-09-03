@@ -38,24 +38,27 @@ test('route: stated for sprayed finishes and raw codes, refused for /P and outso
     assert.equal(routeForCode('X/CP-10').finish, 'CP');
 });
 
-test('part handling: wood stain is CUSTOM, and the colours Stuart named stay SMALL PARTS', () => {
-    // Stuart 2026-09-03: "stained wood can go to custom to be cut then finished." S04 Natural Oak
-    // and S11 Pure Oak are the CPQ WOOD group; before this they fell to "all other colors" and a
-    // 72" stained pole was one finishing job with no shop cut.
-    assert.equal(isWoodStainCode('S04'), true);
-    assert.equal(isWoodStainCode('S11'), true);
-    assert.equal(handlingForErp('H1-138WR/S04'), 'Custom');
-    assert.equal(handlingForErp('H1-138WR/S11'), 'Custom');
-    // SG is one of the small-parts colours he named himself — S + a LETTER must keep falling through.
-    assert.equal(isWoodStainCode('SG'), false);
-    assert.equal(isWoodStainCode('S'), false);
+test('part handling: wood is SMALL PARTS on the item; the miter escalation is per-line', () => {
+    // Stuart 2026-09-03, second pass — the rule he actually wanted: "wood + miter → Custom, wood +
+    // straight → finishing … there will never be miter or custom bends/french returns on order
+    // entry, those will always come from cpq. so wood from order entry right to finishing."
+    // Straight-vs-miter belongs to the ORDER LINE, not the item, so this function keeps wood on the
+    // straight case; a mitered CPQ line escalates through lineClassification's per-line
+    // partHandling override. S04/S11 therefore sit with the other small-parts colours.
+    assert.equal(handlingForErp('H1-138WR/S04'), 'Small Parts');
+    assert.equal(handlingForErp('H1-138WR/S11'), 'Small Parts');
     assert.equal(handlingForErp('HCUMP810/SG'), 'Small Parts');
     assert.equal(handlingForErp('HCUMP810/N90'), 'Small Parts');
     assert.equal(handlingForErp('HCUMP810/CP'), 'Small Parts');
-    // and the paint/plate rules are untouched
+    assert.equal(isAppliedFinishCode('S04'), false);            // a stain is not an applied finish
+    // Metal is untouched — "metal rules we have correct already".
     ['P', 'P01', 'P25', 'EP3', 'MEP2'].forEach(c => assert.equal(isAppliedFinishCode(c), true, c));
     assert.equal(handlingForErp('HCUMP810/P01'), 'Custom');
+    assert.equal(handlingForErp('HCUMP810/EP3'), 'Custom');
     assert.equal(handlingForErp('HCUMP810'), 'Custom');          // a mill code is made to order
+    // The stain is still NAMEABLE, for lead time — identification only, never routing.
+    assert.equal(isWoodStainCode('S04'), true);
+    assert.equal(isWoodStainCode('SG'), false);
 });
 
 test('tier: raw / P / PLATE / FIN from the canonical vocabulary, one reader for Stock View and 4.5', () => {
