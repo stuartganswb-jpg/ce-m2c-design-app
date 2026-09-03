@@ -155,6 +155,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         shopInstruction: { active: false, value: "" },
         bpOrientation: { active: false, value: "VERTICAL" },
         isReturnBracket: { active: false, value: true },
+        unfinished: { active: false, value: true },
         armThickness: { active: false, value: "" }
     });
 
@@ -489,7 +490,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
             "ID (DO NOT EDIT)", "Legacy ERP ID", "Item ID", "NetSuite Internal ID", "Item Name", "Brand", "Part Class", "Routing Type",
             "Product Type (Category)", "Collection", "Watchlist", "UOM", "Part Handling", "Outsource Action", "Bracket Projection", "Bracket Type / Mount",
             "Weight", "Base Price", "Cost", "Reorder Pt (ROP)", "Lead Time (Days)", "Vendor Name", "Vendor SKU", "Bin Location", "Is In-House (TRUE/FALSE)", "Is Stocked (TRUE/FALSE)", "Paint Size (S/M/L)",
-            "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Backplate Length", "Backplate Width", "Backplate Height", "Bracket Arm Thickness",
+            "Backplate Orientation", "Is Return Bracket (TRUE/FALSE)", "Unfinished (TRUE/FALSE)", "Backplate Length", "Backplate Width", "Backplate Height", "Bracket Arm Thickness",
             "Client Customer ID", "Client SKU", "Client Cost", "Client Sales Price"
         ];
 
@@ -545,6 +546,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 (specs.paintSize || "").toUpperCase(),
                 cust.bpOrientation || "",
                 cust.isReturnBracket ? "TRUE" : "FALSE",
+                cust.unfinished ? "TRUE" : "FALSE",
                 specs.parametric?.length || "",
                 specs.parametric?.width || "",
                 specs.parametric?.height || "",
@@ -662,6 +664,8 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                 const proj = getVal("Bracket Projection"); if(proj !== null) { payload["manufacturingSpecs.customData.projection"] = proj; }
                 const bpo = getVal("Backplate Orientation"); if(bpo !== null && bpo !== "") { payload["manufacturingSpecs.customData.bpOrientation"] = bpo.toUpperCase(); }
                 const isr = getVal("Is Return Bracket (TRUE/FALSE)"); if(isr !== null && isr !== "") { payload["manufacturingSpecs.customData.isReturnBracket"] = isr.toUpperCase() === 'TRUE'; }
+                // UNFINISHED (Stuart 2026-09-03): the part never takes a finish — CPQ / Order Entry price and pull it plain.
+                const unf = getVal("Unfinished (TRUE/FALSE)"); if(unf !== null && unf !== "") { payload["manufacturingSpecs.customData.unfinished"] = unf.toUpperCase() === 'TRUE'; }
                 const bpl = getVal("Backplate Length"); if(bpl !== null && bpl !== "") { payload["manufacturingSpecs.parametric.length"] = bpl === "" ? "" : parseFloat(bpl); }
                 const bpw = getVal("Backplate Width"); if(bpw !== null && bpw !== "") { payload["manufacturingSpecs.parametric.width"] = bpw === "" ? "" : parseFloat(bpw); }
                 const bph = getVal("Backplate Height"); if(bph !== null && bph !== "") { payload["manufacturingSpecs.parametric.height"] = bph === "" ? "" : parseFloat(bph); }
@@ -828,7 +832,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             const patch = sourcingPatch(val);
                             payload['manufacturingSpecs.isInHouse'] = patch.isInHouse;
                             payload['manufacturingSpecs.sourcingMode'] = patch.sourcingMode;
-                        } else if (fieldKey === 'projection' || fieldKey === 'bpOrientation' || fieldKey === 'isReturnBracket' || fieldKey === 'armThickness') {
+                        } else if (fieldKey === 'projection' || fieldKey === 'bpOrientation' || fieldKey === 'isReturnBracket' || fieldKey === 'unfinished' || fieldKey === 'armThickness') {
                             payload[`manufacturingSpecs.customData.${fieldKey}`] = val;
                         } else if (['basePrice', 'cost', 'weight', 'moq', 'leadTime', 'reorderPoint'].includes(fieldKey)) {
                             payload[`manufacturingSpecs.${fieldKey}`] = val === "" ? "" : parseFloat(val);
@@ -1389,6 +1393,18 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                             </label>
                             <select disabled={!updates.isReturnBracket.active} value={String(updates.isReturnBracket.value)} onChange={(e) => handleUpdateChange('isReturnBracket', 'value', e.target.value === 'true')} style={{ ...fieldStyle, opacity: updates.isReturnBracket.active ? 1 : 0.5 }}>
                                 <option value="true">Yes — End-Return (sits at pole end, adds to O2O)</option>
+                                <option value="false">No</option>
+                            </select>
+                        </div>
+
+                        {/* UNFINISHED (Stuart 2026-09-03) — the part never takes a finish; one reader everywhere (Shared/finishLabel.takesNoFinish). */}
+                        <div style={{ background: updates.unfinished.active ? theme.paper : 'transparent', border: `1px solid ${updates.unfinished.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.unfinished.active} onChange={(e) => handleUpdateChange('unfinished', 'active', e.target.checked)} />
+                                Set Unfinished
+                            </label>
+                            <select disabled={!updates.unfinished.active} value={String(updates.unfinished.value)} onChange={(e) => handleUpdateChange('unfinished', 'value', e.target.value === 'true')} style={{ ...fieldStyle, opacity: updates.unfinished.active ? 1 : 0.5 }}>
+                                <option value="true">Yes — never takes a finish (CPQ / Order Entry price and pull it plain; floor reads "no finish")</option>
                                 <option value="false">No</option>
                             </select>
                         </div>

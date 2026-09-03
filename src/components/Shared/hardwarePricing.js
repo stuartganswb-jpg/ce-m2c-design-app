@@ -35,6 +35,7 @@
 // somewhere that might forget to.
 
 import { customerKeys, clientPriceFor, findClientPriceRow } from './clientPricing.js';
+import { takesNoFinish } from './finishLabel.js';
 import { fabricutPriceOf, fabricutCodeOf, priceLevelShort } from './priceLevels.js';
 import { finishVariantOf } from './finishVariant.js';
 import { ROD_ROLES } from './hardwareModel.js';
@@ -171,9 +172,13 @@ export function priceConfiguration(model, ctx = {}) {
         // configuration's own. It arrives as a FUNCTION rather than a map because the caller is the
         // only thing that knows the material gate — a wood stain does not land on a steel bracket,
         // and a clear acrylic finial wears nothing at all.
-        const finishCode = typeof ctx.finishFor === 'function'
+        // ⚠ AN UNFINISHED ITEM WEARS NOTHING (Stuart 2026-09-03, Shared/finishLabel.takesNoFinish):
+        // the item's own tag, read here so the line prices the PLAIN part and carries no finish
+        // code — the pin's no-finish tag (acrylic) already did this; the item's tag now does too.
+        const unfinished = takesNoFinish(part) || !!choice.noFinish;
+        const finishCode = unfinished ? '' : (typeof ctx.finishFor === 'function'
             ? (ctx.finishFor(choice, entry) || '')
-            : ctx.finishCode;
+            : ctx.finishCode);
         const p = priceChoice(choice, part, finishCode === ctx.finishCode ? ctx : { ...ctx, finishCode });
         // ⚠ ROD STOCK IS SOLD BY THE FOOT (Stuart 2026-08-20: "it needs to take billed ft qty on
         // step 6 and multiply it times price of selected rod in 10 and 11 if double"). H1-138R is
@@ -209,7 +214,7 @@ export function priceConfiguration(model, ctx = {}) {
             finishCode: finishCode || '',
             // …and WHY it has none, where it has none: a clear acrylic finial takes no finish at
             // all, which is a different fact from a steel part left in mill.
-            noFinish: !!choice.noFinish,
+            noFinish: unfinished,
             unit: p.price,
             total: p.price * qty * (perFoot ? feet : 1),
             source: p.source,

@@ -17,7 +17,7 @@ import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './ha
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { findClientPriceRow, customerKeys } from './clientPricing';
 import { handoffItem, customerLines } from './hardwareHandoff';
-import { finishLabelOf } from './finishLabel';
+import { finishLabelOf, takesNoFinish } from './finishLabel';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
 import { renderThumbnails, cachedThumb } from './hardwareThumbs';
 import { captureTransparentPng, saveGuideCapture } from './guideCapture';
@@ -783,13 +783,19 @@ function HardwareConfiguratorInner({
         // It also PRICES at that color: a fee with finish variants (painted vs plated upgrade)
         // bills the variant the matched finish actually is, not the configuration's.
         const matched = x.slot ? matchFinishOverride[livePicks[x.slot]] : '';
-        const p = priceChoice({ partId: x.code }, part, matched ? { ...priceCtx, finishCode: matched } : priceCtx);
+        // ⚠ UNFINISHED ITEMS (Stuart 2026-09-03, live order 1: the joiner went to the floor stamped
+        // S04). An extra used to take the configuration's finish unconditionally; now the ITEM's own
+        // "Unfinished" tag (Master Library / 4.5) is asked first — a splice, joiner or connector
+        // prices as the plain part and carries no finish code, so the floor is told nothing to do.
+        const unfinished = takesNoFinish(part);
+        const p = priceChoice({ partId: x.code }, part, unfinished ? { ...priceCtx, finishCode: '' } : (matched ? { ...priceCtx, finishCode: matched } : priceCtx));
         return { partId: x.code, name: part?.itemName || x.code, qty, unit: p.price, total: p.price * qty,
                  sku: p.sku || p.aliasCode, source: p.source, detail: p.detail, note: x.note, extra: true,
                  ...(x.slot ? { slot: x.slot } : {}),
                  // Priced at the configuration's finish, so it says so — a row with no finish under
-                 // it beside rows that have one reads as an oversight rather than a fact.
-                 finishCode: matched || globalFinish };
+                 // it beside rows that have one reads as an oversight rather than a fact. Unless the
+                 // item itself says it takes none: then no code, and the line says why.
+                 finishCode: unfinished ? '' : (matched || globalFinish), noFinish: unfinished };
     }), [extras, findPart, priceCtx, globalFinish, matchFinishOverride, livePicks]);
 
     // ── TRAVERSE COMPONENTS ARE THE LAST QUESTION A TRACK ASKS (Stuart 2026-08-21) ────────────

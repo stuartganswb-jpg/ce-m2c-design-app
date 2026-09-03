@@ -2374,6 +2374,16 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                           </div>
                       </div>
                       )}
+                      {/* UNFINISHED (Stuart 2026-09-03): "tag items that the cpq/order entry will not apply
+                          finish to". Read everywhere through Shared/finishLabel.takesNoFinish — the engine,
+                          the pick row, the floor sheet, the labels. Every record class: a joiner is inventory. */}
+                      <div style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0' }}>
+                          <input type="checkbox" checked={!!editSpecs.customData?.unfinished} onChange={(e) => handleCustomFieldChange("unfinished", e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer', marginTop: '2px', flexShrink: 0 }} />
+                          <div>
+                              <label style={labelStyle}>Unfinished — never takes a finish</label>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', marginTop: '2px' }}>CPQ and Order Entry never apply the configuration's finish to this part; it prices and pulls as the plain item and the floor sheet reads "no finish". Splices, joiners, connectors, hidden hardware. (Bulk: 4.5 Mass Update → Unfinished.)</div>
+                          </div>
+                      </div>
                       {isBracketRecord && !!editSpecs.customData?.isReturnBracket && (
                           <div>
                               <label style={labelStyle}>Bracket Arm Thickness (in)</label>
