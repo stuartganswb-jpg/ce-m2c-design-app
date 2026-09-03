@@ -16,7 +16,7 @@ import ConfiguredItemViewer from '../Shared/ConfiguredItemViewer';
 import SopViewer from '../Shared/SopViewer';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AppImprovementTab from '../Shared/AppImprovementTab';
-import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf } from '../Shared/workOrderContract';
+import { mirrorCustomStatusToSibling, releaseSiblingToPickPack, woItemCodeOf, CUSTOM_FAB_STATUS } from '../Shared/workOrderContract';
 import { isHeld, holdFirst, HOLD_STAGES } from '../Shared/orderHold';
 import OrderStatusChips from '../Shared/OrderStatusChips';
 import WhereIsIt from '../Shared/WhereIsIt';
@@ -24,7 +24,7 @@ import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 import RodPieceInventory, { RodCutPanel } from '../Shared/RodPieceInventory';
 import { shopDb, cleanId, SHOP_TABS, hqWorkOrderIdOf } from './shopShared';
-import { millBaseOf } from '../Shared/finishRouting';
+import { millBaseOf, finishRouteOf, finishSuffixOf } from '../Shared/finishRouting';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
 // salesOrderId/orderKey but no soNum ("SO: undefined" on cards AND printed labels), and no
@@ -1191,7 +1191,7 @@ const ShopFloor = () => {
             if (!window.confirm(`▶ START ${order.woNum}?\n\n${order.item || order.partNum || ''}\n\nIt moves to the Active side; sibling small parts release to Pick/Pack and finishing is notified.`)) return;
             try {
                 await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process', startedAt: serverTimestamp(), startedBy: user.name }));
-                await mirrorCustomStatusToSibling(order, 'In Process');
+                await mirrorCustomStatusToSibling(order, CUSTOM_FAB_STATUS.IN_PROCESS);
                 await releaseSiblingToPickPack(order);
                 // Follows the sibling (§8 Q2) — same rule as the card's Start button.
                 if (order.finSiblingId) await addDoc(collection(db, "global_messages"), {
@@ -1257,7 +1257,7 @@ const ShopFloor = () => {
             if (!window.confirm(`↩ Put ${order.woNum} BACK INTO PRODUCTION?\n\n• Shop status returns to "In Process"\n• Finishing/staging is told the custom parts are NOT complete (the staging handshake blocks again until re-completed)\n\nUse this when Complete was hit by mistake.`)) return;
             try {
                 await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process', completedAt: null, completedBy: null, reopenedAt: serverTimestamp(), reopenedBy: user.name }));
-                await mirrorCustomStatusToSibling(order, 'In Process');
+                await mirrorCustomStatusToSibling(order, CUSTOM_FAB_STATUS.IN_PROCESS);
                 await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `↩ UNDO: custom order ${order.woNum} returned to production by ${user.name} — custom parts are NOT complete.`, t: serverTimestamp(), isSystem: true });
                 writeLog(`Custom order ${order.woNum} completion UNDONE → back to In Process`, 'shop');
             } catch (e) { alert('Undo failed: ' + (e.message || e)); }
@@ -1302,7 +1302,7 @@ const ShopFloor = () => {
                 if (isHeld(order)) return alert(`⛔ ${order.woNum} is ON HOLD — ${order.heldReason || 'no reason recorded'}.\n\nIt cannot be started until management clears the hold.`);
                 await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process' }));
                 // §5: mirror onto the sibling fin WO so the Setup Queue flips to "In Process".
-                await mirrorCustomStatusToSibling(order, 'In Process');
+                await mirrorCustomStatusToSibling(order, CUSTOM_FAB_STATUS.IN_PROCESS);
                 // §A1: starting the custom job is the trigger that releases the sibling small
                 // parts into the Pick/Pack queue (so picking runs in parallel with fabrication).
                 await releaseSiblingToPickPack(order);
@@ -1317,9 +1317,11 @@ const ShopFloor = () => {
 
             const handleCompleteWithLabel = async () => {
                 if (isHeld(order)) return alert(`⛔ ${order.woNum} is ON HOLD — ${order.heldReason || 'no reason recorded'}.\n\nIt cannot be completed until management clears the hold.`);
-                // Outsourced-finish detection: the RTG flag OR any /MEP //EP //P25 code in the
-                // recipe (MEP added 2026-07-21 — Brimar bronze-patina family plates out too).
-                const toPlating = order.isOutsourced || /(MEP\d*|EP[1-6]|P25)\b/i.test(String(order.finishRecipe || ''));
+                // Outsourced finish: the RTG flag, else the ONE shared test (Shared/finishRouting —
+                // the recipe's resolved code, then the part ids). The two local regexes that used to
+                // live here were a second copy of the plater grammar (Brief C · C1, 2026-09-03).
+                const route = finishRouteOf({ finishRecipe: order.finishRecipe, partsList: order.cutList, stockErpId: shopItemCodeOf(order) || '' });
+                const toPlating = order.isOutsourced === true || route.outsourced;
                 const actionText = toPlating ? 'complete and send to OB PLATING (outgoing prep)' : 'complete and print Zebra label';
                 if (!window.confirm(`Mark ${order.woNum} ${actionText}?`)) return;
                 // Reminder only (doesn't block): in-house finish parts should be phosphated
@@ -1329,8 +1331,10 @@ const ShopFloor = () => {
                 printZebraLabel(order);
                 const finalStatus = toPlating ? 'Sent to Plating' : 'Completed';
                 await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: finalStatus, completedAt: serverTimestamp(), completedBy: user.name }));
-                // §5: custom fabrication is done from the finishing floor's perspective.
-                await mirrorCustomStatusToSibling(order, 'Complete');
+                // §5 / §5a: the sibling learns the TRUE state. A plated part is not complete — it is
+                // at the plater; the pack gate (customPartsReady) waits on it and D's receipt flips
+                // it to 'Complete'. Before B5 this said 'Complete' either way (audit P0 #3).
+                await mirrorCustomStatusToSibling(order, toPlating ? CUSTOM_FAB_STATUS.SENT_TO_PLATING : CUSTOM_FAB_STATUS.COMPLETE);
 
                 if (toPlating) {
                     // OUTGOING PREP → WMS PLATING (Stuart 2026-07-21): any custom item configured
@@ -1340,15 +1344,24 @@ const ShopFloor = () => {
                     // (undo → re-complete must not duplicate the demand card).
                     if (!order.platingDemandCreated) {
                         const finText = String(order.finishRecipe || '');
-                        const codeMatch = finText.match(/(MEP\d*|EP[1-6]|P25)/i);
-                        const finishCode = codeMatch ? codeMatch[1].toUpperCase() : 'EP';
-                        const baseErp = String(order.partNum || order.item || 'CUSTOM').toUpperCase();
+                        // The code the plater applies: the recipe's resolved code (shared scan), else
+                        // the item's own finish suffix — never a regex over free text here.
+                        const sfx = finishSuffixOf(shopItemCodeOf(order) || '');
+                        const finishCode = String(route.codes[0] || (sfx && route.outsourced ? sfx : '') || 'EP').toUpperCase();
+                        const baseErp = String(millBaseOf(shopItemCodeOf(order) || order.partNum || order.item || 'CUSTOM')).toUpperCase();
                         const demandId = `PLD-CUSTOM-${String(order.id).replace(/[^A-Za-z0-9-]/g, '')}`;
                         await setDoc(doc(db, "plating_demand", demandId), {
                             id: demandId, brandId: order.brand || 'ce', status: 'open', woNum: order.woNum || order.id,
                             baseItemId: null, baseErpId: baseErp, targetErpId: `${baseErp}/${finishCode}`,
                             finishCode, finishName: finText || finishCode, qty: Number(order.qty) || 1,
                             custom: true, source: 'custom-shop',
+                            // THE LOOP BACK TO THE ORDER (Brief C → D, 2026-09-03): the WMS pull copies
+                            // these onto the plating_shipments line; the build-back mirrors 'Complete'
+                            // onto finSiblingId so the pack gate opens only when the parts are back.
+                            finSiblingId: order.finSiblingId || null,
+                            orderKey: order.orderKey || null,
+                            salesOrderId: order.salesOrderId || null,
+                            shopOrderId: order.id,
                             note: `Custom fab complete — OUTGOING bin${order.cutLength ? ` · cut ${order.cutLength}"` : ''} · SO ${soNumOf(order)}`,
                             createdBy: user?.name || 'Shop', createdAt: Date.now()
                         }, { merge: true });
