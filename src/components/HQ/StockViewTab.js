@@ -11,7 +11,7 @@ import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifec
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { realPartOf, isAliasDoc } from '../Shared/aliasIdentity';
 import { woRefOf } from '../Shared/woRef';
-import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut } from '../Shared/poleCut';
+import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutPlanFromSource } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
@@ -2205,6 +2205,21 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // WOs dispatched straight to the shop, as before) and the custom sibling all come
                 // from Shared/workOrderCreate. The FLOW1/FLOW2 NetSuite anchors and the direct
                 // release below stay exactly as b531f53 built them — anchor policy NONE here.
+                // ── THE POLE CHOICE THE OPERATOR MADE (Q5 — Stuart 2026-09-02) ────────────────
+                // Short of the stocked length: they either chose a longer stick for the saw to cut
+                // down, or chose to wait for the length. Never a milling order for a pole.
+                let poleCut = null, backOrder = '';
+                if (job.poleChoice) {
+                    const pc = job.poleChoice;
+                    const opt = pc.chosen && pc.chosen !== 'BACKORDER' ? (pc.options || []).find(o => o.sourceErp === pc.chosen) : null;
+                    if (opt) {
+                        // Only the SHORTFALL is cut — whatever is already on the shelf is picked.
+                        poleCut = cutPlanFromSource({ targetErp: pc.pullErp, targetFt: pc.pullFt, sourceFt: opt.sourceFt, per: opt.per, scrapFt: opt.scrapFt, want: pc.short });
+                        if (!poleCut) addLog(`⚠ ${pc.pullErp}: could not build the cut from ${opt.sourceErp} — the order is created, raise the cut from WMS → Rod Cuts.`, 'warn');
+                    } else {
+                        backOrder = `${pc.short} × ${pc.pullErp} short (${pc.have} on hand of ${pc.need}) — waiting for the ${pc.pullFt} ft length`;
+                    }
+                }
                 let gate = {}, finPayload = null;
                 try {
                     const res = await parkWorkOrder({
@@ -2214,7 +2229,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         source: 'ORDER_ENTRY', precheck: { plan: job.plan, actions: makeup }, partsList: planLines,
                         inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17',
                         makeup: { dispatchShop: true, customerName: so.customer || '' }, soRef: so.soId || so.id,
-                        anchor: ANCHOR.NONE, woId,
+                        anchor: ANCHOR.NONE, woId, poleCut, backOrder,
                         sales: {
                             soAppId: so.id, soId: so.soId || so.id, customerId: so.customerId || null, customer: so.customer || '',
                             rawErp: erp, aliasErp: job.aliasNote ? job.lineErp : null, soAccepted: !!so.nsInternalId,
@@ -3972,6 +3987,37 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                     </div>
                                                 </div>
                                             ))}
+                                            {/* THE POLE CHOICE (Q5 — Stuart 2026-09-02): "check if stocked length pole
+                                                in stock? if so straight to floor, if not in stock check if suitable
+                                                length is … then make recommendation in pop up and operator decides to
+                                                either put order on back order and wait for 6ft stock to arrive, or go
+                                                ahead and cut 8ft down." A pole is never milled, so those are the two
+                                                answers — and waiting is the default. */}
+                                            {j.poleChoice && (
+                                                <div style={{ margin: '0 16px 12px', padding: '10px 12px', border: '1px dashed var(--brass)', background: 'var(--paper)' }}>
+                                                    <div style={{ ...mono9, color: 'var(--brass)', marginBottom: '6px' }}>
+                                                        ✂ {j.poleChoice.pullFt} FT POLE SHORT — {j.poleChoice.have} of {j.poleChoice.need} on hand · short {j.poleChoice.short}
+                                                    </div>
+                                                    <label style={{ display: 'block', fontSize: '0.84rem', color: 'var(--ink)', marginBottom: '4px', cursor: 'pointer' }}>
+                                                        <input type="radio" name={`pole-${j.key}`} checked={(j.poleChoice.chosen || 'BACKORDER') === 'BACKORDER'}
+                                                            onChange={() => patchJob(j.key, { poleChoice: { ...j.poleChoice, chosen: 'BACKORDER' } })} />
+                                                        {' '}<b>Back order</b> — wait for {j.poleChoice.pullErp} to arrive. The job is created and goes to the floor; its pick waits at the WMS.
+                                                    </label>
+                                                    {(j.poleChoice.options || []).map(o => (
+                                                        <label key={o.sourceErp} style={{ display: 'block', fontSize: '0.84rem', color: o.enough ? 'var(--ink)' : 'var(--ink-soft)', marginBottom: '4px', cursor: o.enough ? 'pointer' : 'not-allowed' }}>
+                                                            <input type="radio" name={`pole-${j.key}`} disabled={!o.enough} checked={j.poleChoice.chosen === o.sourceErp}
+                                                                onChange={() => patchJob(j.key, { poleChoice: { ...j.poleChoice, chosen: o.sourceErp } })} />
+                                                            {' '}<b>Cut {o.rodsNeeded} × {o.sourceErp}</b> ({o.sourceFt} ft → {o.label}) — {o.avail} on hand
+                                                            {o.enough ? '' : ` · not enough (${o.rodsNeeded} needed)`}
+                                                            {o.scrapFt ? ` · ${o.scrapFt} ft scrap per rod` : ''}
+                                                            {(o.alsoYields || []).length ? ` · also yields ${o.alsoYields.map(y => `${y.per} × ${y.ft} ft`).join(', ')} to stock` : ''}
+                                                        </label>
+                                                    ))}
+                                                    {!(j.poleChoice.options || []).some(o => o.enough) && (
+                                                        <div style={{ ...mono9, color: 'var(--ink-soft)', marginTop: '4px' }}>No longer length has the stock to cut from — back order is the only answer.</div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     );
                                 })}

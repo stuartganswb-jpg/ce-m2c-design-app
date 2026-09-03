@@ -53,6 +53,61 @@ export const CUT_OPTIONS = {
 };
 export const cutOptionsFor = (sourceFt) => CUT_OPTIONS[Number(sourceFt)] || [];
 
+// ── THE SAW, READ BACKWARDS (Brief A, Q5 — Stuart 2026-09-02) ──────────────────────────────────
+// "if order for a stocked length pole with small parts finish is entered, check if stocked length
+//  pole in stock? if so straight to floor, if not in stock check if suitable length is (order for
+//  6ft no 6ft in stock but 8ft is), then make recommendation in pop up and operator decides to
+//  either put order on back order and wait for 6ft stock to arrive, or go ahead and cut 8ft down."
+//
+// CUT_OPTIONS says what one stick becomes. This asks the same table the other way: which sticks
+// yield the length I am short of, and how many of that length come off each one. Derived from the
+// table rather than written out, so a change to what the saw can do can never be half-applied.
+// Ordered shortest source first — the least material spent on the piece we need.
+export const sourcesForLength = (targetFt) => {
+    const want = Number(targetFt);
+    const out = [];
+    Object.keys(CUT_OPTIONS).forEach(srcKey => {
+        const sourceFt = Number(srcKey);
+        if (!(sourceFt > want)) return;
+        (CUT_OPTIONS[srcKey] || []).forEach(opt => {
+            const hit = (opt.targets || []).find(t => Number(t.ft) === want);
+            if (!hit || !(Number(hit.per) > 0)) return;
+            out.push({
+                sourceFt, per: Number(hit.per), optionKey: opt.key, label: opt.label,
+                scrapFt: Number(opt.scrapFt) || 0,
+                // What ELSE the same cut produces — a 12 ft cut to 6+4 also yields a 4 ft, and the
+                // operator should see that before choosing it.
+                alsoYields: (opt.targets || []).filter(t => Number(t.ft) !== want).map(t => ({ ft: Number(t.ft), per: Number(t.per) || 0 })),
+            });
+        });
+    });
+    return out.sort((a, b) => a.sourceFt - b.sourceFt);
+};
+
+/**
+ * The cut plan for a source the OPERATOR chose (Q5), rather than the automatic 8 ft rule.
+ *
+ * Same shape poleCutPlan returns, so the work-order writer and the WMS Rod Cuts tab read one
+ * thing. `per` and `scrapFt` come from sourcesForLength — the saw's table, not the caller.
+ */
+export function cutPlanFromSource({ targetErp, targetFt, sourceFt, per, scrapFt = 0, want }) {
+    const raw = rawOf(targetErp);
+    const sourceItemId = targetCodeFor(raw, sourceFt);
+    const n = Math.max(0, Math.floor(Number(want) || 0));
+    const each = Math.max(1, Number(per) || 1);
+    if (!sourceItemId || !n) return null;
+    const sourceQty = Math.ceil(n / each);
+    const targetQty = sourceQty * each;
+    return {
+        sourceItemId, targetItemId: raw,
+        sourceQty, targetQty, wantQty: n,
+        overrun: targetQty - n,
+        cutTo: `${Number(targetFt)}FT`,
+        scrapFt: sourceQty * (Number(scrapFt) || 0),
+        lengthFt: Number(targetFt),
+    };
+}
+
 /**
  * The code for the same rod at a different length: HCUMP810 → 4 ft → HCUMP410.
  * A SUGGESTION ONLY (Stuart 2026-08-25: "we shouldn't have to limit it by pattern, you could always

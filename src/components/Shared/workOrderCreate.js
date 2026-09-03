@@ -77,6 +77,11 @@ export const parkWorkOrder = async ({
     // review's pull lines verbatim (Model B renames the self-pull to the raw code), `makeup` =
     // how component shop WOs dispatch (Order Entry sends them straight to the shop).
     code = '', sales = null, partsList: partsListOverride = null, makeup = {},
+    // A POLE IS CUT OR WAITED FOR, NEVER MILLED (Q5 — Stuart 2026-09-02). On a sales line the
+    // OPERATOR decides in the review: `poleCut` is the plan they chose (Shared/poleCut
+    // .cutPlanFromSource — which stick, how many rods), or `backOrder` is the reason they chose to
+    // wait for the length instead. A stock order still derives its own cut from the 8 ft rule.
+    poleCut = null, backOrder = '',
 }) => {
     const erp = String(code || erpOf(part) || '').toUpperCase();
     if (!erp || erp === 'PENDING') throw new ParkRefusal(REFUSAL.NO_PART, 'No item code on the part — sync or save it with an ERP id first.');
@@ -121,12 +126,14 @@ export const parkWorkOrder = async ({
 
     // 4. A STOCKED POLE IS CUT BEFORE IT IS FINISHED (Stuart 2026-08-19): a 4/6 ft order raises a
     //    cut from 8 ft rods and waits on it; the cut prints this order's finishing label.
-    // NOT on a sales line: Order Entry never raised a cut (b531f53) and whether a stocked-length
-    // pole ordered by a customer is cut here or by the shop pair is Stuart's call, not derived.
+    // A stock order derives its cut from the 8 ft rule; a SALES order carries the one the operator
+    // chose in the review (Q5) — which stick to cut down, or nothing when they chose to wait for
+    // the length. Either way the plan lands in the same rod_cut_orders doc and the same gate, so
+    // the saw and the WMS see one thing.
     let rodCut = null;
-    if (wantFinishing && !isSales) {
+    if (wantFinishing) {
         const ptype = String((part.manufacturingSpecs && part.manufacturingSpecs.productType) || part.productType || '');
-        const cut = poleCutPlan(erp, n, { productType: ptype });
+        const cut = isSales ? poleCut : poleCutPlan(erp, n, { productType: ptype });
         if (cut) {
             const idOf = nsIdOf || ((code) => {
                 const hit = inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(code).toUpperCase());
@@ -145,10 +152,15 @@ export const parkWorkOrder = async ({
     }
 
     // 5. THE DOCUMENT — one shape.
+    // WAITING FOR THE LENGTH (Q5): the work order is created and goes to the floor; its pick waits
+    // at the WMS until the stock lands — the same way a bought line waits for its PO. No new gate.
+    const backOrderStamp = backOrder ? { backOrdered: true, backOrderReason: String(backOrder), backOrderedAt: Date.now() } : {};
+    if (backOrder) made.push(`⏳ BACK ORDER — ${backOrder}. The job goes to the floor; its pick waits at the WMS until the stock arrives.`);
+
     const built = buildParkedWorkOrder({
         intent, woId: id, part, qty: n, brand, createdBy, reqDate, needBy, urgent, note,
         source, routeTo: route.routeTo, finish: route.finish,
-        partsList, bomExploded: !!(plan && plan.exploded), gate, replaces, forPlating, convertSuggestion,
+        partsList, bomExploded: !!(plan && plan.exploded), gate: { ...gate, ...backOrderStamp }, replaces, forPlating, convertSuggestion,
         tasks: wantFinishing ? makeFullTasks() : null, now: Date.now(),
         code: erp, sales,
     });

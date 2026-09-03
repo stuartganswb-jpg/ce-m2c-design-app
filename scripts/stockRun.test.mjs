@@ -12,6 +12,7 @@ import {
     ROUTE_FINISHING, ROUTE_SHOP, REFUSE_PHOSPHATE, REFUSE_OUTSOURCED,
 } from '../src/components/Shared/stockRun.js';
 import { tierOfErp, TIER } from '../src/components/Shared/finishRouting.js';
+import { sourcesForLength, cutPlanFromSource } from '../src/components/Shared/poleCut.js';
 
 const TASKS = { spinSetup: 'Pending' };   // stand-in for makeFullTasks(); the shape is the contract's
 const NOW = 1_700_000_000_000;
@@ -45,6 +46,35 @@ test('tier: raw / P / PLATE / FIN from the canonical vocabulary, one reader for 
     assert.equal(tierOfErp('H1-75DS/P25'), TIER.PLATE);
     assert.equal(tierOfErp('HCUMB410/BS'), TIER.FIN);
     assert.equal(tierOfErp('X/P01'), TIER.FIN);
+});
+
+test('the saw read backwards: which sticks yield a length, and the cut plan for the one chosen', () => {
+    // Eric's rules, verbatim (poleCut CUT_OPTIONS): 8 → two 4 ft or one 6 ft; 6 → one 4 ft;
+    // 12 → one 8 ft, or one 6 ft + one 4 ft. Read backwards, shortest source first.
+    assert.deepEqual(sourcesForLength(6).map(o => [o.sourceFt, o.per]), [[8, 1], [12, 1]]);
+    assert.deepEqual(sourcesForLength(4).map(o => [o.sourceFt, o.per]), [[6, 1], [8, 2], [12, 1]]);
+    assert.deepEqual(sourcesForLength(8).map(o => [o.sourceFt, o.per]), [[12, 1]]);
+    assert.deepEqual(sourcesForLength(12), []);           // nothing longer is stocked
+    // A 12 ft cut to 6+4 also leaves a 4 ft — the operator sees that before choosing it.
+    assert.deepEqual(sourcesForLength(6).find(o => o.sourceFt === 12).alsoYields, [{ ft: 4, per: 1 }]);
+
+    // Short 5 × 6 ft: one 6 ft per 8 ft stick → 5 sticks, no overrun, 2 ft scrap each.
+    const six = cutPlanFromSource({ targetErp: 'HCUMP610/N90', targetFt: 6, sourceFt: 8, per: 1, scrapFt: 2, want: 5 });
+    assert.equal(six.sourceItemId, 'HCUMP810');
+    assert.equal(six.targetItemId, 'HCUMP610');           // the RAW pull, not the finished variant
+    assert.equal(six.sourceQty, 5);
+    assert.equal(six.targetQty, 5);
+    assert.equal(six.overrun, 0);
+    assert.equal(six.scrapFt, 10);
+    assert.equal(six.cutTo, '6FT');
+    // Short 9 × 4 ft: two per 8 ft stick → 5 sticks, 10 pieces, one spare to stock.
+    const four = cutPlanFromSource({ targetErp: 'HCUMP410', targetFt: 4, sourceFt: 8, per: 2, scrapFt: 0, want: 9 });
+    assert.equal(four.sourceQty, 5);
+    assert.equal(four.targetQty, 10);
+    assert.equal(four.overrun, 1);
+    // A code with no length grammar cannot be cut, and neither can nothing.
+    assert.equal(cutPlanFromSource({ targetErp: 'HMLPXX/SG', targetFt: 6, sourceFt: 8, per: 1, want: 3 }), null);
+    assert.equal(cutPlanFromSource({ targetErp: 'HCUMP610', targetFt: 6, sourceFt: 8, per: 1, want: 0 }), null);
 });
 
 test('floor fields: a pole is racked (count, no sled size); a small part carries its size', () => {

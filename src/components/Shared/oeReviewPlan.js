@@ -32,6 +32,7 @@
 import { planFinishedRun, isAssemblyPart } from './finishedGoodsRun.js';
 import { millBaseOf } from './finishRouting.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
+import { isPoleCategory, poleLengthOf, sourcesForLength, targetCodeFor } from './poleCut.js';
 
 // ── AVAILABILITY WITH UNITS ────────────────────────────────────────────────────────────────────
 // One SuiteQL read: per-item available qty AND the item's stock unit label. BUILTIN.DF on the
@@ -145,6 +146,26 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         const lines = plan.exploded ? plan.lines : plan.lines.filter(l => String(l.legacyErpId || '').toUpperCase() !== plan.erp);
         return { ...j, finishedErp, plan: { ...plan, lines } };
     });
+    // ── A POLE IS CUT, NEVER MILLED (Brief A, Q5 — Stuart 2026-09-02) ──────────────────────────
+    // A stocked-length pole ordered with an applied or small-parts finish pulls a physical stick at
+    // that length. If the length is short, the answer is never a milling work order: either a
+    // LONGER stick is cut down, or the order waits for the length to arrive. Work out, per job,
+    // which stick the order needs and which longer sticks the saw could yield it from, so the one
+    // availability read below covers them too.
+    planned.forEach(p => {
+        const ptype = String(p.part?.manufacturingSpecs?.productType || p.part?.productType || '');
+        if (p.buy || p.plan.exploded || !isPoleCategory(ptype)) return;
+        // What the run actually pulls: the planner's single pull line when there is one (the /P
+        // core), else the raw code itself — which is what the floor synthesises from stockErpId.
+        const pullErp = String((p.plan.lines[0] && p.plan.lines[0].legacyErpId) || p.erp || '').toUpperCase();
+        const pullFt = poleLengthOf(pullErp);
+        if (!pullErp || !pullFt) return;                       // no length grammar → an ordinary pull
+        const options = sourcesForLength(pullFt)
+            .map(o => ({ ...o, sourceErp: targetCodeFor(pullErp, o.sourceFt) }))
+            .filter(o => o.sourceErp);
+        p.poleInfo = { pullErp, pullFt, options };
+    });
+
     const codes = new Set();
     planned.forEach(p => p.plan.lines.forEach(l => {
         const c = String(l.legacyErpId || '').toUpperCase();
@@ -153,6 +174,12 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         const mill = millBaseOf(c);
         if (/\/P$/.test(c) && mill !== c) codes.add(mill);
     }));
+    // The pole pull and every stick that could be cut into it — read in the same pull.
+    planned.forEach(p => {
+        if (!p.poleInfo) return;
+        codes.add(p.poleInfo.pullErp);
+        p.poleInfo.options.forEach(o => codes.add(String(o.sourceErp).toUpperCase()));
+    });
 
     let avail = {}, unitsKnown = true;
     if (codes.size) {
@@ -240,6 +267,40 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             components.push(comp);
         });
 
+        // ── THE POLE CHOICE (Q5) ───────────────────────────────────────────────────────────────
+        // Short of the length the order needs? Offer the sticks the saw can cut it from, each with
+        // live stock and the rods it would take, and let the operator decide: CUT one down, or BACK
+        // ORDER and wait for the length. Never a milling work order — so any SHOP action the
+        // sourcing router raised for this same pull is withdrawn here and said so out loud.
+        let poleChoice = null;
+        if (p.poleInfo) {
+            const { pullErp, pullFt, options } = p.poleInfo;
+            const comp = components.find(c => c.code === pullErp);
+            let need = p.qty, have = 0, short = 0;
+            if (comp) { need = comp.need; have = comp.have; short = comp.short; }
+            else {
+                have = Math.max(0, Number(remaining[pullErp]) || 0);
+                short = Math.max(0, need - have);
+                remaining[pullErp] = Math.max(0, (Number(remaining[pullErp]) || 0) - need);
+            }
+            if (short > 0) {
+                const withStock = options.map(o => {
+                    const srcHave = Math.max(0, Number(remaining[String(o.sourceErp).toUpperCase()]) || 0);
+                    const rodsNeeded = Math.ceil(short / o.per);
+                    return { ...o, avail: srcHave, rodsNeeded, enough: srcHave >= rodsNeeded };
+                });
+                // Default is the operator's safest answer: wait. A cut is a deliberate choice.
+                poleChoice = { pullErp, pullFt, need, have, short, options: withStock, chosen: 'BACKORDER' };
+                if (comp) {
+                    const withdrawn = (comp.actions || []).filter(a => a.kind === 'SHOP' || (a.kind === 'ASK' && a.chosen === 'SHOP'));
+                    if (withdrawn.length) {
+                        comp.actions = (comp.actions || []).filter(a => !withdrawn.includes(a));
+                        comp.poleNote = `a ${pullFt} ft pole is cut or waited for, never milled — see the pole choice below`;
+                    }
+                }
+            }
+        }
+
         if (p.buy) {
             // START-NOW OPTION (Stuart 2026-08-31): material on hand can begin finishing before
             // the PO lands — "a client may want some now". The review asks; default is 0 (wait).
@@ -267,7 +328,7 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
             ? { flow: 'FLOW1', baseAssemblyInternalId: String(basePart.netSuiteInternalId), baseErp: String(p.erp).toUpperCase(), note: `Top-level NetSuite work order opens on the BASE assembly ${String(p.erp).toUpperCase()} ×${p.qty} (the /${p.finish} variant is app-only) — the final assembly build posts against it and consumes the components. The SO carries the finish.` }
             : { flow: 'FLOW1', note: `No NetSuite assembly for ${p.finishedErp} (or its base) — the SALES ORDER is the NetSuite record; the /P convert work orders are the anchors.` };
 
-        return { ...p, components, holds, nsPlan };
+        return { ...p, components, holds, nsPlan, poleChoice };
     });
 
     return { jobs: out, nsError: null, unitsKnown };
