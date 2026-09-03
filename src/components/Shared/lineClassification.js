@@ -1,4 +1,4 @@
-import { findClientPriceRow } from './clientPricing';
+import { findClientPriceRow } from './clientPricing.js';
 
 // Single source of truth for splitting a CPQ order line into the two
 // production divisions: 'small' (-> Finishing Floor) vs 'custom' (-> Shop Floor).

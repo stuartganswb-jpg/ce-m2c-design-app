@@ -35,7 +35,7 @@
 // never a local regex for "is this outsourced" (that test lives in Shared/finishRouting and the
 // hq_outsource_finishes list; this module only CALLS it).
 
-import { isOutsourcedFinishCode, isAppliedFinishCode } from './finishRouting';
+import { isOutsourcedFinishCode, isAppliedFinishCode, isWoodStainCode } from './finishRouting.js';
 
 const str = (v) => String(v == null ? '' : v).trim();
 const up = (v) => str(v).toUpperCase();
@@ -143,13 +143,23 @@ export function resolveJobRecipe(job, finishes = []) {
 export const LEAD_WEEKS = {
     PAINT:  { std: 4, rush: 2 },   // in-house applied paint: P, P01…P24
     PLATED: { std: 6, rush: 4 },   // outsourced: EP1…EP6, MEP*, P25
+    // ── WOOD STAIN IS ITS OWN CLASS (Stuart 2026-09-03: "for wood 4 weeks is lead time") ──────
+    // Same four weeks as paint, but NOT the same word: telling a customer their stained oak is
+    // "painted" is wrong on the one document they read. Keyed off isWoodStainCode, which
+    // Shared/finishRouting deliberately keeps OUT of isAppliedFinishCode so that naming a lead
+    // class here cannot move a part between the shop and the finishing floor (Brief A, ea04009 —
+    // wood ROUTES by the line: wood + miter → Custom via the per-line override, wood + straight →
+    // finishing). Lead time and routing are two questions; this file answers only the first.
+    STAIN:  { std: 4, rush: 2 },   // wood stain: S01…S12
 };
 
 /** The finish class the order's lead time follows: 'PLATED' beats 'PAINT'; null = no promise. */
 export const leadBasisOf = (codes = []) => {
     const cs = (codes || []).filter(Boolean).map(up);
+    // Longest promise first: a mixed order is only as quick as its slowest finish.
     if (cs.some(isOutsourcedFinishCode)) return 'PLATED';
     if (cs.some(c => isAppliedFinishCode(c))) return 'PAINT';
+    if (cs.some(isWoodStainCode)) return 'STAIN';
     return null;
 };
 
@@ -175,9 +185,10 @@ export const isRushFeeItem = (part) => {
 };
 
 /** Words for the checkout panel and the documents. */
+const LEAD_WORDS = { PLATED: 'plated finish', PAINT: 'painted finish', STAIN: 'stained finish' };
 export const leadText = ({ leadBasis, leadWeeks, readyDate, rushApplied }) => {
-    if (!leadBasis) return 'No ready-date promise — nothing on this order carries an applied (painted or plated) finish.';
-    const cls = leadBasis === 'PLATED' ? 'plated finish' : 'painted finish';
+    if (!leadBasis) return 'No ready-date promise — nothing on this order carries an applied (painted, plated or stained) finish.';
+    const cls = LEAD_WORDS[leadBasis] || 'applied finish';
     const alt = rushApplied ? '' : ` — add the Rush fee at checkout to shorten to ${LEAD_WEEKS[leadBasis].rush} weeks`;
     return `Ready ${readyDate} (${leadWeeks} weeks, ${cls}${rushApplied ? ', rush' : ''})${alt}.`;
 };
