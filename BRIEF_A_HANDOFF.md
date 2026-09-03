@@ -266,6 +266,70 @@ add it.)
    bare literals at `RTGDispatchTab :273/:275` with `PO_STATUS` - same values today, free to drift
    tomorrow.
 
+## 3i. NEW REQUIREMENT — stocked EP routing + the Backorder window (Stuart, 2026-09-03, relayed)
+
+*"EP finishes since they are outsourced we often have them in stock, so the proper address is to
+first check stock at time of push from RTG (once it becomes a firm sales order) if the items are in
+stock it is routed right to wms pick. if the items are not in stock it needs to be routed to stock
+view 12.5 we need to add a new window of Backorder items on the sales snapshot that filters to show
+any backordered items that do not yet have work orders or purchase orders to cover the needed qty."*
+
+**It corrects an assumption A3 shipped.** `routeForCode` refuses an EP/MEP/P25 code as a work order
+and Order Entry's outsourced branch diverts every such line to a plating demand, unconditionally.
+That is right for REPLENISHMENT (short of plated stock at the Snapshot) and WRONG for a SALES line:
+a stocked EP item goes straight to WMS pick. Two different moments; A3 conflated them. The fix is a
+condition at the sales moment, not a change to `routeForCode`.
+
+**Which reader** (settled with D): `Shared/oeReviewPlan.fetchAvailabilityUnits` — Item ⋈
+AggregateItemLocation, `quantityavailable` + `quantityonorder` + the stock UNIT, with a plain-query
+fallback. It answers *how many can I promise*. D's `fetchLiveBins` (InventoryBalance ⋈ Bin) answers
+*which bin holds them* — the pick's question, after the decision. Unit-awareness settles it on its
+own: HTAEC35 counts in PAIRS and comparing eaches to pairs is the phantom-168 bug. **Do not write a
+third stock reader.**
+
+**Observe, do not reserve** (agreed with D; still Stuart's to confirm). `quantityavailable` is
+on-hand MINUS committed, and a posted SO commits its lines, so SO #2 does not see SO #1's stock. Run
+the check strictly AFTER the order has its `nsInternalId` — RTG's auto-split already waits for it
+(`!o.appCreated || o.nsInternalId`). An app-side reservation would be a fourth source of truth about
+committed stock. The short path already exists if an observation goes stale
+(`PickPackApp.routeShortToPlating`).
+
+**THE WINDOW HAS THREE BUCKETS, NOT ONE LIST.** "In stock or not" is not two-state:
+
+1. **Uncovered demand** — actionable here, raise the WO or PO. Only a genuine zero qualifies.
+2. **Cannot be answered** — `Shared/pickOrder.isDataProblem(state)`: `UNKNOWN_LIBRARY` /
+   `NO_NETSUITE_LINK` / `NO_STOCK_RECORD`. Actionable by someone else (fix the item), shown by NAME
+   not quantity. **Must be visibly separate**: the window's filter is "not covered by a WO or PO", so
+   a data fault can never leave it and would read as permanent backlog — the Sandra/HCUSR1-EA bug,
+   chasing a stray record as a shortage no amount of making rings could fix.
+3. **On the shelf but committed elsewhere** (D's counter-case, found live tonight): available nets
+   committed, so a STALE OPEN SO permanently depresses it. Two Fabricut Order Entry orders from
+   **2026-08-14** — `QS-1786738589252` (23 pcs traverse components) and `QS-1786734991717` (**0 pcs,
+   an empty save**) — are still status `Pending`, which is what the outbox writeBack stamps when
+   NetSuite ACCEPTS. So they are real open NetSuite sales orders committing stock for three weeks.
+   Under the new rule that makes genuinely stocked items read unavailable and land in this window as
+   demand nothing covers, when the truth is an order nobody closed.
+   → **the reader must also return `quantityonhand`**, so "0 available but 5 on hand" is
+   distinguishable from "0 available and 0 on hand" and can say *committed to SO … since 14 Aug*.
+   The honest fix is upstream: close or ship those orders. **Raised to Stuart as its own item**; the
+   0-pcs one is an empty order that arguably should never have posted.
+
+**Partial coverage is a QUANTITY, not a state:** needed − (on-hand + open WO qty + PO qty **not yet
+received**). For a PO the covering figure is `quantity − received`, so a PO for 5 that returned 4
+with 1 scrapped leaves 1 uncovered and must reappear — reading header status instead would hide the
+scrapped piece forever (D's catch; `receivedQty`/`scrapQty` are per line since their receiving work).
+
+**One shared covering function** for this window AND A5's Stock Build Needs board — same shape, same
+traps, and two subtly different versions is how tonight's whole class of bug starts.
+
+**A known fault of mine that must NOT be inherited.** `finishedGoodsRun.stockCheckReport` computes
+`have = known ? avail : 0`, so a code with no NetSuite row is treated as a genuine zero and
+`planMakeupActions` will plan a SHOP WO or BUY_NOTE for it. It is mitigated, not silent — the row
+carries `known:false`, renders "(no NetSuite stock row)", and every caller sits behind the review
+gate where a person approves it. The Backorder window has **no such gate**, so it must classify with
+`codeHealth` instead. Fixing `stockCheckReport` to stop calling unknown a zero is a behaviour change
+to a gated path → goes to Stuart as a proposal, never a silent tidy.
+
 ## 4. Blocked / waiting on others
 
 - Writer 7 on B's B1 (`buildFinDoc`). B will send the hash.
