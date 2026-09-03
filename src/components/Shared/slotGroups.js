@@ -15,13 +15,12 @@
 
 const U = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
-/** `CLUSTER-<slotId>-<ts>` → slotId, or null. A hand-made `CLUSTER-<ts>` and a 2D region
- *  `CLUSTER-<ts>-<i>` never match: the middle segment must not be all digits and the tail must be a
- *  millisecond timestamp. */
+/** `CLUSTER-<slotId>-<ts>` → slotId, or null. A hand-made `CLUSTER-<ts>` (no middle segment) and
+ *  a 2D region `CLUSTER-<ts>-<i>` (a small index, not a millisecond timestamp) never match — the
+ *  tail alone decides; a mutation test showed an extra all-digits guard was unreachable. */
 export function slotIdFromClusterId(id) {
     const m = String(id || '').match(/^CLUSTER-(.+)-(\d{10,})$/);
-    if (!m || /^\d+$/.test(m[1])) return null;
-    return m[1];
+    return m ? m[1] : null;
 }
 
 /** `S<n><MINT>-<PRETTY>` or `S<n>-<NAME>` → { order, label }, or null. */
