@@ -419,9 +419,62 @@ const AppWorkGuide = () => (
     </div>
 );
 
+// Shop Floor: the custom card's lifecycle, the plating hand-off, the milling pipeline and what
+// each step tells RTG. (Brief C, 2026-09-02)
+const ShopFloorGuide = () => (
+    <div>
+        <h2 style={S.h2}>The idea in one minute</h2>
+        <p style={S.p}>The shop <b>receives</b> work; it never decides where work goes. RTG sends every job to the shop
+        already labelled: a customer's made-to-order piece lands on <b>Custom</b>, a stock milling run lands on
+        <b> Milling</b>. If a job shows up on the wrong tab, that is an upstream problem to report — not something to
+        work around on the floor. Everything the shop does is reported back to RTG, which is where management sees
+        status and closes orders.</p>
+        <div style={{ overflowX: 'auto' }}>
+            <table style={S.table}>
+                <thead><tr><th style={S.th}>You want to…</th><th style={S.th}>Go to</th></tr></thead>
+                <tbody>
+                    <tr><td style={S.td}>Work a customer's custom piece (bent pole, cut-to-length, applied finish)</td><td style={S.td}><b>Shop Floor → Custom</b></td></tr>
+                    <tr><td style={S.td}>Accept a stock milling run and get it onto a machine</td><td style={S.td}><b>Shop Floor → Milling</b>, then <b>Scheduler</b></td></tr>
+                    <tr><td style={S.td}>Run the op, log the count, pass or fail the run</td><td style={S.td}><b>Shop Floor → Floor</b> (the machine cards)</td></tr>
+                    <tr><td style={S.td}>Pick the rod to cut from</td><td style={S.td}>The <b>✂ Rod Pieces</b> panel on the active custom card — see the Rod Pieces section</td></tr>
+                    <tr><td style={S.td}>Find out where the rest of an order is</td><td style={S.td}><b>Where is it?</b> in the shop header, or the "Rest of this order" chips on the card</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h2 style={S.h2}>The custom card <span style={S.tabno}>(Shop Floor → Custom)</span></h2>
+        <Screen title="Staged → Active → Complete & Label" tag="one card, one job, every tablet in step">
+            <Path name="Staged" goes="the left column">New orders wait on the left with the item, quantity, cut length and the customer. Review the item (🔍), the SOP or the drawing before you start.</Path>
+            <Path name="▶ Start" goes="the small parts release to the warehouse pick at this moment">Moves the job to the active side for every tablet at once. Starting is also the signal the rest of the order waits for: the finishing floor is told the custom half is under way, and the warehouse begins picking the small parts so both halves meet at staging.</Path>
+            <Path name="The work">Cut sheets, bend/miter/splice instructions, hanger positions and Vision notes are on the card. A multi-line order gets a checkbox per configuration; an in-house finish gets a <b>phosphate</b> reminder — the parts go to the adjacent station before finishing and you check them off here. These are reminders, not locks.</Path>
+            <Path name="No cut list?">An order entered from Order Entry has no geometry, so the card carries a <b>Shop Instruction</b> instead — the standing note for that item (for example "pull from stock, phosphate, hand to finishing"). The note lives on the item in the Master Library and 4.5, so it is the same every time that item is ordered. A card with neither means nobody has written the item's note yet — ask HQ to add it.</Path>
+            <Path name="Complete & Label" goes="the label prints; the rest of the order is told">Prints the completion label and tells the finishing floor and the warehouse the custom parts are done, so the order can be staged and packed. The <b>↩ undo</b> strip below the cards puts a job back into production if Complete was pressed by mistake.</Path>
+            <Path name="Send to Plating" goes="the OB PLATING bin, then the weekly plater shipment">A piece with an outsourced finish (plated, bronze patina) does not go to the finishing floor at all. Completing it prints the label and sends you to the <b>OB PLATING</b> bin; the warehouse's Plating tab picks it up from there for the weekly plater run. <b>Until the "at the plater" status lands (in progress with RTG),</b> the rest of the order reads the custom parts as complete the moment they leave for the plater — so a plated order is never packed before its parts are back; the receipt will flip that status automatically once it is live.</Path>
+        </Screen>
+        <div style={S.note}><b>Holds and urgency.</b> A held order shows a red banner and refuses Start and Complete until management clears the hold in HQ. An urgent order shows a brass banner with the need-by date — acknowledge it so HQ knows the floor has seen it.</div>
+
+        <h2 style={S.h2}>Milling <span style={S.tabno}>(Shop Floor → Milling → Scheduler → Floor)</span></h2>
+        <Screen title="From RTG to the machine" tag="the order is never deleted, only moved along">
+            <Path name="1 · Accept">Pick the stock run from the RTG dispatch list, check the part has a routing, accept it into the machine backlog. The original order stays on file and is marked "In Milling" — HQ can still find, hold or close it at every step.</Path>
+            <Path name="2 · Schedule">Push it to the scheduler queue; it becomes one task per operation, in routing order.</Path>
+            <Path name="3 · Run and finalize">On the machine card: setup, first-part check, run, then log good and scrap and finalize the op as GOOD or FAILED. Good pieces spawn the next op automatically.</Path>
+            <Path name="What RTG sees" goes="the milling run reports, RTG records">When the last op finalizes GOOD, RTG's record of that work order shows <b>built / scrap</b> and the time — and any order waiting on this component releases itself. A FAILED op, or an op with no good pieces, marks the order <b>Failed</b> on RTG with the reason you gave, so a stuck order says why from the board and from Where-is-it. The NetSuite build for a milled item is posted from RTG, not from the shop.</Path>
+        </Screen>
+
+        <h2 style={S.h2}>Edges to know</h2>
+        <ul style={{ paddingLeft: '4px', listStyle: 'none' }}>
+            <li style={S.edge}>• <b>Start is the release.</b> The warehouse pick for the small parts opens when you press Start — an order left staged keeps its small parts waiting too.</li>
+            <li style={S.edge}>• <b>An order with no small parts tells finishing nothing.</b> A job that is custom-only (or entirely plated) has no other half; Start and Complete talk to the warehouse only.</li>
+            <li style={S.edge}>• <b>A zero-good op stops the order,</b> it does not complete it. Log the failure reason — RTG shows it, and management re-issues from there.</li>
+            <li style={S.edge}>• <b>Wrong tab? Don't work around it.</b> A custom job on Milling or a stock run on Custom is a dispatch error upstream; report it rather than accepting it into the wrong pipeline.</li>
+        </ul>
+    </div>
+);
+
 const SECTIONS = [
     { key: 'WO', label: 'Work Orders', comp: WorkOrdersGuide },
     { key: 'OC', label: 'Orders & Customers', comp: OrdersCustomersGuide },
+    { key: 'SF', label: 'Shop Floor', comp: ShopFloorGuide },
     { key: 'RP', label: 'Rod Pieces', comp: RodPiecesGuide },
     { key: 'APP', label: 'Working on the App', comp: AppWorkGuide },
 ];
