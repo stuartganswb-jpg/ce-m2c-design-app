@@ -31,6 +31,31 @@ export function parsePrefix(nodeName) {
 }
 
 /**
+ * ONE cluster's slot identity — the same words on every screen (Stuart 2026-09-03: "i need to
+ * see the slot id's on this screen and then enter those same slot ids on 1.5 and see them glow").
+ * @returns {{order:(number|null), slotId:string, label:string, source:'stamp'|'id'|'prefix'|'none'}}
+ *          `slotId` is the 1.6 slot id when known (short_rod, slot_1786739405484…), else the S<n>
+ *          prefix itself, else '' — it is the string a person types into the other screen's filter.
+ */
+export function slotIdentityOf(cl) {
+    const pfx = parsePrefix(cl && cl.nodes && cl.nodes[0]);
+    if (cl && cl.slotOrder != null && Number.isFinite(Number(cl.slotOrder))) {
+        return { order: Number(cl.slotOrder), slotId: String(cl.slotId || ''), label: cl.slotLabel || cl.name || '', source: 'stamp' };
+    }
+    const sid = slotIdFromClusterId(cl && cl.id);
+    if (sid) return { order: pfx ? pfx.order : null, slotId: sid, label: (cl && cl.name) || (pfx && pfx.label) || '', source: 'id' };
+    if (pfx) return { order: pfx.order, slotId: String(cl.nodes[0]), label: (cl && cl.name) || pfx.label, source: 'prefix' };
+    return { order: null, slotId: '', label: (cl && cl.name) || '', source: 'none' };
+}
+
+/** `#3 · short_rod` — the chip text both screens print; '' when nothing is known. */
+export function slotChipText(cl) {
+    const t = slotIdentityOf(cl);
+    if (t.source === 'none') return '';
+    return `${t.order != null ? `#${t.order}` : '#?'}${t.slotId ? ` · ${t.slotId}` : ''}`;
+}
+
+/**
  * Group an assembly's nodeClusters by the 1.6 slot each was loaded from.
  * @returns {Array<{key, order:(number|null), label, source:'stamp'|'id'|'prefix'|'ungrouped', clusters:Array}>}
  *          sorted by load order (unknown order last, then by label); UNGROUPED always last.
@@ -42,6 +67,7 @@ export function slotGroupsOf(clusters = []) {
         // A later, more confident read of the same slot upgrades what an earlier one left blank.
         if (g.order == null && seed.order != null) g.order = seed.order;
         if (!g.label && seed.label) g.label = seed.label;
+        if (!g.slotId && seed.slotId) g.slotId = seed.slotId;
         g.clusters.push(cl);
         groups.set(key, g);
     };
@@ -49,19 +75,19 @@ export function slotGroupsOf(clusters = []) {
         if (!cl) continue;
         const pfx = parsePrefix(cl.nodes && cl.nodes[0]);
         if (cl.slotOrder != null && Number.isFinite(Number(cl.slotOrder))) {
-            put(`slot:${U(cl.slotId) || Number(cl.slotOrder)}`, { order: Number(cl.slotOrder), label: cl.slotLabel || cl.name || '', source: 'stamp' }, cl);
+            put(`slot:${U(cl.slotId) || Number(cl.slotOrder)}`, { order: Number(cl.slotOrder), slotId: String(cl.slotId || ''), label: cl.slotLabel || cl.name || '', source: 'stamp' }, cl);
             continue;
         }
         const sid = slotIdFromClusterId(cl.id);
         if (sid) {
-            put(`slot:${U(sid)}`, { order: pfx ? pfx.order : null, label: cl.name || (pfx && pfx.label) || '', source: 'id' }, cl);
+            put(`slot:${U(sid)}`, { order: pfx ? pfx.order : null, slotId: sid, label: cl.name || (pfx && pfx.label) || '', source: 'id' }, cl);
             continue;
         }
         if (pfx) {
-            put(`pfx:${pfx.order}:${pfx.label}`, { order: pfx.order, label: cl.name || pfx.label, source: 'prefix' }, cl);
+            put(`pfx:${pfx.order}:${pfx.label}`, { order: pfx.order, slotId: String(cl.nodes[0]), label: cl.name || pfx.label, source: 'prefix' }, cl);
             continue;
         }
-        put('ungrouped', { order: null, label: 'Ungrouped', source: 'ungrouped' }, cl);
+        put('ungrouped', { order: null, slotId: '', label: 'Ungrouped', source: 'ungrouped' }, cl);
     }
     const out = [...groups.values()];
     out.sort((a, b) => {

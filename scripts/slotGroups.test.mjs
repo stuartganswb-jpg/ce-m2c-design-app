@@ -4,7 +4,7 @@
 // (`sh scripts/run-traverse-tests.sh` does).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { slotGroupsOf, slotIdFromClusterId, parsePrefix, nodesOfGroup, slotGaps } from '../src/components/Shared/slotGroups.js';
+import { slotGroupsOf, slotIdFromClusterId, parsePrefix, nodesOfGroup, slotGaps, slotIdentityOf, slotChipText } from '../src/components/Shared/slotGroups.js';
 
 const built = (slotId, n, pretty, extra = {}) => ({
     id: `CLUSTER-${slotId}-${1756900000000 + n}`,
@@ -67,4 +67,15 @@ test('gaps name what the designer still has to tag, at the cluster level', () =>
     ]);
     assert.deepEqual(slotGaps(g[0]), ['1 without a category', '1 without a position']);
     assert.deepEqual(slotGaps(slotGroupsOf([built('ok', 0, 'OK')])[0]), []);
+});
+
+test('one cluster prints the SAME chip on 1.6 and 1.5 — #n · slot id, or the prefix when the id is lost', () => {
+    assert.equal(slotChipText(built('short_rod', 3, 'SHORT-ROD')), '#3 · short_rod');
+    assert.equal(slotChipText({ id: 'CLUSTER-carriers-1756900000999', name: 'CARRIERS', nodes: ['S9ZZZZZ-CARRIERS'], slotId: 'carriers', slotLabel: 'Carriers', slotOrder: 2 }), '#2 · carriers');
+    assert.equal(slotChipText({ id: 'CLUSTER-1756900000500', name: 'LEFT BRACKET', nodes: ['S4-LEFTBRACKET'] }), '#4 · S4-LEFTBRACKET');
+    assert.equal(slotChipText({ id: 'CLUSTER-1756900000500', name: 'HAND MADE', nodes: ['Mesh_12'] }), '');
+    // two NEW-SLOT sections with the same pretty name are told apart by the slot id
+    const a = slotIdentityOf(built('slot_1786739405484', 6, 'NEW-SLOT')), b = slotIdentityOf(built('slot_1786739406248', 7, 'NEW-SLOT'));
+    assert.notEqual(a.slotId, b.slotId);
+    assert.equal(slotGroupsOf([built('slot_1786739405484', 6, 'NEW-SLOT')])[0].slotId, 'slot_1786739405484');
 });

@@ -385,6 +385,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const [locatingSlotKey, setLocatingSlotKey] = useState(null);
     const [hoveredSlotKey, setHoveredSlotKey] = useState(null);
     const [openSlots, setOpenSlots] = useState(() => new Set());
+    const [slotFilter, setSlotFilter] = useState('');   // type a slot id / #n / label here → those slots glow
 
     // --- AUTO-GROUP STATE ---
     const [cadComponents, setCadComponents] = useState([]); // raw top-level subassemblies from the model
@@ -651,6 +652,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
     const slotNodesOf = (key) => nodesOfGroup(slotGroups.find(g => g.key === key));
     const hoveredSlotNodes = hoveredSlotKey ? slotNodesOf(hoveredSlotKey) : [];
     const locatingSlotNodes = locatingSlotKey ? slotNodesOf(locatingSlotKey) : [];
+    // TYPE THE SLOT ID, SEE IT GLOW (Stuart 2026-09-03): the same "#n · slot id" chip 1.6 prints on
+    // a Load Choices section is typed here; every slot whose chip, id or label contains it lights up.
+    const slotQ = String(slotFilter || '').trim().toUpperCase();
+    const slotMatches = slotQ ? slotGroups.filter(g => `#${g.order} ${g.slotId} ${g.label}`.toUpperCase().includes(slotQ)) : slotGroups;
+    const filteredSlotNodes = slotQ ? slotMatches.flatMap(g => nodesOfGroup(g)) : [];
 
     // Normalized lookup of library components for fast name / ERP matching.
     const libraryIndex = useMemo(() => libraryParts.map(part => {
@@ -1137,7 +1143,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                         onMeshClick={handleMeshClick}
                                         onLoaded={setSceneGraph}
                                         onComponents={setCadComponents}
-                                        locatingNodes={(showAutoPanel && glowNodes.length) ? glowNodes : (hoveredClusterNodes.length ? hoveredClusterNodes : (hoveredSlotNodes.length ? hoveredSlotNodes : (locatingNodes.length ? locatingNodes : locatingSlotNodes)))}
+                                        locatingNodes={(showAutoPanel && glowNodes.length) ? glowNodes : (hoveredClusterNodes.length ? hoveredClusterNodes : (hoveredSlotNodes.length ? hoveredSlotNodes : (locatingNodes.length ? locatingNodes : (locatingSlotNodes.length ? locatingSlotNodes : filteredSlotNodes))))}
                                         colorGroups={showAutoPanel && showGroupColors && !glowNodes.length ? colorGroups : []}
                                         onHoverMesh={showAutoPanel ? handleAutoMeshHover : undefined}
                                     />
@@ -1201,9 +1207,11 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                     <h3 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Slots ({slotGroups.filter(g => g.source !== 'ungrouped').length})</h3>
                                     {locatingSlotKey && <button onClick={() => setLocatingSlotKey(null)} style={{ background: '#fff', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer' }}>clear locate</button>}
                                 </div>
-                                <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginBottom: '14px', lineHeight: 1.4 }}>The slots 1.6 loaded, in load order — the number is the S&lt;n&gt; on every node name. Hover a slot to glow everything it loaded; Locate keeps it lit; ▸ lists its clusters.</div>
+                                <div style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-soft)', marginBottom: '10px', lineHeight: 1.4 }}>The slots 1.6 loaded, in load order — the number is the S&lt;n&gt; on every node name. Hover a slot to glow everything it loaded; Locate keeps it lit; ▸ lists its clusters.</div>
+                                <input value={slotFilter} onChange={e => setSlotFilter(e.target.value)} placeholder="Type a slot id, #n or label from 1.6 Load Choices — matching slots glow" title="The same chip 1.6 prints on each Load Choices section (#3 · short_rod). Type any part of it: the slots that match are listed and lit in the model." style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: `1px solid ${slotQ ? 'var(--brass)' : 'var(--line)'}`, outline: 'none', fontFamily: 'var(--mono)', fontSize: '11px', marginBottom: '12px' }} />
+                                {slotQ && !slotMatches.length && <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#b00020', marginBottom: '10px' }}>No slot matches "{slotFilter}" — nothing lit.</div>}
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    {slotGroups.map(g => {
+                                    {slotMatches.map(g => {
                                         const on = locatingSlotKey === g.key;
                                         const isUn = g.source === 'ungrouped';
                                         const open = openSlots.has(g.key);
@@ -1214,7 +1222,7 @@ const NodeClusterTab = ({ currentUser, activeBrand }) => {
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
                                                 <button onClick={() => setOpenSlots(prev => { const n = new Set(prev); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); return n; })} title={open ? 'Collapse' : 'List this slot\'s clusters'} style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink-soft)', cursor: 'pointer', fontSize: '10px', padding: '2px 6px', borderRadius: '2px', flexShrink: 0 }}>{open ? '▾' : '▸'}</button>
                                                 <span title={isUn ? 'No 1.6 slot claims these clusters' : `Load order #${g.order} — read from ${g.source === 'stamp' ? 'the cluster record' : g.source === 'id' ? 'the cluster id' : 'the S<n> node prefix'}`} style={{ fontFamily: 'var(--mono)', fontSize: '10px', fontWeight: 600, minWidth: '34px', textAlign: 'center', padding: '3px 6px', border: `1px solid ${isUn ? 'var(--line)' : 'var(--brass)'}`, background: isUn ? '#fff' : 'var(--brass)', color: isUn ? 'var(--ink-soft)' : '#fff', flexShrink: 0 }}>{isUn ? '—' : (g.order != null ? `#${g.order}` : '?')}</span>
-                                                <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}</span>
+                                                <span style={{ fontWeight: 500, color: 'var(--ink)', fontSize: '0.95rem', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.label}{g.slotId && <span title="The slot id — 1.6 prints the same one on this section's Load Choices heading" style={{ fontFamily: 'var(--mono)', fontSize: '9px', fontWeight: 400, color: 'var(--brass)', marginLeft: '8px' }}>{g.slotId}</span>}</span>
                                                 <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>{g.clusters.length} cluster{g.clusters.length === 1 ? '' : 's'} · {nodesOfGroup(g).length}n</span>
                                                 {gaps.length > 0 && <span title={gaps.join(' · ')} style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#b00020', whiteSpace: 'nowrap' }}>⚠ {gaps.join(' · ')}</span>}
                                                 {!isUn && <button onClick={() => setLocatingSlotKey(on ? null : g.key)} title="Light up every cluster this slot loaded, fade the rest" style={{ background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink)', border: '1px solid var(--brass)', padding: '6px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', cursor: 'pointer', flexShrink: 0 }}>{on ? '◉ Locating' : 'Locate'}</button>}

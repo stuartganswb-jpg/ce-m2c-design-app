@@ -14,6 +14,7 @@ import { analyzeFusionFbx, buildGlbFromAnalysis, UNIT_CHOICES } from '../Shared/
 import { isolateCluster, snapshotPNG } from '../Shared/componentExport';
 import { downloadItemStarterTemplate, parseItemStarterWorkbook } from '../Shared/itemStarterXlsx';
 import { TAG_CATEGORIES, TAG_LOCATIONS, END_TREATMENTS, normalizeLocation, normalizePosition, normalizeCategory, suggestTagsFromName } from '../Shared/assemblyTags';
+import { slotIdentityOf, slotChipText } from '../Shared/slotGroups';
 import { sheet2dChoiceNode } from '../Shared/sheet2d';
 import { planTagImport, applyTagPlan, slotsFromSheet, matchSlotFiles, planSinglesFill, applySinglesFill, parseTagRows, fillReturnFees } from '../Shared/tagSheetImport';
 
@@ -1544,7 +1545,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                         }
                         return { nodeName: pin.choiceNode, label: pin.partName || '', itemNo, imgUrl: pin.imageUrl || '', endTreatment: '', isFee: !!pin.isFee, isHidden: !!pin.isHiddenPart && !pin.parked, parked: !!pin.parked, isBasic: false, usesReturnPlates: false, isReturnArm: false, returnOnly: false, inlineOnly: false, isCollar: false, requiresCollar: '', projInches: '', mountType: '', catOverride: '', custIds: pin.customerIds || [], custNames: pin.customerNames || [], traverseRole: '', driveType: '', trvSetup: '', tier: '', alwaysShown: !!pin.alwaysShown, note: pin.designerNote || '', thumb: '' };
                     });
-                    return { clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(), found: true, is2d: true, choices };
+                    return { clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(), found: true, is2d: true, slot: slotIdentityOf(cl), slotChip: slotChipText(cl), choices };
                 });
                 assignSceneRef.current = null;
                 setAssignModelInfo({ docId: assignId, itemId: data.itemId || assignId, cadFile: '2D tear sheet (no .glb)' });
@@ -1659,6 +1660,8 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                 choices.sort((a, b) => (pinByNode[a.nodeName]?.choiceSort ?? 1e9) - (pinByNode[b.nodeName]?.choiceSort ?? 1e9));
                 return {
                     clusterId: cl.id, clusterName: cl.name, category: (cl.category || '').toUpperCase(), position: (cl.position || '').toUpperCase(),
+                    // THE SLOT THIS SECTION CAME FROM (Stuart 2026-09-03) — the same chip 1.5 prints.
+                    slot: slotIdentityOf(cl), slotChip: slotChipText(cl),
                     found: !!grp,
                     choices
                 };
@@ -2777,7 +2780,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                     <div style={{ borderTop: '1px dashed var(--line)', paddingTop: '10px', maxHeight: '46vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', paddingBottom: '4px' }}>
                             <input value={assignFilter} onChange={e => setAssignFilter(e.target.value)}
-                                placeholder="Show only… slot name, item # or node"
+                                placeholder="Show only… slot name, #n / slot id, item # or node"
                                 title="Filters what is DRAWN, nothing else. With 96 clusters on screen every edit redraws ten thousand controls to change one — narrow it and the page is quick again. Edits you have already made are kept."
                                 style={{ ...inp, flex: 1, minWidth: '260px', padding: '7px 10px', fontSize: '0.85rem' }} />
                             {!!assignFilter && (
@@ -2814,6 +2817,7 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                             if (!q) return true;
                             if (String(r.clusterName || '').toUpperCase().includes(q)) return true;
                             if (String(r.category || '').toUpperCase().includes(q)) return true;
+                            if (String(r.slotChip || '').toUpperCase().includes(q)) return true;   // "#3" or "slot_1786…" from 1.5
                             return (r.choices || []).some(c =>
                                 String(c.itemNo || '').toUpperCase().includes(q) ||
                                 String(c.label || '').toUpperCase().includes(q) ||
@@ -2829,13 +2833,19 @@ function AssemblyBuilderTab({ currentUser, activeBrand }) {
                                 if (cat === 'RING') return [3, 0, 0];
                                 return [4, 0, 0];
                             };
+                            // LOAD ORDER FIRST (Stuart 2026-09-03: "arrange … in the order that she loads them");
+                            // sections with no known order keep the category / position rank below.
+                            const oa = a.slot && a.slot.order != null ? a.slot.order : null, ob = b.slot && b.slot.order != null ? b.slot.order : null;
+                            if (oa != null && ob != null && oa !== ob) return oa - ob;
+                            if (oa != null && ob == null) return -1;
+                            if (oa == null && ob != null) return 1;
                             const ra = rank(a), rb = rank(b);
                             return ra[0] - rb[0] || ra[1] - rb[1] || ra[2] - rb[2] || String(a.clusterName || '').localeCompare(String(b.clusterName || ''));
                         }).map((r) => {
                             return (
                                 <div key={r.clusterId} style={{ border: '1px solid var(--line)', borderRadius: '2px', padding: '10px 12px' }}>
                                     <div onClick={() => toggleCluster(r.clusterId)} title={openClusters.has(r.clusterId) ? 'Click to close this section' : 'Click to open this section'} style={{ cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink)', marginBottom: '8px' }}>
-                                        <span style={{ color: 'var(--brass)', marginRight: '6px' }}>{openClusters.has(r.clusterId) ? '\u25be' : '\u25b8'}</span>{r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){(() => {
+                                        <span style={{ color: 'var(--brass)', marginRight: '6px' }}>{openClusters.has(r.clusterId) ? '\u25be' : '\u25b8'}</span>{r.slotChip && <span title={`This section's slot: load order ${r.slot && r.slot.order != null ? '#' + r.slot.order : 'unknown'}${r.slot && r.slot.slotId ? ' · slot id ' + r.slot.slotId : ''} (read from ${r.slot && r.slot.source === 'stamp' ? 'the cluster record' : r.slot && r.slot.source === 'id' ? 'the cluster id' : 'the S<n> node prefix'}). Type it into 1.5's Slots filter and the same geometry glows.`} style={{ display: 'inline-block', fontFamily: 'var(--mono)', fontSize: '9px', fontWeight: 600, letterSpacing: '.04em', textTransform: 'none', padding: '2px 6px', marginRight: '8px', border: '1px solid var(--brass)', background: 'var(--brass)', color: '#fff', borderRadius: '2px' }}>{r.slotChip}</span>}{r.clusterName} <span style={{ color: 'var(--ink-soft)' }}>· {r.category || '—'}{r.position ? ' · ' + r.position : ''} · {r.choices.length} node(s){(() => {
                                             // What a closed section must still tell him: how many
                                             // choices have no item # yet. That is the whole reason
                                             // for opening one, so it should not require opening it.
