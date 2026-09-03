@@ -16,7 +16,10 @@ of its §4 work. Decisions that changed the brief during the session are recorde
 | `4364916` | `SYSTEM_FLOW_AUDIT.md` §2 table updated to the converted state. | — |
 | `73ab028` | `UserGuideTab.js` Work Orders section updated (S2) — see §6. | — |
 | `984b8fe` | **A1 step 4.** Order Entry Needs (writer 5) converted; builders gain the sales block + custom pair; test case added (6/6). | not yet — regression row §6 (`HCUMP810 + /N90` one WO; `+ /P01` the pair) |
-| (next) | **A1 step 5.** Pre-check component shop WO (writer 9) on the shared shape. | not yet — §6 row "Grid: /P short, raw short" |
+| `64edab5` | **A1 step 5.** Pre-check component shop WO (writer 9) on the shared shape. | not yet — §6 row "Grid: /P short, raw short" |
+| `fa425f1` | **A6.** Snapshot's `finishOf` → `finishCodeFromErp` (Q2). | — |
+| `9337ac7` | **A6.** One `tierOfErp` (Stock View + 4.5), the five routing-grade suffix reads → shared vocabulary; grep proof clean. | not yet — tier view + PO builder plated split |
+| (next) | **A3.** `Shared/platingDemand.issuePlatedDemand` — demand + core-short milling order, NO PO; five callers (PO builder, Snapshot FIN view with a live core read, tier view with its coverage remainder, OE outsourced line, Library card outsourced path). | not yet — §6 "Plated item short" row, all screens |
 
 **No live run has happened yet.** Every conversion is build- and test-proven only. The acceptance
 rows in the brief's §6 that these commits cover (Snapshot finished item, Snapshot 4 ft pole, grid
@@ -46,6 +49,29 @@ Setup Queue showing the recipe group with pulls, and no Push to Shop offered on 
 - **§8 Q3** Stock Build Needs / every PO writer: **one open PO per vendor per brand, every screen appends; the SO number stays on the LINE** (per-line `soAppId`; a header `soAppIds[]` list is fine as the index). Consequence: the OE Needs coverage lookup (`loadOeNeeds`, PO header `soAppId`) moves to the line/index when A4 lands.
 - **A3** the plater PO **stays with the WMS shipment** (the S5 exception, `BRIEF_D` line 30). `issuePlatedDemand` = plating demand + core-short shop WO, **no PO**. Brief and audit updated on main (`b17d772`).
 - **A1** approved with the three deviations: pre-check RESULT passed in; /P and outsourced both refused; `clearConvertGate` self-release sales-only.
+
+## 3b. Stuart's answers in this session (2026-09-02 late)
+
+1. **Live runs**: problems get fixed on NEW orders only; the few still on the floor run through as
+   they are.
+2. **Q5, Order Entry stocked-length pole** (answered as a design, plan not yet approved): if the
+   stocked length is in stock → straight to the floor; if not, check the longer stock the saw can
+   cut it from (6 ft from 8 ft), show the recommendation in the review pop-up, and the operator
+   chooses **back order** (wait for the length to arrive) or **cut the 8 ft down**. Plan sent: a
+   pole choice on the review row → rod cut + `awaitingRodCut` (Snapshot mechanism) or `backOrdered`
+   (waits at the pick like a bought line). Never milled.
+3. **A3 approved** (no PO). **A6 approved.**
+4. **A4, as Stuart wants it** (supersedes the brief's "open PO accumulates over time"):
+   - per Generate press, lines group by vendor → one PO per vendor, saved **not sent** (Draft);
+   - a **preview** of the whole set (5 vendors, 50 items, each PO only its vendor's lines);
+   - **Approve** → push line-for-line to NetSuite (only NetSuite mints the PO#) → PO# stamps back;
+   - **then** the PO can be opened and **sent to the vendor** (email, the mailto-plus-printed-doc
+     the sales order uses); the record lives on **tab 10** (External Co-Op) vendor profile;
+   - PO header gains a **vendor acknowledgement** (date, updated ready date, note), entered days later;
+   - finishing and shop never see a PO; **the WMS will** — a **Receiving tab** is built after
+     creation + send are settled (D's territory; hand-off, not built here);
+   - the tier/raw generator alerts that still say "Push to Shop there" are corrected when A4
+     touches those functions (Stuart: "correct").
 
 ## 4. Blocked / waiting on others
 
