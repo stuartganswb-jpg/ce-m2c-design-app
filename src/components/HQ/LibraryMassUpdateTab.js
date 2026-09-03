@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { tierOfErp } from '../Shared/finishRouting';
 import { matchesCustomerCode } from '../Shared/aliasSearch';
 import { db, storage } from '../../firebase';
 import { buildGalleryIndex, galleryImageForPart, imageUpdate, IMG_GLB_RENDER, IMG_BASE_INHERIT } from '../Shared/partImage';
@@ -741,14 +742,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
 
     // --- MASS UPDATE LOGIC ---
     const anyFilterActive = !!searchTerm || routingFilter !== "ALL" || !!typeFilter || !!collectionFilter || !!watchlistFilter || !!tierFilter;
-    const tierOfErp = (erp) => {
-        const id = String(erp || '').toUpperCase();
-        const cut = id.lastIndexOf('/');
-        if (cut <= 0) return 'RAW';
-        const suffix = id.slice(cut + 1);
-        if (suffix === 'P') return 'P';
-        return suffix.startsWith('EP') ? 'EP' : 'FIN';
-    };
+    // Tier = Shared/finishRouting.tierOfErp (Brief A, A6): the one reader Stock View uses too.
     const filteredInventory = inventory.filter(part => {
         // Don't render the whole library by default — require a search or at least one filter.
         if (!anyFilterActive) return false;
@@ -1324,7 +1318,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 <option value="">All Tiers</option>
                                 <option value="RAW">Raw only (no suffix)</option>
                                 <option value="P">/P — phosphated base</option>
-                                <option value="EP">/EP — plated (outsourced)</option>
+                                <option value="PLATE">/EP — plated (outsourced)</option>
                                 <option value="FIN">Other finished suffix</option>
                             </select>
                         </div>

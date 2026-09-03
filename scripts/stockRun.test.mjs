@@ -11,6 +11,7 @@ import {
     routeForCode, floorFieldsOf, buildStockFinPayload, buildParkedWorkOrder,
     ROUTE_FINISHING, ROUTE_SHOP, REFUSE_PHOSPHATE, REFUSE_OUTSOURCED,
 } from '../src/components/Shared/stockRun.js';
+import { tierOfErp, TIER } from '../src/components/Shared/finishRouting.js';
 
 const TASKS = { spinSetup: 'Pending' };   // stand-in for makeFullTasks(); the shape is the contract's
 const NOW = 1_700_000_000_000;
@@ -34,6 +35,16 @@ test('route: stated for sprayed finishes and raw codes, refused for /P and outso
     // the -N new-item marker and -10/-12 pack sizes are not part of the finish
     assert.equal(routeForCode('X/BL-N').finish, 'BL');
     assert.equal(routeForCode('X/CP-10').finish, 'CP');
+});
+
+test('tier: raw / P / PLATE / FIN from the canonical vocabulary, one reader for Stock View and 4.5', () => {
+    assert.equal(tierOfErp('H1-75DS'), TIER.RAW);
+    assert.equal(tierOfErp('H1-75DS/P'), TIER.P);
+    assert.equal(tierOfErp('H1-75DS/EP1'), TIER.PLATE);
+    assert.equal(tierOfErp('H1-75DS/MEP2'), TIER.PLATE);
+    assert.equal(tierOfErp('H1-75DS/P25'), TIER.PLATE);
+    assert.equal(tierOfErp('HCUMB410/BS'), TIER.FIN);
+    assert.equal(tierOfErp('X/P01'), TIER.FIN);
 });
 
 test('floor fields: a pole is racked (count, no sled size); a small part carries its size', () => {

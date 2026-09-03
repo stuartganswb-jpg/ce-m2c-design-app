@@ -4,7 +4,7 @@ import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeI
 import { buildStockFinPayload } from '../Shared/stockRun';
 import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
-import { isOutsourcedFinishCode, millBaseOf } from '../Shared/finishRouting';
+import { isOutsourcedFinishCode, millBaseOf, finishSuffixOf } from '../Shared/finishRouting';
 import { enqueueNsWrite } from '../Shared/nsOutbox';
 import { makeFullTasks, withItemCode } from '../Shared/workOrderContract';
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
@@ -1378,8 +1378,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       // Gated by the CANONICAL outsourced vocabulary (EPn/MEP*/P25, Shared/finishRouting) — a
       // stray hq_outsource_finishes record coded 'P' must never route an in-house painted /P item
       // to the plater (phosphating is the CONVERT stage, not this).
-      const slash = erp.lastIndexOf('/');
-      const suffix = slash > -1 ? erp.slice(slash + 1).toUpperCase() : '';
+      const suffix = finishSuffixOf(erp);
       const outFinish = suffix && isOutsourcedFinishCode(suffix)
           ? (outsourceFinishes.find(f => finishCodeOf(f) === suffix) || { name: suffix })
           : null;

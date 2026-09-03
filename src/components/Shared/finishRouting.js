@@ -37,6 +37,21 @@ export const millBaseOf = (erpId) => {
 
 export const isOutsourcedErp = (erpId) => isOutsourcedFinishCode(finishSuffixOf(erpId));
 
+// ── THE STOCK TIER of a code (Brief A, A6 — 2026-09-02) ────────────────────────────────────────
+// Fabricut H1 is stocked at three levels that only make sense read together: the raw mill core,
+// the /P phosphated base, the outsourced plated variant — and any other painted suffix that stocks
+// in its own right is finished goods. Two local copies of this rule (Stock View's tierOfItem and
+// 4.5 Mass Update's tierOfErp) disagreed on what "plated" meant: one asked whether a configured
+// outsource-finish record happened to match, the other whether the suffix started with EP. The
+// canonical outsourced vocabulary above decides, once.
+export const TIER = { RAW: 'RAW', P: 'P', PLATE: 'PLATE', FIN: 'FIN' };
+export const tierOfErp = (erpId) => {
+    const sfx = finishSuffixOf(erpId);
+    if (!sfx) return TIER.RAW;
+    if (sfx === 'P') return TIER.P;
+    return isOutsourcedFinishCode(sfx) ? TIER.PLATE : TIER.FIN;
+};
+
 // ── APPLIED FINISH vs ASSEMBLY FINISH — what decides Custom / Small Parts ──────────────────────
 // Stuart 2026-09-01, after the isStocked rule shipped and was wrong:
 //   "any pole that does not have an assembly finish code, which ends before the /p, and the cpq

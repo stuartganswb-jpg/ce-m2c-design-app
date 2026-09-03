@@ -16,7 +16,7 @@ import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { isAssemblyPart } from '../Shared/finishedGoodsRun';
 import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
-import { isOutsourcedFinishCode, handlingForErp, millBaseOf } from '../Shared/finishRouting';
+import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal } from '../Shared/workOrderCreate';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
@@ -534,10 +534,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const part = hqParts.find(p => p.id === li.partId);
             if (!part) continue;
             const erp = String(part.legacyErpId || part.itemId || '').toUpperCase();
-            const slash = erp.lastIndexOf('/');
-            const suffix = slash > -1 ? erp.slice(slash + 1) : '';
-            const outFinish = suffix ? outsourceFinishes.find(f => finishCodeOf(f) === suffix) : null;
-            if (outFinish) platedLines.push({ ...li, part, erp, baseErp: erp.slice(0, slash), finishCode: suffix, finishName: outFinish.name || '' });
+            // The CANONICAL outsourced vocabulary decides (Brief A, A6): an EP/MEP/P25 suffix is a
+            // plated item whether or not a finish record is configured for it (the record only
+            // supplies the name) — the same test the Library card and the writers use.
+            const suffix = finishSuffixOf(erp);
+            const outFinish = isOutsourcedFinishCode(suffix) ? (outsourceFinishes.find(f => finishCodeOf(f) === suffix) || { name: suffix }) : null;
+            if (outFinish) platedLines.push({ ...li, part, erp, baseErp: millBaseOf(erp), finishCode: suffix, finishName: outFinish.name || '' });
             else directBuyLines.push({ ...li, part });
         }
 
@@ -1183,7 +1185,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         setRawStock({ loading: true });
         try {
             const bases = new Set();
-            (salesHist?.rows || []).forEach(r => { const id = String(r.itemid); const cut = id.lastIndexOf('/'); if (cut > 0) bases.add(id.slice(0, cut).toUpperCase()); });
+            (salesHist?.rows || []).forEach(r => { const id = String(r.itemid); if (finishSuffixOf(id)) bases.add(millBaseOf(id).toUpperCase()); });
             const ids = [...bases].map(b => partByKey['erp:' + b]?.netSuiteInternalId).filter(Boolean).map(String);
             const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17';
             const runSql = async (q) => {
@@ -1624,9 +1626,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const byBase = new Map();
         ((salesHist && salesHist.rows) || []).filter(r => !filtered || snapRowOk(r)).forEach(r => {
             const id = String(r.itemid);
-            const cut = id.lastIndexOf('/');
-            if (cut <= 0) return;
-            const base = id.slice(0, cut).toUpperCase();
+            if (!finishSuffixOf(id)) return;
+            const base = millBaseOf(id).toUpperCase();
             // EA history already contains pack consumption — counting PACK rows too would double.
             const pk = packMap.get(id.toUpperCase());
             if (pk && pk.isPack) return;
@@ -1704,18 +1705,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     //   H1-75DS/EP1  outsourced plated                  → a plating to-do on the WMS plating tab
     // (any other suffix — a painted finish that stocks in its own right — is finished goods and
     // routes to Finishing exactly like the FIN view does.)
-    // The tier of a variant is DERIVED from its suffix, never asked: "P" is the phosphate tier;
-    // a suffix matching a configured outsource finish (EP1, EP2…) is the plated tier; the rest is
-    // finished goods. Same rule the main grid's plated-line split already uses.
-    const TIER_PHOS = 'PHOS', TIER_PLATE = 'PLATE', TIER_FIN = 'FIN';
-    const tierOfItem = (itemid) => {
-        const id = String(itemid || '').toUpperCase();
-        const cut = id.lastIndexOf('/');
-        if (cut <= 0) return null;
-        const suffix = id.slice(cut + 1);
-        if (suffix === 'P') return TIER_PHOS;
-        return outsourceFinishes.some(f => finishCodeOf(f) === suffix) ? TIER_PLATE : TIER_FIN;
-    };
+    // The tier of a variant is DERIVED from its suffix by the ONE shared reader (Brief A, A6):
+    // Shared/finishRouting.tierOfErp — P is the phosphate tier, the canonical outsourced vocabulary
+    // (EP*, MEP*, P25) is the plated tier, the rest is finished goods. Same rule the grid's
+    // plated-line split, 4.5 Mass Update and the writers use.
+    const TIER_PHOS = TIER.P, TIER_PLATE = TIER.PLATE, TIER_FIN = TIER.FIN;
     // Groups = one raw base + its variant rows, ONLY where a "/P" variant exists — that /P is what
     // makes an item three-tier. Bases without one are ordinary raw cores and live on the RAW view.
     // Demand on the base row is the sum of every variant (one core per finished unit), which is the
@@ -1728,16 +1722,15 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const byBase = new Map();
         ((salesHist && salesHist.rows) || []).forEach(r => {
             const id = String(r.itemid).toUpperCase();
-            const cut = id.lastIndexOf('/');
-            if (cut <= 0) return;
+            if (!finishSuffixOf(id)) return;
             const pk = packMap.get(id);
             if (pk && pk.isPack) return;   // EA history already carries pack consumption
-            const base = id.slice(0, cut);
+            const base = millBaseOf(id);
             let g = byBase.get(base);
             if (!g) { g = { base, cells: salesHist.months.map(() => 0), total: 0, variants: [], hasPhos: false, anyMatch: false }; byBase.set(base, g); }
             r.cells.forEach((c, i) => { g.cells[i] += (c.v || 0); });
             g.total += (r.total || 0);
-            const tier = tierOfItem(id);
+            const tier = tierOfErp(id);
             if (tier === TIER_PHOS) g.hasPhos = true;
             if (snapRowOk(r)) g.anyMatch = true;
             g.variants.push({ r, tier });
@@ -1782,7 +1775,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         for (let i = 0; i < rows.length; i++) {
             const { r, qty, baseErp, baseInfo } = rows[i];
             const erp = String(r.itemid).toUpperCase();
-            const suffix = erp.slice(erp.lastIndexOf('/') + 1);
+            const suffix = finishSuffixOf(erp);
             const fin = outsourceFinishes.find(f => finishCodeOf(f) === suffix);
             const demandId = `PLD-${activeBrand.toUpperCase()}-${Date.now()}-${i}`;
             await setDoc(doc(db, 'plating_demand', demandId), {
@@ -1895,9 +1888,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const conv = [], woMake = [];
         make.forEach(x => {
             const id = String(x.r.itemid).toUpperCase();
-            const cut = id.lastIndexOf('/');
-            if (cut > 0 && id.slice(cut + 1) === 'P') {
-                const baseErp = id.slice(0, cut);
+            if (routeForCode(id).refuse === REFUSE_PHOSPHATE) {
+                const baseErp = millBaseOf(id);
                 const basePart = partByKey['erp:' + baseErp] || null;
                 conv.push({ ...x, baseErp, baseInfo: { part: basePart, iid: basePart?.netSuiteInternalId ? String(basePart.netSuiteInternalId) : null, available: null } });
             } else woMake.push(x);
