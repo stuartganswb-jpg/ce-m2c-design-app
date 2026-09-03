@@ -143,6 +143,23 @@ subsidiary check, vendor-by-nsId, `source`, and the vendor minimum.
 **Also**: the tier/raw/finished generator alerts no longer name buttons that are gone (Stuart:
 "correct") — 8 strings, no logic. The User Guide gains "How a purchase order goes out" (S2).
 
+## 3f. Open design question — the receipt shape (Brief D asked, 2026-09-02)
+
+D will build the WMS **Receiving tab** for vendor POs when Stuart calls it, and asked for two
+fields to be settled in `Shared/purchaseOrders.js` (A's file) rather than retrofitted:
+
+1. **per-line `receivedAt` / `receivedBy`** beside `received` — the floor needs to know who took a
+   delivery in;
+2. **somewhere for a SHORT or OVER receipt.** The plating flow gained `scrapQty` for this, but a
+   short on an ordinary PO is usually a **backorder, not scrap**, so D's own view is that it wants a
+   different name.
+
+**Not written.** Stuart's instruction was explicit: *"we will need to build the 'receiving tab' to
+receive these po's, we can do that after we have finalized the creation and send."* Fields nobody
+writes yet are dead schema, and the second one is a real decision (does a short close the line, or
+leave it open against the vendor's acknowledged ready date?) that belongs with the tab it serves.
+Both requirements are recorded here so whoever builds it starts from them; the writer stays A's.
+
 ## 4. Blocked / waiting on others
 
 - Writer 7 on B's B1 (`buildFinDoc`). B will send the hash.
