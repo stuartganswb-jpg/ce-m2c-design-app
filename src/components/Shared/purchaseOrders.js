@@ -278,8 +278,12 @@ export const markPoSent = async (poId, by = '') =>
 // exactly as asked — the per-line receipts the WMS will post are a separate thing.
 export const acknowledgePurchaseOrder = async ({ poId, ackRef = '', readyDate = '', note = '', by = '' }) =>
     updateDoc(doc(db, 'hq_purchase_orders', poId), {
+        // `vendorReadyDate`, not `readyDate` (Brief E asked, 2026-09-02): the sales-order header
+        // already promises a readyDate to the CUSTOMER (painted 4 wk / plated 6, rush 2 / 4). What
+        // the VENDOR commits to is a different fact and gets its own name, so the two can never be
+        // read for each other.
         vendorAck: {
-            acknowledged: true, ackRef: String(ackRef || ''), readyDate: String(readyDate || ''),
+            acknowledged: true, ackRef: String(ackRef || ''), vendorReadyDate: String(readyDate || ''),
             note: String(note || ''), at: Date.now(), by,
         },
         // The date the rest of the app already reads for an expected arrival.

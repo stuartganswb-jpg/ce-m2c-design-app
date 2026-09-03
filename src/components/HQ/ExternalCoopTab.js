@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { poEmailDraft, markPoSent, acknowledgePurchaseOrder, hasNsNumber, poRef } from '../Shared/purchaseOrders';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { collection, onSnapshot, query, where, doc, getDoc, getDocs, updateDoc, setDoc, deleteDoc } from "firebase/firestore";
@@ -801,7 +802,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
   };
   const createdDateOf = (job) => job.createdAt?.seconds ? new Date(job.createdAt.seconds * 1000).toLocaleDateString()
       : (typeof job.createdAt === 'number' ? new Date(job.createdAt).toLocaleDateString() : (job.dateSaved || '—'));
-  const [platingPOs, setPlatingPOs] = useState([]);          // plating shipments (hq_purchase_orders, kind=plating)
+  const [platingPOs, setPlatingPOs] = useState([]);          // every hq_purchase_orders doc — plating shipments AND the stock/component buys (A4)
   const [activePlatingPO, setActivePlatingPO] = useState(null); // shipment detail modal
   const [recordingReceipt, setRecordingReceipt] = useState(false);
   const [receiptDraft, setReceiptDraft] = useState({});         // { lineIndex: qty } being received now
@@ -857,8 +858,12 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
           setDraftDrawings(drawings);
       });
 
-      // Plating shipments sent to vendors (from the Pick Pack plating tool) — surfaced on the vendor profile.
-      const unsubPlating = onSnapshot(query(collection(db, "hq_purchase_orders"), where("kind", "==", "plating")), (snap) => {
+      // EVERY purchase order this vendor has, on one list (Brief A, A4 — 2026-09-02). It was the
+      // plating shipments alone; the stock and component buys the three PO writers raise belong on
+      // the same card, because to the vendor they are the same relationship. One subscription, one
+      // rendered list — a plating PO keeps its packing list and its own actions, an ordinary PO
+      // gets approve-state, the send, and the vendor's acknowledgement.
+      const unsubPlating = onSnapshot(collection(db, "hq_purchase_orders"), (snap) => {
           setPlatingPOs(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(po => !po.deleted && po.status !== 'Deleted'));
       });
 
@@ -1116,7 +1121,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
 
   // Plating shipments for a vendor — match by stored vendorCrmId, else NetSuite internal id, else name
   // (covers shipments created before vendorCrmId was stored).
-  const getVendorPlatingShipments = (vendorId) => {
+  const getVendorPurchaseOrders = (vendorId) => {
       const nsId = String(vendorId || '').replace(/^VEND-/, '');
       const vname = String(crmData[vendorId]?.name || '').toLowerCase();
       return platingPOs
@@ -1133,6 +1138,30 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
       };
       printPlatingPackingList(pl);
   };
+  // ── SEND, AND WHAT THE VENDOR SAYS BACK (Brief A, A4 — Stuart 2026-09-02) ────────────────────
+  // "once the po is sent the record is kept on tab 10 in vendor portal. the po's must have ability
+  //  to add at the header level a vendor acknowledgement with updated ready date. this information
+  //  usually arrives a few days after it is sent."
+  // A PO can only go out once NetSuite has minted its number — that number is what the vendor and
+  // the receiving paperwork both reference. The email is the operator's own, exactly as a sales
+  // order leaves the CRM: nothing is transmitted from here without a person pressing send.
+  const [ackDraft, setAckDraft] = useState({});
+  const sendPoToVendor = async (po) => {
+      if (!hasNsNumber(po)) return alert(`${poRef(po)} has no NetSuite PO number yet.\n\nApprove it first (12.5 Stock View → the draft PO preview) — NetSuite mints the number and stamps it back, usually within a minute. The number is what the vendor and the receipt both reference.`);
+      const draft = poEmailDraft(po, activeCrmRecord);
+      if (!draft.to.length && !window.confirm(`No email address on ${activeCrmRecord?.name || 'this vendor'}.\n\nOpen your mail client anyway and address it by hand?`)) return;
+      try { await markPoSent(po.id, currentUser || ''); }
+      catch (e) { console.warn('PO sent stamp failed (the mail still opens):', e); }
+      window.location.href = `mailto:${draft.to.join(',')}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
+  };
+  const saveVendorAck = async (po) => {
+      const d = ackDraft[po.id] || {};
+      try {
+          await acknowledgePurchaseOrder({ poId: po.id, ackRef: d.ackRef || '', readyDate: d.vendorReadyDate || '', note: d.note || '', by: currentUser || '' });
+          setAckDraft(prev => ({ ...prev, [po.id]: undefined }));
+      } catch (e) { alert('Could not save the acknowledgement: ' + (e.message || e)); }
+  };
+
   const updatePlatingEta = async (poDocId, val) => {
       try { await updateDoc(doc(db, "hq_purchase_orders", poDocId), { expectedReceiveDate: val || null }); } catch (e) { console.error(e); }
   };
@@ -1695,15 +1724,15 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
 
                                       {/* --- PLATING SHIPMENTS (vendors only) --- */}
                                       {activeSubTab === 'VENDORS' && (() => {
-                                          const shipments = getVendorPlatingShipments(activeCrmRecord.id);
+                                          const shipments = getVendorPurchaseOrders(activeCrmRecord.id);
                                           return (
                                           <div style={{ marginBottom: '24px' }}>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--line)', paddingBottom: '12px', marginBottom: '16px' }}>
-                                                  <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Plating Shipments</h4>
-                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{shipments.length} sent</span>
+                                                  <h4 style={{ margin: 0, fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Purchase Orders</h4>
+                                                  <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)' }}>{shipments.length} on record</span>
                                               </div>
                                               {shipments.length === 0 ? (
-                                                  <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No plating shipments sent to this vendor yet. They appear here when the Pick Pack plating tool ships a pallet.</div>
+                                                  <div style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', padding: '10px' }}>No purchase orders for this vendor yet. Stock and component buys appear here as soon as they are raised (12.5 Stock View); plating shipments appear when the Pick Pack plating tool ships a pallet.</div>
                                               ) : (
                                                   <div style={{ maxHeight: '420px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                                       {shipments.map(po => {
@@ -1711,7 +1740,7 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                                           return (
                                                           <div key={po.id} style={{ border: '1px solid var(--line)', padding: '16px', background: 'var(--paper)' }}>
                                                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                                  <span style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', fontFamily: 'var(--mono)' }}>{po.nsPoTran || po.poId}</span>
+                                                                  <span style={{ fontWeight: 500, fontSize: '0.95rem', color: 'var(--ink)', fontFamily: 'var(--mono)' }}>{po.nsPoTran || po.poId}{po.kind === 'plating' ? ' · plating' : ''}</span>
                                                                   <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', padding: '4px 8px', border: '1px solid var(--line)', background: '#fff' }}>{(po.status || 'Sent').replace(/_/g, ' ')}</span>
                                                               </div>
                                                               <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '8px' }}>
@@ -1721,10 +1750,52 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
                                                                   <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--ink-soft)' }}>Expected back</label>
                                                                   <input type="date" value={po.expectedReceiveDate || ''} onChange={e => updatePlatingEta(po.id, e.target.value)} style={{ padding: '6px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
                                                               </div>
+                                                              {/* An ordinary PO lists its own lines; a plating shipment keeps its packing list. */}
+                                                              {po.kind !== 'plating' && (po.items || []).length > 0 && (
+                                                                  <div style={{ marginTop: '10px', borderTop: '1px solid rgba(28,26,22,.08)' }}>
+                                                                      {(po.items || []).map((l, li) => (
+                                                                          <div key={li} style={{ display: 'flex', gap: '10px', paddingTop: '6px', fontSize: '0.82rem', flexWrap: 'wrap' }}>
+                                                                              <span style={{ fontFamily: 'var(--mono)', minWidth: '140px' }}>{l.itemId}</span>
+                                                                              <span style={{ color: 'var(--ink-soft)' }}>{l.quantity} × ${Number(l.rate || 0).toFixed(2)}</span>
+                                                                              {l.soRef && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', paddingTop: '2px' }}>SO {l.soRef}</span>}
+                                                                              {Number(l.received) > 0 && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: '#3a7d44', paddingTop: '2px' }}>{l.received} received</span>}
+                                                                          </div>
+                                                                      ))}
+                                                                  </div>
+                                                              )}
+                                                              {/* WHAT THE VENDOR SAID BACK — header level, days after the send (Stuart, A4).
+                                                                  vendorReadyDate is the VENDOR's commitment; the customer-side readyDate on a
+                                                                  sales order is a different promise and keeps its own name (Brief E). */}
+                                                              {po.kind !== 'plating' && (() => {
+                                                                  const ack = po.vendorAck || {};
+                                                                  const d = ackDraft[po.id] || { ackRef: ack.ackRef || '', vendorReadyDate: ack.vendorReadyDate || '', note: ack.note || '' };
+                                                                  const setD = (patch) => setAckDraft(prev => ({ ...prev, [po.id]: { ...d, ...patch } }));
+                                                                  return (
+                                                                      <div style={{ marginTop: '12px', padding: '10px', border: `1px dashed ${ack.acknowledged ? '#3a7d44' : 'var(--line)'}` }}>
+                                                                          <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: ack.acknowledged ? '#3a7d44' : 'var(--ink-soft)', marginBottom: '8px' }}>
+                                                                              {ack.acknowledged ? `✓ Vendor acknowledged${ack.at ? ` ${new Date(ack.at).toLocaleDateString()}` : ''}${ack.by ? ` · ${ack.by}` : ''}` : 'Vendor acknowledgement'}
+                                                                          </div>
+                                                                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                                                              <input value={d.ackRef} onChange={e => setD({ ackRef: e.target.value })} placeholder="Vendor's order #" style={{ padding: '6px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', flex: '1 1 140px' }} />
+                                                                              <label style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Ready</label>
+                                                                              <input type="date" value={d.vendorReadyDate} onChange={e => setD({ vendorReadyDate: e.target.value })} style={{ padding: '6px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem' }} />
+                                                                              <input value={d.note} onChange={e => setD({ note: e.target.value })} placeholder="Note" style={{ padding: '6px 8px', border: '1px solid var(--line)', fontFamily: 'var(--sans)', fontSize: '0.85rem', flex: '1 1 160px' }} />
+                                                                              <button onClick={() => saveVendorAck(po)} style={{ padding: '7px 12px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>Save</button>
+                                                                          </div>
+                                                                      </div>
+                                                                  );
+                                                              })()}
                                                               <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
-                                                                  <button onClick={() => setActivePlatingPO(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>View Details</button>
-                                                                  <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Reprint</button>
-                                                                  <button onClick={() => emailPlatingOrder(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>✉ Email Order (PDF)</button>
+                                                                  {po.kind === 'plating' ? (<>
+                                                                      <button onClick={() => setActivePlatingPO(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer' }}>View Details</button>
+                                                                      <button onClick={() => reprintPlatingPackingList(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: '#fff', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Reprint</button>
+                                                                      <button onClick={() => emailPlatingOrder(po)} style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer' }}>✉ Email Order (PDF)</button>
+                                                                  </>) : (
+                                                                      <button onClick={() => sendPoToVendor(po)} title={hasNsNumber(po) ? 'Opens your mail client with the order, and marks it sent' : 'Approve it first (12.5 Stock View) — NetSuite mints the PO number, and that is what goes to the vendor'}
+                                                                          style={{ flex: 1, padding: '8px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', background: hasNsNumber(po) ? 'var(--ink)' : 'var(--paper-2)', color: hasNsNumber(po) ? '#fff' : 'var(--ink-soft)', border: hasNsNumber(po) ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>
+                                                                          {hasNsNumber(po) ? '✉ Send to vendor' : 'Awaiting NetSuite PO number'}
+                                                                      </button>
+                                                                  )}
                                                               </div>
                                                           </div>
                                                           );
