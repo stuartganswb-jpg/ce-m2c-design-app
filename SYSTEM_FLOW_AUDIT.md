@@ -63,17 +63,25 @@ process" is visible: the same intent — *make N of item X* — is expressed ten
 
 | # | screen / path | file:line | `source` | `routeTo` | finPayload | gates | NS anchor | orderType | recipe |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | **Stock View WO grid** | `StockViewTab.js:728` | **none** | `FINISHING` iff finish suffix, else **route-open** | no → enrich at release | pre-check (`gate`) | at release (`queueNsStockWorkOrder`) | stock (implied) | `finishCodeFromErp` |
-| 2 | Stock View plating base-short milling | `StockViewTab.js:571` | **none** | **none** (route-open) | no | none | none | — | none |
-| 3 | **Sales Snapshot** | `StockViewTab.js:1430` | `SALES_SNAPSHOT` | `FINISHING` + finPayload iff finish; else route-open doc | **yes, verbatim** | rod cut + pre-check | at release (Route A) | stock | `finish` |
-| 4 | Raw Cores | `StockViewTab.js:1829` | `RAW_CORES` | `SHOP` | no | none | **at creation** (root WO if NS assembly) | — | none |
+| 1 | **Stock View WO grid** | `StockViewTab.js` `pushWOsToDispatch` → **`parkWorkOrder`** (7c70a8d) | `STOCKVIEW_GRID` | stated: FINISHING / SHOP; /P → convert to-do; outsourced → refused | **yes** (builder) | pre-check + rod cut + components | at release (Route A) / SHOP at creation | stock | from the code |
+| 2 | Stock View plating base-short milling | `StockViewTab.js` PO builder (b) → **`parkWorkOrder`** (A1 step 3) | `STOCKVIEW_PO_BUILDER` | `SHOP` + `forPlating` | n/a | none | at creation (root) | stock | none |
+| 3 | **Sales Snapshot** | `StockViewTab.js` `createStockFinWOs` → **`parkWorkOrder`** (b6d0e36) | `SALES_SNAPSHOT` | stated: FINISHING / SHOP (raw rows no longer route-open); outsourced → refused | **yes** (builder) | rod cut + pre-check + components | at release (Route A) / SHOP at creation | stock | from the code |
+| 4 | Raw Cores | `StockViewTab.js` `createStockShopWOs` → **`parkWorkOrder`** (A1 step 3) | `RAW_CORES` | `SHOP` | n/a | none | at creation (root) | stock | none |
 | 5 | **Order Entry Needs** (live OE) | `StockViewTab.js:2410` (+`2446` shop sibling) | `ORDER_ENTRY` | `FINISHING` (+`SHOP` sibling when Custom) | **yes** | soAccept · nsWo · convert · components | at creation: FLOW2 on the variant, FLOW1 on the base assembly | **sales** | `finish` |
-| 6 | **Master Library** card `createStockBuildWO` | `LibraryTab.js:1067` | `LIBRARY_MAKEUP` | **none (route-open)** | no | none | at creation (root WO) | — | `finishCodeFromErp` |
+| 6 | **Master Library** card `createStockBuildWO` | `LibraryTab.js` → **`parkWorkOrder`** (A1 step 3) | `LIBRARY_MAKEUP` | `SHOP` (always raw here; finished codes are refused) | n/a | none | at creation (root) | stock | none |
 | 7 | Master Library `releaseRunToFloor` | `LibraryTab.js:1122` | — | writes hq **already Dispatched** + fin **directly** | n/a | own pre-check | own `enqueueNsWrite` (`:1300`) | stock | `recipe \|\| finishLabel \|\| PENDING` |
 | 8 | Setup Queue scrap re-make | `SetupQueue.js:508` | `SETUP_QUEUE_REMAKE` | `FINISHING` | yes | pre-check | at release | stock | `finishCodeFromErp` |
 | 9 | Pre-check make-up (component shop WO) | `finishedRunPrecheck.js:241` | `PRECHECK_MAKEUP` | `SHOP` | no | — | at creation (root WO) | — | none |
 | 10 | RTG balance re-issue | `RTGDispatchTab.js:1958` | `RTG_REISSUE` | **none (route-open)** | no | none | none | — | parent's |
 | ✗ | tab 7's own generator | `QuickShipTab.js:1680` | — | — | — | — | — | — | **dead** (`OE_SAVE_AUTOFIRE_RETIRED = true`, `:1541`) |
+
+> **State 2026-09-02 evening (Brief A, A1 in flight):** writers 1, 2, 3, 4 and 6 now call the one
+> writer, `Shared/workOrderCreate.parkWorkOrder` (shape: `Shared/stockRun.buildParkedWorkOrder`,
+> node-tested). Every doc they write carries `source`, a stated `routeTo`, `orderType 'stock'`,
+> `autoFlow true`, `type` = the item code, and a complete `finPayload` on a finishing route.
+> Route-open parking is gone from those five. Still to convert: 5 (Order Entry Needs → intent
+> ORDER_ENTRY), 7 (the Library run — waits on B's builder), 9 (the pre-check's component shop WO →
+> COMPONENT_MILL). 8 is retired for stock (B6); 10 is B's, spec'd in BRIEF_B §B6 (INTENT.REISSUE).
 
 What the table says:
 
