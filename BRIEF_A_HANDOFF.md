@@ -280,7 +280,34 @@ That is right for REPLENISHMENT (short of plated stock at the Snapshot) and WRON
 a stocked EP item goes straight to WMS pick. Two different moments; A3 conflated them. The fix is a
 condition at the sales moment, not a change to `routeForCode`.
 
-**Which reader** (settled with D): `Shared/oeReviewPlan.fetchAvailabilityUnits` — Item ⋈
+**Which reader — SETTLED with D and B, 2026-09-03.** Target: a new `Shared/stockAvailability.js`
+consolidating the THREE near-duplicate availability queries that exist today —
+`StockViewTab :281` (rich: onhand + available + onorder + committed + backordered, NOT chunked),
+`StockViewTab :924` (chunked in 200s by nsId, available ONLY), and
+`Shared/oeReviewPlan.fetchAvailabilityUnits` (by code, available + onorder + the stock UNIT, with a
+plain-query fallback). One function keyed by code OR nsId, returning available + onHand + committed
++ onOrder + unit, chunked — the three proven parts, **no new SQL**. `fetchAvailabilityUnits`
+delegates so no existing caller moves. **A writes it; B calls it.**
+
+*Why onHand and committed beside available:* `available` is net of ALL commitment, so a stale open
+SO depresses it (see bucket 3). Without on-hand and committed the window cannot tell "0 available,
+0 on hand" (make or buy) from "0 available, 5 on hand, committed to a stale SO" (close that order,
+make nothing) — opposite actions.
+
+*Why the unit:* HTAEC35 counts in PAIRS; comparing eaches to pairs is the phantom-168 that caused
+the review gate to exist.
+
+**B IS NOT BLOCKED ON THIS.** If B5 part 2 is ordered first, B calls `fetchAvailabilityUnits` as it
+stands — `available` already answers the push's question correctly. The extraction is purely
+additive; B's call site does not change when it lands.
+
+**Two per-code precisions** (agreed with B, easy to conflate): `unitsKnown === false` is BATCH-level
+— `BUILTIN.DF(Item.stockunit)` was refused so units are null for the whole pull → "cannot be
+answered *for this pull*", **retry, never a backorder**. The per-CODE test is `!(code in map)` → no
+inventory row → data fix. A code present with `unit: null` blocks a confident pick with its own
+message. Three different states, three different messages.
+
+**Original note (superseded above, kept for the reasoning):** `Shared/oeReviewPlan.fetchAvailabilityUnits` — Item ⋈
 AggregateItemLocation, `quantityavailable` + `quantityonorder` + the stock UNIT, with a plain-query
 fallback. It answers *how many can I promise*. D's `fetchLiveBins` (InventoryBalance ⋈ Bin) answers
 *which bin holds them* — the pick's question, after the decision. Unit-awareness settles it on its
