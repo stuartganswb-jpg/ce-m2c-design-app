@@ -2490,6 +2490,12 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                         <div><label style={labelStyle}>Program #</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
                         <div><label style={labelStyle}>Raw Mat</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                        {/* SHOP INSTRUCTION (Stuart C7 ruling, 2026-09-02 — S1, the tag lives on the item): one plain
+                            sentence the Shop Floor's Custom card shows whenever an order has no cut list, e.g.
+                            "Pull from stock, phosphate, hand to finishing". No routing meaning, no vocabulary —
+                            it is read on the floor, never interpreted. Bulk-set in 4.5 Mass Update. */}
+                        <div style={{ gridColumn: '1 / -1' }}><label style={labelStyle}>Shop Instruction <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>— shown on the shop card when the order has no cut list</span></label>
+                            <input name="shopInstruction" value={editSpecs.shopInstruction || ""} onChange={handleSpecChange} placeholder="e.g. Pull from stock, phosphate, hand to finishing" style={fieldStyle} /></div>
                         {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Weight (lbs)</label><input name="weight" type="number" step="0.01" value={editSpecs.weight || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
                         {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Base Price ($)</label><input name="basePrice" type="number" step="0.01" value={editSpecs.basePrice || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}
                         {sourcingOf(editSpecs) !== SOURCING.BOTH && <div><label style={labelStyle}>Base Cost ($)</label><input name="cost" type="number" step="0.01" value={editSpecs.cost || ""} onChange={handleSpecChange} style={fieldStyle} /></div>}

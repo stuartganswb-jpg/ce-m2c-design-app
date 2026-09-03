@@ -151,6 +151,7 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
         leadTime: { active: false, value: "" },
         reorderPoint: { active: false, value: "" },
         binLocation: { active: false, value: "" },
+        shopInstruction: { active: false, value: "" },
         bpOrientation: { active: false, value: "VERTICAL" },
         isReturnBracket: { active: false, value: true },
         armThickness: { active: false, value: "" }
@@ -1550,6 +1551,15 @@ const LibraryMassUpdateTab = ({ currentUser, activeBrand }) => {
                                 <option value="">Select Bin...</option>
                                 {(globalLists.bins || []).map(b => <option key={b} value={b.toUpperCase()}>{b}</option>)}
                             </select>
+                        </div>
+
+                        <div style={{ background: updates.shopInstruction.active ? theme.paper : 'transparent', border: `1px solid ${updates.shopInstruction.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '12px', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: theme.ink }}>
+                                <input type="checkbox" checked={updates.shopInstruction.active} onChange={(e) => handleUpdateChange('shopInstruction', 'active', e.target.checked)} />
+                                Overwrite Shop Instruction
+                            </label>
+                            {/* Plain string shown on the Shop Floor's Custom card when the order has no cut list (Stuart C7, 2026-09-02). */}
+                            <input type="text" disabled={!updates.shopInstruction.active} value={updates.shopInstruction.value} onChange={(e) => handleUpdateChange('shopInstruction', 'value', e.target.value)} style={{ ...fieldStyle, opacity: updates.shopInstruction.active ? 1 : 0.5 }} placeholder="e.g. Pull from stock, phosphate, hand to finishing" />
                         </div>
 
                         <div style={{ background: updates.sourcing.active ? theme.paper : 'transparent', border: `1px solid ${updates.sourcing.active ? theme.brass : theme.line}`, padding: '16px', transition: 'all 0.2s' }}>
