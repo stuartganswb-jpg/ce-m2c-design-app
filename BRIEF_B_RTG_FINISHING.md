@@ -276,6 +276,47 @@ plating state and no finishing stage.
 - **the shop-doc contract** — `buildShopDoc`'s shape is what A's `executeMakeupActions` writes;
   publish it in `WORK_ORDER_CONTRACT.md` (update that doc — it is dated 06-10 and cited as current).
 
+#### Patch spec from A — written 2026-09-02 evening (A1 step 1 on main as b6d0e36)
+
+**Writer 10 — the balance re-issue (`RTGDispatchTab.js`, `closeBalance` → the `plan.reissueQty > 0`
+block).** Replace the inline `setDoc(doc(db, 'hq_work_orders', newId), withItemCode({...}))` with:
+
+```js
+import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
+// …
+const part = await libraryPartOf(itemCode);   // Approved_Designs where legacyErpId == itemCode (RTG already reads the library for Route A; reuse that lookup)
+try {
+    const res = await parkWorkOrder({
+        intent: INTENT.REISSUE,                  // routes by the code: finish suffix → FINISHING + finPayload, raw → SHOP
+        part, qty: rq, brand: activeBrand, createdBy: currentUser || '',
+        reqDate: m.order.needBy || m.order.reqDate || '',
+        note: `↻ re-issue of ${m.order.id} — balance closed, ${plan.balance} short`,
+        source: 'RTG_REISSUE',
+        replaces: { woId: m.order.id, reason: `balance closed, ${plan.balance} short` },
+        inventory: [part],
+    });
+    addLog(`↻ Re-issued ${rq} × ${itemCode} as ${res.woId} (replaces ${m.order.id}) — ${res.routeTo}, auto-releases when clear.`, 'success');
+} catch (e) {
+    if (e instanceof ParkRefusal) addLog(`⛔ re-issue refused: ${e.message}`, 'error');   // a /P core or an outsourced finish: not a work order
+    else throw e;
+}
+```
+What changes: the re-issue stops parking route-open (no `routeTo`, no `finPayload`, no anchor) and
+gets the same stamps as every other stock order (`routeTo`, `finPayload` on a finishing route,
+`source`, `autoFlow`, `replacesWo`/`replacesReason`, `type` = the item code). The `INTENT.REISSUE`
+intent lands in `workOrderCreate.js` in A's next commit (it is STOCK_FINISH or STOCK_MILL decided by
+the code, plus the lineage stamp) — do not call it before that hash is announced. No pre-check runs
+on a re-issue (the parent's components were already made up); pass no `precheck`.
+
+**PO memo (`RTGDispatchTab.js`, the `enqueueNsWrite kind:'purchaseorder'` payload).**
+`memo: \`Stock replenishment ${po.poId || po.id} (Sales Snapshot)\`` →
+`memo: \`${po.note || SOURCE_LABEL[po.source] || 'Stock replenishment'} · ${po.poId || po.id}\`` where
+`SOURCE_LABEL` maps `SALES_SNAPSHOT → 'Sales Snapshot'`, `STOCKVIEW_PO_BUILDER → 'Stock View PO
+builder'`, `OE_REVIEW → 'Order Entry review'`, `STOCK_BUILD_NEEDS → 'Stock Build Needs'`. A4 stamps
+`source` and `note` on every PO from every writer; until A4 lands, POs from the Snapshot carry
+`source:'SALES_SNAPSHOT'` and no `note`, the other two carry neither — the fallback keeps today's
+wording for those.
+
 ### B7 — the floor reports every event back (orderLifecycle)
 
 `propagateFloorState` is called at ActiveFloor completion (`:181`) and from the Setup Queue's
