@@ -42,7 +42,7 @@ tab 12 / the outbox payload shows ONE 58034 line.
 ## 2. The header, as written now (every door — `Shared/salesOrderHeader.soHeaderOf`)
 
 `customer, customerId, customerPo, sidemark, jobName, memo, needBy ('' when none — NEVER
-invented), readyDate, leadWeeks, leadBasis ('PAINT'|'PLATED'|null), rushApplied, shipTo[],
+invented), readyDate, leadWeeks, leadBasis ('PAINT'|'PLATED'|'STAIN'|null), rushApplied, shipTo[],
 shippingMethod, shippingAddressId, customShippingAddress, shippingAmount, productionNotes,
 internalMemo, recipe (CODE or ''), recipeLabel, recipeSource ('finishes'|'finishLabel'|
 'configKey'|'lineCode'|'configValue'|'mixed'|'none'), recipes[], source ('CPQ'|'QUICKSHIP'|'CRM'),
@@ -55,10 +55,14 @@ rushApplied, recipe, recipeLabel, recipeSource, recipes`; `cpqData.breakdown[]` 
 line with a finishCode; same on `cartItems[].pricingBreakdown[]`. Quick Ship QUOTE jobs carry
 `orderSidemark, poNumber, internalMemo, needBy, productionNotes, shipping*`.
 
-**Lead times** live in ONE table, `LEAD_WEEKS` in `salesOrderHeader.js` (PAINT 4/2, PLATED 6/4).
-An order with no applied finish (mill, or a small-parts colour like /BS /N90 /CP) makes **no
-promise** (`leadBasis: null`, `readyDate: ''`) — Stuart named only the two classes; ask before
-adding a third, do not derive one. A rush fee is recognised by the keyword test tab 7 always
+**Lead times** live in ONE table, `LEAD_WEEKS` in `salesOrderHeader.js`: **PAINT 4/2, PLATED 6/4,
+STAIN 4/2** (the third class was added 2026-09-03 in `6e0bfdd` — Stuart: *"for wood 4 weeks is lead
+time"* — after the live Fabricut orders surfaced S-codes; §10). `leadBasis` is therefore
+`'PAINT'|'PLATED'|'STAIN'|null`, ordered longest-promise-first so a mixed order is only as quick as
+its slowest finish. An order with no applied finish (mill, or a small-parts colour like /BS /N90
+/CP) still makes **no promise** (`leadBasis: null`, `readyDate: ''`). Ask before adding a fourth
+class, do not derive one — and note `isWoodStainCode` lives in `Shared/finishRouting` (A's file,
+the authority on what a code IS); this table only says how long it takes. A rush fee is recognised by the keyword test tab 7 always
 used (RUSH / EXPEDITE in type, name or `customData.feeType`) — `isRushFeeItem`. S1 candidate: a
 feeType tag on the item.
 
@@ -146,3 +150,86 @@ stale bundle — reload and re-PIN after the deploy.
 "Reopening"; **7 · Quick Ship / Order Entry** → "Create the record", "To-be-finished → floor"
 (rewritten to the review-gate truth); **4.6** → "💲 Fees". Repo docs: this file,
 `SYSTEM_FLOW_AUDIT.md` §6 (state note), the patch specs appended to Briefs A, B, D §7.
+
+---
+
+## 10. Session 2 — 2026-09-03 evening (documents, the stain class, the live-run pre-flight)
+
+### Shipped
+
+| commit | what | proof |
+|---|---|---|
+| `9802142` | **Customer documents print descriptions and part numbers.** Two defects: the ITEM cell was hardcoded blank (`item: b.isHeader ? '▶' : ''`) so NO document had ever printed an item number, and descriptions were whatever the line stored at save — so pre-08-31 orders printed the designer's 1.6 node labels for ever. `customerDocLines` now takes an optional print-time resolver `{findPart, custKeys}` and re-resolves the description from the Master Library (keeping the row's indent prefix) and the clientSku from the customer's pricing row. The CRM feeds it a slim index built off the `Approved_Designs` snapshot it already subscribes to — no extra Firestore traffic. | Verified live on SO60239 before/after: `- HBR1-1INPOLE / - H21INPOLELEFT` with blank ITEM → `HBR1-1INPOLE · 1" Round Rod 16ga (Cut 46")`, `H1-FRPF · FRENCH RETURN`. Deploy confirmed by grepping the shipped chunk for the emitted expression, NOT the version stamp — see the trap below. |
+| `6e0bfdd` | **STAIN lead class** (Stuart: *"for wood 4 weeks is lead time"*). `LEAD_WEEKS.STAIN = {std:4, rush:2}`, `leadBasisOf` returns `'STAIN'` after PLATED and PAINT (a mixed order is only as quick as its slowest finish), `leadText` says "stained finish". Keyed off `isWoodStainCode`, which `finishRouting` deliberately keeps OUT of `isAppliedFinishCode`, so a lead class cannot move a part between floors. Also fixed two extensionless relative imports (`./finishRouting`, `./clientPricing`) that had broken the node suites. | `run-traverse-tests`: 31 passed, 0 failed. Six-case behaviour table verified in node. |
+
+### The finish codes, read from the live CPQ list (answers A's and D's pre-flight questions)
+
+| Fabricut name | code | class | routes |
+|---|---|---|---|
+| Aged Champagne | `P14` | painted | in-house finishing |
+| Warm Bronze | `P16` | painted | in-house finishing |
+| Aged Brass | `EP5` | plated | **outsourced** — and by BOTH routes independently (in the plated list AND matching the `EP*` suffix grammar), so it is not one library edit from flipping |
+| Natural Oak | `S04` | wood stain | in-house |
+| Pure Oak | `S11` | wood stain | in-house |
+
+Every finish resolves to a real CODE, so A's "name lands as the code" failure mode and D's
+"toBeFinished with no code → confidently wrong FROM FINISHING label" both **do not fire** on these
+orders. Recorded as ruled out, not merely unobserved.
+
+### Named, not fixed — carry these forward
+
+1. **Wood + miter — CONDITIONAL on one piece of data, so read the condition first.**
+   `classifyLine` rule 1 (the ITEM's own `manufacturingSpecs.partHandling`) returns immediately;
+   the per-line flag at rule 2 is reached only when the item carries NO tag. Rules -1
+   (`customOverrideHandling`) and 0 (fee / return-name grammar) sit above it, so a mitered return
+   billed as a fee **does** escalate to Custom — the concern is not "the miter fails to escalate".
+   **THE CONDITION — check this before hunting anything:** does a wood pole's Master Library card
+   carry a Part Handling value?
+   - **Tagged `Small Parts`** → the defect is LIVE. On a wood + miter order the fee goes Custom to
+     the shop while the wood pole classifies by its item tag and goes to finishing: *the shop is
+     told to miter a pole it was never sent.* Silent at both ends — nothing compares the two floor
+     docs ("custom fab with no pole" is not a check that exists), and the WMS drops fee lines from
+     a finishing pick (`lineIsFeeish`), so the pole arrives as an ordinary pull with no trace a
+     miter was sold. Sandra would pack a straight pole and no screen would say otherwise (D).
+   - **No tag at all** → the mechanism works TODAY, and it works only through the *absence* of a
+     tag. The risk is then a future tagging sweep silently breaking Stuart's rule, so it wants a
+     comment on the item rather than a code fix.
+   Do not assume the first state: a reader who takes the defect as live may hunt a bug that does
+   not exist yet. NOT exercised 2026-09-03 — both wood orders are straight cuts, and the only
+   mitered order (H1-75 #1) is metal (P16 → applied paint → `handlingForErp` says Custom, so pole
+   and fee both reach the shop).
+2. **Order Entry pack path — fee lines reach the packer.** `packLinesOf` reads `job.lines` with
+   no fee filter, so a fee line (e.g. `FEE-H1-MRPF`) is presented to the packer as a physical item
+   and blocks pack completion. **D7 owns it.** **UNEXERCISED** on 2026-09-03 — never run, as
+   distinct from run and passed — because H1-75 #1 (the only order carrying that fee) went through
+   the CPQ door. Its stated proof: a node test in D7's `Shared/pickLines.js` feeding a QUICKSHIP
+   order carrying `FEE-H1-MRPF` and asserting it reaches neither the pick list nor the pack list.
+   D deliberately declined a fifth live order to demonstrate it — raising a real NetSuite order
+   that moves real stock to prove something a code read already establishes is the wrong trade.
+3. **Two vocabularies for one class.** S-codes are now known in two places: `LEAD_WEEKS.STAIN` +
+   `leadBasisOf` here (how long it takes — mine) and `isWoodStainCode` in `Shared/finishRouting`
+   (what an S-code IS — A's, and the authority). Anyone adding a routing clause should look at
+   both so they cannot drift.
+4. **`B5` never landed** — `customFabStatus 'Sent to Plating'` and `gatesOf` are not on main, so a
+   plated line's pack gate still reads the old contract. Report as "B not landed", not as a fault.
+
+### Two traps worth re-reading before the next deploy
+
+- **The version stamp lies when several sessions push.** After `9802142` the stamp advanced past my
+  commit time while the bundle still served the OLD code — another session's build had finished in
+  between. Verify a deploy by grepping the shipped chunk for the *emitted expression*
+  (`isHeader?"\u25b6":e.legacyErpId||""`), not by the stamp, and not by a comment or an identifier
+  (both are minified away). My change added no new string literal, which is why the usual
+  marker-grep was useless.
+- **Extensionless relative imports break the node suites.** CRA resolves `'./clientPricing'`; node
+  does not. Every relative import in a node-reachable `Shared/` module needs the explicit `.js`.
+
+### Still not done
+
+The four-order live run (`0903/`) had not been entered when this was written: **zero orders, zero
+quotes, zero work orders created.** Setup reached — Fabricut (CUST-4720), price level *Fabricut
+Cost*, sidemark ROOM LEFT, flow H1-138, 18 steps loaded — and stopped there. Door plan: H1-138 #1
+and H1-75 #1 through **CPQ**; H1-138 #2 and H1-75 #2 through **Order Entry**. Stuart's rulings that
+bind the run: straight cuts need no Vision sheet; wood is Small Parts on the item and miters
+escalate per line (`ea04009`); wood lead time is 4 weeks.
+
