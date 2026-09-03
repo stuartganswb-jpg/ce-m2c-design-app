@@ -373,7 +373,12 @@ decision — components must be $0).
   — with the description carrying the kit code / per-motor code so Eric can read it. Today's
   "kit dollars ride the rollup, components at their rates" must go; otherwise the SO total is the
   kit + the parts.
-- **E (customer documents):** print `pricingBreakdown` in the order F emits it; no re-sorting.
+- **E (hardwareHandoff.handoffItem, the breakdown assembly):** F's `applyKitPricing` now stamps
+  every line with `billGroup` (1 kit · 2 extra feet · 3 added · 4 included, `BILL_GROUP` in
+  `kitSeed.js`). Stamp the rows handoff builds itself — `extraRows` = 3, `trvRows` = `billable ? 3
+  : 4` — and, when any line carries `billGroup`, STABLE-sort the final `breakdown` by it before
+  the total. That is the whole change; nothing is removed.
+- **E (customer documents):** print `pricingBreakdown` in the order it arrives; no re-sorting.
   Tab 7's traverse mirror (`trvDocLines`) already prints kit → parts; align its order to 1-4 too.
 - **Prove on tab 12** with one kit-seeded CPQ order and the same kit on tab 7: identical line
   order on paper, identical NetSuite payload shape (one holder at the config total, N lines at $0).

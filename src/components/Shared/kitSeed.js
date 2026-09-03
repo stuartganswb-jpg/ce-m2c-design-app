@@ -197,10 +197,38 @@ const isPerFootLine = (l) => !!l.perFoot;
  *
  * @returns {{lines, total}} in the same shape priceConfiguration returns.
  */
-export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, clientSku, perFootPrice } = {}) {
+// ── THE ORDER OF THE BILL, BOTH DOORS (Stuart 2026-09-03) ────────────────────────────────────
+// "i want them both aligned and to appear the same. the kit code and first 4 feet at price, extra
+// feet should appear immediately below this line at billable rate. any additional billable
+// components added in cpq (extra brackets, etc) next at billable rate. then all included
+// components of kit at $0.00." NetSuite gets every item at $0 and ONE line carrying the
+// configuration total — that half is the push's (Brief E hand-off); this half stamps each line
+// with its GROUP so every document, and the push, can print the same order without re-deciding:
+//   1 the kit line · 2 the additional feet · 3 added billable parts · 4 included, at $0.
+// `included` = what the kit already paid for: the rules explosion for a flow-aligned kit plus the
+// record's kitComponents (4.6 — "all of the info is tagged, you just need to gather and display
+// it"), each with the quantity the kit covers. A line matched to it bills nothing up to that
+// quantity and the DIFFERENCE above it — the components chart's own rule, applied to the engine's
+// slot picks too. The motor FOLDS INTO THE KIT LINE at the customer's per-motor code and price
+// (tab 7's way), so their paper reads their PO.
+export const BILL_GROUP = { KIT: 1, FEET: 2, ADDED: 3, INCLUDED: 4 };
+const keyOf = (v) => String(v == null ? '' : v).trim().toUpperCase();
+
+export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, clientSku, perFootPrice, included = [], motor = null } = {}) {
     if (!priced || !kitCode) return priced;
     const base = Number(baseFeet) > 0 ? Number(baseFeet) : 4;
     const price = Number(kitPrice) > 0 ? Number(kitPrice) : 0;
+    // What the kit covers, keyed by every spelling a line might carry (our code, the doc id).
+    const cover = new Map();
+    (included || []).forEach(i => {
+        const q = Number(i && i.qty) || 0;
+        if (q <= 0) return;
+        [i.code, i.partId].map(keyOf).filter(Boolean).forEach(k => cover.set(k, (cover.get(k) || 0) + q));
+    });
+    const coveredQty = (l) => {
+        for (const k of [l.partId, l.billedId, l.legacyErpId, l.code].map(keyOf)) { if (k && cover.has(k)) return cover.get(k); }
+        return 0;
+    };
 
     // ── ONE ADDITIONAL-FOOT LINE, NAMED FOR THE PART THE CUSTOMER UNDERSTANDS ────────────────
     // Stuart 2026-08-22: "the fascia is the length the customer understands, track is all shop
@@ -228,7 +256,22 @@ export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, 
         : perFoot.reduce((sum, l) => sum + (Number(l.unit) || 0) * billedOf(l), 0);
 
     const rest = (priced.lines || []).map(l => {
-        if (!isPerFootLine(l)) return l;
+        if (!isPerFootLine(l)) {
+            if (l.isFee) return { ...l, billGroup: BILL_GROUP.ADDED };
+            // A slot pick the kit already covers: the first `cov` bill nothing; the rest bill as
+            // added parts. A line with nothing left to bill is INCLUDED; one wholly above the
+            // kit is ADDED at its own rate, exactly as if the kit had never mentioned it.
+            const cov = coveredQty(l);
+            if (cov > 0) {
+                const qty = Number(l.qty) > 0 ? Number(l.qty) : 1;
+                const above = Math.max(0, qty - cov);
+                const unit = Number(l.unit) || 0;
+                return { ...l, inKit: above === 0, coveredQty: Math.min(cov, qty), total: unit * above,
+                    billGroup: above > 0 ? BILL_GROUP.ADDED : BILL_GROUP.INCLUDED,
+                    detail: above > 0 ? `${above} above the ${Math.min(cov, qty)} in the kit` : `included in the ${base} ft kit` };
+            }
+            return { ...l, billGroup: (Number(l.total) || 0) > 0 ? BILL_GROUP.ADDED : BILL_GROUP.INCLUDED };
+        }
         const billed = billedOf(l);
         const isCarrier = carrier && l === carrier;
         return {
@@ -241,24 +284,32 @@ export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, 
             // Everything that is not the carrier is shop work as far as the customer is concerned:
             // it was built, it ships, and its cost is already inside the foot they were quoted.
             ...(isCarrier ? {} : { shopOnly: true }),
+            billGroup: (isCarrier && billed > 0) ? BILL_GROUP.FEET : BILL_GROUP.INCLUDED,
             detail: isCarrier
                 ? (billed > 0 ? `${billed} ft above the ${base} ft kit` : `included in the ${base} ft kit`)
                 : (billed > 0 ? 'shop work — inside the per-foot price' : `included in the ${base} ft kit`),
         };
     });
 
+    // THE MOTOR FOLDS INTO THE KIT LINE (Stuart 2026-09-03, "match tab 7"): the customer's
+    // per-motor code and net replace the base code and price; the motor part itself is then an
+    // included component at $0. No motor chosen = the base kit exactly as before.
+    const mc = motor && motor.code ? motor : null;
+    const kitUnit = mc && Number.isFinite(Number(mc.net)) && Number(mc.net) > 0 ? Number(mc.net) : price;
     const kitLine = {
         partId: kitCode,
         name: kitName || kitCode,
-        sku: clientSku || kitCode,
-        aliasCode: clientSku || '',
-        billedId: kitCode,
+        sku: (mc && mc.fabSku) || clientSku || kitCode,
+        aliasCode: (mc && mc.fabSku) || clientSku || '',
+        billedId: (mc && mc.code) || kitCode,
+        ...(mc ? { motorCode: mc.code, motorItem: mc.motorItem || '' } : {}),
         qty: 1,
         perFoot: false,
         finishCode: '',
         noFinish: false,
-        unit: price,
-        total: price,
+        unit: kitUnit,
+        total: kitUnit,
+        billGroup: BILL_GROUP.KIT,
         source: 'kit',
         detail: `${base} ft kit`,
         hidden: false,
@@ -273,6 +324,7 @@ export function applyKitPricing(priced, { kitCode, kitName, kitPrice, baseFeet, 
         noNs: true,
     };
 
-    const lines = [kitLine, ...rest];
+    // Kit, extra feet, added, included — a stable sort, so within a group the walk's order holds.
+    const lines = [kitLine, ...rest].map((l, i) => ({ l, i })).sort((a, b) => (a.l.billGroup || 9) - (b.l.billGroup || 9) || a.i - b.i).map(x => x.l);
     return { ...priced, lines, total: lines.reduce((s, l) => s + (Number(l.total) || 0), 0) };
 }

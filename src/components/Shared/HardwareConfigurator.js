@@ -9,6 +9,8 @@ import { configuratorLines, configuratorTotal, defaultPicks} from './traverseCon
 import { traverseAnswersMissing, drawLabel } from './traverseDraw';
 import { seedFromVision } from './visionBridge';
 import { seedFromKit, applyKitPricing } from './kitSeed';
+import { explodeTraverse } from './traverseExplode';
+import { parseKitCode } from './kitCode';
 import { SIZE_STEP_TYPE, sizeSelectionsOf, buildSizeIndex, sizeVariantOf, partAllowedAtSize, returnsAllowedFor, renderScaleOf, projInchesOfSel } from './sizeMatrix';
 import { choicesFromAssembly, modelNodesOf } from './hardwareAdapter';
 import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './hardwarePricing';
@@ -129,6 +131,7 @@ function HardwareConfiguratorInner({
     const [kitPick, setKitPick] = useState('');      // the kit chosen as a starting point
     const [kitSource, setKitSource] = useState(null);  // { code, name, baseFeet, record } — bills as line 1
     const [kitReport, setKitReport] = useState(null);  // what it carried, missed, or refused
+    const [kitMotor, setKitMotor] = useState('');      // the per-motor code chosen for a MOTORIZED kit (folds into the kit line)
     const [showDiag, setShowDiag] = useState(false);
     const [showGeo, setShowGeo] = useState(false);   // the untagged-node list, behind its count
     const [whySlot, setWhySlot] = useState(null);   // slot key whose exclusions are being read
@@ -473,6 +476,7 @@ function HardwareConfiguratorInner({
     // runs reseatPicks on every model, exactly as the Vision seed relies on.
     const applyKit = (id) => {
         setKitPick(id);
+        setKitMotor('');
         if (!id) { setKitReport(null); setKitSource(null); return; }
         const chosen = kits.find(k => String(k.id || k.legacyErpId || '') === id);
         if (!chosen) return;
@@ -720,14 +724,38 @@ function HardwareConfiguratorInner({
         // source of truth (Stuart 2026-08-27). Matched by the same key rule every row lookup
         // uses; absent → applyKitPricing falls back to the flow's own per-foot item rates.
         const kitRow = findClientPriceRow(kitSource.record?.clientPricing, customerKeys(customerId, customer));
+        // ── WHAT THE KIT ALREADY PAID FOR (Stuart 2026-09-03: "check back against 4.6 — all of
+        // the kits are built, all of the info is tagged, you just need to gather and display it")
+        // The rules explosion for a flow-aligned kit (fascia + track by the foot, the bracket count
+        // at this length and projection, splices, the motor or plugs) plus the record's own
+        // kitComponents. Each with the quantity the kit covers; applyKitPricing bills only above it.
+        const ms = kitSource.record?.manufacturingSpecs || {};
+        const family = ms.kitFamily || (parseKitCode(kitSource.code) || {}).family || 'H1-2TRV';
+        const motorCodes = Array.isArray(ms.kitMotorCodes) ? ms.kitMotorCodes : [];
+        // ⚠ Read from `answers` here, not from `trvDrive` — that const is declared BELOW this memo
+        // and a memo factory runs where it is called (the temporal-dead-zone ReferenceError this
+        // file has been taken out by twice). Same expression, evaluated early.
+        const driveNow = /MOTOR/.test(String(answers.drive || '').toUpperCase()) ? 'MOTORIZED' : 'MANUAL';
+        const mc = driveNow === 'MOTORIZED' && kitMotor ? motorCodes.find(x => String(x.code || '').toUpperCase() === String(kitMotor).toUpperCase()) : null;
+        const feet = lengthFeet || kitSource.baseFeet;
+        const exploded = ms.kitAlign
+            ? explodeTraverse({ family, align: { ...ms.kitAlign, drive: driveNow }, feet, motorItem: mc?.motorItem || '', rules: trvRules, proj: answers.proj != null ? String(answers.proj) : '' })
+            : { lines: [] };
+        const included = [
+            ...exploded.lines.map(l => ({ code: l.code, partId: findPart(l.code)?.id, qty: l.qty })),
+            ...(Array.isArray(ms.kitComponents) ? ms.kitComponents : []).map(c => ({ partId: c.partId, code: findPart(c.partId)?.legacyErpId || '', qty: Number(c.qty) || 1 })),
+        ];
         return {
             kitCode: kitSource.code, kitName: kitSource.name, kitPrice: kp?.price || 0,
             baseFeet: kitSource.baseFeet,
             perFootPrice: kitRow?.perFootPrice,
             // THEIR number, resolved by the same rule every other line's alias is.
             clientSku: kp?.sku || kp?.aliasCode || '',
+            included,
+            // The per-motor code and net, folded onto the kit line by applyKitPricing (tab 7's way).
+            motor: mc ? { code: mc.code, fabSku: mc.fabSku || '', motorItem: mc.motorItem || '', net: parseFloat(mc.net) } : null,
         };
-    }, [kitSource, priceCtx, customerId, customer]);
+    }, [kitSource, priceCtx, customerId, customer, kitMotor, answers.drive, answers.proj, trvRules, lengthFeet, findPart]);
     const priced = useMemo(() => {
         const p = priceConfiguration(resolved, priceCtx);
         return kitBill ? applyKitPricing(p, kitBill) : p;
@@ -1451,6 +1479,17 @@ function HardwareConfiguratorInner({
                                 style={{ width: '64px', padding: '6px 8px', border: '1px solid var(--line)', background: '#fff', fontSize: '12px' }} />
                             <span style={{ ...mono, fontSize: '8.5px', color: 'var(--ink-soft)' }}>additional ft</span>
                         </span>
+                    )}
+                    {/* THE MOTOR, IN THEIR WORDS (Stuart 2026-09-03: "match tab 7"). A motorized kit
+                        has one customer code PER MOTOR; picking it here folds the motor into the kit
+                        line at that code and net, so the CPQ quote reads the same as tab 7's. */}
+                    {kitSource && trvDrive === 'MOTORIZED' && (kitSource.record?.manufacturingSpecs?.kitMotorCodes || []).length > 0 && (
+                        <select value={kitMotor} onChange={e => setKitMotor(e.target.value)}
+                            title="Their per-motor kit code — the kit line takes this code and its net price; the motor itself rides included at $0."
+                            style={{ padding: '6px 8px', border: `1px solid ${kitMotor ? 'var(--brass)' : '#b00020'}`, background: '#fff', fontSize: '11px', fontFamily: 'var(--mono)' }}>
+                            <option value="">motor: — choose their code —</option>
+                            {(kitSource.record.manufacturingSpecs.kitMotorCodes || []).map(x => <option key={x.code} value={x.code}>{x.code}{x.motorItem ? ` · ${x.motorItem}` : ''}{Number.isFinite(parseFloat(x.net)) ? ` · $${parseFloat(x.net)}` : ''}</option>)}
+                        </select>
                     )}
                     <span style={{ ...mono, fontSize: '8px', textTransform: 'none', letterSpacing: 0, color: 'var(--ink-faint)' }}>
                         {kitSource

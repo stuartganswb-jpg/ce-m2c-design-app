@@ -8,7 +8,7 @@
 // stubbed `axes` would prove nothing about the day the brackets arrive.
 
 import { resolve } from '../src/components/Shared/hardwareModel.js';
-import { seedFromKit, kitsForSeeding, applyKitPricing } from '../src/components/Shared/kitSeed.js';
+import { seedFromKit, kitsForSeeding, applyKitPricing, BILL_GROUP } from '../src/components/Shared/kitSeed.js';
 
 let pass = 0, fail = 0;
 const eq = (name, got, want) => {
@@ -183,6 +183,52 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
     const priced = { lines: [{ partId: 'X', qty: 1, perFoot: true, feet: 10, unit: 9, total: 90 }], total: 90 };
     eq('no kit code leaves it exactly as it was', applyKitPricing(priced, {}), priced);
     eq('and so does no priced object at all', applyKitPricing(null, { kitCode: 'K' }), null);
+}
+
+// ── 11. ONE ORDER ON BOTH DOORS (Stuart 2026-09-03) ──────────────────────────────────────────
+// "the kit code and first 4 feet at price, extra feet immediately below at billable rate, any
+// additional billable components next, then all included components of kit at $0.00."
+{
+    // Prod shape: engine lines carry the library DOC id as partId and our code on billedId.
+    const priced = {
+        lines: [
+            { partId: 'CE-INV-61954', billedId: 'H1-2TRV-WB', name: 'bracket', qty: 5, perFoot: false, unit: 20, total: 100, role: 'BRACKET' },
+            { partId: 'CE-INV-70001', billedId: 'H1-2RCTAR', name: 'fascia', qty: 1, perFoot: true, feet: 10, unit: 9, total: 90, cutLength: 120, role: 'FASCIA' },
+            { partId: 'CE-INV-70002', billedId: 'H1-2TRVTRK/C', name: 'track', qty: 1, perFoot: true, feet: 10, unit: 6, total: 60, role: 'TRACK' },
+            { partId: 'CE-INV-70003', billedId: 'HSOM-21', name: 'motor', qty: 1, perFoot: false, unit: 300, total: 300, role: 'TRV_END' },
+            { partId: 'CE-INV-70004', billedId: 'H1-1CC', name: 'finial', qty: 2, perFoot: false, unit: 15, total: 30, role: 'FINIAL' },
+            { partId: 'FEE-RUSH', name: 'rush', qty: 1, perFoot: false, unit: 50, total: 50, isFee: true },
+        ],
+        total: 630,
+    };
+    // What the kit covers at 10 ft — the rules explosion (codes) + the record's kitComponents (doc ids).
+    const included = [
+        { code: 'H1-2RCTAR', qty: 10 }, { code: 'H1-2TRVTRK/C', qty: 10 },
+        { code: 'H1-2TRV-WB', partId: 'CE-INV-61954', qty: 3 },      // the chart says 3 brackets at 10 ft
+        { code: 'HSOM-21', qty: 1 },
+    ];
+    const motor = { code: 'H1-2TRV-4M/P-35C', fabSku: 'HTS7504M35', motorItem: 'HSOM-21', net: 505 };
+    const r = applyKitPricing(priced, { kitCode: 'H1-2TRV-4M/P', kitName: 'motorized set', kitPrice: 318, baseFeet: 4, perFootPrice: 22, included, motor });
+
+    eq('the ORDER: kit · extra feet · added (2 brackets, finial, rush) · included', r.lines.map(l => l.billGroup), [1, 2, 3, 3, 3, 4, 4]);
+    eq('…and the names in that order', r.lines.map(l => l.name), ['motorized set', 'fascia', 'bracket', 'finial', 'rush', 'track', 'motor']);
+    eq('the kit line wears THEIR per-motor code and net (tab 7\'s way)', [r.lines[0].billedId, r.lines[0].sku, r.lines[0].unit, r.lines[0].motorCode], ['H1-2TRV-4M/P-35C', 'HTS7504M35', 505, 'H1-2TRV-4M/P-35C']);
+    eq('the extra feet sit immediately below it', [r.lines[1].name, r.lines[1].billedFeet, r.lines[1].total], ['fascia', 6, 132]);
+    const bkt = r.lines.find(l => l.name === 'bracket');
+    eq('5 brackets, 3 in the kit → 2 bill above it, as an ADDED part', [bkt.coveredQty, bkt.total, bkt.billGroup, bkt.inKit], [3, 40, BILL_GROUP.ADDED, false]);
+    eq('the finial was never in the kit — full price, added', [r.lines.find(l => l.name === 'finial').total, r.lines.find(l => l.name === 'finial').billGroup], [30, 3]);
+    const mot = r.lines.find(l => l.name === 'motor');
+    eq('the motor part itself is INCLUDED at $0 — its money is on the kit line', [mot.total, mot.inKit, mot.billGroup], [0, true, 4]);
+    eq('the track is shop work inside the foot: included, still 10 ft', [r.lines.find(l => l.name === 'track').total, r.lines.find(l => l.name === 'track').feet, r.lines.find(l => l.name === 'track').billGroup], [0, 10, 4]);
+    eq('a fee is an added charge', r.lines.find(l => l.isFee).billGroup, 3);
+    eq('505 kit + 132 feet + 40 brackets + 30 finial + 50 rush', r.total, 757);
+    eq('NOTHING LEAVES THE LIST', r.lines.length, priced.lines.length + 1);
+
+    // No motor chosen → the base kit exactly as before; a covered line matched by DOC ID only.
+    const r2 = applyKitPricing(priced, { kitCode: 'H1-2TRV-4/P', kitPrice: 318, baseFeet: 4, included: [{ partId: 'CE-INV-61954', qty: 5 }] });
+    eq('base code and price when no motor is folded', [r2.lines[0].billedId, r2.lines[0].unit], ['H1-2TRV-4/P', 318]);
+    eq('a doc-id match covers the whole count → included at $0', [r2.lines.find(l => l.name === 'bracket').total, r2.lines.find(l => l.name === 'bracket').inKit], [0, true]);
+    eq('a motor line nobody covered bills in full', r2.lines.find(l => l.name === 'motor').total, 300);
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
