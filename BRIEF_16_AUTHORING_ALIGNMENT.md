@@ -67,6 +67,14 @@ That is the whole problem, and it is a UI-parity problem, not a data-model probl
 
 ## 2. Ask 1 — the divergence, measured
 
+> **POST-CHANGE STATE (2026-09-03, Brief F session):** every row of the 2a table is now reachable on the
+> slot row — both renderers mount ONE `ChoiceTagControls` component (`bb52947`, `c7d42bd`), so the
+> table below describes the code as it was this morning. The projection grammar (2b) is one grammar
+> on both screens; the `basic` tooltip is the assign row's; the three slot seeds carry the 2c keys.
+> Load order (§3) and the 1.5 locator (§4) shipped `411c7c6` / `383489b`. See
+> `BRIEF_16_AUTHORING_ALIGNMENT_HANDOFF.md`.
+
+
 There are **two paths that produce the same thing** (a `choices[]` row per geometry node) and
 **two different renderers** for it. The data model is already identical; the UI is not.
 
