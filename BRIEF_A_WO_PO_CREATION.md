@@ -428,3 +428,10 @@ Master Library subsections, and the Purchase Orders text) and the repo guide it 
 team member reading the guide sees: orders route on their own and RTG records them; POs open and
 accumulate until sent; BOTH items ask; where the Stock Build Needs board is and what "covered"
 means; and the plated-item triple in plain words. List the sections touched in the handoff.
+
+### Hand-offs from B — the names, verbatim (shipped 3133aba (B5) + 7182f2e (B2), 2026-09-02)
+
+`Shared/workOrderContract.js`: `CUSTOM_FAB_STATUS = { PENDING:'Pending', IN_PROCESS:'In Process', SENT_TO_PLATING:'Sent to Plating', COMPLETE:'Complete' }`; `mirrorCustomStatusToSibling(shopOrderOrLink, status)` — unchanged signature, reads only `finSiblingId`, refuses an unknown status, stamps `customFabAt`.
+`Shared/orderStatus.js`: `customPartsReady(wo)` (the one pack-gate test), `customFabLabel(wo)` ("At the plater since <date>"), stage `PLATING`; `GATES`, `gatesOf(wo)`, `openGatesOf(wo)`, `isReleasable(wo)`, `gateSummary(wo)`.
+`Shared/orderLifecycle.js`: `propagateFloorState(ctx, { finWo, phase, by })` — phases `'Plating Received'` (receipt) and `'Plated'` (build-back) are B's vocabulary; `'Sent to Plating'` is only ever a `customFabStatus` value.
+Contract text: `WORK_ORDER_CONTRACT.md` §5 / §5a.

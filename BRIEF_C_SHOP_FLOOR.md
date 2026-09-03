@@ -279,6 +279,13 @@ tells RTG. Plus the repo guide. Listed in the handoff.
 
 ---
 
+### Hand-offs from B — the names, verbatim (shipped 3133aba (B5) + 7182f2e (B2), 2026-09-02)
+
+`Shared/workOrderContract.js`: `CUSTOM_FAB_STATUS = { PENDING:'Pending', IN_PROCESS:'In Process', SENT_TO_PLATING:'Sent to Plating', COMPLETE:'Complete' }`; `mirrorCustomStatusToSibling(shopOrderOrLink, status)` — unchanged signature, reads only `finSiblingId`, refuses an unknown status, stamps `customFabAt`.
+`Shared/orderStatus.js`: `customPartsReady(wo)` (the one pack-gate test), `customFabLabel(wo)` ("At the plater since <date>"), stage `PLATING`; `GATES`, `gatesOf(wo)`, `openGatesOf(wo)`, `isReleasable(wo)`, `gateSummary(wo)`.
+`Shared/orderLifecycle.js`: `propagateFloorState(ctx, { finWo, phase, by })` — phases `'Plating Received'` (receipt) and `'Plated'` (build-back) are B's vocabulary; `'Sent to Plating'` is only ever a `customFabStatus` value.
+Contract text: `WORK_ORDER_CONTRACT.md` §5 / §5a.
+
 ## 8. Open questions for Stuart (ask before the plan)
 
 1. **The Order Entry custom pole card** (`HCUMP810` + `/P01`) has no cut list. What should the
