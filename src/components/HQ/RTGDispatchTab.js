@@ -7,8 +7,10 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, car
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
+import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
+import { isReleasable, openGatesOf, gateSummary } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -347,8 +349,9 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // An app-created SO (CPQ save) waits for NetSuite to accept it (nsInternalId via
         // writeBack) before splitting to the floors, so a rejected order never becomes work.
         const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
-        const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && !o.awaitingRodCut && !o.awaitingConvert && !o.awaitingSoAccept
-            && !(o.awaitingNsWo && !o.nsWoId) && !(o.awaitingComponents && !o.componentsDone) && !o.pushedToFinishing
+        // The gates are ONE list (orderStatus.gatesOf, Brief B2) — the same six this effect, the
+        // auto-flow effect below, pushToFinishing and A's clearConvertGate used to spell by hand.
+        const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && isReleasable(o)
             && (o.finPayload || o.routeTo === 'FINISHING' || o.routeTo === 'SHOP'));
         const target = so || wo;
         if (!target) return;
@@ -519,11 +522,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (autoBusyRef.current || isSyncing) return;
         // orderClass ORDER_ENTRY counts as autoFlow even without the flag — heals the WOs
         // generated in the minutes before the flag shipped (2026-08-29 morning).
-        const wo = liveWO.find(o => (o.autoFlow || o.orderClass === 'ORDER_ENTRY') && o.status === 'Approved' && o.finPayload && !o.pushedToFinishing
-            // awaitingNsWo (Stuart 2026-08-29): the floor waits for the NetSuite work-order
-            // number — the outbox writeBack stamps nsWoId, and the next board refresh releases.
-            && !o.awaitingSoAccept && !o.awaitingConvert && !o.awaitingRodCut && !(o.awaitingNsWo && !o.nsWoId)
-            && !(o.awaitingComponents && !o.componentsDone)
+        // Every gate — SO accept, NetSuite WO # (Stuart 2026-08-29: the outbox writeBack stamps
+        // nsWoId and the next refresh releases), components, convert, rod cut, released-once — is
+        // the one list in orderStatus.gatesOf.
+        const wo = liveWO.find(o => (o.autoFlow || o.orderClass === 'ORDER_ENTRY') && o.status === 'Approved' && o.finPayload
+            && isReleasable(o)
             && !o.stopped && !autoTriedRef.current.has(`flow:${o.id}`));
         if (!wo) return;
         autoBusyRef.current = true;
@@ -1347,33 +1350,23 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     const pushToFinishing = async (hqOrder, orderType, opts = {}) => {
         // ⚡ AUTO mode (Stuart 2026-08-26): no dialogs — gated or already-dispatched orders are
         // SKIPPED with a log line, never forced. A human pressing the button keeps every confirm.
+        // THE GATES ARE ONE LIST (orderStatus.gatesOf, Brief B2): rod cut (Stuart 2026-08-19 — the
+        // poles do not exist yet), phosphate convert (2026-08-27), SO accept (a rejected order never
+        // becomes work), NetSuite WO # (2026-08-29 — nothing goes to the floor unanchored), component
+        // milling, and released-once (2026-07-21 — a second tap must never quietly duplicate the
+        // floor card). Each gate's words live there, so the auto log, the confirm here, the board's
+        // gate line and Where-Is-It all say the same thing.
         if (opts.auto) {
-            if (hqOrder.awaitingRodCut) { addLog(`⚡ auto: ${hqOrder.id} waiting on its rod cut — left parked.`, 'warn'); return; }
-            if (hqOrder.awaitingConvert) { addLog(`⚡ auto: ${hqOrder.id} waiting on its phosphate convert — left parked.`, 'warn'); return; }
-            if (hqOrder.awaitingSoAccept) { addLog(`⚡ auto: ${hqOrder.id} waiting for NetSuite to accept its sales order — left parked.`, 'warn'); return; }
-            if (hqOrder.awaitingNsWo && !hqOrder.nsWoId) { addLog(`⚡ auto: ${hqOrder.id} waiting for its NetSuite work-order number — left parked.`, 'warn'); return; }
-            if (hqOrder.awaitingComponents && !hqOrder.componentsDone) { addLog(`⚡ auto: ${hqOrder.id} waiting on its component shop WO(s) — left parked.`, 'warn'); return; }
-            if (hqOrder.pushedToFinishing) { addLog(`⚡ auto: ${hqOrder.id} already dispatched — skipped.`, 'info'); return; }
+            const g = openGatesOf(hqOrder)[0];
+            if (g) { addLog(`⚡ auto: ${hqOrder.id} ${g.note} — left parked.`, g.key === 'dispatched' ? 'info' : 'warn'); return; }
+        } else {
+            for (const g of openGatesOf(hqOrder).filter(x => x.kind === 'wait')) {
+                if (!window.confirm(`${g.icon} ${g.help}\n\nRelease it to the floor anyway?`)) return;
+            }
+            if (!window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
+            const done = openGatesOf(hqOrder).find(x => x.key === 'dispatched');
+            if (done && !window.confirm(`⚠ ${done.help}`)) return;
         }
-        // THE POLES DO NOT EXIST YET (Stuart 2026-08-19). A 4 ft order is cut from stocked 8 ft rods,
-        // and until WMS → ROD CUTS → Cuts for Finishing has done it there is nothing to pick or
-        // spray. Releasing early sends the floor after rods nobody has made.
-        if (!opts.auto && hqOrder.awaitingRodCut && !window.confirm(`⏳ ${hqOrder.id} is waiting on a rod cut.\n\n${hqOrder.rodCutNote || 'The 8 ft rods have not been cut yet.'}\n\nUntil WMS → ROD CUTS → "Cuts for Finishing" completes it, the ${woItemCodeOf(hqOrder) || 'cut'} poles do not exist to pick or finish — and that cut prints this order's label when it's done.\n\nRelease it to the floor anyway?`)) return;
-        // COMPONENT CONVERT GATE (Stuart 2026-08-27) — same wait as the rod cut, for /P components:
-        // the pre-check found the phosphated cores short and raised a convert to-do; until the WMS
-        // Convert tab posts it, the components do not exist to pick.
-        if (!opts.auto && hqOrder.awaitingConvert && !window.confirm(`⏳ ${hqOrder.id} is waiting on a phosphate CONVERT.\n\n${hqOrder.convertGateNote || 'Component /P cores are short — a convert to-do is open on the WMS Convert tab.'}\n\nUntil the convert posts, the ${woItemCodeOf(hqOrder) || ''} components do not exist to pick. The gate clears itself when the WMS completes the convert.\n\nRelease it to the floor anyway?`)) return;
-        // ORDER-ENTRY WOs wait for their SALES ORDER (the CPQ rule: a rejected order never becomes
-        // work). The outbox writeBack lifts this the moment NetSuite accepts the SO.
-        if (!opts.auto && hqOrder.awaitingSoAccept && !window.confirm(`⏳ ${hqOrder.id} belongs to sales order ${hqOrder.soAppId || ''}, which NetSuite has not accepted yet.\n\nThe gate clears itself when the SO posts (watch the Transmit Log). If NetSuite REJECTED the order, fix and re-send it rather than releasing this work.\n\nRelease it to the floor anyway?`)) return;
-        // NOTHING GOES TO THE FLOOR WITHOUT ITS NETSUITE WORK ORDER (Stuart 2026-08-29) — the
-        // number is queued (11.1 → Sync Queue) and stamps back within about a minute.
-        if (!opts.auto && hqOrder.awaitingNsWo && !hqOrder.nsWoId && !window.confirm(`⏳ ${hqOrder.id} is waiting for its NETSUITE WORK ORDER number.\n\nThe WO is queued (11.1 → NetSuite Sync Queue) and its number stamps back automatically — the release then happens on its own. Releasing NOW puts unanchored paper on the floor.\n\nRelease it anyway?`)) return;
-        if (!opts.auto && hqOrder.awaitingComponents && !hqOrder.componentsDone && !window.confirm(`⏳ ${hqOrder.id} is waiting on ${(hqOrder.componentShopWoIds || []).length} component shop WO(s) still in milling.\n\nThe pulls do not exist yet — the gate clears itself the moment the shop completes them. Releasing NOW sends the floor a job it cannot pick.\n\nRelease it anyway?`)) return;
-        if (!opts.auto && !window.confirm(`Push HQ Order ${hqOrder.id} to the Finishing Floor Setup Queue?`)) return;
-        // STOP MECHANISM (Stuart 2026-07-21): a second tap must never quietly duplicate the
-        // floor card — an already-dispatched order needs an explicit, scary re-confirm.
-        if (!opts.auto && hqOrder.pushedToFinishing && !window.confirm(`⚠ ${woRefOf(hqOrder)} was ALREADY dispatched to finishing.\n\nRelease it AGAIN anyway? Normally NO — this re-copies the floor card.`)) return;
 
         // SALES-SNAPSHOT stock WOs (2026-07-16): the snapshot pre-builds the COMPLETE finishing
         // doc (pole rack info, paint sizes, stock ids) and parks the WO here for review —
@@ -1953,21 +1946,35 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 const ans = window.prompt(`Re-issue the shortfall?\n\n${plan.balance} × ${itemCode} were not built.\n\nQuantity to re-issue (blank or 0 = none — adjust it for an efficient batch):`, String(plan.reissueQty));
                 const rq = parseInt(ans) || 0;
                 if (rq > 0) {
-                    const stamp = Date.now().toString().slice(-6);
-                    const newId = `WO-${String(itemCode).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}`;
-                    await setDoc(doc(db, 'hq_work_orders', newId), withItemCode({
-                        id: newId, woId: newId, brand: activeBrand, status: 'Approved',
-                        customer: 'Internal Stock', type: String(itemCode), rootItem: String(itemCode).toUpperCase(),
-                        partErpId: String(itemCode).toUpperCase(), itemName: m.order.itemName || '',
-                        totalParts: rq, recipe: m.order.recipe || '',
-                        reqDate: m.order.needBy || m.order.reqDate || new Date(Date.now() + 6048e5).toISOString().split('T')[0],
-                        // LINEAGE — without it the board fills with replacements nobody can relate
-                        // to the order they came from.
-                        replacesWo: m.order.id, replacesReason: `balance closed, ${plan.balance} short`,
-                        ...(m.order.stockInternalId ? { stockInternalId: String(m.order.stockInternalId) } : {}),
-                        createdAt: Date.now(), createdBy: currentUser || '', source: 'RTG_REISSUE',
-                    }));
-                    addLog(`↻ Re-issued ${rq} × ${itemCode} as ${newId} (replaces ${m.order.id}) — parked here for release.`, 'success');
+                    // WRITER 10 → THE ONE WRITER (Brief B6 / A's patch spec, 2026-09-02). This used to
+                    // park a route-open record here — no routeTo, no finPayload, no anchor — the last
+                    // writer that did, and the one that never auto-released (audit P0 #1). Now it is a
+                    // parkWorkOrder call: the code decides the route (finish suffix → FINISHING with a
+                    // complete finPayload, raw → SHOP), the lineage rides as replacesWo/replacesReason,
+                    // and a /P core or a plated finish is REFUSED with nothing written — those are a
+                    // convert or a plating demand, never a work order.
+                    const code = String(itemCode).toUpperCase();
+                    let libSnap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', code)));
+                    if (libSnap.empty) libSnap = await getDocs(query(collection(db, 'Approved_Designs'), where('itemId', '==', code)));
+                    const part = libSnap.empty ? null : { id: libSnap.docs[0].id, ...libSnap.docs[0].data() };
+                    if (!part) {
+                        addLog(`⛔ re-issue of ${rq} × ${code} refused: not in the Master Library — sync or create it first. Nothing parked.`, 'error');
+                    } else {
+                        try {
+                            const res = await parkWorkOrder({
+                                intent: INTENT.REISSUE, part, qty: rq, brand: activeBrand, createdBy: currentUser || '',
+                                reqDate: m.order.needBy || m.order.reqDate || '',
+                                note: `↻ re-issue of ${m.order.id} — balance closed, ${plan.balance} short`,
+                                source: 'RTG_REISSUE',
+                                replaces: { woId: m.order.id, reason: `balance closed, ${plan.balance} short` },
+                                inventory: [part],
+                            });
+                            addLog(`↻ Re-issued ${rq} × ${code} as ${res.woId} (replaces ${m.order.id}) — route ${res.routeTo}, auto-releases when clear.${res.made.length > 1 ? ` ${res.made.slice(1).join(' · ')}` : ''}`, 'success');
+                        } catch (e) {
+                            if (e instanceof ParkRefusal) addLog(`⛔ re-issue of ${rq} × ${code} refused (${e.code}): ${e.message}`, 'error');
+                            else throw e;
+                        }
+                    }
                 }
             }
             alert(`⚖ ${itemCode} closed short.\n\nBuilt ${plan.good} of ${plan.ordered}; balance ${plan.balance} closed across ${res.fin} finishing / ${res.shop} shop / ${res.hq} RTG record(s).${skipped.length ? `\n\n⚠ NOT done: ${skipped.join('; ')}` : ''}${res.ns ? `\n\nNetSuite WO close queued (${res.ns}) — NOT confirmed; a non-WIP work order refuses it.` : ''}\n\nWatch the transmit log for the NetSuite writes.`);
@@ -2584,21 +2591,12 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                                     </div>
                                                 );
                                             })()}
-                                            {wo.awaitingRodCut && (
-                                                <div title={`WMS → ROD CUTS → Cuts for Finishing. ${wo.rodCutNote || ''}`} style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>
-                                                    ✂ AWAITING ROD CUT{wo.rodCutNote ? <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}> · {wo.rodCutNote}</span> : ''}
+                                            {/* Every open gate, from the one list — cleared by whom is in the hover. */}
+                                            {openGatesOf(wo).filter(g => g.kind === 'wait').map(g => (
+                                                <div key={g.key} title={`Cleared by ${g.clearedBy}.`} style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>
+                                                    {g.icon} {g.label.toUpperCase()}{g.detail ? <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}> · {g.detail}</span> : ''}
                                                 </div>
-                                            )}
-                                            {wo.awaitingConvert && (
-                                                <div title={`WMS → Convert tab ("Needs Phosphating"). ${wo.convertGateNote || ''} The gate clears itself when the convert posts.`} style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>
-                                                    ⇄ AWAITING CONVERT{wo.convertGateNote ? <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}> · {wo.convertGateNote}</span> : ''}
-                                                </div>
-                                            )}
-                                            {wo.awaitingSoAccept && (
-                                                <div title="This work order belongs to an Order Entry sales order NetSuite has not accepted yet — the gate clears itself when the SO posts (Transmit Log shows progress)." style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>
-                                                    ⏳ AWAITING SO ACCEPT{wo.soAppId ? <span style={{ fontWeight: 400, color: 'var(--ink-soft)' }}> · {wo.soAppId}</span> : ''}
-                                                </div>
-                                            )}
+                                            ))}
                                             {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}
                                             {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
                                             {urgentControls(wo, 'hq_work_orders')}
@@ -2614,7 +2612,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                             itself the moment its gates open. */}
                                         {(wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') ? (
                                             <span title="Auto-flow: components in stock → straight to finishing; /P short → releases when the WMS convert posts; raw short → its milling WO is already on the shop floor." style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, color: 'var(--brass)', border: '1px dashed var(--brass)', background: '#fdf8ef' }}>
-                                                🔁 AUTO-FLOW · {wo.awaitingSoAccept ? 'awaiting SO accept' : wo.awaitingConvert ? 'awaiting phosphate convert' : (wo.awaitingComponents && !wo.componentsDone) ? 'awaiting component milling' : wo.awaitingRodCut ? 'awaiting rod cut' : (wo.awaitingNsWo && !wo.nsWoId) ? 'awaiting NetSuite WO #' : 'releasing…'}
+                                                🔁 AUTO-FLOW · {gateSummary(wo) || 'releasing…'}
                                             </span>
                                         ) : (<>
                                         <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>

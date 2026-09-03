@@ -197,3 +197,60 @@ export const statusLine = (st) =>
         .map(s => `${s.label}: ${stageLabel(s.stage).toLowerCase()}${s.detail ? ` (${s.detail})` : ''}`)
         .join(' · ');
 
+// ── THE GATES (Brief B2, Stuart 2026-09-02) ──────────────────────────────────────────────────
+// What parks an hq_work_orders record in RTG, and the ONE list of it. Until this, the same six
+// conditions were hand-written in three places (RTG's auto-release effect, pushToFinishing's auto
+// branch and A's clearConvertGate) and worded a fourth way on the board — they agreed by luck. Now
+// every reader — the two auto effects, the release's confirms, the board's gate lines and its
+// AUTO-FLOW chip, Where-Is-It, and clearConvertGate — asks here, so a gate added to this table is
+// seen and worded identically everywhere at once.
+//
+// Order = the order the flow opens them in: the sales order has to exist, then its NetSuite
+// anchor, then the components have to be milled, phosphated and cut, then it goes ONCE.
+// `kind: 'wait'` gates are things the order is waiting on; 'done' is the already-released stop.
+// `label` is the fixed wording, `detail` the order's own note; `note` = label · detail.
+// The gates are EVALUATED here and nowhere else — they are SET by the writers (A) and CLEARED by
+// the WMS / the outbox writeBack / RTG's component effect (see SYSTEM_FLOW_AUDIT §5).
+const itemOf = (wo) => String(wo.itemCode || wo.stockErpId || '').trim();
+export const GATES = [
+    { key: 'soAccept', kind: 'wait', icon: '⏳',
+      open: (wo) => !!wo.awaitingSoAccept,
+      label: 'awaiting SO accept', detail: (wo) => wo.soAppId || '',
+      clearedBy: 'NetSuite accepting the sales order (outbox writeBack clears awaitingSoAccept)',
+      help: (wo) => `${wo.id} belongs to sales order ${wo.soAppId || ''}, which NetSuite has not accepted yet.\n\nThe gate clears itself when the SO posts (watch the Transmit Log). If NetSuite REJECTED the order, fix and re-send it rather than releasing this work.` },
+    { key: 'nsWo', kind: 'wait', icon: '⏳',
+      open: (wo) => !!wo.awaitingNsWo && !wo.nsWoId,
+      label: 'awaiting NetSuite WO #', detail: () => '',
+      clearedBy: 'the outbox writeBack stamping nsWoId',
+      help: (wo) => `${wo.id} is waiting for its NETSUITE WORK ORDER number.\n\nThe WO is queued (11.1 → NetSuite Sync Queue) and its number stamps back automatically — the release then happens on its own. Releasing NOW puts unanchored paper on the floor.` },
+    { key: 'components', kind: 'wait', icon: '🧩',
+      open: (wo) => !!wo.awaitingComponents && !wo.componentsDone,
+      label: 'awaiting component milling', detail: (wo) => (wo.componentShopWoIds || []).length ? `${wo.componentShopWoIds.length} shop WO(s)` : '',
+      clearedBy: 'every component shop WO completing (RTG\'s live effect stamps componentsDone)',
+      help: (wo) => `${wo.id} is waiting on ${(wo.componentShopWoIds || []).length} component shop WO(s) still in milling.\n\nThe pulls do not exist yet — the gate clears itself the moment the shop completes them. Releasing NOW sends the floor a job it cannot pick.` },
+    { key: 'convert', kind: 'wait', icon: '⇄',
+      open: (wo) => !!wo.awaitingConvert,
+      label: 'awaiting phosphate convert', detail: (wo) => wo.convertGateNote || '',
+      clearedBy: 'the WMS Convert tab posting the convert (clearConvertGate)',
+      help: (wo) => `${wo.id} is waiting on a phosphate CONVERT.\n\n${wo.convertGateNote || 'Component /P cores are short — a convert to-do is open on the WMS Convert tab.'}\n\nUntil the convert posts, the ${itemOf(wo)} components do not exist to pick. The gate clears itself when the WMS completes the convert.` },
+    { key: 'rodCut', kind: 'wait', icon: '✂',
+      open: (wo) => !!wo.awaitingRodCut,
+      label: 'awaiting rod cut', detail: (wo) => wo.rodCutNote || '',
+      clearedBy: 'WMS → ROD CUTS → Cuts for Finishing completing it (prints this order\'s label)',
+      help: (wo) => `${wo.id} is waiting on a rod cut.\n\n${wo.rodCutNote || 'The 8 ft rods have not been cut yet.'}\n\nUntil WMS → ROD CUTS → "Cuts for Finishing" completes it, the ${itemOf(wo) || 'cut'} poles do not exist to pick or finish — and that cut prints this order's label when it's done.` },
+    { key: 'dispatched', kind: 'done', icon: '✓',
+      open: (wo) => !!wo.pushedToFinishing,
+      label: 'already dispatched to finishing', detail: () => '',
+      clearedBy: 'nothing — an order is released once',
+      help: (wo) => `${wo.woDisplayId || wo.nsWoTran || wo.id} was ALREADY dispatched to finishing.\n\nRelease it AGAIN anyway? Normally NO — this re-copies the floor card.` },
+];
+// Every gate, open or not, with its words resolved for this order.
+export const gatesOf = (wo) => !wo ? [] : GATES.map(g => {
+    const detail = g.detail(wo);
+    return { key: g.key, kind: g.kind, icon: g.icon, open: !!g.open(wo), label: g.label, detail, note: detail ? `${g.label} · ${detail}` : g.label, help: g.help(wo), clearedBy: g.clearedBy };
+});
+export const openGatesOf = (wo) => gatesOf(wo).filter(g => g.open);
+// The one question the auto paths ask. False for a missing record — nothing releases nothing.
+export const isReleasable = (wo) => !!wo && openGatesOf(wo).length === 0;
+// "awaiting SO accept · awaiting rod cut" — '' when nothing is open.
+export const gateSummary = (wo, sep = ' · ') => openGatesOf(wo).map(g => g.note).join(sep);

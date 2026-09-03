@@ -12,7 +12,7 @@
 // no second listener to a floor tablet and can never show something staler than the screen around
 // it.
 import React, { useState, useMemo } from 'react';
-import { orderStatusOf, stageLabel, stageTone } from './orderStatus';
+import { orderStatusOf, stageLabel, stageTone, gateSummary } from './orderStatus';
 import OrderStatusChips from './OrderStatusChips';
 import { woRefOf } from './woRef';
 
@@ -109,6 +109,12 @@ const WhereIsIt = ({ orders = [], extras = [], recipeLenOf = () => 0, compact = 
                                     {st.isSplit && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--brass)', textTransform: 'uppercase' }}>split</span>}
                                 </div>
                                 <OrderStatusChips wo={o} recipeLen={recipeLenOf(o)} />
+                                {/* A parked RTG record says what it is waiting on, in the gate list's words. */}
+                                {gateSummary(o) && (
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--brass)', marginTop: '7px' }}>
+                                        ⏳ parked · {gateSummary(o)}
+                                    </div>
+                                )}
                                 {place && (
                                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink)', marginTop: '7px' }}>
                                         📍 {place}

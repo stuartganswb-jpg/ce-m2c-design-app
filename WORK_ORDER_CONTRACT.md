@@ -159,6 +159,18 @@ Requirement: the small-parts job window in the Setup Queue shows the matching cu
 
 </details>
 
+## 5a. The gates — `gatesOf(wo)` (Brief B2)
+
+What parks an `hq_work_orders` record in RTG is ONE ordered list in `Shared/orderStatus.js`:
+`soAccept → nsWo → components → convert → rodCut → dispatched`. Exports: `GATES`, `gatesOf(wo)`
+(every gate with `key / kind / icon / open / note / help / clearedBy` resolved for this order),
+`openGatesOf(wo)`, `isReleasable(wo)` (the one question every auto path asks — false for a missing
+record), `gateSummary(wo)` (`"awaiting SO accept · SO-9 · awaiting rod cut"`). The gates are
+evaluated here and nowhere else; they are SET by the writers and CLEARED by the WMS, the outbox
+writeBack and RTG's component effect (SYSTEM_FLOW_AUDIT §5). A gate added to `GATES` is seen and
+worded identically by RTG's two auto effects, the release confirms, the board's gate lines and
+AUTO-FLOW chip, Where-Is-It, and A's `clearConvertGate`.
+
 ---
 
 ## 6. SO-import + auto-split flow (the new feature)
