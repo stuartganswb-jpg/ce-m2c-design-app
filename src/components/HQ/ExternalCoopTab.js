@@ -17,6 +17,7 @@ import OrderStatusChips from '../Shared/OrderStatusChips';
 import { orderStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
 import { softDeleteOrder, closeOrderEverywhere, deleteLinkedDemands } from '../Shared/orderLifecycle';
 import { queueEstimateToSalesOrder, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
+import { soHeaderOf } from '../Shared/salesOrderHeader';
 import { printForm } from '../Shared/printForm';
 
 const printStyles = `
@@ -900,13 +901,21 @@ const ExternalCoopTab = ({ currentUser, activeBrand, userRole = '' }) => {
       if (!window.confirm(`Create the NetSuite Sales Order for ${quoteDisplayNo(job)} now?\n\nTransforms estimate ${job.netsuiteEstimateNo || job.netsuiteEstimateId} into a Sales Order (queued — posts in ~1 min, the SO # lands here and on the RTG board automatically).`)) return;
       try {
           const soDocId = `SO-APP-${String(job.quoteNo || job.jobId || job.id).replace(/[^A-Za-z0-9-]/g, '')}`;
+          // ONE HEADER, WHICHEVER DOOR (Brief E, Q9/Q10 — Shared/salesOrderHeader): built from the
+          // job exactly as CPQ's save-as-SO builds it — customer, PO, sidemark, needBy (the
+          // customer's date or '' — the +14-day fiction is gone), ready date, shipTo, production
+          // notes, and the recipe stamped from the job's finishes (no PENDING-RECIPE placeholder).
+          const [mf, os] = await Promise.all([getDoc(doc(db, 'system', 'master_finishes')), getDocs(collection(db, 'hq_outsource_finishes'))]);
+          const outsourceFinishes = os.docs.map(d => ({ id: d.id, ...d.data() }));
+          const finishes = [...((mf.exists() && mf.data().finishes) || []), ...outsourceFinishes];
+          const custRec = { ...(crmData[job.customer?.id] || activeCrmRecord || {}), id: job.customer?.id || activeCrmRecord?.id || '', name: job.customer?.name || activeCrmRecord?.name || '' };
+          const soHeader = soHeaderOf({ door: 'CRM', job, customer: custRec, finishes, outsourceFinishes, by: currentUser || '' });
           await setDoc(doc(db, 'hq_sales_orders', soDocId), {
-              id: soDocId, soId: soDocId, appCreated: true, brand: activeBrand,
-              customer: job.customer?.name || activeCrmRecord?.name || '', status: 'Approved', type: 'Custom',
-              hqJobId: job.id, memo: job.sidemark || job.jobName || '',
-              recipe: 'PENDING-RECIPE', totalParts: 1, length: 0, width: 0, height: 0,
-              reqDate: new Date(Date.now() + 12096e5).toISOString().split('T')[0],
-              createdAt: Date.now(), createdBy: currentUser || ''
+              id: soDocId, soId: soDocId, brand: activeBrand,
+              status: 'Approved', type: 'Custom',
+              ...soHeader,
+              totalParts: 1, length: 0, width: 0, height: 0,
+              createdAt: Date.now(),
           }, { merge: true });
           const res = await queueEstimateToSalesOrder({
               job, by: currentUser || '',
