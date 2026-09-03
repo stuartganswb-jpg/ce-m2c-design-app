@@ -296,7 +296,7 @@ committed stock. The short path already exists if an observation goes stale
 
 **THE WINDOW HAS THREE BUCKETS, NOT ONE LIST.** "In stock or not" is not two-state:
 
-1. **Uncovered demand** — actionable here, raise the WO or PO. Only a genuine zero qualifies.
+1. **Uncovered demand** — actionable here, raise the WO or PO.
 2. **Cannot be answered** — `Shared/pickOrder.isDataProblem(state)`: `UNKNOWN_LIBRARY` /
    `NO_NETSUITE_LINK` / `NO_STOCK_RECORD`. Actionable by someone else (fix the item), shown by NAME
    not quantity. **Must be visibly separate**: the window's filter is "not covered by a WO or PO", so
@@ -313,6 +313,22 @@ committed stock. The short path already exists if an observation goes stale
    distinguishable from "0 available and 0 on hand" and can say *committed to SO … since 14 Aug*.
    The honest fix is upstream: close or ship those orders. **Raised to Stuart as its own item**; the
    0-pcs one is an empty order that arguably should never have posted.
+
+**THE ORDER OF THE TEST MATTERS — `codeHealth` DOES NOT DETECT A SHORTAGE** (D's correction to an
+earlier phrasing of mine, verified at `Shared/pickOrder.js:103`). It takes **no quantity** and never
+compares need to on-hand: its `OK` branch is only for blank/`PENDING`/`N/A` codes, so a healthy code
+with 500 on the shelf returns `OUT_OF_STOCK` exactly like a code short by 2 of 5. It classifies
+*why there is nothing*, presupposing a shortage — it does not find one. So filtering the window on
+`state === 'OUT_OF_STOCK'` would be doubly wrong: it admits every healthy code, and it cannot see a
+partially covered line, which is not a distinct state but a positive remainder on a code whose state
+reads identically to a total shortage. The composition is, strictly in this order:
+
+1. **Arithmetic decides membership** — `remainder = needed − (on-hand + open WO qty + PO qty not yet
+   received)`. `remainder > 0`, or the line is not on the window at all.
+2. **`codeHealth` explains it** — on those lines only, as a label.
+3. **`isDataProblem(state)` buckets it** — true → bucket 2, everything else short → bucket 1.
+
+Quantity is the membership test; health is only the label.
 
 **Partial coverage is a QUANTITY, not a state:** needed − (on-hand + open WO qty + PO qty **not yet
 received**). For a PO the covering figure is `quantity − received`, so a PO for 5 that returned 4
