@@ -160,6 +160,53 @@ writes yet are dead schema, and the second one is a real decision (does a short 
 leave it open against the vendor's acknowledged ready date?) that belongs with the tab it serves.
 Both requirements are recorded here so whoever builds it starts from them; the writer stays A's.
 
+## 3g. THE WOOD ROUTING FINDING — observed live 2026-09-03, accepted for these orders
+
+**Stuart's rule** (second pass, verbatim): *"wood + miter → Custom, wood + straight → finishing is
+perfect. there will never be miter or custom bends/french returns on order entry, those will always
+come from cpq. so wood from order entry right to finishing. metal from order entry follows same
+rules as cpq."* Metal was already correct and is untouched throughout.
+
+**It does not hold today, and not for the reason first suspected.** Brief D read
+`Shared/lineClassification.classifyLine` correctly — `const partLevel = …partHandling; if
+(partLevel) return partLevel;` fires BEFORE the per-line flag, so an item tag short-circuits any
+line-level escalation. D's hypothesis was that wood rods were tagged Small Parts, blocking miters.
+**Checked in the live app instead of guessing** (Master Library cards, two of five opened):
+
+- Wood poles exist ONLY as raw rods — `H1-138WHTOAK` (by foot), `-4`, `-6`, `-8`, `-10`. There is
+  **no stained variant item at all** (no `/S04`, no `/S11`), so a stained wood line resolves to the
+  RAW rod.
+- `H1-138WHTOAK-6` (1-3/8" × 72", the length on tonight's orders) and `H1-138WHTOAK` both read
+  **PART HANDLING = Custom**, PROD TYPE POLE, FINISH STREAM POLES. That tag is *correct* per the
+  settled rule (a mill code with no suffix is made-to-order) and `handlingForErp` produces it for
+  all five identically.
+
+**So every wood pole line goes to the SHOP — straight ones included.** Observed live: H1-138 #1
+(NATURAL OAK 72" ×2) and #2 (PURE OAK 72" ×2). The miter half stays hypothetical; the straight half
+is real and was seen on these orders.
+
+**Both obvious fixes are wrong**, which is why nothing was changed:
+- *Tag the rods Small Parts* → straight wood reaches finishing, but a mitered wood line could then
+  NEVER escalate, because any tag short-circuits the line flag.
+- *Untag them* → the line decides, but that needs the flow step to stamp handling, and letting a
+  line-level Custom beat an item tag is exactly what Stuart banned 2026-07-28 (the flow generator
+  stamped every bracket step 'Custom', dragging brackets/backplates to the shop and starving the
+  finishing pick list — the comment at `lineClassification` §1 records it).
+
+**The shape that satisfies both rules:** escalate on the CUT itself — the miter signal that already
+exists on a CPQ order (`fabMethod` / `qtyMiters` / `qtyMiterReturns`, built by RTG's split from
+Vision's `engData.shape === 'MITERED'`) — rather than on a generic handling stamp. A mitered line
+goes to the shop because it needs sawing, not because something tagged it. Touches E
+(`classifyLine`), B (the split) and C (owns `RodPieceInventory`/`rodPieces`, which already read
+`fabMethod`). **A's part is the finding only; the change is not A's to make.**
+
+**STATUS: accepted, not fixed.** Stuart, relayed 2026-09-03: *"enter all 4, shop is fine for this
+time, just enter these, the team is actually going to do the work on the floor for them as actual
+orders."* These are REAL customer orders — they post to NetSuite and the floor physically builds
+them. So: **do NOT retag the wood rods and do NOT ship a handlingForErp/classifyLine change while
+these orders are in flight** — rerouting work already on the floor is worse than the fault. If he
+later approves the design, ask explicitly whether he means after these four are built.
+
 ## 4. Blocked / waiting on others
 
 - Writer 7 on B's B1 (`buildFinDoc`). B will send the hash.
