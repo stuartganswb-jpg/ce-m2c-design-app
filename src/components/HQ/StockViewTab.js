@@ -1060,9 +1060,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         const e = (p.legacyErpId || p.itemId || '').toUpperCase();
         if (e) partByKey['erp:' + e] = p;
     });
-    // Finish/recipe = the code after the last "/", up to the first "-" (e.g. BL-N→BL, CP-10-N→CP, P01→P01).
-    // The "-N" is a temporary new-item marker and any "-10"/"-12" is a size, not part of the finish.
-    const finishOf = (itemid) => { const s = String(itemid || ''); const i = s.lastIndexOf('/'); return i >= 0 ? s.slice(i + 1).split('-')[0].toUpperCase() : ''; };
+    // Finish/recipe of a snapshot row = the SHARED reader (Brief A, A6 — Stuart 2026-09-02 "yes /P is
+    // a core"): finishCodeFromErp strips the "-N" new-item marker and "-10"/"-12" pack sizes exactly as
+    // the local copy did, and answers '' for a /P core — so a /P row shows no finish chip and sorts
+    // with the raw rows. One answer to "what finish is this", the same one the writers route on.
     const POLE_RACK = 8; // poles are painted 8 per rack (not sled-packed by S/M/L)
     // RING PACKS (Stuart 2026-07-17): "BASE/FIN-EA" = the stocked SINGLE; "BASE/FIN-7/-10/-12"
     // (any digits, WITH an -EA sibling in the report) = customer pack ASSEMBLIES of that single —
@@ -2539,7 +2540,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // same-finish work orders can be issued as one batch; ITEM # = default order.
                 const rows = snapSort === 'finish'
                     ? [...rowsFiltered].sort((a, b) =>
-                        (finishOf(a.itemid) || '~').localeCompare(finishOf(b.itemid) || '~') ||
+                        (finishCodeFromErp(a.itemid) || '~').localeCompare(finishCodeFromErp(b.itemid) || '~') ||
                         String(a.itemid).localeCompare(String(b.itemid), undefined, { numeric: true, sensitivity: 'base' }))
                     : rowsFiltered;
                 // RAW-CORES view (Stuart 2026-07-17): demand rolled up to the BASE item behind the
@@ -2958,7 +2959,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 <React.Fragment key={r.internalId}>
                                                 <tr style={urg ? { background: '#fdf3f3' } : undefined}>
                                                     <td style={{ padding: '7px 12px', textAlign: 'left', fontFamily: 'var(--mono)', fontSize: '11px', color: 'var(--ink)', borderBottom: '1px solid var(--paper-2)', position: 'sticky', left: 0, background: urg ? '#fdf3f3' : '#fff', whiteSpace: 'nowrap' }}>{r.itemid}{urg && <span title={urg.map(u => `${u.ref}: needs ${u.need}, make ${u.shortfall} × ${u.coreErpId}`).join(' · ')} style={{ marginLeft: '6px', color: '#fff', background: '#d9534f', fontSize: '9px', padding: '2px 6px', letterSpacing: '.05em' }}>⚠ URGENT · make {urgentTotalFor(urg)} × {urg[0].coreErpId}</span>}{info.isPole ? <span style={{ color: 'var(--brass)', fontSize: '9px' }}> · POLE</span> : (info.size ? <span style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · {info.size}</span> : null)}{info.isOutsourced ? <span title="Outsourced (vendor, not an assembly) — 6-month safe-stock rule" style={{ color: '#3f7fc4', fontSize: '9px' }}> · OUT</span> : (info.isAssembly ? <span title="Assembly finished in-house — 6-week rule (3wk lead + 3wk safety)" style={{ color: '#3a7d44', fontSize: '9px' }}> · ASM</span> : null)}{info.isPack ? <span title={info.minRule} style={{ color: 'var(--ink-soft)', fontSize: '9px' }}> · PACK×{info.packSize}</span> : (info.isSingleAgg ? <span title="This EA history IS the full single demand (each-buyers + mirrored pack consumption); pack rows are not added on top — no double count. Avail counts pack shelf stock × size." style={{ color: '#3a7d44', fontSize: '9px' }}> · EA+</span> : null)}
-                                                    {finishOf(r.itemid) && !info.isPack ? (
+                                                    {finishCodeFromErp(r.itemid) && !info.isPack ? (
                                                         sug
                                                             ? <button onClick={() => { if (window.confirm(`Clear the convert suggestion (${sug.qty} × ${sug.from})?`)) setConvSugMap(p => { const n = { ...p }; delete n[r.itemid]; return n; }); }} title="Convert suggestion attached — rides onto the WO for the Setup Queue operator. Click to clear." style={{ marginLeft: '6px', background: 'var(--brass)', color: '#fff', border: 'none', padding: '2px 7px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px' }}>⇄ {String(sug.from).split('/').pop()} ×{sug.qty}</button>
                                                             : <button onClick={() => setConvSugFor(convSugFor === r.itemid ? null : r.itemid)} title="Suggest converting a sister finished color to raw for this build — the WO carries the note; the Setup Queue operator runs the actual conversion" style={{ marginLeft: '6px', background: convSugFor === r.itemid ? 'var(--ink)' : 'transparent', color: convSugFor === r.itemid ? '#fff' : 'var(--brass)', border: '1px solid var(--brass)', padding: '1px 6px', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '9px' }}>⇄</button>
