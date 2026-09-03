@@ -45,8 +45,7 @@ pick/pack. *Q3* — rules are deployed.
 are tablets in Spanish-first hands — wording matters (`i18n.js`).
 
 **Vercel.** `curl -s https://www.4cosworkcenter.com/version.json` → stamp after commit time.
-**PickPackApp is a lazy chunk** (5,813 lines, one file) — sweep `/asset-manifest.json`, string
-literals only.
+**PickPackApp compiles into `main.*.js`** (verified live by the D session 09-02 — not a lazy chunk; 5,813 lines, one file) — grep main for string-literal markers.
 
 **Cloud Shell — yours, and not automatic.** `functions/index.js` (`nsOutboxWorker`,
 `onStockBuildDone`, `netsuiteProxy`) deploys only from `shell.cloud.google.com`: `git pull` →
