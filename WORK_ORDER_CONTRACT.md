@@ -171,6 +171,36 @@ writeBack and RTG's component effect (SYSTEM_FLOW_AUDIT §5). A gate added to `G
 worded identically by RTG's two auto effects, the release confirms, the board's gate lines and
 AUTO-FLOW chip, Where-Is-It, and A's `clearConvertGate`.
 
+## 5b. The builders — one release, one document shape (Brief B1/B3, 2026-09-04)
+
+`Shared/floorRelease.js` (no React):
+
+- `buildFinDoc({ hqOrder, finPayload, by, now?, extra? })` → the exact `fin_workorders` doc: the writer's
+  payload verbatim (the Snapshot model — nothing re-derived at release) + `needBy` (E's one date key,
+  '' = none) + the board's later `urgent` statement winning + `nsWoId/nsWoTran` from the record + a
+  parked hold carried + the pole/sled exclusivity ASSERTED (dev throws; prod logs + `shapeWarning`)
+  + `dispatchedAt/By` + `withItemCode`. Callers: `releaseStockWoToFloor`, the CPQ split's small-parts
+  half (adds `cutSheetMissing`/`visionUsed`), A's `releaseFinWoToFloor` (hand-off).
+- `buildShopDoc({ hqOrder, orderType, shopId, finishRecipe, finSiblingId, part?, by, fields?, extra? })` →
+  the exact `shop_custom_orders` doc: `category`/`routeTo` from the order type, sibling links always,
+  `isOutsourced` by the SHARED finish rule (`isOutsourcedRecipe`: code or the recipe's plating codes —
+  never the `hq_outsource_finishes` name match, which now supplies only the plater's price), phosphate
+  by the one rule (record's explicit flag wins), caller-supplied id (the OE pair's `<woId>-C`),
+  `urgent`, `needBy`, the item's `shopInstruction`, `cutSheetMissing`/`visionUsed`. Callers: `pushToShop`,
+  the split's shop half.
+- `releaseStockWoToFloor({ hqOrder, brand, by, log })` → `buildFinDoc` + `pushedToFinishing/Dispatched`
+  on the record + **Route A** (`queueNsStockWorkOrder`: four-source assembly-id resolution, the
+  once-ever STOP, outbox `dedupeKey wo:hq_work_orders:<id>`, writeBack onto BOTH docs). Refuses
+  sales-typed / no payload / already dispatched. Callable with no RTG tab open — the WMS rod-cut and
+  convert completions and A's `clearConvertGate` call it (hand-offs).
+
+**The one release engine (RTG):** the ⚡ toggle is the kill switch; every Approved record with
+`isReleasable` clear goes through its door (SO → split; SHOP → `pushToShop`; sales WO →
+`releaseFinWoToFloor`; stock WO → Route A). No push buttons; one supervisor override in the detail
+view. Order Entry / Quick Ship SOs are on the board as records (`quickShipStatusOf`), never split.
+
+---
+
 ---
 
 ## 6. SO-import + auto-split flow (the new feature)

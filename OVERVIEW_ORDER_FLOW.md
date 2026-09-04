@@ -47,7 +47,7 @@ Finalizing pushes the quote to NetSuite as an **Estimate** today. The plan: when
 - **Custom parts → Shop Floor** (things fabricated to size: cut poles, custom brackets).
 - **Small parts → Finishing Floor** (catalog parts that get picked and finished).
 
-Today this is a manual push per order; the automatic split + the shared order key that keeps both halves matched is what's being wired. **[being connected]**
+Since 4 Sep 2026 this is automatic: one release engine on RTG (the ⚡ toggle is its kill switch) splits a sales order and releases every parked work order through the door its type names the moment its gates clear — a stock build's NetSuite work order is queued at that same moment (Route A, `Shared/floorRelease.js`). There are no push buttons; one supervisor override lives in the order's detail view. Both halves share `orderKey` and cross-link (`finSiblingId` / `shopSiblingId`); the custom half's four states (`Pending → In Process → Sent to Plating → Complete`) gate packing. **[live]**
 
 ---
 

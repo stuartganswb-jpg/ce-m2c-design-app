@@ -1,4 +1,4 @@
-# Brief B handoff — RTG Dispatch + Finishing Floor (2026-09-03, night)
+# Brief B handoff — RTG Dispatch + Finishing Floor (2026-09-04, end of day)
 
 *Brief: `BRIEF_B_RTG_FINISHING.md`. Rules: `CLAUDE.md` working agreement + Stuart 2026-09-03:
 **one issue at a time per session; check for a safe push before every push; approvals relayed via
@@ -38,3 +38,24 @@ None converted yet: **B1 not started** (waits on Stuart ordering it). Inputs are
 
 ## 5. Guide (S2)
 Not yet touched. Sections to update when B3/B9 land: "⚡ Auto-Release", "the honest matrix", "Edges to know", Work Orders, finishing-floor explainer — gate words, the four `customFabStatus` states, the Order Entry rows on the board.
+
+## 6. 2026-09-04 — shipped today (all verified in the served bundle via asset-manifest sweeps)
+
+| commit | what |
+|---|---|
+| 65dbd96 | JFP View Item shows what is painted and what is pulled (Setup Queue) |
+| fc6e4d1 | the auto-flow door matches the order — stock through Route A (five unanchored builds found; heal panel pressed) |
+| f68a68c | `Shared/floorRelease.js`: Route A + the stock release leave the RTG tab (WMS/A call it — specs in D, A) |
+| f60fc29 | closing an order cancels its open rod cut; Setup Queue refuses Start/Stage while a cut is open |
+| e72e7ce | `finishAsAvailable` control on both RTG SO cards (D's four field names; reason logged) |
+| e87d991 | "no finish" on the pull lines via F's `takesNoFinish` (PullLinesLive reads the part records) |
+| a12c804 · 04aebab | **B1**: `buildFinDoc` + `buildShopDoc`; split + pushToShop + stock release use them; `cutSheetMissing`/`visionUsed`/`shopInstruction`; proven on the seeded Brimar order |
+| beba981 | QC scrap + the custom red line reach the RTG record (`propagateFloorState` gains `extra`); rows show "⚠ SCRAP n reported on the floor" |
+| ff69f79 | **B3**: one release engine (toggle = kill switch), Push buttons gone, one supervisor override, source line, PO panel = every open PO + Approve/Mark-sent through A's helpers, legacy-enrich count |
+| (this) | **B9**: guide "⚡ Auto-Release — RTG is the record and the control", OVERVIEW_ORDER_FLOW, WORK_ORDER_CONTRACT §5b |
+
+Hand-offs written today (all in the owners' briefs): A — unresolved BOM pin refuses + "fix the BOM or use JFP" (WO11588); `releaseFinWoToFloor` → `buildFinDoc`; `clearConvertGate` stock branch → `releaseStockWoToFloor`; Reset→Setup propagates. C+D — Shop Reopen cancels its plating demand. D — JFP adjustment double-post (dedupeKey); rod-cut completion calls `releaseStockWoToFloor`; the JFP/plating receipt phases.
+
+Sweep (2026-09-04): every terminal or changing write on the four order collections goes through the one closer / propagate / the record itself, except the three above (handed off) and the Library rollback hard-delete (acceptable, ledgered).
+
+**Still queued (B, on Stuart's word):** `awaitingReceipt` GATES entry + the `finishAsAvailable` release half (after A's `receiptRefs`/`clearReceiptGate`); B5 part 2 stock-first split (`fetchAvailabilityUnits` after `nsInternalId`, three-way answer, pick-only fin doc, no plating demand at the split); B7 `identityKeysOf` SHOP-<id> key; B8 Setup Queue PENDING-RECIPE `recipeSource`; B4 read `so.recipe` first + write `needBy` on the fin doc (then E deletes the aliases); delete the enrich branch after a week of zero; Setup Queue outsourced group after A's writers are all live.
