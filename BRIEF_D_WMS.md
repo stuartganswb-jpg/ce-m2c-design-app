@@ -340,6 +340,44 @@ Plus the repo guide. Listed in the handoff.
 `Shared/orderLifecycle.js`: `propagateFloorState(ctx, { finWo, phase, by })` — phases `'Plating Received'` (receipt) and `'Plated'` (build-back) are B's vocabulary; `'Sent to Plating'` is only ever a `customFabStatus` value.
 Contract text: `WORK_ORDER_CONTRACT.md` §5 / §5a.
 
+### Hand-off from B — the JFP paint-run adjustment posts TWICE (Stuart, 2026-09-04: "it def. doubled the transaction")
+
+**Evidence.** NetSuite IA26935 (8/25 2:39 PM, marker `#Td7hVh`) and IA26936 (2:40 PM, marker
+`#kVbjg8`): same `WO-JFP-HSMCB1-04-983046`, same HSMCB1/04 ×30 into High Point-CE, both posted.
+Two different outbox markers one minute apart = the APP enqueued two writes; the outbox's
+per-marker idempotency never saw a retry. Stock on HSMCB1/04 is overstated by 30 — one of the two
+needs reversing by hand in NetSuite (Stuart's call which).
+
+**Cause (`PickPackApp.js`, verified 2026-09-04).** The JFP adjustment is enqueued from two places
+and NEITHER passes the outbox's `dedupeKey` guard that every other NetSuite writer bitten this way
+already uses (RTG `wo:hq_work_orders:<id>`, Library, `po:<id>`, `wocmpl:<id>`, `nsWorkOrder`):
+1. the put-away scan (`isPaintOnlyOrder(job)` branch in the pack handler, ~:1622) — enqueues, THEN
+   stamps `jfpAdjQueued`; it never checks `jfpAdjQueued`/`jfpAdjPosted` first, so a second scan or a
+   second tablet on the same order queues again;
+2. `redoPutaway` (~:1495, Eric 2026-08-24) — refuses only on `jfpAdjPosted`; it does NOT refuse while
+   the first attempt is still PENDING/POSTING. The worker runs once a minute, so a re-post inside
+   that minute (before the writeBack stamps `jfpAdjPosted`) queues a second copy — the 1-minute gap
+   between the two records fits this exactly.
+
+**Fix (yours, two places, no new mechanism):**
+- both `enqueueNsWrite` calls pass `dedupeKey: \`jfp-adj:${job.id}\`` — the outbox then REFUSES a
+  second entry while one is PENDING/POSTING, with its own message ("already queued … in the
+  NetSuite Sync Queue"); a FAILED entry does not block, so Eric's genuine-rejection re-post still
+  works;
+- the put-away branch refuses up front when `job.jfpAdjQueued || job.jfpAdjPosted` (alert naming
+  `jfpAdjTran` when present — same wording as `redoPutaway`'s guard), so the stamp is a guard, not
+  just a record;
+- `redoPutaway` additionally refuses while `job.jfpAdjQueued && !job.jfpAdjPosted` unless the
+  outbox entry for that key is FAILED (the dedupeKey check covers the in-flight case; this is the
+  honest message for the operator: "the first attempt is still in the queue — wait a minute or
+  check 11.1").
+Nothing changes for onStockBuildDone (it ignores JFP by design — no `nsWoId`). Acceptance: scan
+put-away twice on a JFP order → ONE ns_outbox entry, second scan refused; press ↩ re-post within a
+minute → refused; fail the entry (bad bin) → re-post allowed → ONE new entry.
+
+**Named, not fixed (B):** the same "enqueue then stamp, never check the stamp" shape may exist on
+the pack-scrap adjustment (same account 254, same payload shape) — worth a look while you are there.
+
 ## 8. Open questions (ask before the plan)
 
 1. **Eric — FLOW1's close.** After the /P convert posts against its WO, does a build of the base
