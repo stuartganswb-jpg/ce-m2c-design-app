@@ -6,6 +6,7 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
+import { packLinesOf as packLinesShared, pickableLinesOf } from '../Shared/pickLines';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
@@ -504,20 +505,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         return t.length <= NS_MEMO_MAX ? t : `${t.slice(0, NS_MEMO_MAX - 1).trimEnd()}…`;
     };
 
-    const FEEISH_NAME_RE = /\b(FRENCH|MITERED|MITER|BENT)\s+RETURN\b|\bSPLICE\b|\bFEE\b/i;
-    const lineIsFeeish = (l) => {
-        if (l && (l.isFee || l.lineIsFee)) return true;
-        const pid = String((l && (l.legacyErpId || l.partId)) || '');
-        // A CONFIGURATOR OPTION IS NOT A PART (Eric 2026-08-20). OPT-FLUSH-LEFT told the warehouse
-        // to find a "flush cut left" on a shelf; it is an instruction to the shop about what to do
-        // to the pole. No part record will ever carry an OPT- code — the shortage panel said as
-        // much ("not in the library … fix the flow step, do not make stock") while the pick list
-        // went on asking for it.
-        if (/(^|-)OPT-/i.test(pid)) return true;
-        const hasRealId = pid && pid !== 'PENDING' && pid !== 'N/A' && pid !== 'UNASSIGNED' && !/(^|-)(FEE|HIDDEN)-/.test(pid);
-        return !hasRealId && FEEISH_NAME_RE.test(String((l && l.name) || ''));
-    };
-    const pickableLines = (job) => (job.partsList || []).filter(l => !lineIsFeeish(l));
+    // THE FEE TEST NOW LIVES IN Shared/pickLines (Brief D · D7). It was here, and a near-copy was
+    // in lineClassification, and the pick/pack/label readers each had their own idea of a line.
+    // Moving it found two things the local copy got wrong: an explicit FEE- code still needed its
+    // NAME to agree before it counted as a fee, and the name pattern required the SINGULAR
+    // "RETURN" — so FEE-H1-MRPF called "Mitered Returns" passed both tests and reached the packer.
+    const pickableLines = pickableLinesOf;
     // LIVE PER-BIN STOCK for pick lines (Stuart 2026-07-20 — HCUBEA1 showed UNASSIGNED while
     // NetSuite held 126 in a bin: the stored library home bin was blank/stale). Pulled when a
     // card expands / picking starts / ⟳ Live is tapped; the display and the bin-scan
@@ -725,31 +718,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (CATEGORY_NAME_RX.FINIAL.test(n)) return 'FINIAL';
         return 'SMALL';
     };
-    const packLinesOf = (job) => {
-        const out = [];
-        if (isQsOrder(job)) {
-            // Quick Ship SO: flat stocked lines (kit label kept so the packer sees the set).
-            (job.lines || []).forEach((l, i) => {
-                // aliasErp is display-only: erp stays the real code the packer scans and labels.
-                out.push({ key: `L${i}`, erp: l.erp || '', aliasErp: l.aliasErp || '', name: `${l.name || 'Item'}${l.kit ? ` · ${l.kit}` : ''}`, qty: Number(l.qty) || 1 });
-            });
-        } else if (job.orderType === 'stock') {
-            // Stock build: what gets handled here is the FINISHED item going back to the shelf —
-            // not the raw pull line the pick stage used. Qty is the GOOD count: completedParts
-            // already nets out packing scrap (Sandra 2026-08-10: scrapped 1 of 120 rings and the
-            // card still said 120 — totalParts never changes, completedParts does).
-            const goodQty = (job.completedParts !== undefined && job.completedParts !== null) ? Math.max(0, Number(job.completedParts) || 0) : (Number(job.totalParts) || 1);
-            out.push({ key: 'STOCK', erp: job.stockErpId || job.type || '', name: `${job.stockErpId || job.type || 'Stock'} — finished stock, bin & shelve${(Number(job.packScrap) || 0) > 0 ? ` (${job.packScrap} scrapped)` : ''}`, qty: goodQty });
-        } else {
-            (job.partsList || []).forEach((l, i) => {
-                if (lineIsFeeish(l)) return;
-                out.push({ key: `L${i}`, erp: l.legacyErpId || l.partId || '', name: l.partName || l.name || 'Part', qty: Number(l.quantity ?? l.qty) || 1 });
-            });
-            const poleQty = Number(job.totalPoles || (job.poles && job.poles.qty)) || 0;
-            if (poleQty > 0) out.push({ key: 'POLES', erp: job.poles?.type || job.type || 'POLE', name: `Pole${poleQty === 1 ? '' : 's'} · ${job.poles?.type || job.type || ''}`, qty: poleQty, isPole: true });
-        }
-        return out.map(l => ({ ...l, cat: packCatOf(l) }));
-    };
+    // ONE READER, both dialects (Brief D · D7 — Shared/pickLines). The category tag stays here:
+    // it is display grouping for the pack screen, not part of what a line IS.
+    const packLinesOf = (job) => packLinesShared(job).map(l => ({ ...l, cat: packCatOf(l) }));
     const packRef = (j) => isQsOrder(j) ? `SO ${j.soId || j.id}` : woRefOf(j);
 
     // ── ONE ORDER, ONE PAIR OF HANDS (Stuart 2026-09-02: "make sure each is gated so once a user
