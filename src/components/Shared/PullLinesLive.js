@@ -7,7 +7,28 @@
 // One read per card open (the component mounts when the modal opens); NetSuite unreachable
 // renders "unverified" — it informs, it never blocks.
 import React, { useEffect, useState } from 'react';
+import { collection, getDocs, query, where } from 'firebase/firestore';
+import { db } from '../../firebase';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
+import { takesNoFinish } from './finishLabel';
+
+// THE PART RECORDS BEHIND THE PULL CODES (Stuart 2026-09-03, the "Unfinished" tag): a joiner,
+// splice or connector NEVER takes a finish, and the engine had stamped the configuration finish
+// (S04) on the joiner of the night's first live order. The tag lives on the ITEM
+// (manufacturingSpecs.customData.unfinished) and the one reader is finishLabel.takesNoFinish —
+// item wins, a line's own noFinish counts, a line's finishCode never outranks the record. This
+// component had no part records (it only read NetSuite bins), so it reads them here, by code, in
+// tens. Best-effort like the bin read: unreachable = the line prints what it carries.
+export const fetchPartsByCode = async (codes) => {
+    const out = {};
+    const list = [...new Set((codes || []).map(c => String(c || '').toUpperCase()).filter(Boolean))];
+    for (let i = 0; i < list.length; i += 10) {
+        const slice = list.slice(i, i + 10);
+        const snap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', 'in', slice)));
+        snap.forEach(d => { const p = { id: d.id, ...d.data() }; out[String(p.legacyErpId || '').toUpperCase()] = p; });
+    }
+    return out;
+};
 
 const binQuery = (codes, locationId) => {
     const idList = codes.map(c => `'${String(c).toUpperCase().replace(/'/g, "''")}'`).join(',');
@@ -54,6 +75,7 @@ const pullLinesOf = (wo) => {
             name: l.partName || l.name || '',
             qty: Number(l.quantity != null ? l.quantity : l.qty) || 0,
             finish: l.finishLabel || l.finishCode || '',
+            noFinish: !!l.noFinish,          // the 1.6 pin fact (e.g. clear acrylic) — takesNoFinish reads it
         }))
         .filter(l => l.code);
     const own = String((wo && (wo.stockErpId || wo.type)) || '').toUpperCase();
@@ -69,13 +91,23 @@ const PullLinesLive = ({ wo }) => {
     const byCode = new Map();
     rawLines.forEach(l => {
         const cur = byCode.get(l.code);
-        if (cur) { cur.qty += l.qty; if (l.finish && !cur.finishes.includes(l.finish)) cur.finishes.push(l.finish); }
+        if (cur) { cur.qty += l.qty; if (l.finish && !cur.finishes.includes(l.finish)) cur.finishes.push(l.finish); cur.noFinish = cur.noFinish || l.noFinish; }
         else byCode.set(l.code, { ...l, finishes: l.finish ? [l.finish] : [] });
     });
     const lines = [...byCode.values()];
     const codes = [...new Set(lines.map(l => l.code))];
     const codesKey = codes.join('|');
     const locationId = (BRAND_NETSUITE_MAP[String((wo && (wo.brand || wo.brandId)) || 'ce').toLowerCase()] || {}).location || '17';
+
+    const [parts, setParts] = useState({});
+    useEffect(() => {
+        let dead = false;
+        if (!codesKey) { setParts({}); return undefined; }
+        fetchPartsByCode(codesKey.split('|'))
+            .then(map => { if (!dead) setParts(map); })
+            .catch(() => { if (!dead) setParts({}); });
+        return () => { dead = true; };
+    }, [codesKey]);
 
     useEffect(() => {
         let dead = false;
@@ -107,7 +139,9 @@ const PullLinesLive = ({ wo }) => {
                         <span style={{ minWidth: '180px' }}>
                             <span style={{ ...mono, fontWeight: 600, color: 'var(--ink)' }}>{l.code}</span>
                             <span style={{ color: 'var(--ink-soft)' }}> × {l.qty}</span>
-                            {(l.finishes || []).length > 0 && <span style={{ ...mono, fontSize: '10px', color: 'var(--brass)' }}> · {l.finishes.join(', ')}</span>}
+                            {takesNoFinish(parts[l.code], l)
+                                ? <span title="This part takes no finish (Unfinished tag on the item, or the pin says so) — it is pulled as is, never sprayed." style={{ ...mono, fontSize: '10px', color: 'var(--ink-soft)' }}> · no finish</span>
+                                : (l.finishes || []).length > 0 && <span style={{ ...mono, fontSize: '10px', color: 'var(--brass)' }}> · {l.finishes.join(', ')}</span>}
                             {l.name && <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)' }}>{l.name}</div>}
                         </span>
                         <span style={{ ...mono, fontSize: '11px', textAlign: 'right', color: stockColor, alignSelf: 'center' }}>
