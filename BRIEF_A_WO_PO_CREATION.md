@@ -496,3 +496,15 @@ else if (wo && wo.autoFlow && wo.status === 'Approved' && isReleasable(wo) && wo
 ```
 `wo.brand` is on every parked doc (your stamps). Same for the rod-cut path on D's side (spec in
 Brief D). After both land, RTG's tab-bound effect is the safety net, not the mechanism.
+
+### Hand-off from B — releaseFinWoToFloor writes through buildFinDoc (B1 commit 1, 2026-09-04)
+
+`Shared/floorRelease.buildFinDoc({ hqOrder, finPayload, by, now?, extra? })` returns the exact
+fin_workorders doc: verbatim payload + needBy (payload's, else the record's, '' = none) + the
+board's later urgent statement + nsWoId/nsWoTran from the record + a parked hold carried +
+pole/sled assertion (dev throws, prod logs + `shapeWarning`) + dispatched stamps + withItemCode.
+Patch (your `releaseFinWoToFloor`): replace the inline `setDoc(... withItemCode({ ...fp, nsWoId…,
+dispatchedAt… }))` with `setDoc(doc(db, 'fin_workorders', fp.id), buildFinDoc({ hqOrder: hqWo,
+finPayload: fp, by }))`. Behaviour identical for what you stamp today; the sales release gains
+urgent/holds/needBy for free and can never write both streams. Then the Library run (writer 7)
+converts to parkWorkOrder + the auto path, as agreed.

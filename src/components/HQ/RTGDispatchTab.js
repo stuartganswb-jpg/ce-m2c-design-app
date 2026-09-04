@@ -7,7 +7,7 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, car
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
-import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared } from '../Shared/floorRelease';
+import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc } from '../Shared/floorRelease';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
@@ -1194,7 +1194,18 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     ? Object.keys(paintSizes).sort((a, b) => paintSizes[b] - paintSizes[a]).find(k => paintSizes[k] > 0)
                     : null;
 
-                await setDoc(doc(db, "fin_workorders", finId), withItemCode({
+                // THE CUT SHEET (C, 2026-09-03): a custom pole line with a cutLength whose job has no
+                // Vision engineering (no shape / O2O / per-pole lengths) reaches the shop with nothing to
+                // cut to. Stamped on the floor docs as a FACT; the shop card shows its red notice only when
+                // a Vision draft existed and still produced none (cutSheetMissing && visionUsed) — a plain
+                // straight cut stays quiet (Stuart). The board says so at the split.
+                const visionUsed = !!(Object.keys(eng).length || (Array.isArray(eng.hangerLocations) && eng.hangerLocations.length) || bracketNotes.length);
+                const cutSheetMissing = customLines.some(l => l.cutLength) && !eng.shape && !eng.poleO2O && eng.pole1 == null && eng.pole2 == null && eng.pole3 == null;
+                if (cutSheetMissing) addLog(`⚠ SO ${orderKey}: custom pole with NO cut sheet — the job has no Vision engineering specs${visionUsed ? '' : ' (no Vision draft on this job)'}; the shop card will say so.`, 'warn');
+                // ONE builder (Shared/floorRelease.buildFinDoc): the split computes the payload, the
+                // builder adds what every release carries — needBy, urgent, anchor, holds, the pole/sled
+                // assertion, the dispatched stamps — so this doc and a stock release have one shape.
+                const finPayload = {
                     id: finId, woNum: finId, displayId: finId,
                     orderKey, quoteId: so.hqJobId, salesOrderId: so.soId || null,
                     estimateId: job.netsuiteEstimateId || null,
@@ -1226,6 +1237,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     shopSiblingId: hasCustom ? shopId : null, hasCustomSibling: hasCustom,
                     customFabStatus: 'Pending',
                     createdAt: Date.now(), updatedAt: Date.now(), createdBy: currentUser
+                };
+                await setDoc(doc(db, "fin_workorders", finId), buildFinDoc({
+                    hqOrder: so, finPayload, by: currentUser || '',
+                    extra: { needBy: so.needBy || '', cutSheetMissing, visionUsed },
                 }));
                 addLog(`Created Finishing WO ${finId} (${partsList.length} small lines).`, "success");
             }

@@ -103,6 +103,54 @@ export async function queueNsStockWorkOrder({ hqOrder, fp, brand, by = '', log =
     }
 }
 
+// ── THE FINISHING DOCUMENT, BUILT ONCE (Brief B1) ─────────────────────────────────────────────
+// Every path that writes a fin_workorders doc — the stock release below, the CPQ split's small-parts
+// half (RTG), A's sales release (finishedRunPrecheck.releaseFinWoToFloor) — assembles it HERE. The
+// four hand-copied field lists each carried something the others lacked (urgent vs nsWoId vs holds
+// vs needBy); this is their union, once.
+const IS_DEV = typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production';
+const hasPoles = (d) => (Number(d.totalPoles) || 0) > 0 || (d.poles && (Number(d.poles.qty) || 0) > 0);
+const hasSled = (d) => !!d.paintSize || (d.paintSizes && Object.values(d.paintSizes).some(v => (Number(v) || 0) > 0));
+
+/**
+ * @param {object} p.hqOrder     the RTG record (hq_work_orders or hq_sales_orders) — the later statement of intent
+ * @param {object} p.finPayload  the complete floor doc as the writer/split computed it (the Snapshot model)
+ * @param {string} p.by          who released
+ * @param {number} [p.now]
+ * @param {object} [p.extra]     stamps the caller adds (cutSheetMissing, visionUsed, recipeSource…)
+ * @returns the exact fin_workorders document to write (id = finPayload.id)
+ */
+export function buildFinDoc({ hqOrder = {}, finPayload, by = '', now = Date.now(), extra = {} }) {
+    if (!finPayload || !finPayload.id) throw new Error('buildFinDoc: finPayload with an id is required');
+    const fp = finPayload;
+    // A POLE IS NOT A SLED (00b26f3, Sandra's WO11535: an order carrying both streams could never
+    // complete). The writer decides; this asserts. Dev throws so the writer bug is found; prod
+    // logs and stamps shapeWarning so the board can count it — it never silently strips a stream.
+    let shapeWarning = null;
+    if (hasPoles(fp) && hasSled(fp)) {
+        shapeWarning = `poles/totalPoles AND paintSize/paintSizes both present on ${fp.id} — a pole order must not carry a sled stream`;
+        if (IS_DEV) throw new Error(`buildFinDoc: ${shapeWarning}`);
+        console.error('buildFinDoc:', shapeWarning);
+    }
+    const docOut = {
+        ...fp,
+        // The customer's date (E, 2026-09-03): needBy is the ONE key; '' means no date. The payload's
+        // own value stands; the RTG record fills it when the payload has none.
+        needBy: fp.needBy !== undefined ? fp.needBy : (hqOrder.needBy || ''),
+        // The board's later urgent statement wins over what the payload carried at creation.
+        ...(hqOrder.urgent ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || fp.needBy || fp.reqDate || '', urgentBy: hqOrder.urgentBy || by || '', urgentAt: hqOrder.urgentAt || now } : {}),
+        // The NetSuite anchor rides onto the floor card when the record already has it (Order Entry
+        // anchors open at creation; Route A stamps stock ones back after release).
+        ...(hqOrder.nsWoId ? { nsWoId: hqOrder.nsWoId, nsWoTran: hqOrder.nsWoTran || null } : {}),
+        // A hold placed while the order was parked is NOT lost at release.
+        ...(hqOrder.held === true ? { held: true, heldAt: hqOrder.heldAt || now, heldBy: hqOrder.heldBy || '', heldReason: hqOrder.heldReason || '', heldStage: hqOrder.heldStage || null } : {}),
+        ...(shapeWarning ? { shapeWarning } : {}),
+        ...extra,
+        dispatchedAt: now, dispatchedBy: by || '',
+    };
+    return withItemCode(docOut);
+}
+
 /**
  * Release a parked STOCK work order to the finishing floor: the verbatim finPayload (the Snapshot
  * model — nothing re-derived at dispatch), the board's later urgent statement winning, the
@@ -116,14 +164,7 @@ export async function releaseStockWoToFloor({ hqOrder, brand, by = '', log = noo
     if (fp.orderType === 'sales' || hqOrder.orderType === 'sales') return { released: false, nsNote: '', finId: fp.id, why: 'sales-typed — releaseFinWoToFloor is its door' };
     if (hqOrder.pushedToFinishing) return { released: false, nsNote: '', finId: fp.id, why: 'already dispatched' };
     const now = Date.now();
-    // The urgent flag rides the release. It may have been set at Stock View's Generate press
-    // (already in the payload) or raised on the board while the order waited — the board's value
-    // wins, since it is the later statement of intent.
-    await setDoc(doc(db, 'fin_workorders', fp.id), withItemCode({
-        ...fp,
-        ...(hqOrder.urgent ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || fp.needBy || fp.reqDate || '', urgentBy: hqOrder.urgentBy || by || '', urgentAt: hqOrder.urgentAt || now } : {}),
-        dispatchedAt: now, dispatchedBy: by || '',
-    }));
+    await setDoc(doc(db, 'fin_workorders', fp.id), buildFinDoc({ hqOrder, finPayload: fp, by, now }));
     await updateDoc(doc(db, 'hq_work_orders', hqOrder.id), { pushedToFinishing: true, status: 'Dispatched', dispatchedAt: now, dispatchedBy: by || '' });
     // ROUTE A (2026-07-16): these stocked items are real NetSuite assemblies with BOMs, so
     // releasing to the floor ALSO queues a real NetSuite work order (outbox — serial, retried,
