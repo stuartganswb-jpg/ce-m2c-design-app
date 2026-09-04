@@ -435,3 +435,42 @@ means; and the plated-item triple in plain words. List the sections touched in t
 `Shared/orderStatus.js`: `customPartsReady(wo)` (the one pack-gate test), `customFabLabel(wo)` ("At the plater since <date>"), stage `PLATING`; `GATES`, `gatesOf(wo)`, `openGatesOf(wo)`, `isReleasable(wo)`, `gateSummary(wo)`.
 `Shared/orderLifecycle.js`: `propagateFloorState(ctx, { finWo, phase, by })` — phases `'Plating Received'` (receipt) and `'Plated'` (build-back) are B's vocabulary; `'Sent to Plating'` is only ever a `customFabStatus` value.
 Contract text: `WORK_ORDER_CONTRACT.md` §5 / §5a.
+
+### Hand-off from B — a BOM pull line that is a NetSuite INTERNAL ID, not an item code (Stuart, 2026-09-04)
+
+**Evidence.** RTG card WO-HCUDEC15-N34-000565-6 (NetSuite WO11588): "Stock View grid · HCUDEC15/N34 ×2 ·
+BOM pull: 2×7674". The pull line's `legacyErpId`/`partId` is `7674` — a NetSuite internal id — so the
+WMS cannot pick it (nothing scans as 7674) and the floor card names no component. Stuart: "it is on
+old item not sure why".
+
+**Cause (verified in code, not data).** `Shared/finishedGoodsRun.pinErpOf(pin, inventory)`: when the
+pin has no `legacyErpId`, it looks `pin.partId` up in `inventory` (by doc id / itemId / code /
+`netSuiteInternalId`) and, on a MISS, **returns `pid.toUpperCase()` — the raw partId — as if it were
+a code**. The inventory the Stock View grid hands the planner is `enrichedInventory`
+(`StockViewTab.js:2338`), which EXCLUDES retired items (`isRetired` + the retired NetSuite-id set).
+So a component that is retired/old, or simply absent from the library, can never resolve and its
+internal id leaks through as the pull code. The planner's `usablePin` accepts it (a numeric string
+is not FEE/HIDDEN/OPT), the note is built from it (`:697`), and `parkWorkOrder` parks it verbatim.
+
+**Fix (yours — `finishedGoodsRun.js` + the grid):**
+1. `pinErpOf` never manufactures a code from an unresolved id: on a miss return `''` (or `{ code:'',
+   unresolved: pid }`), and `planFinishedRun` emits the line as `unresolved: true, partName:
+   "component not in the library (NetSuite id 7674)"` with `legacyErpId: null` — the same honesty
+   the pick list already has for "not in the library … fix the flow step".
+2. `parkWorkOrder` REFUSES to park a finishing run whose plan carries an unresolved line
+   (`ParkRefusal { code: 'BOM_UNRESOLVED' }`, naming the pin and the parent), so the WO is never
+   created with a pull nobody can pick — the person fixes the BOM pin / un-retires or links the
+   component, then re-parks. (Rule 3: no stopgap that lets it through with a warning.)
+3. Resolution should also try the FULL library (retired included) for the lookup — a retired
+   component is still a real NetSuite item the pick can scan; `enrichedInventory`'s retired filter
+   is right for the GRID's rows, wrong for resolving a BOM pin.
+4. Adjacent, named: the grid let an OLD parent (HCUDEC15/N34) be ordered at all — if it is
+   retired, the row should not be orderable; if it is not, say why it reads "old".
+
+**Already live, needs a hand fix:** WO11588 exists in NetSuite and on the floor with an unpickable
+pull; close/re-issue once the pin resolves (B's writer-10 re-issue via `INTENT.REISSUE` once built,
+or by hand now).
+
+**Downstream:** finishing — a card that names its component; WMS — a pull that scans; NetSuite —
+the WO's component demand already carries the right item (NetSuite resolved the BOM itself), so
+only the app's pull line was wrong. No RTG change.
