@@ -1,7 +1,17 @@
 import React, { useState } from 'react';
 import { finishingDb as db } from '../../firebase'; // 🔒 SECURE IMPORT
-import { doc, updateDoc, setDoc } from "firebase/firestore";
+import { doc, updateDoc, setDoc, getDoc, getDocs, query, collection, where } from "firebase/firestore";
 import { btnStyle, inputStyle, labelStyle } from './finishingStyles';
+import { propagateFloorState } from '../Shared/orderLifecycle';
+
+// SCRAP REACHES THE RECORD (Stuart 2026-09-04 sweep: "no leftover places where a work order can be
+// closed/adjusted/changed and not alert RTG"). QC scrap and the custom-order red line were written
+// on the floor doc only; RTG's card never knew. Best-effort, the floor's own write stands regardless.
+const tellRtgScrap = async (wo, extra) => {
+    try {
+        await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc }, { finWo: wo, by: extra.scrapReportedBy || '', extra });
+    } catch (e) { console.warn('RTG scrap propagate failed (floor record stands):', e); }
+};
 
 // Added setUser to the incoming props for seamless logout!
 export const MixModal = ({ color, paintProfiles, setMixModal, writeLog, user, setUser }) => {
@@ -114,9 +124,9 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
 
         // THE REDLINE BLOCKER
         if (isCustomSalesOrder && Number(scrap) > 0) {
-            await updateDoc(doc(db, "fin_workorders", wo.id), {
-                redlineAlert: `${user.name} reported ${scrap} scrap on Custom Sales Order ${wo.soId || wo.id}. Completion blocked.`
-            });
+            const redlineAlert = `${user.name} reported ${scrap} scrap on Custom Sales Order ${wo.soId || wo.id}. Completion blocked.`;
+            await updateDoc(doc(db, "fin_workorders", wo.id), { redlineAlert });
+            await tellRtgScrap(wo, { redlineAlert, scrapReported: Number(scrap), scrapReportedBy: user.name || '', scrapReportedAt: Date.now() });
             writeLog(`Redline Alert: Scrap on Sales Order ${wo.id}`, 'alert');
             alert("❌ SALES ORDER SHORTAGE: Supervisor has been alerted. You cannot complete a custom order short.");
             
@@ -141,7 +151,10 @@ export const QcModal = ({ qcModal, setQcModal, writeLog, user, setUser, workOrde
 
         await updateDoc(doc(db, "fin_workorders", wo.id), updates);
         writeLog(`QC ${qcModal.taskType || 'final'} on ${wo.id} — ${Number(good)} good · ${Number(scrap)} scrap`, 'production');
-        if (Number(scrap) > 0) writeLog(`⚠ SCRAP: ${Number(scrap)} pc(s) on ${wo.id} (${wo.stockErpId || wo.type || ''}) — re-make from the Setup Queue ⟲ panel`, 'alert');
+        if (Number(scrap) > 0) {
+            writeLog(`⚠ SCRAP: ${Number(scrap)} pc(s) on ${wo.id} (${wo.stockErpId || wo.type || ''}) — re-make from the Setup Queue ⟲ panel`, 'alert');
+            await tellRtgScrap(wo, { scrapReported: Number(scrap), scrapReportedBy: user.name || '', scrapReportedAt: Date.now() });
+        }
 
         // Final-gate caller (ActiveFloor last-step completion) proceeds only after QC passes.
         if (typeof qcModal.onPassed === 'function') {

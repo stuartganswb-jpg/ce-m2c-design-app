@@ -2174,6 +2174,12 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                 </div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: '#5a8f5a', marginTop: '3px' }}>
                     Sent to floor · {dispatchedChip(o)} · {whenStr(o.dispatchedAt)}
+                    {/* SCRAP REPORTED ON THE FLOOR reaches the record (2026-09-04 sweep). */}
+                    {(o.redlineAlert || Number(o.scrapReported) > 0) && (
+                        <span title={`${o.redlineAlert || ''}${o.scrapReportedBy ? ` — ${o.scrapReportedBy}` : ''}${o.scrapReportedAt ? ` ${whenStr(o.scrapReportedAt)}` : ''}`} style={{ marginLeft: '8px', color: '#d9534f', fontWeight: 700 }}>
+                            ⚠ SCRAP {Number(o.scrapReported) > 0 ? `${o.scrapReported} ` : ''}reported on the floor{o.redlineAlert ? ' · completion blocked' : ''}
+                        </span>
+                    )}
                     {/* The floor reporting back (2026-08-29 audit: floorPhase was written and read
                         by NOTHING) — the board finally shows what the floor last said. */}
                     {o.floorPhase && (

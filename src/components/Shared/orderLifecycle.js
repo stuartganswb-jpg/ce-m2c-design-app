@@ -183,15 +183,17 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
  * works if the floor keeps it informed — before this, an order finished on the floor sat on the
  * dispatch board as live work forever.
  */
-export async function propagateFloorState(ctx, { finWo, phase, by }) {
+export async function propagateFloorState(ctx, { finWo, phase, by, extra }) {
     const { db, doc, updateDoc } = ctx;
     if (!finWo) return null;
     const links = await linkedDocsOf(ctx, finWo, finWo.orderType === 'sales' ? 'sales' : 'stock');
     if (!links.hq) return null;                       // orphan — the audit below is what surfaces it
+    // `extra` (2026-09-04): facts the floor wants on the record beside the phase — a scrap count,
+    // a red-line alert, a reset. With no `phase` the record's floorPhase is left alone.
     const patch = phase === 'Complete'
         ? { floorPhase: 'Complete', floorCompletedAt: Date.now(), floorCompletedBy: by || '' }
-        : { floorPhase: phase || '', floorUpdatedAt: Date.now() };
-    await updateDoc(doc(db, links.hq.coll, links.hq.id), patch).catch(() => {});
+        : (phase ? { floorPhase: phase, floorUpdatedAt: Date.now() } : { floorUpdatedAt: Date.now() });
+    await updateDoc(doc(db, links.hq.coll, links.hq.id), { ...patch, ...(extra || {}) }).catch(() => {});
     return links.hq.id;
 }
 
