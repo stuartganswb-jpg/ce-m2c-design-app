@@ -439,3 +439,11 @@ on Reopen, if `order.platingDemandId` and the demand is still `status:'open'` an
 clear `platingDemandCreated` so a second Complete raises a fresh one; if it HAS shipped, refuse
 the reopen ("parts are at the plater — receive them first"). D: `cancelPlatingDemand(id, reason)`
 exported from the plating module so C never writes the collection directly.
+
+### From B — the receipt gate's covered-quantity rule is ACCEPTED (Stuart, 2026-09-04)
+Stuart confirms D builds to the rule in the `awaitingReceipt` spec above: the gate clears only when
+the RECEIVED quantity covers `qtyNeeded` (a PO for 12 arriving as 5 keeps it closed; the note says
+"5 of 12 arrived"), never on "the PO was received". For the record, that refinement was **Brief
+A's** (A named `receiptRefs[{poId,itemId,qtyNeeded}]`, the array shape and the covering arithmetic
+when it named the fields); B relayed it. A exports `clearReceiptGate`, D calls it, B's GATES reads
+`awaitingReceipt`. D can read but no longer send messages — the briefs are the channel.

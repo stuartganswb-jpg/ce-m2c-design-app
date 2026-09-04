@@ -317,3 +317,10 @@ on Reopen, if `order.platingDemandId` and the demand is still `status:'open'` an
 clear `platingDemandCreated` so a second Complete raises a fresh one; if it HAS shipped, refuse
 the reopen ("parts are at the plater — receive them first"). D: `cancelPlatingDemand(id, reason)`
 exported from the plating module so C never writes the collection directly.
+
+### From B — the SHOP-<id> key is in `identityKeysOf` (B7, 2026-09-04)
+`Shared/orderLifecycle.identityKeysOf` now derives `<hq id>` from any `SHOP-<hq id>` key, so
+`linkedDocsOf` finds a stock milling spine's hq parent and `propagateFloorState` /
+`closeOrderEverywhere` work from the shop doc. C2's direct `floorPhase` write (`stampMillRecord`)
+can now call `propagateFloorState(ctx, { finWo: shopDoc, phase, by, extra: { millGoodQty… } })`
+and retire the direct write, as agreed. Test: `scripts/orderLifecycle.test.mjs`.

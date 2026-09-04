@@ -19,10 +19,20 @@
 
 // Every identity an order might be keyed under. The floor and the board have historically keyed the
 // same order four different ways, which is why linkage has to be by SET rather than by one field.
-export const identityKeysOf = (o) => [...new Set([
-    o && o.id, o && o.woId, o && o.soId, o && o.orderKey, o && o.hqJobId, o && o.quoteId,
-    o && o.finSiblingId, o && o.shopSiblingId,
-].filter(Boolean).map(String))];
+export const identityKeysOf = (o) => {
+    const raw = [
+        o && o.id, o && o.woId, o && o.soId, o && o.orderKey, o && o.hqJobId, o && o.quoteId,
+        o && o.finSiblingId, o && o.shopSiblingId,
+    ].filter(Boolean).map(String);
+    // THE SHOP DOC'S OWN CONVENTION IS A KEY (Brief B7, C's finding 2026-09-03): a shop job is
+    // written as SHOP-<hq work order id> (pushToShop, the split's shop half, RTG's component gate
+    // reads it back the same way), but a STOCK milling spine's orderKey and quoteId are the LIBRARY
+    // PART id — so the set never held the hq record's id, linkedDocsOf found no parent, and
+    // propagateFloorState / closeOrderEverywhere from the shop closed nothing on the board. The
+    // deterministic link was always in the id; now it is in the set.
+    const stripped = raw.filter(k => k.startsWith('SHOP-')).map(k => k.slice(5));
+    return [...new Set([...raw, ...stripped])];
+};
 
 // Is this document finished as far as the business is concerned?
 export const isClosedState = (d) => !!d && (
