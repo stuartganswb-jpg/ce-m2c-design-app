@@ -991,7 +991,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     <div>
                         <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id} <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '2px 6px', marginLeft: '6px' }}>Order Entry · stocked</span></div>
                         <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || so.customerName || 'N/A'}{so.sidemark ? ` · ${so.sidemark}` : ''}{(so.lines || []).length ? ` · ${so.lines.length} line${so.lines.length === 1 ? '' : 's'}` : ''}</div>
-                        {urgentControls(so, 'hq_sales_orders')}
+                        {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}
                     </div>
                     <button onClick={() => deleteOrder('hq_sales_orders', so)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                 </div>
@@ -1003,7 +1003,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                         {st.detail && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{st.detail}</span>}
                         {st.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: tone }}>· {st.by}</span>}
                     </span>
-                    {so.finishAsAvailable === true && <span title={`Finish as available — the exception: parts go to finishing as they arrive.${so.finishAsAvailableBy ? ` Set by ${so.finishAsAvailableBy}` : ''}${so.finishAsAvailableReason ? ` — ${so.finishAsAvailableReason}` : ''}`} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--brass)', border: '1px dashed var(--brass)', padding: '3px 7px' }}>finish as available</span>}
                 </div>
                 {wos.length > 0 && (
                     <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.6 }}>
@@ -1053,6 +1052,50 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             {isUrgent(order) ? `⚡ URGENT${order.needBy ? ` · BY ${order.needBy}` : ''}` : '⚡ Flag urgent'}
         </button>
     );
+    // FINISH AS AVAILABLE — the outlier, named as one (Stuart 2026-09-03: "a flag on the order, that
+    // states 'Finish as available' that would be the outlier, default would be to wait and finish
+    // complete when all available"). Lives on the SALES ORDER; two surfaces set it — the WMS SO Pack
+    // card (D, where late parts are visible) and this board — writing the SAME four fields, and both
+    // log who/when/why ("log it whom/when"). Absent = the default: wait. The release reads it once
+    // the receipt gate exists (Brief B queue): true → in-stock lines go now, late lines follow.
+    const finishAsAvailableOn = (o) => !!(o && o.finishAsAvailable);
+    const toggleFinishAsAvailable = async (so) => {
+        const on = finishAsAvailableOn(so);
+        const ref = so.soId || so.id;
+        if (!window.confirm(on
+            ? `Turn OFF "Finish as available" for SO ${ref}?\n\nBack to the normal way: every part waits, and the order is finished complete once all of them are in.`
+            : `Turn ON "Finish as available" for SO ${ref}?\n\nThis is the EXCEPTION. Parts go to finishing as they arrive instead of waiting for the whole order — used when the last parts will be late and finishing the rest now saves time.`)) return;
+        const why = window.prompt(on ? 'Why is it going back to waiting? (recorded)' : 'Why finish ahead? (recorded — e.g. which parts are late)', '');
+        if (why === null) return;
+        const reason = String(why).trim();
+        if (!reason) return alert('A reason is needed — nothing was changed.');
+        try {
+            await updateDoc(doc(db, 'hq_sales_orders', so.id), {
+                finishAsAvailable: !on, finishAsAvailableAt: Date.now(), finishAsAvailableBy: currentUser || '',
+                finishAsAvailableReason: reason,
+            });
+            addLog(`${!on ? '⚡ Finish as available ON' : 'Finish as available OFF'} for SO ${ref}: ${reason}`, !on ? 'warn' : 'info');
+        } catch (e) { alert('Could not change it: ' + (e.message || e)); }
+    };
+    const finishAsAvailableControls = (so) => {
+        const on = finishAsAvailableOn(so);
+        const who = on ? `${so.finishAsAvailableBy ? ` by ${so.finishAsAvailableBy}` : ''}${so.finishAsAvailableAt ? ` · ${new Date(so.finishAsAvailableAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}` : ''}` : '';
+        return (
+            <button
+                onClick={() => toggleFinishAsAvailable(so)}
+                title={on
+                    ? `Finish as available — the exception: parts go to finishing AS THEY ARRIVE.${who}${so.finishAsAvailableReason ? ` — ${so.finishAsAvailableReason}` : ''} Click to go back to waiting.`
+                    : 'The default is to WAIT and finish the order complete once every part is in. Turn this on only when the last parts will be late and finishing the rest now saves time — a reason is recorded.'}
+                style={{
+                    fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em',
+                    padding: '3px 8px', cursor: 'pointer', marginTop: '6px', marginLeft: '6px',
+                    border: `1px ${on ? 'solid' : 'dashed'} ${on ? 'var(--brass)' : 'var(--line)'}`,
+                    background: on ? 'var(--brass)' : '#fff', color: on ? '#fff' : 'var(--ink-soft)', fontWeight: on ? 700 : 400,
+                }}>
+                {on ? `⚡ FINISH AS AVAILABLE${who}` : '⚡ Finish as available'}
+            </button>
+        );
+    };
     const dispatchedChip = (o) => [o.pushedToFinishing ? 'FINISHING ✓' : null, o.pushedToShop ? 'SHOP ✓' : null].filter(Boolean).join('  ·  ') || 'SENT';
     const whenStr = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
 
@@ -2530,7 +2573,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                         <div>
                                             <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id}</div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || 'N/A'}</div>
-                                            {urgentControls(so, 'hq_sales_orders')}
+                                            {urgentControls(so, 'hq_sales_orders')}{finishAsAvailableControls(so)}
                                         </div>
                                         <button onClick={() => deleteOrder('hq_sales_orders', so)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
