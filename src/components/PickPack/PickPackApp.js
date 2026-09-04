@@ -6,6 +6,7 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
+import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction } from "firebase/firestore";
@@ -222,6 +223,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [shipCosts, setShipCosts] = useState({}); // {plating_shipments docId: plating $/ea string}
     const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
     const [expandedShip, setExpandedShip] = useState({}); // out-at-plater shipments: collapsed by default
+    const [expandedSo, setExpandedSo] = useState({});     // SO Pack: force a not-yet-ready card open
     // ── THE RECEIVING STATION (Stuart 2026-09-03, receiving PLT-CE-1782150374239) ──────────────
     // Scan to find, receive to a cart, put the cart away — and the BUILD POSTS AT THE BIN SCAN.
     const [platingScan, setPlatingScan] = useState('');        // the find box (scanner or typing)
@@ -1027,6 +1029,106 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const c = claimOf(job, 'pack');
         if (c && claimIsMine(c)) releaseClaim(job, 'pack');
         setPackOrderId(null);
+    };
+
+    // ══ WHERE IS EVERY PIECE OF THIS ORDER? (Stuart 2026-09-03) ═════════════════════════════════
+    // "it should show qty ordered qty on hand, qty in production, qty committed and the status of
+    // each, the cards can stay collapsed until all items on the order are committed, then the card
+    // glows green and expands as it is ready to be packed."
+    //
+    // FOUR NUMBERS, FOUR SOURCES, and the distinctions are the whole point:
+    //   ORDERED    the line. Compared against NetSuite quantities via `nsQty` when E stamps it —
+    //              until then a per-foot rod line reads pieces here and feet there, so the compare
+    //              is deliberately NOT made against NetSuite yet.
+    //   ON HAND    `available` from Shared/oeReviewPlan.fetchAvailabilityUnits — NetSuite's
+    //              quantityavailable, i.e. on hand NET OF COMMITTED, unit-aware. Free stock: what
+    //              is on the shelf and promised to nobody. NOT raw on-hand, or an order would be
+    //              told it can have pieces another order already owns.
+    //   PRODUCTION open work orders and un-received purchase-order quantity STAMPED FOR THIS ORDER
+    //              (soAppId) — the app's own claim on inbound stock, which Stuart chose over
+    //              NetSuite's allocation ("build it for what the parts were ordered for, it will be
+    //              better than netsuites"). The app cannot read NetSuite's per-SO commitment at
+    //              all: the only commitment figure anywhere is an item-level aggregate.
+    //   COMMITTED pieces physically GATHERED for this order — the committed-bin allocation. Zero
+    //              until that flow lands; it is the number that turns a card green.
+    //
+    // COVERAGE, and why green is not "committed" alone yet: a line is READY when what is gathered
+    // plus what is free on the shelf meets the order. Free stock is genuinely available, so an
+    // order whose parts are all sitting in stock IS ready to pack. As the committed-bin flow fills
+    // `committedQty`, the same test tightens on its own — gathered pieces stop being counted twice
+    // because `available` already excludes what NetSuite has committed.
+    const [soStats, setSoStats] = useState({}); // orderId → { codes: {CODE: {avail, unit, prod}}, at, error }
+    const soStatsRef = useRef(new Set());
+    const lineCodeOf = (l) => String((l && (l.erp || l.code)) || '').trim().toUpperCase();
+    const loadSoStats = async (orders) => {
+        const todo = (orders || []).filter(o => o && o.id && !soStatsRef.current.has(o.id));
+        if (!todo.length) return;
+        todo.forEach(o => soStatsRef.current.add(o.id));
+        const codes = [...new Set(todo.flatMap(o => (o.lines || []).map(lineCodeOf).filter(Boolean)))];
+        const loc = BRAND_NETSUITE_MAP[activeBrand]?.location || '17';
+        let availMap = {}, availErr = null;
+        if (codes.length) {
+            try { const r = await fetchAvailabilityUnits(codes, loc); availMap = r.map || {}; }
+            catch (e) { availErr = e.message || String(e); }
+        }
+        const next = {};
+        for (const o of todo) {
+            const prod = {};
+            // Work orders raised FOR THIS SALES ORDER. Order Entry stamps soAppId on the hq doc
+            // (Shared/stockRun salesHeader); the finished code is what the line will receive.
+            try {
+                const ws = await getDocs(query(collection(db, 'hq_work_orders'), where('soAppId', '==', o.id)));
+                ws.docs.map(d => ({ id: d.id, ...d.data() }))
+                    .filter(w => !w.deleted && !['Closed', 'Deleted', 'CANCELLED'].includes(String(w.status || '')))
+                    .filter(w => w.floorPhase !== 'Complete' && !['Completed', 'Built'].includes(String(w.status || '')))
+                    .forEach(w => { const c = woItemCodeOf(w); if (c) prod[c] = (prod[c] || 0) + (Number(w.qty ?? w.totalParts) || 0); });
+            } catch (e) { /* production is additive detail — the card still shows ordered/on hand */ }
+            // Purchase-order lines raised for this sales order: what is ORDERED MINUS RECEIVED is
+            // still inbound. Reading `received` per line rather than the header status is the point
+            // — a PO for 5 that returned 4 leaves 1 inbound, and a header status cannot say that.
+            try {
+                const ps = await getDocs(query(collection(db, 'hq_purchase_orders'), where('soAppIds', 'array-contains', o.id)));
+                ps.docs.map(d => d.data()).filter(p => !p.deleted).forEach(p => {
+                    (p.items || []).filter(it => String(it.soAppId || '') === String(o.id)).forEach(it => {
+                        const c = String(it.itemId || '').trim().toUpperCase();
+                        const left = Math.max(0, (Number(it.quantity) || 0) - (Number(it.received) || 0));
+                        if (c && left > 0) prod[c] = (prod[c] || 0) + left;
+                    });
+                });
+            } catch (e) { /* same — additive */ }
+            const codeMap = {};
+            (o.lines || []).forEach(l => {
+                const c = lineCodeOf(l);
+                if (!c || codeMap[c]) return;
+                const a = availMap[c] || null;
+                codeMap[c] = { avail: a ? Number(a.available) || 0 : null, unit: a ? a.unit : null, prod: prod[c] || 0 };
+            });
+            next[o.id] = { codes: codeMap, at: Date.now(), error: availErr };
+        }
+        setSoStats(prev => ({ ...prev, ...next }));
+    };
+    // One line's four numbers and the word that follows from them.
+    const lineStats = (o, l) => {
+        const c = lineCodeOf(l);
+        const st = (soStats[o.id] && soStats[o.id].codes[c]) || null;
+        const ordered = Number(l.qty) || 0;
+        const committed = Number((o.committedQty && o.committedQty[c]) || 0);
+        const avail = st && st.avail != null ? st.avail : null;
+        const prod = st ? st.prod : 0;
+        const covered = committed + (avail != null ? Math.max(0, avail) : 0);
+        const state = committed >= ordered && ordered > 0 ? 'GATHERED'
+            : covered >= ordered && ordered > 0 ? 'READY'
+                : (covered + prod) >= ordered && ordered > 0 ? 'IN PRODUCTION'
+                    : avail == null ? 'UNKNOWN' : 'SHORT';
+        return { code: c, ordered, committed, avail, prod, covered, state };
+    };
+    // An order is ready when every REAL line is. A to-be-finished line arrives from a floor and is
+    // never a shelf pull, so it answers to production, not to stock.
+    const orderReady = (o) => {
+        const lines = (o.lines || []).filter(l => lineCodeOf(l));
+        if (!lines.length) return false;
+        if (!soStats[o.id]) return false;
+        return lines.every(l => { const st = lineStats(o, l); return st.state === 'GATHERED' || st.state === 'READY'; });
     };
 
     const printOrderLineLabels = (job, line) => printStockItemLabels({
@@ -3919,8 +4021,21 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                     };
                     const open = quickShipOrders.filter(o => (o.status || 'Pending') !== 'Shipped');
                     const shipped = quickShipOrders.filter(o => o.status === 'Shipped');
-                    const Card = ({ o }) => (
-                        <div style={{ border: `1px solid ${theme.line}`, marginBottom: '16px', background: '#fff' }}>
+                    // Load the four numbers for the OPEN orders only, once each (soStatsRef), and
+                    // never for shipped history — it is a NetSuite round trip per batch and a
+                    // Firestore read per order, and history cannot change.
+                    if (open.length) loadSoStats(open);
+                    // COLLAPSED UNTIL IT IS WHOLE, then green and open (Stuart 2026-09-03). Not
+                    // decoration: an order missing parts is not work the packer can do, and a screen
+                    // that presents it identically to a ready one is what sends someone to a shelf
+                    // for a piece still at the plater. An order the numbers cannot answer for yet
+                    // stays neutral and open rather than pretending either way.
+                    const Card = ({ o }) => {
+                    const ready = orderReady(o);
+                    const loaded = !!soStats[o.id];
+                    const showLines = !!expandedSo[o.id] || ready || !loaded;
+                    return (
+                        <div style={{ border: `1px solid ${ready ? '#3a7d44' : theme.line}`, boxShadow: ready ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '16px', background: '#fff' }}>
                             <div style={{ padding: '14px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div>
                                     <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{o.customer || 'Customer'}</span>
@@ -3931,11 +4046,15 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {(o.lines || []).some(l => l.toBeFinished) && <span style={{ fontFamily: theme.mono, fontSize: '9px', fontWeight: 700, color: theme.brass, marginLeft: '12px', letterSpacing: '.05em' }}>📦 PACK &amp; HOLD — parts arrive from the floors</span>}
                                     {o.productionNotes && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink, marginTop: '4px' }}>📝 {o.productionNotes}</div>}
                                 </div>
+                                <span onClick={() => setExpandedSo(p => ({ ...p, [o.id]: !p[o.id] }))} title={showLines ? 'Collapse' : 'Show the lines anyway'} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', marginRight: '10px', color: theme.inkSoft }}>{showLines ? '▾' : '▸'}</span>
+                                {loaded && (ready
+                                    ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {t('READY TO PACK')}</span>
+                                    : <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>{t('waiting on parts')}</span>)}
                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: o.status === 'Shipped' ? '#3a7d44' : (o.status === 'Picked' ? theme.brass : theme.inkSoft) }}>{o.status || 'Pending'}</span>
                             </div>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                            {showLines && <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                                 <thead><tr style={{ background: theme.paper2 }}>
-                                    {['Item #', 'Description', 'Bin', 'Qty', ''].map(h => <th key={h} style={{ textAlign: h === 'Qty' ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
+                                    {['Item #', 'Description', 'Bin', 'Ord', 'Hand', 'Prod', 'Comm', 'Status', ''].map(h => <th key={h} style={{ textAlign: ['Ord', 'Hand', 'Prod', 'Comm'].includes(h) ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
                                 </tr></thead>
                                 <tbody>
                                     {(o.lines || []).map((l, i) => (
@@ -3955,14 +4074,28 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {l.toBeFinished && <div style={{ color: theme.brass, fontFamily: theme.mono, fontSize: '10px', fontWeight: 600 }}>🎨 TO BE FINISHED · {l.finishCode || ''} — arrives from {l.finishOutsourced ? 'the plater (WMS Plating)' : 'the finishing floor'}, do not pull raw</div>}
                                             </td>
                                             <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.toBeFinished ? theme.brass : (l.bin ? theme.ink : theme.inkSoft), borderBottom: `1px solid ${theme.paper2}` }}>{l.toBeFinished ? (l.finishOutsourced ? 'FROM PLATING' : 'FROM FINISHING') : (l.bin || 'UNASSIGNED')}</td>
-                                            <td style={{ padding: '9px 18px', textAlign: 'center', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.qty}</td>
+                                            {(() => {
+                                                const st = lineStats(o, l);
+                                                const num = (v, col) => <td style={{ padding: '9px 10px', textAlign: 'center', fontFamily: theme.mono, fontSize: '12px', color: col || theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{v}</td>;
+                                                const tone = { GATHERED: '#2e7d32', READY: '#3a7d44', 'IN PRODUCTION': theme.brass, SHORT: '#c0392b', UNKNOWN: theme.inkSoft }[st.state];
+                                                return (<>
+                                                    {num(st.ordered)}
+                                                    {num(st.avail == null ? '—' : st.avail, st.avail != null && st.avail < st.ordered ? '#c0392b' : theme.ink)}
+                                                    {num(st.prod || '—', st.prod ? theme.brass : theme.inkSoft)}
+                                                    {num(st.committed || '—', st.committed ? '#2e7d32' : theme.inkSoft)}
+                                                    <td style={{ padding: '9px 12px', fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: tone, borderBottom: `1px solid ${theme.paper2}`, whiteSpace: 'nowrap' }}>
+                                                        {l.toBeFinished ? t('from the floor') : t(st.state)}
+                                                        {st.unit && <span style={{ color: theme.inkSoft }}> · {st.unit}</span>}
+                                                    </td>
+                                                </>);
+                                            })()}
                                             <td style={{ padding: '9px 12px', textAlign: 'right', borderBottom: `1px solid ${theme.paper2}` }}>
                                                 <button onClick={() => printOrderLineLabels(o, l)} title={`Print ${Math.max(1, Math.min(50, Number(l.qty) || 1))} × ${l.erp || ''} item label(s)`} style={{ padding: '5px 9px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, cursor: 'pointer', fontSize: '12px' }}>🖨</button>
                                             </td>
                                         </tr>
                                     ))}
                                 </tbody>
-                            </table>
+                            </table>}
                             {o.status !== 'Shipped' && (
                                 <div style={{ padding: '12px 18px', display: 'flex', gap: '10px', justifyContent: 'flex-end', alignItems: 'center', borderTop: `1px solid ${theme.line}` }}>
                                     {o.packStatus === 'Packed'
@@ -3979,7 +4112,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 </div>
                             )}
                         </div>
-                    );
+                    ); };
                     return (
                         <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '30px', minHeight: '100%', boxShadow: '0 4px 24px rgba(0,0,0,0.02)' }}>
                             <div style={{ fontFamily: theme.serif, color: theme.ink, fontWeight: 500, fontSize: '1.4rem', marginBottom: '6px' }}>Stock / Quick Ship Orders</div>
