@@ -564,7 +564,16 @@ exports.nsOutboxWorker = onSchedule({
 exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (event) => {
     const after = event.data && event.data.after && event.data.after.exists ? event.data.after.data() : null;
     if (!after) return;
-    if (after.orderType !== 'stock' || !after.nsWoId || after.nsCompletionQueued) return;
+    // ── THE APP BUILDS EVERY NETSUITE WORK ORDER IT OPENS (Brief D · D2, audit §13 c) ─────────
+    // The guard here used to read `orderType !== 'stock'`, which meant an Order Entry line's
+    // anchor work order was opened by the app and closed by NOBODY. Stuart, asked who closes them:
+    // "Closed by hand today. The app must build them." Prevention is the goal — every WO the app
+    // opens, the app posts the build against.
+    //
+    // A sales-typed doc with NO nsWoId is untouched, exactly as before: a CPQ custom order's
+    // NetSuite record is its SALES ORDER, and there is no work order to close.
+    if (!after.nsWoId || after.nsCompletionQueued) return;
+    if (after.orderType !== 'stock' && after.orderType !== 'sales') return;
     // ⚖ THE BUILD POSTS AT THE BIN SCAN, NOT AT THE BAKE (Stuart 2026-08-03: "the bin count is
     // already off as the assembly build populated the bin — this build should happen after
     // completion of painting AND the packing screen has scanned them to their bin").
@@ -580,6 +589,10 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
     // finishing screen and appears in the WMS packing queue immediately. Only the NetSuite
     // INVENTORY posting moved.
     if (after.packStatus !== 'Packed') return;
+    // A STOCK build is PUT AWAY and always scans a bin; a SALES order is PACKED into a box and
+    // ships, so it has no put-away bin and must not wait for one. The inventoryDetail below is
+    // therefore omitted on a sales build, which is correct: the pieces are received and shipped in
+    // the same breath, and the fulfilment that follows relieves them.
     const scannedBin = String(after.putawayBin || '').trim().toUpperCase();
 
     const fdb = admin.firestore();
@@ -606,6 +619,14 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
         }
     } catch (e) { /* bin optional — the queue entry fails visibly if NetSuite insists */ }
 
+    // FLOW1 vs FLOW2 (Order Entry, StockViewTab :2465-2490). FLOW2 anchors on the finished
+    // variant, so the build is the ordinary one. FLOW1 anchors on the BASE assembly — its memo
+    // says so in words: "closes on the final assembly build (after mill + phosphate convert)" —
+    // and `nsWoOnErp` / `nsWoOnInternalId` are stamped on the doc at creation to say which item
+    // that is. The transform is against the WORK ORDER either way, so NetSuite resolves the item
+    // itself; these fields are carried for the label and for the log, not to pick a different URL.
+    const flow1 = after.orderType === 'sales' && !!after.nsWoOnErp;
+    const buildOf = flow1 ? `${after.nsWoOnErp} (base assembly)` : (after.stockErpId || woDocId);
     const obRef = fdb.collection('ns_outbox').doc(`wocmpl-${woDocId.replace(/[^A-Za-z0-9_-]/g, '_')}`);
     try {
         await obRef.create({
@@ -613,13 +634,14 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
         // the UI's "Create Build" button makes. workordercompletion is WIP-only and 400s with
         // "invalid work order" on these (learned 2026-07-21, WO11308-12).
         id: obRef.id, kind: 'workordercompletion',
-        label: `Build NS WO ${after.nsWoTran || after.nsWoId} — ${after.stockErpId || woDocId} ×${qty}`,
-        sourceApp: 'FINISHING', createdBy: `auto (put away${scannedBin ? ` · bin ${scannedBin}` : ''})`,
+        label: `Build NS WO ${after.nsWoTran || after.nsWoId} — ${buildOf} ×${qty}${after.orderType === 'sales' ? ' · SALES' : ''}`,
+        sourceApp: after.orderType === 'sales' ? 'ORDER_ENTRY' : 'FINISHING',
+        createdBy: `auto (${after.orderType === 'sales' ? 'packed' : 'put away'}${scannedBin ? ` · bin ${scannedBin}` : ''})`,
         targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${after.nsWoId}/!transform/assemblyBuild`,
         method: 'POST',
         payload: {
             quantity: qty,
-            memo: `Stock build ${woDocId} put away${scannedBin ? ` ${scannedBin}` : ''} [app push ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' })} #${obRef.id.slice(0, 6)}]`,
+            memo: `${after.orderType === 'sales' ? `SO build ${woDocId}${flow1 ? ' (base)' : ''} packed` : `Stock build ${woDocId} put away`}${scannedBin ? ` ${scannedBin}` : ''} [app push ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' })} #${obRef.id.slice(0, 6)}]`,
             ...(bin ? { inventoryDetail: { quantity: qty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: qty }] } } } : {})
         },
         writeBack: { collection: 'fin_workorders', docId: woDocId, patch: { nsWoCompletionPosted: true }, idField: 'nsWoCompletionId', tranField: 'nsWoCompletionTran' },
@@ -628,6 +650,91 @@ exports.onStockBuildDone = onDocumentWritten('fin_workorders/{woId}', async (eve
         });
     } catch (dupErr) { /* entry already exists — another fire won the race; nothing to do */ }
     await fdb.doc(`fin_workorders/${woDocId}`).set({ nsCompletionQueued: true }, { merge: true });
+});
+
+
+// ============================================================================
+// 2d. MILL COMPLETE → THE ROOT'S NETSUITE BUILD (Brief D · D3, Stuart 2026-09-03)
+// ============================================================================
+// RTG has a manual ⛏ Mill Build button that posts a milled root's assembly build against the
+// NetSuite work order the app opened for it. Manual means it gets forgotten, and a forgotten
+// build leaves an open WO with committed components — the same hole D2 closes on the sales side.
+//
+// Brief C's C2 (334c9c3, live) made this possible by stamping the hq work order when the last
+// milling op passes QC: floorPhase 'Complete', millGoodQty, millScrapQty, millCompletedAt/By. A
+// FAILED op stamps floorPhase 'Failed' instead and never reaches this trigger.
+//
+// GATED BY BRAND, ON PURPOSE (Stuart: "default 3 for classical, other brands as needed when we get
+// there"). system/wms_config.rootBuildAuto is a map of brand → true. Nothing fires for a brand
+// that is not listed, so the manual button stays the path until someone deliberately turns a brand
+// on — after watching three clean manual posts on CE, which is the threshold he set.
+//
+// Only spines RTG dispatched are stamped by C2 (the hq id derives from the shop doc's SHOP-<hqId>),
+// so a hand-keyed shop order never triggers a build. That is correct and worth knowing: this
+// automates RTG's button, not every milling job that ever happens.
+exports.onMillComplete = onDocumentWritten('hq_work_orders/{woId}', async (event) => {
+    const after = event.data && event.data.after && event.data.after.exists ? event.data.after.data() : null;
+    if (!after) return;
+    // Every condition is required, and each one is doing work:
+    //   floorPhase Complete + millGoodQty>0  the mill finished and made something good (C2)
+    //   nsWoId                                the app opened a NetSuite WO to close
+    //   !nsRootBuildPosted / !nsRootBuildQueued  once only
+    if (after.floorPhase !== 'Complete') return;
+    const qty = Number(after.millGoodQty) || 0;
+    if (qty <= 0 || !after.nsWoId) return;
+    if (after.nsRootBuildPosted || after.nsRootBuildQueued) return;
+
+    const fdb = admin.firestore();
+    const woDocId = event.params.woId;
+    const brand = String(after.brand || 'ce').toLowerCase();
+
+    // THE FLAG IS READ AT FIRE TIME, not cached: turning a brand off must stop the next build, not
+    // the one after the next deploy.
+    let on = false;
+    try {
+        const cfg = await fdb.doc('system/wms_config').get();
+        on = !!((cfg.exists && cfg.data().rootBuildAuto) || {})[brand];
+    } catch (e) { on = false; }
+    if (!on) {
+        // Say so once, so "why did it not fire" is answerable without reading this file.
+        if (!after.nsRootBuildSkipped) {
+            await fdb.doc(`hq_work_orders/${woDocId}`).set({
+                nsRootBuildSkipped: `auto-build off for brand ${brand} — post it from RTG's ⛏ Mill Build`,
+                nsRootBuildSkippedAt: Date.now(),
+            }, { merge: true }).catch(() => {});
+        }
+        return;
+    }
+
+    const internalId = after.nsWoOnInternalId || after.stockInternalId || after.nsItemId || null;
+    if (!internalId) {
+        await fdb.doc(`hq_work_orders/${woDocId}`).set({
+            nsRootBuildSkipped: 'no NetSuite item id on the work order — sync it (11.1), then post from RTG',
+            nsRootBuildSkippedAt: Date.now(),
+        }, { merge: true }).catch(() => {});
+        return;
+    }
+
+    // Deterministic id, the WO11453 lesson: create() refuses a second, the entry is written FIRST
+    // and the stamp follows, so a re-fire between the two can never double-build.
+    const obRef = fdb.collection('ns_outbox').doc(`rootbuild-${woDocId.replace(/[^A-Za-z0-9_-]/g, '_')}`);
+    try {
+        await obRef.create({
+            id: obRef.id, kind: 'workordercompletion',
+            label: `Root build — ${after.rootItem || after.itemCode || woDocId} ×${qty} (mill complete)`,
+            sourceApp: 'SHOP', createdBy: `auto (mill complete${after.millCompletedBy ? ` · ${after.millCompletedBy}` : ''})`,
+            targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder/${after.nsWoId}/!transform/assemblyBuild`,
+            method: 'POST',
+            payload: {
+                quantity: qty,
+                memo: `Mill build ${woDocId} ×${qty}${(Number(after.millScrapQty) || 0) > 0 ? ` (${after.millScrapQty} scrap)` : ''} [app push ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: '2-digit', day: '2-digit', year: '2-digit', hour: 'numeric', minute: '2-digit' })} #${obRef.id.slice(0, 6)}]`,
+            },
+            writeBack: { collection: 'hq_work_orders', docId: woDocId, patch: { nsRootBuildPosted: true }, idField: 'nsRootBuildId', tranField: 'nsRootBuildTran' },
+            status: 'PENDING', attempts: 0, lastError: null, nsId: null, nsTran: null,
+            createdAt: Date.now(), nextAttemptAt: Date.now(), leasedAt: null, postedAt: null,
+        });
+    } catch (dupErr) { /* already queued by an earlier fire — nothing to do */ }
+    await fdb.doc(`hq_work_orders/${woDocId}`).set({ nsRootBuildQueued: true, nsRootBuildQueuedAt: Date.now() }, { merge: true }).catch(() => {});
 });
 
 
