@@ -17,7 +17,7 @@ import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf } from '../Shared/workOrderContract';
-import { hardDeleteWithLedger, propagateFloorState } from '../Shared/orderLifecycle';
+import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { clearConvertGate } from '../Shared/finishedRunPrecheck';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
@@ -987,11 +987,15 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     ].sort((a, b) => (a.packedReadyAt || a.completedAt || a.createdAt || 0) - (b.packedReadyAt || b.completedAt || b.createdAt || 0));
     const packedRecent = [...finAll, ...quickShipOrders].filter(j => j.packStatus === 'Packed').sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)).slice(0, 6);
 
+    // OPENING A CARD IS LOOKING, NOT TAKING (Stuart 2026-09-03: "we need to be able to open the
+    // card without starting the pick just to take a look at what is on there, i just did that and
+    // there is no abort pick so i can't stop the process").
+    //
+    // That was mine. The claim gate shipped earlier tonight made OPENING a card take ownership of
+    // it, and the only way back out was tapping the same chip again — invisible unless you already
+    // knew. So the two acts are now separate: open = read-only, always allowed, even on an order
+    // someone else holds; START PACKING is what claims it; Close leaves and releases what you hold.
     const openPackOrder = async (job) => {
-        // Same gate as the pick: the order doc says who has it open, everyone else is refused.
-        let r;
-        try { r = await claimOrder(job, 'pack'); } catch (err) { return alert('Could not open the order: ' + (err.message || err)); }
-        if (!r.ok) return alert(`${r.claim.by} ${t('is packing this')} — ${t('since')} ${claimSince(r.claim)}.\n\n${t('Pick a different order, or ask them (or an admin) to release it.')}`);
         setPackOrderId(job.id);
         const brandBoxes = stdBoxes.filter(b => !b.brandId || b.brandId === 'global' || b.brandId === activeBrand);
         const small = brandBoxes.find(b => /small/i.test(b.name || ''));
@@ -1007,7 +1011,69 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
             fetchLiveBins([erp]);
         } else setPutawayBin('');
     };
+    // ── ITEM LABELS FROM AN ORDER CARD (Stuart 2026-09-03: "on both of these tabs on the cards
+    // we need the ability to print item labels") ────────────────────────────────────────────────
+    // One label per piece, for one line or for every line on the order. Same 2x4 stock item label
+    // and the same one label route the packing station and the plating dock already print through.
+    // Take the order for packing — the claim that opening no longer makes.
+    const startPacking = async (job) => {
+        let r;
+        try { r = await claimOrder(job, 'pack'); } catch (err) { return alert('Could not start packing: ' + (err.message || err)); }
+        if (!r.ok) return alert(`${r.claim.by} ${t('is packing this')} — ${t('since')} ${claimSince(r.claim)}.\n\n${t('Pick a different order, or ask them (or an admin) to release it.')}`);
+    };
+    // Leave the card. Releases the claim only if it is OURS — closing a card you were only looking
+    // at must never take the order off the person who holds it.
+    const closePackCard = (job) => {
+        const c = claimOf(job, 'pack');
+        if (c && claimIsMine(c)) releaseClaim(job, 'pack');
+        setPackOrderId(null);
+    };
+
+    const printOrderLineLabels = (job, line) => printStockItemLabels({
+        itemId: line.erp || line.code || '', itemName: line.name || '', uom: 'EA',
+        woNum: packRef(job), copies: Math.max(1, Math.min(50, Number(line.qty) || 1)),
+    });
+    const printAllOrderLabels = (job, lines) => {
+        const rows = (lines || []).filter(l => (l.erp || l.code));
+        if (!rows.length) return alert('No item lines on this order to label.');
+        const pcs = rows.reduce((a, l) => a + Math.max(1, Number(l.qty) || 1), 0);
+        if (pcs > 50 && !window.confirm(`That is ${pcs} labels across ${rows.length} lines. Print them all?`)) return;
+        rows.forEach(l => printOrderLineLabels(job, l));
+    };
+
+    // ── CLOSING A STALE ORDER FROM THE WAREHOUSE (Stuart 2026-09-03: "how do we get rid of those
+    // old orders there is no mechanism to close in the app") ────────────────────────────────────
+    // The closer already existed — Shared/orderLifecycle.closeOrderEverywhere, which closes the hq
+    // record and every linked floor doc, clears the pick fields so the job leaves the queue, and
+    // records who closed it, from where and why. It was wired to RTG ALONE, and an Order Entry
+    // sales order never reaches RTG's board (its status is 'Pending'; the board queries
+    // Approved/Dispatched), so exactly the orders that go stale were the ones with no way to close
+    // them. Two from 2026-08-14 were still sitting here.
+    // This is a CALLER of the one closer, not a second closer. And it says the part the app cannot
+    // do: closing here does NOT release NetSuite's commitment — the sales order has to be closed
+    // in NetSuite by a person, or the stock stays promised to a dead order.
+    const closeStaleOrder = async (job) => {
+        const ref = packRef(job);
+        const why = window.prompt(`Close ${ref}?\n\nIt leaves the warehouse queues and every linked floor document is closed with it.\n\n⚠ This does NOT close the order in NetSuite — the stock stays COMMITTED there until someone closes the sales order in NetSuite itself.\n\nWhy is it being closed? (recorded against the order)`, '');
+        if (why === null) return;
+        const reason = String(why).trim();
+        if (!reason) return alert('A reason is needed — it is what makes the close accountable. Nothing was changed.');
+        try {
+            const res = await closeOrderEverywhere(
+                { db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                { order: job, kind: 'sales', by: operator?.name || '', from: 'WMS_SO_PACK', reason },
+            );
+            writeLog(`Closed ${ref} from SO Pack: ${reason}${res && res.finIds && res.finIds.length ? ` · ${res.finIds.length} floor doc(s)` : ''}`, 'wms');
+            alert(`✅ ${ref} closed in the app${res && res.finIds && res.finIds.length ? ` (${res.finIds.length} floor document(s) closed with it)` : ''}.\n\n⚠ NOW CLOSE IT IN NETSUITE — until you do, its lines stay committed and that stock cannot be promised to anyone else.`);
+        } catch (e) { alert('Could not close it: ' + (e.message || e)); }
+    };
+
     const confirmPackLine = async (job, line) => {
+        // Looking is free; changing the order is not. (Stuart 2026-09-03 — the card opens read-only.)
+        if (!claimIsMine(claimOf(job, 'pack'))) {
+            const c = claimOf(job, 'pack');
+            return alert(c ? `${c.by} ${t('is packing this')} — ${t('since')} ${claimSince(c)}.` : `Press START PACKING first — this order is not yours yet, and marking pieces packed on someone else's order is how a box goes out wrong.`);
+        }
         try { await updateDoc(packDocOf(job), { [`packedLines.${line.key}`]: { at: Date.now(), by: operator?.name || 'Packer' } }); }
         catch (e) { alert('Could not mark packed: ' + (e.message || e)); }
     };
@@ -1256,6 +1322,11 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const lines = packLinesOf(job);
         const left = lines.filter(l => !(job.packedLines && job.packedLines[l.key]));
         if (left.length) return alert(`Every piece must be physically packed and confirmed first — ${left.length} line${left.length === 1 ? '' : 's'} still on the TO PACK side.`);
+        // The order must be YOURS to complete. (The card opens read-only — Stuart 2026-09-03.)
+        if (!claimIsMine(claimOf(job, 'pack'))) {
+            const c = claimOf(job, 'pack');
+            return alert(c ? `${c.by} ${t('is packing this')} — ${t('since')} ${claimSince(c)}. Ask them, or have an admin release it.` : 'Press START PACKING first — this order is not yours yet.');
+        }
         const isStockPutaway = job.orderType === 'stock';
         if (!(job.packPhotos || []).length && !isStockPutaway) return alert('A photo of the packaged parts is required — tap 📷 Add Photo first.');
         const bin = normalizeBin(putawayBin);
@@ -3864,7 +3935,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             </div>
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                                 <thead><tr style={{ background: theme.paper2 }}>
-                                    {['Item #', 'Description', 'Bin', 'Qty'].map(h => <th key={h} style={{ textAlign: h === 'Qty' ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
+                                    {['Item #', 'Description', 'Bin', 'Qty', ''].map(h => <th key={h} style={{ textAlign: h === 'Qty' ? 'center' : 'left', padding: '8px 18px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', color: theme.inkSoft, borderBottom: `1px solid ${theme.line}` }}>{h}</th>)}
                                 </tr></thead>
                                 <tbody>
                                     {(o.lines || []).map((l, i) => (
@@ -3885,6 +3956,9 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                             </td>
                                             <td style={{ padding: '9px 18px', fontFamily: theme.mono, color: l.toBeFinished ? theme.brass : (l.bin ? theme.ink : theme.inkSoft), borderBottom: `1px solid ${theme.paper2}` }}>{l.toBeFinished ? (l.finishOutsourced ? 'FROM PLATING' : 'FROM FINISHING') : (l.bin || 'UNASSIGNED')}</td>
                                             <td style={{ padding: '9px 18px', textAlign: 'center', fontWeight: 500, color: theme.ink, borderBottom: `1px solid ${theme.paper2}` }}>{l.qty}</td>
+                                            <td style={{ padding: '9px 12px', textAlign: 'right', borderBottom: `1px solid ${theme.paper2}` }}>
+                                                <button onClick={() => printOrderLineLabels(o, l)} title={`Print ${Math.max(1, Math.min(50, Number(l.qty) || 1))} × ${l.erp || ''} item label(s)`} style={{ padding: '5px 9px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, cursor: 'pointer', fontSize: '12px' }}>🖨</button>
+                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -3894,6 +3968,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {o.packStatus === 'Packed'
                                         ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}{o.nsIfTran ? ` · IF ${o.nsIfTran}${o.nsFulfillStatus ? ` (${o.nsFulfillStatus})` : ''}` : (o.nsFulfillQueued ? ' · IF queued…' : '')}{(o.trackingNumbers || []).length ? ` · 🚚 ${o.trackingNumbers.join(', ')}` : ''}</span>
                                         : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
+                                    <button onClick={() => printAllOrderLabels(o, o.lines || [])} title="Print item labels for every line on this order" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 {t('Labels')}</button>
+                                    {/* A stale order had nowhere to die: RTG's board cannot see an Order Entry sale, and RTG
+                                        was the only caller of the closer. This is that same closer, reachable from where the
+                                        stale order is actually noticed. */}
+                                    <button onClick={() => closeStaleOrder(o)} title="Close this order in the app — it leaves the warehouse queues. Does NOT close it in NetSuite." style={{ padding: '9px 14px', background: 'transparent', color: '#c0392b', border: '1px solid #c0392b', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Close order')}</button>
                                     {o.packStatus === 'Packed' && <button onClick={() => pullFulfillment(o)} title="Pull fulfillment status + tracking # from NetSuite" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⤓ Tracking</button>}
                                     {o.status !== 'Picked' && <button onClick={() => setQSStatus(o, 'Picked')} style={{ padding: '9px 18px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Picked</button>}
                                     <button onClick={() => setQSStatus(o, 'Shipped')} style={{ padding: '9px 18px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>Mark Shipped</button>
@@ -3984,7 +4063,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     const done = jl.filter(l => j.packedLines && j.packedLines[l.key]).length;
                                     const active = packOrderId === j.id;
                                     return (
-                                        <button key={j.id} onClick={() => { if (active) { releaseClaim(j, 'pack'); setPackOrderId(null); } else openPackOrder(j); }} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
+                                        <button key={j.id} onClick={() => { if (active) closePackCard(j); else openPackOrder(j); }} style={{ background: active ? theme.ink : theme.paper, color: active ? '#fff' : theme.ink, border: `1px solid ${active ? theme.ink : theme.line}`, padding: '10px 14px', cursor: 'pointer', textAlign: 'left' }}>
                                             {!active && <OrderStatusChips wo={j} showWho={false} style={{ marginBottom: '6px' }} />}
                                             {/* A paint run looks like a stock build until you read the code — say so. */}
                                             {isPaintOnlyOrder(j) && <div title={`Legacy NetSuite item ${j.jfpItemCode || ''} — no assembly. Scanning the bin adjusts the painted pieces into it.`} style={{ display: 'inline-block', marginBottom: '6px', background: theme.brass, color: '#fff', fontFamily: theme.mono, fontSize: '9px', letterSpacing: '.08em', padding: '2px 7px' }}>{PAINT_ONLY_BADGE} · {j.jfpItemCode || ''}</div>}
@@ -4001,6 +4080,28 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             {/* WORKSPACE — TO PACK left, physically confirmed pieces move right */}
                             {packJob ? (
                                 <>
+                                    {/* WHO HAS THIS ORDER — and the way out. Opening is looking; START PACKING is
+                                        taking. Everything that CHANGES the order is disabled until it is yours. */}
+                                    {(() => {
+                                        const c = claimOf(packJob, 'pack');
+                                        const mine = claimIsMine(c);
+                                        const held = !!c && !mine;
+                                        return (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', marginBottom: '14px', border: `1px solid ${held ? '#d9534f' : (mine ? '#3a7d44' : theme.line)}`, background: held ? '#fdf3f3' : (mine ? '#f0f7f1' : theme.paper) }}>
+                                                <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: held ? '#c0392b' : (mine ? '#3a7d44' : theme.inkSoft), textTransform: 'uppercase' }}>
+                                                    {held ? `🔒 ${c.by} ${t('is packing this')} · ${t('since')} ${claimSince(c)}`
+                                                        : mine ? `🔒 ${t('You are packing this')}`
+                                                            : `👁 ${t('Looking only — nothing is changed until you start packing')}`}
+                                                </span>
+                                                <span style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                                    <button onClick={() => printAllOrderLabels(packJob, packLinesOf(packJob))} title="Print item labels for every line on this order" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 {t('Labels')}</button>
+                                                    {!c && <button onClick={() => startPacking(packJob)} style={{ padding: '9px 16px', background: theme.ink, color: '#fff', border: 'none', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Start packing')}</button>}
+                                                    {held && isPlatingAdmin && <button onClick={() => adminReleaseClaim(packJob, 'pack')} style={{ padding: '9px 14px', background: 'transparent', border: '1px solid #d9534f', color: '#c0392b', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Release (admin)')}</button>}
+                                                    <button onClick={() => closePackCard(packJob)} style={{ padding: '9px 16px', background: 'transparent', color: theme.inkSoft, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>{t('Close')}</button>
+                                                </span>
+                                            </div>
+                                        );
+                                    })()}
                                     {needsPoleMatch && (
                                         <div style={{ background: poleMatched ? '#f0f7f1' : '#fdf3f3', border: `1px solid ${poleMatched ? '#3a7d44' : '#d9534f'}`, padding: '14px 16px', marginBottom: '16px' }}>
                                             <div style={{ fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: poleMatched ? '#3a7d44' : '#d9534f', marginBottom: '6px' }}>

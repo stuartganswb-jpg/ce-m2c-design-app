@@ -14,6 +14,11 @@ export const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'ROD 
 // ticking a row sees exactly the words the operator sees on the floor.
 export const pickTabLabel = (tab) => String(tab || '')
     .replace('QUEUE', 'PICK QUEUE')
+    // 'STOCK' is a misnomer and always was — every order on that tab is a CUSTOMER order
+    // (Stuart 2026-09-03: "this tab should be called special order packing as all the orders i
+    // see on it are for customers"). The KEY stays 'STOCK' because keys are permission identity;
+    // renaming it would silently revoke the tab for every role that has it ticked.
+    .replace('STOCK', 'SO PACK')
     .replace('PACKING', 'PACKAGING PREP')
     .replace('GALLERY', 'ASSET GALLERY')
     .replace('COUNT', 'BIN COUNT')

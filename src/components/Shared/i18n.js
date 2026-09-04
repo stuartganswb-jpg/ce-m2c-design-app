@@ -76,6 +76,13 @@ const ES = {
     'another bin': 'otra ubicación',
     'placed': 'colocadas',
     'Put away & build': 'Ubicar y construir',
+
+    // ── SO Pack / Packaging Prep (open to look, start to take) ───────────────────────────────
+    'Labels': 'Etiquetas',
+    'Close order': 'Cerrar orden',
+    'Close': 'Cerrar',
+    'Start packing': 'Empezar embalaje',
+    'Looking only — nothing is changed until you start packing': 'Solo mirando — nada cambia hasta que empiece el embalaje',
     'Pick a different order, or ask them (or an admin) to release it.': 'Tome otra orden, o pida a esa persona (o a un admin) que la libere.',
     'Line Item': 'Línea',
     'Line Items': 'Líneas',
@@ -118,7 +125,6 @@ const ES = {
     'Customer': 'Cliente',
     'Reason': 'Motivo',
     'Confirm': 'Confirmar',
-    'Close': 'Cerrar',
     'Print': 'Imprimir',
     'Search': 'Buscar',
     'shop fab not started': 'fabricación no iniciada',
