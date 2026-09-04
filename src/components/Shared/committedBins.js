@@ -136,3 +136,75 @@ export function lineGathering({ order, code, ordered }) {
     const want = Math.max(0, Math.floor(Number(ordered) || 0));
     return { gathered, ordered: want, outstanding: Math.max(0, want - gathered), complete: want > 0 && gathered >= want };
 }
+
+// ══ WHO IS WAITING FOR THESE? — the arrival alert ═════════════════════════════════════════════
+//
+// Stuart 2026-09-03, describing the gap this closes:
+//   "the small parts are ordered in bulk and kept in stock, so when they come back they at this
+//    point may not realize there are back orders against them. so what is the tool that alerts the
+//    wms operators that hey this just came in and 20 arrived 10 can go to the stock bin but 10 are
+//    for SO## and need to go to a sales order commited bin."
+//
+// Two different arrivals, and only the second needs this:
+//   • A pole plated FOR one order comes back FOR that order. Its shipment line carries the sales
+//     order, so nobody has to work anything out — it goes straight to that order's bin.
+//   • Small parts come back in BULK to stock, and the backorders against them are invisible at the
+//     dock. That is the case that quietly ships a customer's parts onto the open shelf, where the
+//     next order takes them.
+//
+// So: given what just arrived, which open orders are short of it, oldest need first, and what is
+// left over for stock. OLDEST FIRST is the rule because it is the only one that cannot be gamed by
+// the order of arrival — and it is the same instinct behind the whole feature, that an older
+// order must not lose its pieces to a newer one.
+//
+// Pure: the caller resolves its own orders into `demands` and keeps line shapes out of here.
+
+/**
+ * @param {number} qty      pieces that just arrived
+ * @param {Array}  demands  [{ orderId, ref, ordered, gathered, needBy, createdAt }] — open orders
+ *                          carrying this code. `ordered - gathered` is what each still needs.
+ * @returns {{allocations: Array, toStock: number, demandTotal: number, shortfall: number}}
+ */
+export function planAllocation({ qty, demands = [] }) {
+    let left = Math.max(0, Math.floor(Number(qty) || 0));
+    const rows = (demands || [])
+        .map(d => ({
+            orderId: d.orderId, ref: d.ref || d.orderId,
+            outstanding: Math.max(0, (Math.floor(Number(d.ordered) || 0)) - (Math.floor(Number(d.gathered) || 0))),
+            needBy: String(d.needBy || ''), createdAt: Number(d.createdAt) || 0,
+        }))
+        .filter(d => d.orderId && d.outstanding > 0)
+        // Oldest NEED first; an order with no date sorts after ones that have one (it is not
+        // urgent by absence), then by when the order was raised.
+        .sort((a, b) => {
+            const an = a.needBy || '￿', bn = b.needBy || '￿';
+            if (an !== bn) return an < bn ? -1 : 1;
+            return a.createdAt - b.createdAt;
+        });
+
+    const demandTotal = rows.reduce((s, r) => s + r.outstanding, 0);
+    const allocations = [];
+    for (const r of rows) {
+        if (left <= 0) break;
+        const take = Math.min(left, r.outstanding);
+        allocations.push({ orderId: r.orderId, ref: r.ref, qty: take, outstanding: r.outstanding });
+        left -= take;
+    }
+    return {
+        allocations,
+        toStock: left,
+        demandTotal,
+        shortfall: Math.max(0, demandTotal - (Math.floor(Number(qty) || 0))),
+    };
+}
+
+/** One line of plain words for the operator: what this arrival does. */
+export function allocationSummary(plan, code) {
+    if (!plan) return '';
+    const c = upCode(code);
+    if (!plan.allocations.length) return `All ${plan.toStock} × ${c} to stock — no open order is waiting for it.`;
+    const parts = plan.allocations.map(a => `${a.qty} for ${a.ref}`);
+    if (plan.toStock > 0) parts.push(`${plan.toStock} to stock`);
+    const tail = plan.shortfall > 0 ? ` · still short ${plan.shortfall} across the open orders` : '';
+    return `${c}: ${parts.join(' · ')}${tail}`;
+}

@@ -8,6 +8,7 @@
 import {
     upBin, committedBinOf, committedQtyOf, binConflict,
     planCommit, planRelease, totalGathered, nextBinFor, lineGathering,
+    planAllocation, allocationSummary,
 } from '../src/components/Shared/committedBins.js';
 
 let pass = 0, fail = 0;
@@ -86,6 +87,32 @@ eq('an order with no bin has no next bin', nextBinFor({}), '');
 eq('line gathering, part way', lineGathering({ order: two, code: 'A', ordered: 12 }), { gathered: 10, ordered: 12, outstanding: 2, complete: false });
 eq('line gathering, complete', lineGathering({ order: two, code: 'B', ordered: 4 }), { gathered: 4, ordered: 4, outstanding: 0, complete: true });
 eq('a line ordering nothing is never complete', lineGathering({ order: two, code: 'A', ordered: 0 }).complete, false);
+
+// ── the arrival alert: who is waiting, oldest need first ──────────────────────────────────────
+const demands = [
+    { orderId: 'B', ref: 'QS-B', ordered: 10, gathered: 0, needBy: '2026-10-01', createdAt: 200 },
+    { orderId: 'A', ref: 'QS-A', ordered: 6, gathered: 2, needBy: '2026-09-20', createdAt: 100 },
+    { orderId: 'C', ref: 'QS-C', ordered: 5, gathered: 5, needBy: '2026-09-01', createdAt: 50 },
+];
+let p = planAllocation({ qty: 20, demands });
+eq('oldest NEED is served first, and a fully-gathered order does not queue',
+    p.allocations, [{ orderId: 'A', ref: 'QS-A', qty: 4, outstanding: 4 }, { orderId: 'B', ref: 'QS-B', qty: 10, outstanding: 10 }]);
+eq('the remainder goes to stock', p.toStock, 6);
+eq('demand total counts only what is outstanding', p.demandTotal, 14);
+eq('nothing is short when the arrival covers it', p.shortfall, 0);
+
+p = planAllocation({ qty: 6, demands });
+eq('a short arrival fills the oldest first and stops', p.allocations, [{ orderId: 'A', ref: 'QS-A', qty: 4, outstanding: 4 }, { orderId: 'B', ref: 'QS-B', qty: 2, outstanding: 10 }]);
+eq('nothing is left for stock when orders are short', p.toStock, 0);
+eq('and the shortfall is reported', p.shortfall, 8);
+
+p = planAllocation({ qty: 5, demands: [] });
+eq('no claimants sends it all to stock', [p.allocations.length, p.toStock], [0, 5]);
+eq('an order with no need-by sorts after one that has a date',
+    planAllocation({ qty: 1, demands: [{ orderId: 'X', ordered: 1, gathered: 0, createdAt: 1 }, { orderId: 'Y', ordered: 1, gathered: 0, needBy: '2026-12-01', createdAt: 9 }] }).allocations[0].orderId, 'Y');
+eq('zero arriving allocates nothing', planAllocation({ qty: 0, demands }).allocations.length, 0);
+ok('the summary names the orders', /QS-A/.test(allocationSummary(planAllocation({ qty: 20, demands }), 'h1-1')));
+ok('the summary says so when nobody is waiting', /no open order/.test(allocationSummary(planAllocation({ qty: 3, demands: [] }), 'h1-1')));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

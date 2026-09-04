@@ -7,7 +7,7 @@ import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
-import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered } from '../Shared/committedBins';
+import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered, planAllocation, allocationSummary } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction } from "firebase/firestore";
@@ -1188,6 +1188,57 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         } catch (e) { alert('Could not release: ' + (e.message || e)); }
     };
 
+    // ── "WHO IS WAITING FOR THESE?" — the arrival alert (Stuart 2026-09-03) ──────────────────
+    // "the small parts are ordered in bulk and kept in stock, so when they come back they at this
+    // point may not realize there are back orders against them. so what is the tool that alerts
+    // the wms operators that hey this just came in and 20 arrived 10 can go to the stock bin but
+    // 10 are for SO## and need to go to a sales order commited bin."
+    //
+    // This is the tool. Given a code and a quantity that just arrived, it asks every OPEN sales
+    // order what it is still short of, offers the split oldest-need-first, and — on a yes — gathers
+    // each order's share into its committed bin, asking for that bin once per order. Whatever no
+    // order is waiting for goes to stock exactly as it does today.
+    //
+    // It ANSWERS rather than acts: a No leaves everything on the shelf and nothing is written, so
+    // an operator who is unsure is never trapped into an allocation.
+    const demandsFor = (code) => {
+        const c = String(code || '').trim().toUpperCase();
+        if (!c) return [];
+        return quickShipOrders
+            .filter(o => soOpenFor(o) && o.packStatus !== 'Packed')
+            .map(o => {
+                const line = (o.lines || []).find(l => String(l.erp || '').trim().toUpperCase() === c);
+                if (!line) return null;
+                return {
+                    orderId: o.id, ref: o.soId || o.id,
+                    ordered: Number(line.qty) || 0, gathered: committedQtyOf(o, c),
+                    needBy: o.needBy || o.needByDate || o.reqDate || '', createdAt: Number(o.createdAt) || 0,
+                };
+            })
+            .filter(Boolean);
+    };
+    // Returns how many pieces were taken by orders — the caller puts the REST on the shelf.
+    const offerAllocation = async (code, qty, { from = '' } = {}) => {
+        const c = String(code || '').trim().toUpperCase();
+        const plan = planAllocation({ qty, demands: demandsFor(c) });
+        if (!plan.allocations.length) return 0;
+        const lines = plan.allocations.map(a => `   ${a.qty} → ${a.ref}${a.qty < a.outstanding ? ` (still short ${a.outstanding - a.qty})` : ''}`).join('\n');
+        if (!window.confirm(`⚠ ${qty} × ${c} just arrived, and open orders are waiting for ${plan.demandTotal}.\n\n${lines}\n${plan.toStock > 0 ? `   ${plan.toStock} → stock\n` : ''}\nSend each order's share to its committed bin? You will be asked for the bin once per order.\n\nNo = put it all away as ordinary stock and leave the orders short.`)) {
+            writeLog(`Arrival alert declined: ${qty} × ${c} put to stock while ${plan.demandTotal} were outstanding${from ? ` (${from})` : ''}.`, 'wms');
+            return 0;
+        }
+        let taken = 0;
+        for (const a of plan.allocations) {
+            const order = quickShipOrders.find(o => o.id === a.orderId);
+            if (!order) continue;
+            const oline = (order.lines || []).find(l => String(l.erp || '').trim().toUpperCase() === c);
+            const done = await commitToOrder(order, { code: c, qty: a.qty, ordered: Number(oline && oline.qty) || 0 });
+            if (done) taken += a.qty;   // a refusal or a cancelled bin prompt leaves those pieces for stock
+        }
+        writeLog(`Arrival alert: ${allocationSummary(plan, c)}${from ? ` (${from})` : ''} — ${taken} gathered into committed bins.`, 'wms');
+        return taken;
+    };
+
     const printOrderLineLabels = (job, line) => printStockItemLabels({
         itemId: line.erp || line.code || '', itemName: line.name || '', uom: 'EA',
         woNum: packRef(job), copies: Math.max(1, Math.min(50, Number(line.qty) || 1)),
@@ -1584,8 +1635,20 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                     }
                     return;
                 }
+                // PACKAGING PREP IS THE HANDLER TO SO PACK FOR PAINTED/STAINED ITEMS (Stuart
+                // 2026-09-03). A finished stock run reaching the shelf is precisely the moment the
+                // backorders against it are invisible — so ask BEFORE it disappears into stock.
+                // The NetSuite build is unaffected either way: it receives into the SCANNED bin,
+                // because a committed bin is app-only and NetSuite must go on seeing the shelf.
+                let allocNote = '';
+                try {
+                    const allocCode = woItemCodeOf(job);
+                    const doneQty = Number(job.completedParts) > 0 ? Number(job.completedParts) : (Number(job.totalParts) || 0);
+                    const taken = allocCode && doneQty > 0 ? await offerAllocation(allocCode, doneQty, { from: `put-away ${packRef(job)}` }) : 0;
+                    if (taken > 0) allocNote = `\n\n📦 ${taken} of them are now gathered for open orders — see SO Pack. The rest stay in ${bin}.`;
+                } catch (e) { console.warn('arrival alert failed (the put-away stands):', e); }
                 setPackOrderId(null);
-                alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\nThe NetSuite assembly build is queued now and receives into ${bin} — watch it land in 11.1 → NetSuite Sync Queue (~1 min).`);
+                alert(`📦 ${packRef(job)} put away → bin ${bin}.\n\nThe NetSuite assembly build is queued now and receives into ${bin} — watch it land in 11.1 → NetSuite Sync Queue (~1 min).${allocNote}`);
                 return;
             }
             try {
@@ -2909,6 +2972,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 await commitToOrder(forOrder, { code: target, qty: got, ordered: Number(oline && oline.qty) || 0 });
             } else if (soId) {
                 writeLog(`⚠ Plating put-away: ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')} rather than guessed into a committed bin.`, 'wms');
+            } else {
+                // BULK PLATED SMALL PARTS — the case Stuart named: ordered for stock, so nothing on
+                // the line points at an order, and the backorders against them are invisible at the
+                // dock. Ask before they vanish onto the shelf.
+                try { await offerAllocation(target, got, { from: `plating put-away ${line.shipmentId || line.id}` }); }
+                catch (e) { console.warn('arrival alert failed (the build stands):', e); }
             }
             alert(`✅ ${got} × ${target} put away and built.\n\n${bins.map(p => `   ${p.qty} → ${p.bin}`).join('\n')}${scrap > 0 ? `\n\n${scrap} short piece(s) scrapped out of WIP-Plating.` : ''}`);
             setPaLineId(''); setPaBins([{ bin: '', qty: '' }]); setPaMulti(false); setPlatingScan(''); setPlatingFocusId(null);
