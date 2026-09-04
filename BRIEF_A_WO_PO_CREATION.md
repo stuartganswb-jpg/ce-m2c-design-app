@@ -459,8 +459,12 @@ is not FEE/HIDDEN/OPT), the note is built from it (`:697`), and `parkWorkOrder` 
    the pick list already has for "not in the library … fix the flow step".
 2. `parkWorkOrder` REFUSES to park a finishing run whose plan carries an unresolved line
    (`ParkRefusal { code: 'BOM_UNRESOLVED' }`, naming the pin and the parent), so the WO is never
-   created with a pull nobody can pick — the person fixes the BOM pin / un-retires or links the
-   component, then re-parks. (Rule 3: no stopgap that lets it through with a warning.)
+   created with a pull nobody can pick. **The refusal's message says what to do (Stuart,
+   2026-09-04): "The BOM for <parent> names a component the app cannot resolve (NetSuite id 7674).
+   Either FIX THE BOM — link that pin to a library item with an item # — or run this as a JUST FOR
+   PAINT job (Master Library → JFP), which takes the NetSuite item # and the pull item directly."**
+   Same sentence on the grid row, the Snapshot, the Library card and the pre-check — wherever the
+   refusal surfaces. (Rule 3: no stopgap that lets it through with a warning.)
 3. Resolution should also try the FULL library (retired included) for the lookup — a retired
    component is still a real NetSuite item the pick can scan; `enrichedInventory`'s retired filter
    is right for the GRID's rows, wrong for resolving a BOM pin.
