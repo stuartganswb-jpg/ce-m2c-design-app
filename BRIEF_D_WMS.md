@@ -378,6 +378,37 @@ minute → refused; fail the entry (bad bin) → re-post allowed → ONE new ent
 **Named, not fixed (B):** the same "enqueue then stamp, never check the stamp" shape may exist on
 the pack-scrap adjustment (same account 254, same payload shape) — worth a look while you are there.
 
+### Hand-off from B — the rod-cut / convert completions RELEASE a stock order (Stuart, 2026-09-04: "imperative")
+
+**Why.** Sandra's cut for WO-HCUMP615-N34-165016-1 posted, cleared `awaitingRodCut` and printed the
+label — and the order sat parked, because the stock release (payload copy + Route A) lived only in
+RTG's tab. `Shared/floorRelease.js` now carries it with no React: `releaseStockWoToFloor({ hqOrder,
+brand, by, log })` → `{ released, nsNote, finId, why }` (verbatim finPayload, board's urgent wins,
+dispatched stamps, then Route A with the once-ever STOP + dedupeKey + writeBack onto both docs;
+refuses sales-typed / no payload / already dispatched). Callers decide the gates first with
+`orderStatus.isReleasable`.
+
+**Your two call sites (`PickPackApp.js`):**
+1. **Rod cut complete** (the `isFinishingCut && o.finWoId` block, after the gate clears): re-read
+   the hq doc, then
+   ```js
+   if (wo && wo.autoFlow && wo.status === 'Approved' && isReleasable(wo)) {
+       const res = wo.orderType === 'sales' || wo.orderClass === 'ORDER_ENTRY'
+           ? { released: await releaseFinWoToFloor(wo, operatorName) }            // A's sales door (unchanged)
+           : await releaseStockWoToFloor({ hqOrder: wo, brand: activeBrand, by: operatorName, log: (m) => writeLog(m, 'wms') });
+       writeLog(res.released ? `✂ ${o.id} released ${o.finWoId} to finishing${res.nsNote ? ' + NetSuite WO queued' : ''}` : `✂ ${o.id}: gate cleared, not released — ${res.why || 'a gate is still open'}`, 'wms');
+   }
+   ```
+   The label already prints; keep it. If another gate is still open (convert, components) the
+   order stays parked and RTG's effect takes it when that clears — say so in the log, never force.
+2. **Convert complete** is A's `clearConvertGate` (their file) — A switches its stock branch to
+   the same call; nothing for you there beyond the existing call.
+
+**Downstream:** finishing — same doc it would have got from RTG; NetSuite — the same Route A
+write, from the WMS instead of a tab; RTG — the record flips to Dispatched with `dispatchedBy`
+= the operator; no duplicate possible (STOP + dedupeKey). Acceptance: complete a finishing cut
+with NO RTG tab open → the Setup Queue shows the order within seconds and 11.1 shows its WO.
+
 ## 8. Open questions (ask before the plan)
 
 1. **Eric — FLOW1's close.** After the /P convert posts against its WO, does a build of the base

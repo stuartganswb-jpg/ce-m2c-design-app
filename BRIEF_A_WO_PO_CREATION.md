@@ -478,3 +478,21 @@ or by hand now).
 **Downstream:** finishing — a card that names its component; WMS — a pull that scans; NetSuite —
 the WO's component demand already carries the right item (NetSuite resolved the BOM itself), so
 only the app's pull line was wrong. No RTG change.
+
+### Hand-off from B — clearConvertGate's STOCK branch releases through Shared/floorRelease (2026-09-04)
+
+Your 2026-09-02 comment is exactly right ("a stock order released here would reach the floor
+unanchored, so the cleared gate hands it to RTG's auto-release effect, which releases AND
+anchors") — and that effect runs only while an RTG tab is open (Stuart today: "imperative").
+The anchoring release now exists outside RTG: `Shared/floorRelease.releaseStockWoToFloor({ hqOrder,
+brand, by, log })` (verbatim payload + Route A, STOP + dedupeKey, refuses sales/no-payload/
+already-dispatched). Patch: in `clearConvertGate`, after the re-read, keep your eligibility line
+for sales (`releaseFinWoToFloor`) and add the stock branch:
+```js
+else if (wo && wo.autoFlow && wo.status === 'Approved' && isReleasable(wo) && wo.finPayload) {
+    const res = await releaseStockWoToFloor({ hqOrder: wo, brand: wo.brand, by: operatorName || 'convert-complete' });
+    if (res.released) return 'released';
+}
+```
+`wo.brand` is on every parked doc (your stamps). Same for the rod-cut path on D's side (spec in
+Brief D). After both land, RTG's tab-bound effect is the safety net, not the mechanism.
