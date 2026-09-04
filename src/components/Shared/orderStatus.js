@@ -21,6 +21,10 @@
 // of them. `slowest` exists only for sorting and colour, never as the thing to display alone.
 
 export const STAGES = {
+    // A stocked (Order Entry / Quick Ship) sales order saved but not yet accepted by NetSuite. It is
+    // on the RTG board from creation (Stuart 2026-09-03: "EVERY ORDER via RTG always") but is not
+    // warehouse work until the SO posts — NS_QUEUED is the guard that keeps it off the pick tab.
+    AWAITING_NS: { rank: 5, label: 'Awaiting NetSuite', hint: 'Saved — NetSuite has not accepted the sales order yet' },
     RELEASED: { rank: 10, label: 'Released', hint: 'Dispatched — not started' },
     SHOP: { rank: 20, label: 'Shop', hint: 'Custom fabrication in progress' },
     // 'Sent to Plating' (Brief B5, Stuart 2026-09-02): the custom half is OUT at the plater. It is
@@ -190,6 +194,26 @@ export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
         done: !!fulfilment && ['SHELVED', 'SHIPPED'].includes(fulfilment.stage),
     };
 }
+
+// ── A STOCKED SALES ORDER (Order Entry / Quick Ship) ─────────────────────────────────────────
+// hq_sales_orders orderClass 'QUICKSHIP': no split, no floor docs — the lines are picked and packed
+// straight off the shelf by the WMS, which stamps pick/pack state on the SO doc itself. RTG shows
+// the RECORD (Stuart 2026-09-03, hard rule) and never dispatches it. One stream, same chip shape.
+export const quickShipStatusOf = (so) => {
+    if (!so) return null;
+    const S = { key: 'ORDER', label: 'Stocked order' };
+    if (so.currentPhase === 'Closed' || so.status === 'Closed' || so.closed === true || so.status === 'CANCELLED') return { ...S, stage: 'CLOSED', detail: 'closed', since: so.closedAt || null, by: so.closedBy || '' };
+    if (so.status === 'NS_QUEUED') return { ...S, stage: 'AWAITING_NS', detail: so.nsQueuedAt ? '' : 'queued', since: so.nsQueuedAt || so.createdAt || null };
+    if (so.packStatus === 'Packed') {
+        if (so.nsIfTran) return { ...S, stage: 'SHIPPED', detail: `fulfilment ${so.nsIfTran}`, since: so.packedAt || null, by: so.packedBy || '' };
+        return { ...S, stage: 'PACKED', detail: so.nsFulfillQueued ? 'fulfilment queued' : 'awaiting shipment', since: so.packedAt || null, by: so.packedBy || '' };
+    }
+    if (so.packInProgress && so.packInProgress.by) return { ...S, stage: 'PACKED', detail: 'packing now', since: so.packInProgress.startedAt || null, by: so.packInProgress.by };
+    if (so.pickStatus === 'Staged_Ready_For_Finishing') return { ...S, stage: 'STAGED', detail: 'picked & staged', since: so.stagedAt || null };
+    if (so.pickStatus === 'Picked_Awaiting_Staging') return { ...S, stage: 'PICKED', detail: 'awaiting pack', since: so.pickedAt || null };
+    if (so.pickInProgress && so.pickInProgress.by) return { ...S, stage: 'PICKING', detail: 'picking now', since: so.pickInProgress.startedAt || null, by: so.pickInProgress.by };
+    return { ...S, stage: 'PICKING', detail: 'in the WMS pick queue', since: so.soAcceptedAt || null };
+};
 
 // One-line form for a dense list ("Small parts: painting coat 2 of 3 · Poles: done").
 export const statusLine = (st) =>

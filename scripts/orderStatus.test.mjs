@@ -7,7 +7,7 @@
 
 import {
     GATES, gatesOf, openGatesOf, isReleasable, gateSummary,
-    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone,
+    customPartsReady, customFabLabel, orderStatusOf, STAGES, stageTone, quickShipStatusOf,
 } from '../src/components/Shared/orderStatus.js';
 
 let pass = 0, fail = 0;
@@ -79,6 +79,17 @@ const inShop = orderStatusOf({ hasCustomSibling: true, customFabStatus: 'In Proc
 eq('In Process still reads SHOP (unchanged)', inShop.streams.find(s => s.key === 'CUSTOM').stage, 'SHOP');
 const doneShop = orderStatusOf({ hasCustomSibling: true, customFabStatus: 'Complete', currentPhase: 'Setup' }, { recipeLen: 2 });
 eq('Complete still reads FINISHED (unchanged)', doneShop.streams.find(s => s.key === 'CUSTOM').stage, 'FINISHED');
+
+// ── a stocked (Order Entry / Quick Ship) sales order's stage, from the SO doc the WMS stamps ──
+eq('QS: NS_QUEUED = awaiting NetSuite', quickShipStatusOf({ status: 'NS_QUEUED' }).stage, 'AWAITING_NS');
+eq('QS: accepted, nothing picked = in the pick queue', quickShipStatusOf({ status: 'Pending', pickStatus: 'Pending' }).stage, 'PICKING');
+eq('QS: picking claimed names the picker', quickShipStatusOf({ status: 'Pending', pickInProgress: { by: 'Andrea', startedAt: 1 } }).by, 'Andrea');
+eq('QS: picked = awaiting pack', quickShipStatusOf({ status: 'Pending', pickStatus: 'Picked_Awaiting_Staging' }).stage, 'PICKED');
+eq('QS: packed, no fulfilment yet', quickShipStatusOf({ status: 'Pending', packStatus: 'Packed' }).stage, 'PACKED');
+eq('QS: packed with fulfilment = shipped', quickShipStatusOf({ status: 'Pending', packStatus: 'Packed', nsIfTran: 'IF123' }).stage, 'SHIPPED');
+eq('QS: closed', quickShipStatusOf({ status: 'Closed' }).stage, 'CLOSED');
+eq('QS: null in, null out', quickShipStatusOf(null), null);
+ok('AWAITING_NS ranks below everything started', STAGES.AWAITING_NS.rank < STAGES.RELEASED.rank);
 
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

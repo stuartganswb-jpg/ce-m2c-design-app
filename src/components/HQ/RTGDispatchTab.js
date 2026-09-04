@@ -8,9 +8,9 @@ import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
-import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
-import { isReleasable, openGatesOf, gateSummary } from '../Shared/orderStatus';
+import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
@@ -348,6 +348,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // Live mirrors, not the manual board load — a new order triggers its own release.
         // An app-created SO (CPQ save) waits for NetSuite to accept it (nsInternalId via
         // writeBack) before splitting to the floors, so a rejected order never becomes work.
+        // hqJobId IS LOAD-BEARING (Stuart 2026-09-03, decision 6 + the every-order-via-RTG rule): an
+        // Order Entry / Quick Ship order (orderClass QUICKSHIP) has none, is shown on the board as a
+        // RECORD, and must NEVER be split here — its stocked lines are already being picked and
+        // packed by the WMS off the SO doc itself. Widening this to QUICKSHIP would create fin/shop
+        // docs for work the warehouse is already doing: duplicate work orders for one order.
         const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
         // The gates are ONE list (orderStatus.gatesOf, Brief B2) — the same six this effect, the
         // auto-flow effect below, pushToFinishing and A's clearConvertGate used to spell by hand.
@@ -942,6 +947,53 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     };
     const soBoard = splitBoard(salesOrders);
     const woBoard = splitBoard(workOrders);
+    // ORDER ENTRY / QUICK SHIP SALES ORDERS ARE ON THE BOARD (Stuart 2026-09-03: "no matter from cpq
+    // or order entry, i want all orders routed thru RTG … EVERY ORDER via RTG always hard rule").
+    // They never were: the dispatch query above lists status Approved/Dispatched, and a stocked
+    // order is saved NS_QUEUED and flipped to 'Pending' by the outbox — the WMS lifecycle vocabulary,
+    // which is deliberate (NS_QUEUED is the guard that keeps an unaccepted order away from pickers,
+    // so the write side must not change). The board reads them from the live feed it already has
+    // (liveSO — unfiltered by status, brand-scoped, tombstones dropped), from CREATION, and shows
+    // them as RECORDS: a status chip and their work orders, never a split button (see the guard on
+    // the auto-dispatch effect above). Closed rows leave the board; packed ones stay a week.
+    const qsRows = liveSO.filter(o => o.orderClass === 'QUICKSHIP' && !o.rtgArchived && !isClosedState(o));
+    const qsRecent = (o) => (Date.now() - (o.packedAt || o.updatedAt || o.createdAt || 0)) < WEEK_MS;
+    const qsBoard = {
+        open: qsRows.filter(o => !isDoneState(o)).sort(urgentFirst),
+        done: qsRows.filter(o => isDoneState(o) && qsRecent(o)).sort((a, b) => (b.packedAt || 0) - (a.packedAt || 0)),
+    };
+    const qsCard = (so, done) => {
+        const st = quickShipStatusOf(so) || {};
+        const tone = stageTone(st.stage);
+        const wos = liveWO.filter(w => w.soAppId === so.id && !w.deleted);
+        return (
+            <div key={so.id} style={{ ...cardStyle, borderLeft: `4px solid ${isUrgent(so) ? '#d9534f' : tone}`, ...(isUrgent(so) ? { background: '#fdf3f3' } : {}), ...(done ? { opacity: 0.8 } : {}) }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                    <div>
+                        <div style={{ fontWeight: 500, fontSize: '1.1rem', color: isUrgent(so) ? '#d9534f' : 'var(--ink)' }}>SO: {so.soId || so.id} <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--ink-soft)', border: '1px solid var(--line)', padding: '2px 6px', marginLeft: '6px' }}>Order Entry · stocked</span></div>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '4px' }}>Cust: {so.customer || so.customerName || 'N/A'}{so.sidemark ? ` · ${so.sidemark}` : ''}{(so.lines || []).length ? ` · ${so.lines.length} line${so.lines.length === 1 ? '' : 's'}` : ''}</div>
+                        {urgentControls(so, 'hq_sales_orders')}
+                    </div>
+                    <button onClick={() => deleteOrder('hq_sales_orders', so)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
+                </div>
+                {so.memo && <div style={{ fontSize: '0.85rem', color: 'var(--ink)', marginBottom: '10px', fontStyle: 'italic', borderLeft: '2px solid var(--line)', paddingLeft: '8px' }}>"{so.memo}"</div>}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginBottom: wos.length ? '8px' : 0 }}>
+                    <span title={`${st.label} — ${stageLabel(st.stage)}${st.detail ? ` · ${st.detail}` : ''}${st.by ? ` · ${st.by}` : ''}`} style={{ display: 'inline-flex', alignItems: 'baseline', gap: '6px', border: `1px solid ${tone}`, borderLeft: `3px solid ${tone}`, background: '#fff', padding: '3px 7px', whiteSpace: 'nowrap' }}>
+                        <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--ink-soft)' }}>WMS</span>
+                        <b style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.04em', color: tone }}>{stageLabel(st.stage)}</b>
+                        {st.detail && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)' }}>{st.detail}</span>}
+                        {st.by && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: tone }}>· {st.by}</span>}
+                    </span>
+                    {so.finishAsAvailable === true && <span title={`Finish as available — the exception: parts go to finishing as they arrive.${so.finishAsAvailableBy ? ` Set by ${so.finishAsAvailableBy}` : ''}${so.finishAsAvailableReason ? ` — ${so.finishAsAvailableReason}` : ''}`} style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--brass)', border: '1px dashed var(--brass)', padding: '3px 7px' }}>finish as available</span>}
+                </div>
+                {wos.length > 0 && (
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.6 }}>
+                        {wos.map(w => <div key={w.id}>↳ {woRefOf(w)} {woItemCodeOf(w) ? `· ${woItemCodeOf(w)}` : ''} · {w.status === 'Dispatched' ? (w.floorPhase || 'on the floor') : (gateSummary(w) || (w.status === 'Approved' ? 'releasing…' : (w.status || '').toLowerCase()))}</div>)}
+                    </div>
+                )}
+            </div>
+        );
+    };
 
     // Flip the flag ON THE ORDER, not on some dispatch-time-only checkbox: an order that is urgent
     // is urgent while it sits here waiting too, which is exactly the situation Eric described. The
@@ -2554,6 +2606,16 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                     </div>
                                 </div>
                             ))}
+
+                            {(qsBoard.open.length > 0 || qsBoard.done.length > 0) && (
+                                <div style={{ marginTop: soBoard.pending.length ? '18px' : 0, paddingTop: soBoard.pending.length ? '14px' : 0, borderTop: soBoard.pending.length ? '1px dashed var(--line)' : 'none' }}>
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.12em', color: 'var(--ink-soft)', marginBottom: '10px' }}>
+                                        Order Entry · stocked — record only, picked by the WMS ({qsBoard.open.length}{qsBoard.done.length ? ` · ${qsBoard.done.length} packed this week` : ''})
+                                    </div>
+                                    {qsBoard.open.map(so => qsCard(so, false))}
+                                    {qsBoard.done.map(so => qsCard(so, true))}
+                                </div>
+                            )}
 
                             {dispatchedSection(soBoard, 'sales')}
                         </div>
