@@ -19,7 +19,7 @@ const eq = (n, got, want) => {
 const ok = (n, c) => { if (c) { pass++; return; } fail++; console.log(`✗ ${n}`); };
 
 // ── the six gates, in flow order ──
-eq('gate keys in flow order', GATES.map(g => g.key), ['soAccept', 'nsWo', 'components', 'convert', 'rodCut', 'dispatched']);
+eq('gate keys in flow order', GATES.map(g => g.key), ['soAccept', 'nsWo', 'receipt', 'components', 'convert', 'rodCut', 'dispatched']);
 eq('only dispatched is a done-gate', GATES.filter(g => g.kind === 'done').map(g => g.key), ['dispatched']);
 
 // ── a clean parked order releases ──
@@ -27,7 +27,7 @@ const clean = { id: 'WO-1', status: 'Approved' };
 ok('clean order is releasable', isReleasable(clean));
 eq('clean order has no open gates', openGatesOf(clean), []);
 eq('clean order summary is empty', gateSummary(clean), '');
-eq('gatesOf still lists all six for a clean order', gatesOf(clean).length, 6);
+eq('gatesOf still lists every gate for a clean order', gatesOf(clean).length, 7);
 ok('missing record is never releasable', !isReleasable(null) && !isReleasable(undefined));
 eq('gatesOf(null) is empty', gatesOf(null), []);
 

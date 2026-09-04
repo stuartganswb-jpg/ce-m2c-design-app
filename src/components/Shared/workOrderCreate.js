@@ -20,11 +20,12 @@
 // (Shared/purchaseOrders, A4), or raise a plating demand (Shared/platingDemand, A3). It parks.
 
 import { db } from '../../firebase';
-import { doc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { withItemCode, makeFullTasks } from './workOrderContract';
 import { buildParkedWorkOrder, routeForCode, ROUTE_FINISHING, ROUTE_SHOP, REFUSE_PHOSPHATE, REFUSE_OUTSOURCED } from './stockRun.js';
 import { planFinishedRun, erpOf } from './finishedGoodsRun.js';
-import { executeMakeupActions } from './finishedRunPrecheck';
+import { executeMakeupActions, releaseFinWoToFloor } from './finishedRunPrecheck';
+import { isReleasable } from './orderStatus';
 import { poleCutPlan } from './poleCut.js';
 import { queueNsAssemblyWorkOrder, isNsAssemblyRec } from './nsWorkOrder';
 
@@ -77,6 +78,9 @@ export const parkWorkOrder = async ({
     // review's pull lines verbatim (Model B renames the self-pull to the raw code), `makeup` =
     // how component shop WOs dispatch (Order Entry sends them straight to the shop).
     code = '', sales = null, partsList: partsListOverride = null, makeup = {},
+    // MATERIAL WE HAD TO BUY (Stuart 2026-09-04): [{ itemId, qtyNeeded, poId? }]. The order parks
+    // AWAITING RECEIPT and sits on the WMS until enough arrives to cover it — see receiptGateFields.
+    receiptRefs = null,
     // A POLE IS CUT OR WAITED FOR, NEVER MILLED (Q5 — Stuart 2026-09-02). On a sales line the
     // OPERATOR decides in the review: `poleCut` is the plan they chose (Shared/poleCut
     // .cutPlanFromSource — which stick, how many rods), or `backOrder` is the reason they chose to
@@ -151,6 +155,12 @@ export const parkWorkOrder = async ({
         }
     }
 
+    // The material gate rides with the others, so every reader sees one gate object.
+    if (receiptRefs && receiptRefs.length) {
+        const rg = receiptGateFields(receiptRefs);
+        if (rg.awaitingReceipt) { gate = { ...gate, ...rg }; made.push(`📦 waiting on material — ${rg.receiptGateNote}`); }
+    }
+
     // 5. THE DOCUMENT — one shape.
     // WAITING FOR THE LENGTH (Q5): the work order is created and goes to the floor; its pick waits
     // at the WMS until the stock lands — the same way a bought line waits for its PO. No new gate.
@@ -214,4 +224,118 @@ export const parkWorkOrder = async ({
 
     made.unshift(`${route.routeTo === ROUTE_FINISHING ? '🎨' : '🏭'} ${id} — ${n} × ${erp}${route.finish ? ` (${route.finish})` : ''} → RTG, route ${route.routeTo}${Object.keys(gate).length ? ' · gated: ' + Object.keys(gate).filter(k => /^awaiting/.test(k) && gate[k]).map(k => k.replace(/^awaiting/, '').toLowerCase()).join(' + ') : ' · auto-release when clear'}`);
     return { woId: id, routeTo: route.routeTo, finish: route.finish, gate, made, finPayload: hq.finPayload || null, rodCut, shopWoId: built.shopSibling ? built.shopSibling.id : null };
+};
+
+// ── AWAITING MATERIAL — the gate for an order whose stock had to be bought ─────────────────────
+// Stuart 2026-09-04: "when an order is placed and we do not have stock it needs to wait for it to
+// arrive and the order sits parked on wms."
+//
+// A SETS it (here), B READS it (orderStatus.GATES key 'receipt', so RTG's auto-release and every
+// other gate reader honour it without knowing it exists), D TRIGGERS the clear from the receiving
+// dock. Agreed across the three sessions 2026-09-03 before any of it was written.
+//
+// TWO SHAPES CHOSEN DELIBERATELY, both cheap now and a migration later:
+//  · an ARRAY of refs, not one poId — a work order can wait on more than one purchase order, and
+//    a scalar would silently release it with half its material;
+//  · each ref CARRIES THE QUANTITY — clearing on "the PO was received" is wrong, because a PO for
+//    12 arriving as 5 does not make the order runnable. `receiptCodes` is the flattened list the
+//    array-contains query needs (one field, so Firestore indexes it on its own — no composite).
+export const receiptGateFields = (refs = [], note = '') => {
+    const clean = (refs || [])
+        .filter(r => r && r.itemId && Number(r.qtyNeeded) > 0)
+        .map(r => ({
+            itemId: String(r.itemId).toUpperCase(),
+            qtyNeeded: Math.max(1, Math.floor(Number(r.qtyNeeded) || 0)),
+            receivedSoFar: 0,
+            ...(r.poId ? { poId: String(r.poId) } : {}),
+        }));
+    if (!clean.length) return {};
+    return {
+        awaitingReceipt: true,
+        receiptRefs: clean,
+        receiptCodes: [...new Set(clean.map(r => r.itemId))],
+        receiptGateNote: note || clean.map(r => `${r.qtyNeeded} × ${r.itemId}${r.poId ? ` on ${r.poId}` : ''}`).join(' · '),
+    };
+};
+
+// The purchase order usually does not exist yet when the work order is parked — the review raises
+// the WOs first and buckets the POs afterwards — so the gate goes on immediately (which is what
+// stops the release) and the PO number is written onto the refs a moment later.
+export const stampReceiptPo = async (woId, itemId, poId) => {
+    if (!woId || !itemId || !poId) return false;
+    const code = String(itemId).toUpperCase();
+    const snap = await getDocs(query(collection(db, 'hq_work_orders'), where('receiptCodes', 'array-contains', code)));
+    const hit = snap.docs.find(d => d.id === woId);
+    if (!hit) return false;
+    const refs = (hit.data().receiptRefs || []).map(r =>
+        String(r.itemId).toUpperCase() === code && !r.poId ? { ...r, poId: String(poId) } : r);
+    await updateDoc(doc(db, 'hq_work_orders', woId), {
+        receiptRefs: refs,
+        receiptGateNote: refs.map(r => `${r.qtyNeeded} × ${r.itemId}${r.poId ? ` on ${r.poId}` : ''}`).join(' · '),
+    });
+    return true;
+};
+
+/**
+ * Material arrived — give it to the orders that were waiting, oldest need-by first.
+ *
+ * Called by the WMS receiving dock (the WMS never writes hq_work_orders itself, symmetric with the
+ * rule that this side never writes from the warehouse). Partial delivery keeps the gate CLOSED and
+ * rewrites the note to say how much is still owed, which is the whole point of carrying quantities.
+ *
+ * @returns {{ cleared: string[], released: string[], used: number, notes: string[] }}
+ */
+export const clearReceiptGate = async ({ itemId, receivedQty, poId = '', operatorName = '' }) => {
+    const code = String(itemId || '').toUpperCase();
+    let left = Math.max(0, Math.floor(Number(receivedQty) || 0));
+    const out = { cleared: [], released: [], used: 0, notes: [] };
+    if (!code || !left) return out;
+    const asked = left;
+
+    const snap = await getDocs(query(collection(db, 'hq_work_orders'), where('receiptCodes', 'array-contains', code)));
+    const waiting = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .filter(w => w.awaitingReceipt === true && !w.deleted && !['Closed', 'Cancelled', 'Deleted'].includes(String(w.status || '')))
+        // The order that needs it soonest is served first; a tie goes to the one raised first.
+        .sort((a, b) => String(a.needBy || a.reqDate || '9999').localeCompare(String(b.needBy || b.reqDate || '9999'))
+            || (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+
+    for (const wo of waiting) {
+        if (left <= 0) break;
+        const refs = (wo.receiptRefs || []).map(r => ({ ...r }));
+        let took = 0;
+        refs.forEach(r => {
+            if (left <= 0 || String(r.itemId).toUpperCase() !== code) return;
+            // A ref that names a DIFFERENT purchase order is not satisfied by this delivery.
+            if (poId && r.poId && String(r.poId) !== String(poId)) return;
+            const short = Math.max(0, (Number(r.qtyNeeded) || 0) - (Number(r.receivedSoFar) || 0));
+            if (!short) return;
+            const take = Math.min(short, left);
+            r.receivedSoFar = (Number(r.receivedSoFar) || 0) + take;
+            left -= take; took += take;
+        });
+        if (!took) continue;
+        const covered = refs.every(r => (Number(r.receivedSoFar) || 0) >= (Number(r.qtyNeeded) || 0));
+        const note = refs.map(r => `${r.receivedSoFar}/${r.qtyNeeded} × ${r.itemId}`).join(' · ');
+        try {
+            await updateDoc(doc(db, 'hq_work_orders', wo.id), {
+                receiptRefs: refs, receiptGateNote: note,
+                ...(covered ? { awaitingReceipt: false, receiptClearedAt: Date.now(), receiptClearedBy: operatorName || '' } : {}),
+            });
+        } catch (e) { out.notes.push(`⚠ ${wo.id}: could not record the receipt against it (${e.message || e})`); continue; }
+        if (!covered) { out.notes.push(`${wo.id}: ${note} — still short, staying parked`); continue; }
+        out.cleared.push(wo.id);
+
+        // Released only when EVERY gate is clear — the one list (orderStatus.isReleasable), never a
+        // hand-written set. The eligibility in front of it is not a gate: a stock order releases
+        // through RTG's Route A so its NetSuite work order is opened, never from here.
+        const fresh = { ...wo, receiptRefs: refs, awaitingReceipt: false };
+        if ((fresh.orderType === 'sales' || fresh.orderClass === 'ORDER_ENTRY')
+            && (fresh.autoFlow || fresh.orderClass === 'ORDER_ENTRY') && isReleasable(fresh)) {
+            try {
+                if (await releaseFinWoToFloor(fresh, operatorName || 'receiving')) out.released.push(wo.id);
+            } catch (e) { out.notes.push(`⚠ ${wo.id}: material is in, but the release failed (${e.message || e}) — release it from RTG`); }
+        }
+    }
+    out.used = asked - left;
+    return out;
 };

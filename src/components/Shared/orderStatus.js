@@ -253,6 +253,16 @@ export const GATES = [
       label: 'awaiting NetSuite WO #', detail: () => '',
       clearedBy: 'the outbox writeBack stamping nsWoId',
       help: (wo) => `${wo.id} is waiting for its NETSUITE WORK ORDER number.\n\nThe WO is queued (11.1 → NetSuite Sync Queue) and its number stamps back automatically — the release then happens on its own. Releasing NOW puts unanchored paper on the floor.` },
+    // MATERIAL WE HAD TO BUY (Stuart 2026-09-04: "when an order is placed and we do not have stock
+    // it needs to wait for it to arrive and the order sits parked on wms"). Set by A when the
+    // review raises a PO for a line's material, cleared by the WMS receiving dock — and the
+    // clearing is the difference that matters: it is not "the PO was received", it is "enough
+    // arrived to cover THIS line". A PO for 12 landing as 5 does not make the order runnable.
+    { key: 'receipt', kind: 'wait', icon: '📦',
+      open: (wo) => !!wo.awaitingReceipt,
+      label: 'awaiting material', detail: (wo) => wo.receiptGateNote || '',
+      clearedBy: 'the WMS receiving tab recording enough received quantity to cover the line (clearReceiptGate)',
+      help: (wo) => `${wo.id} is waiting on material we had to buy.\n\n${wo.receiptGateNote || 'A purchase order was raised for this line and has not arrived yet.'}\n\nThe gate clears itself at the receiving dock the moment enough is received to cover this line — a part delivery keeps it closed and says how much is still owed. Releasing NOW sends the floor a job whose material is not in the building.` },
     { key: 'components', kind: 'wait', icon: '🧩',
       open: (wo) => !!wo.awaitingComponents && !wo.componentsDone,
       label: 'awaiting component milling', detail: (wo) => (wo.componentShopWoIds || []).length ? `${wo.componentShopWoIds.length} shop WO(s)` : '',

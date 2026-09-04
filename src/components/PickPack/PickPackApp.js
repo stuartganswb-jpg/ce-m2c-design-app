@@ -37,6 +37,7 @@ import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
 import { fetchNsPurchaseOrder, importNsPurchaseOrder, recordPoReceipt, openQtyOf, poRef } from "../Shared/purchaseOrders";
+import { clearReceiptGate } from "../Shared/workOrderCreate";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -989,7 +990,24 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 writeLog(`Receiving ${poRef(rcvPo)}: recorded in the app only — this PO has no NetSuite id on file, so no receipt was posted.`, 'wms');
             }
 
-            // 4 — THE ORDERS THAT WERE WAITING. Before anything goes on a shelf: an order placed
+            // 4a — THE ORDERS PARKED ON THIS MATERIAL. An order placed with no stock has been
+            // sitting AWAITING RECEIPT since the review raised the PO (Stuart 2026-09-04: "it
+            // needs to wait for it to arrive and the order sits parked on wms"). Enough has now
+            // arrived to cover some of them: the gate clears and the job goes to the floor. A part
+            // delivery keeps the gate closed and says how much is still owed. The WMS never writes
+            // work orders itself — clearReceiptGate is A's, called from here.
+            const freed = [];
+            for (const a of res.applied) {
+                try {
+                    const r = await clearReceiptGate({ itemId: a.itemId, receivedQty: a.qty, poId: rcvPo.poId || rcvPo.id, operatorName: operator?.name || '' });
+                    (r.released || []).forEach(id => freed.push(id));
+                    (r.cleared || []).forEach(id => writeLog(`Receiving ${poRef(rcvPo)}: ${a.itemId} covered ${id} — material gate cleared.`, 'wms'));
+                    (r.notes || []).forEach(n => writeLog(`Receiving ${poRef(rcvPo)}: ${n}`, 'wms'));
+                } catch (e) { console.warn('receipt gate clear failed (the receipt stands):', e); }
+            }
+            if (freed.length) writeLog(`Receiving ${poRef(rcvPo)}: ${freed.length} order(s) released to finishing — ${freed.join(', ')}.`, 'wms');
+
+            // 4b — THE ORDERS THAT WERE WAITING. Before anything goes on a shelf: an order placed
             // with no stock has been sitting parked here waiting for exactly this delivery
             // (Stuart 2026-09-04). offerAllocation names them, and gathers the pieces into the
             // order's committed bin for the ones the operator takes.
@@ -998,7 +1016,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 try { taken += await offerAllocation(a.itemId, a.qty, { from: `receiving ${poRef(rcvPo)}` }) || 0; }
                 catch (e) { console.warn('arrival alert failed (the receipt stands):', e); }
             }
-            alert(`✅ ${pcs} pcs received against ${poRef(rcvPo)} into ${bin}.${taken ? `\n\n${taken} went to orders that were waiting.` : ''}${rcvPo.nsPoId ? '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).' : ''}`);
+            alert(`✅ ${pcs} pcs received against ${poRef(rcvPo)} into ${bin}.`
+                + (freed.length ? `\n\n🏭 ${freed.length} order(s) were waiting on this material and have gone to the finishing floor:\n   ${freed.join('\n   ')}` : '')
+                + (taken ? `\n\n${taken} went to orders waiting to ship.` : '')
+                + (rcvPo.nsPoId ? '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).' : ''));
             setRcvBin('');
             pullNetSuiteStock();
         } catch (e) {

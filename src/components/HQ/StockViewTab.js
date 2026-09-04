@@ -19,7 +19,8 @@ import { issuePlatedDemand } from '../Shared/platingDemand';
 import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf } from '../Shared/purchaseOrders';
 import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
-import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal } from '../Shared/workOrderCreate';
+import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal, stampReceiptPo } from '../Shared/workOrderCreate';
+import { isReleasable } from '../Shared/orderStatus';
 import { routeForCode, REFUSE_PHOSPHATE } from '../Shared/stockRun';
 import { buildOeReviewPlan, actionsOfReviewedJob } from '../Shared/oeReviewPlan';
 import { queueNsAssemblyWorkOrder } from '../Shared/nsWorkOrder';
@@ -2074,6 +2075,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         if (!runnable.length) return alert('Every line is blocked — resolve the flagged holds first.');
         setOeReview(prev => ({ ...prev, busy: true }));
         const poBuckets = {}; // `${vendor}|${soId}` → { vendorName, so, lines: [] }
+        // Work orders parked AWAITING RECEIPT in this run: { woId, soAppId, itemId }. The review
+        // raises the work orders first and buckets the POs afterwards, so the gate goes on
+        // immediately (that is what holds the release) and the PO number is written on below.
+        const gatedWos = [];
         try {
             // START-NOW SPLIT (Stuart 2026-08-31): a bought TO-BE-FINISHED line with stock on
             // hand may begin finishing immediately for the reviewed portion — that portion gets
@@ -2144,6 +2149,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         backOrder = `${pc.short} × ${pc.pullErp} short (${pc.have} on hand of ${pc.need}) — waiting for the ${pc.pullFt} ft length`;
                     }
                 }
+                const rcptRefs = job.__tag === '-NOW' ? null
+                    : (poLines || []).map(pl => ({ itemId: String(pl.code || '').toUpperCase(), qtyNeeded: Number(pl.editQty ?? pl.qty) || Number(pl.qty) || 0 }))
+                        .filter(r => r.itemId && r.qtyNeeded > 0);
+                if (rcptRefs && rcptRefs.length) rcptRefs.forEach(r => gatedWos.push({ woId, soAppId: so.id, itemId: r.itemId }));
                 let gate = {}, finPayload = null;
                 try {
                     const res = await parkWorkOrder({
@@ -2154,6 +2163,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         inventory: hqParts, locationId: (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17',
                         makeup: { dispatchShop: true, customerName: so.customer || '' }, soRef: so.soId || so.id,
                         anchor: ANCHOR.NONE, woId, poleCut, backOrder,
+                        // MATERIAL WE HAD TO BUY (Stuart 2026-09-04): every component this review
+                        // is raising a PO for parks the order AWAITING RECEIPT — it sits on the WMS
+                        // until enough arrives to cover it. A '-NOW' split is the exception by
+                        // definition: those pieces are on the shelf, which is why it exists.
+                        receiptRefs: rcptRefs,
                         sales: {
                             soAppId: so.id, soId: so.soId || so.id, customerId: so.customerId || null, customer: so.customer || '',
                             rawErp: erp, aliasErp: job.aliasNote ? job.lineErp : null, soAccepted: !!so.nsInternalId,
@@ -2195,13 +2209,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         await updateDoc(doc(db, 'hq_work_orders', woId), { nsWoQueued: true });
                         addLog(`📤 Top-level NetSuite WO queued on ${job.nsPlan.baseErp} ×${qty} (SO ${so.soId || so.id}) — shows ON ORDER; the final assembly build closes it.`, 'success');
                     } catch (e) { addLog(`⚠ ${job.nsPlan.baseErp}: top-level NS WO queue failed (${e.message || e}) — the RTG anchor review will re-offer it.`, 'error'); }
-                    if (!gate.awaitingConvert && !gate.awaitingComponents) {
+                    if (isReleasable(gate)) {
                         await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-review');
                         addLog(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — approved in review → RELEASED to the finishing floor (${woId}).`, 'success');
                     } else {
                         addLog(`✅ WO ${woId}: ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — waiting on ${gate.awaitingConvert ? 'its phosphate convert' : ''}${gate.awaitingConvert && gate.awaitingComponents ? ' + ' : ''}${gate.awaitingComponents ? 'its component shop WO(s)' : ''}; auto-releases when they post.`, 'success');
                     }
-                } else if (!gate.awaitingConvert && !gate.awaitingComponents) {
+                } else if (isReleasable(gate)) {
                     await releaseFinWoToFloor({ id: woId, finPayload }, currentUser || 'oe-review');
                     addLog(`✅ ${qty} × ${finishedErp} (SO ${so.soId || so.id}) — approved in review → RELEASED to the finishing floor (${woId}).`, 'success');
                 } else {
@@ -2227,6 +2241,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 });
                 if (!res.pos.length) { addLog(`⛔ PO skipped — no NetSuite-synced vendor matches "${vendorName}". Sync vendors (11.1), then Generate again.`, 'error'); continue; }
                 oeDraftPos.push(...res.pos);
+                // The gate now knows WHICH purchase order it is waiting on, so a delivery of the
+                // same code against a different PO cannot clear the wrong order.
+                for (const po of res.pos) {
+                    for (const it of (po.items || [])) {
+                        const code = String(it.itemId || '').toUpperCase();
+                        for (const g of gatedWos.filter(x => x.itemId === code && x.soAppId === (it.soAppId || so.id))) {
+                            try { await stampReceiptPo(g.woId, code, po.poId); } catch (e) { console.warn('receipt-gate PO stamp failed', g.woId, e); }
+                        }
+                    }
+                }
                 res.pos.forEach(po => addLog(`🧾 DRAFT ${po.poId} → ${po.vendor}: ${po.items.map(l => `${l.quantity} × ${l.itemId}`).join(', ')} (SO ${so.soId || so.id}) — review and approve to send it to NetSuite.`, 'info'));
             }
             setOeReview(null);
