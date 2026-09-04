@@ -11,6 +11,7 @@ import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderSh
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
+import { isOpenPo, isDraftPo, approvePurchaseOrder, markPoSent, poRef, PO_STATUS } from '../Shared/purchaseOrders';
 import { isReleasable, openGatesOf, gateSummary, quickShipStatusOf, stageLabel, stageTone } from '../Shared/orderStatus';
 import WhereIsIt, { physicalPlaceOf } from '../Shared/WhereIsIt';
 import { releaseHold } from '../Shared/orderHold';
@@ -240,40 +241,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (subGap && !window.confirm(`⚠ ${po.vendor} is assigned to NetSuite subsidiary ${subGap.split(',').join(' / ')}, but this PO is issued by subsidiary ${po.nsSubsidiary || '?'}.\n\nNetSuite will almost certainly refuse it — and it will blame the LOCATION field, which is not the problem. Fix: add subsidiary ${po.nsSubsidiary || '?'} to that vendor record in NetSuite, then re-run 11.1 → Sync Active Vendors.\n\nPush anyway?`)) return;
         if (!window.confirm(`Queue PO ${po.poId || po.id} → NetSuite?\n\nVendor: ${po.vendor} (internal id ${po.nsVendorId})\n${(po.items || []).length} line(s), req ${po.reqDate || 'n/a'}.\n\nIt posts from the sync queue within ~a minute (11.1 → NetSuite Sync Queue shows status); the PO record picks up the NetSuite # automatically.`)) return;
         try {
-            const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
-            // LAYER 2 (2026-07-16): staged write — the outbox worker posts it (serial, retried,
-            // idempotent via the [ob:] memo marker) and writes status + nsPoId/nsPoTran back
-            // onto the PO doc. Concurrency-safe under the whole team; nobody waits on a PO.
-            const obId = await enqueueNsWrite({
-                kind: 'purchaseorder',
-                label: `PO ${po.poId || po.id} → ${po.vendor}`,
-                sourceApp: 'RTG',
-                createdBy: currentUser || '',
-                targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder`,
-                method: 'POST',
-                payload: {
-                    entity: { id: String(po.nsVendorId) },
-                    // SUBSIDIARY MUST COME BEFORE LOCATION, AND NEITHER GOES ALONE (Eric, 2026-08-15).
-                    // Sending `location` with no `subsidiary` is what produced "Invalid Field Value 17
-                    // for the following field: location" on a CE PO — 17 IS the right CE location, but
-                    // setting the entity first auto-populates the VENDOR's primary subsidiary, and our
-                    // vendors sit opposite the company buying from them (The Generator's primary is
-                    // M2C; Dayton Grey's is CE). NetSuite then rejects a location belonging to the
-                    // subsidiary it just defaulted away from. Subsidiary first pins it; location
-                    // resolves against that. Keep this key order — it mirrors the order NetSuite
-                    // applies them in.
-                    ...(nsConfig.subsidiary
-                        ? { subsidiary: { id: String(nsConfig.subsidiary) }, location: { id: String(nsConfig.location) } }
-                        : {}),
-                    // The date the PO is wanted. Without it NetSuite dates the whole PO today and
-                    // receiving has nothing to schedule against — the req date is already on the doc.
-                    ...(po.reqDate ? { dueDate: po.reqDate } : {}),
-                    memo: `Stock replenishment ${po.poId || po.id} (Sales Snapshot)`,
-                    item: { items: (po.items || []).map(l => ({ item: { id: String(l.nsItemId) }, quantity: parseInt(l.quantity) || 1, ...(parseFloat(l.rate) > 0 ? { rate: parseFloat(l.rate) } : {}), description: l.description || l.itemId })) }
-                },
-                writeBack: { collection: 'hq_purchase_orders', docId: po.id, patch: { status: 'Pushed to NetSuite', pushedAt: Date.now() }, idField: 'nsPoId', tranField: 'nsPoTran' }
-            });
-            await updateDoc(doc(db, 'hq_purchase_orders', po.id), { status: 'Queued to NetSuite', nsOutboxId: obId, queuedAt: Date.now() });
+            // ONE payload, ONE memo, ONE duplicate guard (A's Shared/purchaseOrders.approvePurchaseOrder):
+            // subsidiary-before-location, dueDate, the item lines, memo = po.note || the source's
+            // label (B6), dedupeKey po:<id>. This panel's Approve and Stock View's send one shape.
+            await approvePurchaseOrder({ po, brand: activeBrand, createdBy: currentUser || '' });
             addLog(`📤 PO ${po.poId || po.id} queued → NetSuite (${po.vendor}); posts within ~1 min.`, 'success');
             alert(`📤 PO queued for ${po.vendor}.\n\nIt posts to NetSuite from the sync queue within about a minute — watch 11.1 → NetSuite Sync Queue for the live status and PO #.`);
             loadRTGOrders();
@@ -292,7 +263,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             // week fall into the archive toggle below, so the board stays this week's work.
             const soQuery = query(collection(db, "hq_sales_orders"), where("status", "in", ["Approved", "Dispatched"]), where("brand", "==", activeBrand));
             const woQuery = query(collection(db, "hq_work_orders"), where("status", "in", ["Approved", "Dispatched"]), where("brand", "==", activeBrand));
-            const poQuery = query(collection(db, "hq_purchase_orders"), where("status", "==", "Approved"), where("brand", "==", activeBrand));
+            // EVERY OPEN PO (Stuart 2026-09-03: "every order via RTG"; D found POs vanished after
+            // approval because this asked status == 'Approved' — A's chain is Draft → Approved →
+            // Queued → Pushed → Sent → Partially Received; the plating PO writes its own). The one
+            // predicate, isOpenPo (Shared/purchaseOrders), decides; terminal = received/closed/deleted.
+            const poQuery = query(collection(db, "hq_purchase_orders"), where("brand", "==", activeBrand));
             const invQuery = query(collection(db, "hq_inventory_tasks"), where("status", "==", "Active"), where("brand", "==", activeBrand));
 
             const [soSnap, woSnap, poSnap, invSnap] = await Promise.all([
@@ -301,7 +276,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
             setSalesOrders(soSnap.docs.map(d => ({ id: d.id, ...d.data() })));
             setWorkOrders(woSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-            setPurchaseOrders(poSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+            setPurchaseOrders(poSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(isOpenPo));
             setInventoryTasks(invSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
         } catch (error) {
@@ -340,23 +315,34 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         return () => subs.forEach(u => u && u());
     }, [activeBrand]);
 
-    // ⚡ AUTO-RELEASE ENGINE — one order at a time off the live mirrors (state + toggle above).
+    // ⚡ THE ONE RELEASE ENGINE (Brief B3, Stuart 2026-09-04) — S3: everything auto-routes, RTG
+    // records everything, no manual push. Until today there were TWO effects: this one, governed by
+    // the ⚡ toggle, and an Order Entry "auto-flow" effect that ignored the toggle — which is why
+    // orders reached the floor while the toggle read OFF. Now one effect, one rule:
+    //   · the ⚡ toggle is the KILL SWITCH for all of it (OFF = nothing releases, the chips say so);
+    //   · every Approved record whose gates are closed (orderStatus.isReleasable) goes to its floor
+    //     through the door its type names: a CPQ sales order splits; a SHOP route → pushToShop; a
+    //     sales-typed work order → A's direct release (its NetSuite record is the sales order); a
+    //     stock work order → Route A (releaseStockWoToFloor, the NetSuite work order at release);
+    //   · a self-authorized order (autoFlow / Order Entry) ignores `sinceAt`; a legacy order parked
+    //     before the toggle was turned on waits for the supervisor override in its detail view —
+    //     turning the switch on must never flood the floor with an old backlog;
+    //   · one order per render cycle, every release logged.
     useEffect(() => {
         const cfg = autoRelease;
         if (!cfg || !cfg.enabled || autoBusyRef.current || isSyncing) return;
         const since = cfg.sinceAt || 0;
-        const fresh = (o) => (o.createdAt || 0) >= since && !o.stopped && !autoTriedRef.current.has(o.id);
-        // Live mirrors, not the manual board load — a new order triggers its own release.
-        // An app-created SO (CPQ save) waits for NetSuite to accept it (nsInternalId via
-        // writeBack) before splitting to the floors, so a rejected order never becomes work.
+        const selfAuthorized = (o) => !!(o.autoFlow || o.orderClass === 'ORDER_ENTRY');
+        const fresh = (o) => (selfAuthorized(o) || (o.createdAt || 0) >= since) && !o.stopped && !autoTriedRef.current.has(o.id);
+        // An app-created SO (CPQ save) waits for NetSuite to accept it (nsInternalId via writeBack)
+        // before splitting to the floors, so a rejected order never becomes work.
         // hqJobId IS LOAD-BEARING (Stuart 2026-09-03, decision 6 + the every-order-via-RTG rule): an
         // Order Entry / Quick Ship order (orderClass QUICKSHIP) has none, is shown on the board as a
         // RECORD, and must NEVER be split here — its stocked lines are already being picked and
         // packed by the WMS off the SO doc itself. Widening this to QUICKSHIP would create fin/shop
         // docs for work the warehouse is already doing: duplicate work orders for one order.
         const so = liveSO.find(o => o.status === 'Approved' && fresh(o) && o.hqJobId && (!o.appCreated || o.nsInternalId));
-        // The gates are ONE list (orderStatus.gatesOf, Brief B2) — the same six this effect, the
-        // auto-flow effect below, pushToFinishing and A's clearConvertGate used to spell by hand.
+        const isSalesFlow = (o) => o.orderType === 'sales' || o.orderClass === 'ORDER_ENTRY' || (o.finPayload && o.finPayload.orderType === 'sales');
         const wo = !so && liveWO.find(o => o.status === 'Approved' && fresh(o) && isReleasable(o)
             && (o.finPayload || o.routeTo === 'FINISHING' || o.routeTo === 'SHOP'));
         const target = so || wo;
@@ -369,20 +355,20 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     addLog(`⚡ Auto-release: importing & splitting SO ${so.soId || so.id}…`, 'info');
                     await autoSplitSalesOrder(so, { skipConfirm: true });
                 } else if (wo.routeTo === 'SHOP') {
+                    // THE ORDER SAYS WHAT IT IS (Stuart 2026-09-01): `|| 'stock'` is exactly the
+                    // behaviour for records written before orderType existed.
                     addLog(`⚡ Auto-release: ${wo.id} → shop floor…`, 'info');
-                    // THE ORDER SAYS WHAT IT IS (Stuart 2026-09-01). 'stock' was hard-coded here,
-                    // and pushToShop reads it as isStock → routeTo MILLING, category 'Stock
-                    // Milling'. An Order Entry job is a CUSTOMER job: released as stock it lands
-                    // in the milling backlog instead of Custom Fabrication. Orders written before
-                    // orderType existed carry none, so `|| 'stock'` is exactly today's behaviour.
                     await pushToShop(wo, wo.orderType || 'stock', { auto: true });
+                } else if (isSalesFlow(wo) && wo.finPayload) {
+                    addLog(`⚡ Auto-release: ${wo.id} → finishing floor (sales order is the NetSuite record)…`, 'info');
+                    await releaseFinWoToFloor(wo, currentUser || 'auto-release');
                 } else {
-                    addLog(`⚡ Auto-release: ${wo.id} → finishing floor…`, 'info');
+                    addLog(`⚡ Auto-release: ${wo.id} → finishing floor, NetSuite work order queued (Route A)…`, 'info');
                     await pushToFinishing(wo, 'stock', { auto: true });
                 }
             } catch (e) {
                 console.error('auto-release failed', e);
-                addLog(`⚡ Auto-release FAILED for ${target.id}: ${e.message} — left parked for a human.`, 'error');
+                addLog(`⚡ Auto-release FAILED for ${target.id}: ${e.message} — left parked; release from its detail view.`, 'error');
             } finally {
                 autoBusyRef.current = false;
                 setTimeout(() => loadRTGOrders(), 900);
@@ -519,51 +505,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         }
     };
 
-    // 🔁 ORDER ENTRY AUTO-FLOW — independent of the ⚡ per-brand toggle: these orders authorized
-    // their own routing at creation (Stuart 2026-08-28: "the system should already have all the
-    // information it needs"). RTG just executes the release the moment every gate — SO accept,
-    // phosphate convert, rod cut — is open. The WMS convert-complete hook releases most of them
-    // directly; this catches the rest (e.g. an SO acceptance writeBack opening the last gate).
-    useEffect(() => {
-        if (autoBusyRef.current || isSyncing) return;
-        // orderClass ORDER_ENTRY counts as autoFlow even without the flag — heals the WOs
-        // generated in the minutes before the flag shipped (2026-08-29 morning).
-        // Every gate — SO accept, NetSuite WO # (Stuart 2026-08-29: the outbox writeBack stamps
-        // nsWoId and the next refresh releases), components, convert, rod cut, released-once — is
-        // the one list in orderStatus.gatesOf.
-        //
-        // THE DOOR MATCHES THE ORDER (Stuart 2026-09-04, five unanchored builds on the floor). Since
-        // A's parkWorkOrder stamps autoFlow:true on EVERY stock order (2026-09-02), this effect was
-        // taking stock orders through the SALES door — releaseFinWoToFloor copies the payload and
-        // queues no NetSuite work order, because a sales order's NetSuite record is the sales order.
-        // A stock build's anchor is Route A, queued at release by pushToFinishing. So: sales →
-        // the direct release; stock → pushToFinishing (Route A); a SHOP route → pushToShop. One
-        // effect, the right door for each, and nothing reaches a floor unanchored.
-        const isSalesFlow = (o) => o.orderType === 'sales' || o.orderClass === 'ORDER_ENTRY' || (o.finPayload && o.finPayload.orderType === 'sales');
-        const wo = liveWO.find(o => (o.autoFlow || o.orderClass === 'ORDER_ENTRY') && o.status === 'Approved'
-            && (o.routeTo === 'SHOP' || o.finPayload)
-            && isReleasable(o)
-            && !o.stopped && !autoTriedRef.current.has(`flow:${o.id}`));
-        if (!wo) return;
-        autoBusyRef.current = true;
-        autoTriedRef.current.add(`flow:${wo.id}`);
-        (async () => {
-            try {
-                if (wo.routeTo === 'SHOP') {
-                    addLog(`🔁 Auto-flow: ${wo.id} — gates open, releasing to the shop floor…`, 'info');
-                    await pushToShop(wo, wo.orderType || 'stock', { auto: true });
-                } else if (isSalesFlow(wo)) {
-                    addLog(`🔁 Auto-flow: ${wo.id} — gates open, releasing to the finishing floor (sales order is the NetSuite record)…`, 'info');
-                    await releaseFinWoToFloor(wo, currentUser || 'auto-flow');
-                } else {
-                    addLog(`🔁 Auto-flow: ${wo.id} — gates open, releasing to the finishing floor and queuing its NetSuite work order (Route A)…`, 'info');
-                    await pushToFinishing(wo, 'stock', { auto: true });
-                }
-            } catch (e) { addLog(`🔁 Auto-flow release FAILED for ${wo.id}: ${e.message} — left parked.`, 'error'); }
-            finally { autoBusyRef.current = false; setTimeout(() => loadRTGOrders(), 900); }
-        })();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [liveWO]);
+    // (The Order Entry auto-flow effect that lived here is merged into the one release engine above — B3.)
 
     // Form branding (shared with Admin > Form Templates) so printed docs use the configured
     // header/footer/terms + brand logo.
@@ -1096,6 +1038,34 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             </button>
         );
     };
+    // WHAT A PARKED RECORD IS WAITING ON — one wording for the row chip (B3: the Push buttons are
+    // gone; a person reads status here and, if they must, overrides from the detail view).
+    const releaseStateOf = (o, kind) => {
+        const selfAuthorized = !!(o.autoFlow || o.orderClass === 'ORDER_ENTRY');
+        if (kind === 'sales') {
+            if (o.autoSplit) return { text: 'auto-split ✓', tone: 'ok' };
+            if (!o.hqJobId) return { text: 'no CPQ job linked — cannot split; release from View', tone: 'red' };
+            if (o.appCreated && !o.nsInternalId) return { text: 'awaiting NetSuite SO accept', tone: 'wait' };
+        } else {
+            const g = gateSummary(o);
+            if (g) return { text: g, tone: 'wait' };
+            if (!(o.routeTo === 'SHOP' || o.routeTo === 'FINISHING' || o.finPayload)) return { text: 'no route / floor payload on this record — release from View', tone: 'red' };
+        }
+        if (o.stopped) return { text: 'stopped — release from View', tone: 'red' };
+        if (!autoRelease || !autoRelease.enabled) return { text: 'auto-release is OFF — turn it on, or release from View', tone: 'red' };
+        if (!selfAuthorized && (o.createdAt || 0) < (autoRelease.sinceAt || 0)) return { text: `parked before auto-release was turned on (${whenStr(autoRelease.sinceAt)}) — release from View`, tone: 'red' };
+        return { text: kind === 'sales' ? 'splitting to the floors…' : 'releasing…', tone: 'ok' };
+    };
+    const releaseChip = (o, kind) => {
+        const st = releaseStateOf(o, kind);
+        const color = st.tone === 'red' ? '#d9534f' : 'var(--brass)';
+        return (
+            <span title={st.tone === 'red' ? 'Nothing will release this on its own. Open View — the supervisor override is there, behind a confirm.' : 'Auto-release: the record goes to its floor the moment its gates are clear; RTG keeps the record. Nothing to press.'}
+                style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, color, border: `1px dashed ${color}`, background: st.tone === 'red' ? '#fdf3f3' : '#fdf8ef', textAlign: 'center' }}>
+                {st.tone === 'ok' ? '⚡' : st.tone === 'red' ? '⛔' : '⏳'} {st.text}
+            </span>
+        );
+    };
     const dispatchedChip = (o) => [o.pushedToFinishing ? 'FINISHING ✓' : null, o.pushedToShop ? 'SHOP ✓' : null].filter(Boolean).join('  ·  ') || 'SENT';
     const whenStr = (t) => t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
 
@@ -1583,7 +1553,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 pushedToFinishing: true,
                 dispatchedAt: Date.now(),
                 dispatchedBy: currentUser || '',
-                status: "Dispatched" 
+                status: "Dispatched",
+                // LEGACY WRITER (Brief B, Stuart answer 4): this record had no finPayload and was
+                // enriched at release. Counted on the board; this branch goes after a week of zero.
+                legacyEnriched: true, legacyEnrichedAt: Date.now(),
             });
 
             // ROUTE A FOR THIS BRANCH TOO (Eric 2026-08-17). A stock build released down this path
@@ -2563,9 +2536,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                         builds the cut list, parts list, drawing + links the halves.
                                         (Manual single-floor pushes live on the Work Order / stock cards.) */}
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                        <button style={{ ...btnStyle, flex: 2, background: so.autoSplit ? 'var(--paper-2)' : 'var(--ink)', color: so.autoSplit ? 'var(--ink-soft)' : '#fff', border: so.autoSplit ? '1px solid var(--line)' : 'none' }} onClick={() => autoSplitSalesOrder(so)}>
-                                            {so.autoSplit ? 'Auto-Split ✓' : '⚡ Import & Auto-Split to Floors'}
-                                        </button>
+                                        {releaseChip(so, 'sales')}
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(so, 'sales')}>View</button>
                                         {so.hqJobId && <button style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }} onClick={() => setCfgQuote(so.hqJobId)}>🔍 Config</button>}
                                     </div>
@@ -2590,7 +2561,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                     <div style={{ background: '#fff', border: '1px solid var(--line)', borderRadius: '2px', display: 'flex', flexDirection: 'column', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                         <div style={{ padding: '20px 24px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Work Orders</span>
-                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Stock Builds</span>
+                            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Stock Builds{(() => { const n = liveWO.filter(o => o.legacyEnriched && (Date.now() - (o.legacyEnrichedAt || 0)) < 7 * 864e5).length; return n ? ` · ${n} legacy release${n === 1 ? '' : 's'} this week` : ''; })()}</span>
                         </div>
                         <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
                             {woBoard.pending.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved work orders pending dispatch.</p>}
@@ -2627,30 +2598,18 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                             {wo.needsPhosphating && <div style={{ fontSize: '0.8rem', color: '#d9534f', fontWeight: 600, marginTop: '4px' }}>*REQUIRES PHOSPHATING*</div>}
                                             {wo.isPlatingDemand && <div style={{ fontSize: '0.8rem', color: 'var(--brass)', fontWeight: 600, marginTop: '4px' }}>*PLATING DEMAND STOCK*</div>}
                                             {urgentControls(wo, 'hq_work_orders')}
+                                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', marginTop: '6px', color: wo.source ? 'var(--ink-soft)' : '#d9534f' }}>
+                                                {wo.source ? `source · ${wo.source}${wo.intent ? ` · ${wo.intent}` : ''}${wo.routeTo ? ` → ${wo.routeTo}` : ''}` : '⛔ NO SOURCE on this record — a writer parked it without saying who (name it to A)'}
+                                            </div>
                                         </div>
                                         <button onClick={() => deleteOrder('hq_work_orders', wo)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.2rem', padding: 0, color: 'var(--ink-soft)' }}>×</button>
                                     </div>
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                         <button style={{ ...btnStyle, flex: 1 }} onClick={() => handleViewOrder(wo, 'stock')}>View</button>
                                         <button style={{ ...btnStyle, flex: 1 }} title="Re-explode this assembly against today's BOM and rewrite the warehouse pull lines. Refused once picking has started." onClick={() => refreshBomLines(wo, 'stock')}>↻ BOM</button>
-                                        {/* ORDER ENTRY AUTO-FLOW (Stuart 2026-08-28): the system already has
-                                            everything it needs to route this order — shop → phosphate →
-                                            finishing → WMS — so no Push buttons are offered. It releases
-                                            itself the moment its gates open. */}
-                                        {(wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') ? (
-                                            <span title="Auto-flow: components in stock → straight to finishing; /P short → releases when the WMS convert posts; raw short → its milling WO is already on the shop floor." style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, color: 'var(--brass)', border: '1px dashed var(--brass)', background: '#fdf8ef' }}>
-                                                🔁 AUTO-FLOW · {gateSummary(wo) || ((wo.routeTo === 'SHOP' || wo.finPayload) ? 'releasing…' : 'no floor payload on this record — see View')}
-                                            </span>
-                                        ) : (<>
-                                        <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>
-                                            {wo.pushedToFinishing ? 'Finishing Pushed ✓' : 'Push to Finishing'}
-                                        </button>
-                                        {wo.routeTo !== 'FINISHING' && (
-                                            <button style={{ ...btnStyle, flex: 1, background: wo.pushedToShop ? 'var(--paper-2)' : 'var(--brass)', color: wo.pushedToShop ? 'var(--ink-soft)' : '#fff', border: wo.pushedToShop ? '1px solid var(--line)' : 'none' }} onClick={() => pushToShop(wo, wo.orderType || 'stock')}>
-                                                {wo.pushedToShop ? 'Shop Pushed ✓' : 'Push to Shop'}
-                                            </button>
-                                        )}
-                                        </>)}
+                                        {/* B3 (S3): no Push buttons — the record releases itself; the chip says what it
+                                            waits on, in gatesOf's words; the supervisor override lives in View. */}
+                                        {releaseChip(wo, 'stock')}
                                     </div>
                                 </div>
                             ))}
@@ -2680,7 +2639,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                             <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)' }}>Inbound</span>
                         </div>
                         <div style={{ padding: '24px', flex: 1, background: 'var(--paper)', maxHeight: '600px', overflowY: 'auto' }}>
-                            {purchaseOrders.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No approved purchase orders incoming.</p>}
+                            {purchaseOrders.length === 0 && <p style={{ color: 'var(--ink-soft)', fontStyle: 'italic', fontSize: '0.9rem', margin: 0 }}>No open purchase orders.</p>}
                             
                             {purchaseOrders.map(po => (
                                 <div key={po.id} style={{ ...cardStyle, borderLeft: `4px solid ${po.nsVendorId ? 'var(--brass)' : 'var(--line)'}` }}>
@@ -2695,7 +2654,20 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                     {!poLocked(po) && (
                                         <button style={{ ...btnStyle, width: '100%', background: '#fff', border: '1px solid var(--brass)', color: 'var(--brass)', marginBottom: '8px' }} onClick={() => openPoEdit(po)} title="Add or remove lines, fix quantities and rates — editable until the PO is queued to NetSuite.">✎ Edit PO</button>
                                     )}
-                                    <button style={{ ...btnStyle, width: '100%', background: po.nsVendorId ? 'var(--brass)' : 'var(--paper-2)', color: po.nsVendorId ? '#fff' : 'var(--ink-soft)', border: 'none', marginBottom: '8px', cursor: po.nsVendorId ? 'pointer' : 'not-allowed' }} onClick={() => pushPoToNetSuite(po)}>⬆ Push PO → NetSuite</button>
+                                    {/* REVIEW → APPROVE → SEND (S5 + Stuart's A4 amendment): the lines with their
+                                        sources and the running total are the review; Approve is the one deliberate
+                                        act — it pushes to NetSuite for the PO#; Sent to Vendor is recorded after. */}
+                                    <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', color: 'var(--ink-soft)', margin: '4px 0 8px', lineHeight: 1.6 }}>
+                                        <div style={{ textTransform: 'uppercase', letterSpacing: '.08em', color: 'var(--brass)', fontWeight: 700 }}>{po.status || 'Draft'}{po.nsPoTran ? ` · NS ${po.nsPoTran}` : ''}{po.source ? ` · ${po.source}` : ''}</div>
+                                        {(po.items || []).slice(0, 6).map((l, i) => <div key={i}>{l.quantity} × {l.itemId}{parseFloat(l.rate) > 0 ? ` @ ${Number(l.rate).toFixed(2)}` : ''}{l.from ? <span style={{ color: 'var(--ink)' }}> · {l.from}</span> : ''}{Number(l.received) > 0 ? ` · received ${l.received}` : ''}</div>)}
+                                        {(po.items || []).length > 6 && <div>…and {(po.items || []).length - 6} more</div>}
+                                        <div style={{ color: 'var(--ink)' }}>total {((po.items || []).reduce((t, l) => t + (parseFloat(l.rate) > 0 ? parseFloat(l.rate) * (parseInt(l.quantity) || 0) : 0), 0)).toFixed(2)}</div>
+                                    </div>
+                                    {isDraftPo(po) || po.status === PO_STATUS.APPROVED ? (
+                                        <button style={{ ...btnStyle, width: '100%', background: po.nsVendorId ? 'var(--brass)' : 'var(--paper-2)', color: po.nsVendorId ? '#fff' : 'var(--ink-soft)', border: 'none', marginBottom: '8px', cursor: po.nsVendorId ? 'pointer' : 'not-allowed' }} onClick={() => pushPoToNetSuite(po)}>✓ Approve → NetSuite (gets the PO #)</button>
+                                    ) : po.status === PO_STATUS.PUSHED ? (
+                                        <button style={{ ...btnStyle, width: '100%', background: 'var(--ink)', color: '#fff', border: 'none', marginBottom: '8px' }} onClick={async () => { if (!window.confirm(`Mark PO ${poRef(po)} as SENT to ${po.vendor}?\n\nRecord only — the vendor's copy goes from your own mail client / tab 10.`)) return; try { await markPoSent(po.id, currentUser || ''); addLog(`✉ PO ${poRef(po)} marked sent to ${po.vendor}.`, 'success'); loadRTGOrders(); } catch (e) { alert('Could not mark sent: ' + (e.message || e)); } }}>✉ Mark sent to vendor</button>
+                                    ) : null}
                                     <button style={{ ...btnStyle, width: '100%', background: 'var(--ink)', color: '#fff', border: 'none' }} onClick={() => alert('Sent to Receiving Dock App')}>Alert Receiving Dock</button>
                                     {/* DELIVERY TRACKING (Stuart 2026-08-31: "when we get delivery
                                         updates from suppliers, we can update PO status and see it
@@ -3236,18 +3208,30 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                     )}
                                 </div>
 
-                                <div style={{ display: 'flex', gap: '16px', marginTop: '10px' }}>
-                                    <button 
-                                        onClick={() => { pushToFinishing(activeViewOrder, activeViewOrder.orderType); setActiveViewOrder(null); }} 
-                                        style={{ flex: 1, padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}
+                                {/* THE ONE SUPERVISOR OVERRIDE (Stuart 2026-09-02, answer 1: "keep one, behind the
+                                    scary confirm, in the detail view"). Nobody is ever REQUIRED to press it — every
+                                    record releases itself when its gates clear. It exists for the order the engine
+                                    will not take: parked before the switch, stopped, no route, or a gate a person has
+                                    decided to walk past. It goes through the same door the engine would (split /
+                                    shop / sales release / Route A), so a forced release is still anchored. */}
+                                <div style={{ display: 'flex', gap: '16px', marginTop: '10px', alignItems: 'center' }}>
+                                    <span style={{ flex: 2, fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+                                        {(() => { const st = releaseStateOf(activeViewOrder, activeViewOrder.orderType === 'sales' && !activeViewOrder.finPayload && !activeViewOrder.routeTo ? 'sales' : 'stock'); return `Auto-release: ${st.text}`; })()}
+                                    </span>
+                                    <button
+                                        onClick={async () => {
+                                            const o = activeViewOrder;
+                                            const isSo = o.orderType === 'sales' && !o.finPayload && !o.routeTo && !!o.hqJobId;
+                                            if (!window.confirm(`⚠ SUPERVISOR OVERRIDE — release ${o.soId || o.woDisplayId || o.id} NOW?\n\nThe engine has not released it: ${releaseStateOf(o, isSo ? 'sales' : 'stock').text}.\n\nThis walks past whatever it is waiting on. The release goes through the normal door (${isSo ? 'split to both floors' : o.routeTo === 'SHOP' ? 'shop' : 'finishing + its NetSuite work order'}) and is logged under your name.`)) return;
+                                            setActiveViewOrder(null);
+                                            addLog(`⚠ SUPERVISOR OVERRIDE by ${currentUser || '?'}: releasing ${o.soId || o.id} — engine said "${releaseStateOf(o, isSo ? 'sales' : 'stock').text}".`, 'warn');
+                                            if (isSo) return autoSplitSalesOrder(o);
+                                            if (o.routeTo === 'SHOP') return pushToShop(o, o.orderType || 'stock');
+                                            return pushToFinishing(o, o.orderType || 'stock');
+                                        }}
+                                        style={{ flex: 1, padding: '16px', background: '#d9534f', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', fontWeight: 700 }}
                                     >
-                                        Push to Finishing Floor
-                                    </button>
-                                    <button 
-                                        onClick={() => { pushToShop(activeViewOrder, activeViewOrder.orderType); setActiveViewOrder(null); }} 
-                                        style={{ flex: 1, padding: '16px', background: 'var(--brass)', color: '#fff', border: 'none', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer', transition: 'background 0.2s' }}
-                                    >
-                                        Push to Shop Floor
+                                        ⚠ Supervisor override — release now
                                     </button>
                                 </div>
                             </div>
