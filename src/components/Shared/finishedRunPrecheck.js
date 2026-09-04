@@ -32,6 +32,7 @@ import { queueNsAssemblyWorkOrder, pickNsWoItem, isNsAssemblyRec } from './nsWor
 import { db } from '../../firebase';
 import { doc, setDoc, updateDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { withItemCode } from './workOrderContract';
+import { isReleasable } from './orderStatus';
 import { buildParkedWorkOrder, ROUTE_SHOP } from './stockRun.js';
 
 // ── PURE PLANNING ──────────────────────────────────────────────────────────────────────────────
@@ -346,8 +347,18 @@ export const clearConvertGate = async (demand, operatorName = '') => {
     try {
         const woSnap = await getDoc(doc(db, 'hq_work_orders', finWoId));
         const wo = woSnap.exists() ? { id: woSnap.id, ...woSnap.data() } : null;
-        if (wo && (wo.orderType === 'sales' || wo.orderClass === 'ORDER_ENTRY') && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && !wo.awaitingSoAccept && !wo.awaitingRodCut
-            && !(wo.awaitingNsWo && !wo.nsWoId) && !(wo.awaitingComponents && !wo.componentsDone)) {
+        // ONE GATE LIST (Brief B's B2, 7182f2e - `Shared/orderStatus.isReleasable`). The five
+        // conditions used to be hand-written here and in four other places, agreeing by luck
+        // (audit P1 #10). They are now read from the one definition, so a gate B adds is
+        // respected here without anyone remembering to come back.
+        //
+        // The two tests in front of it are NOT gates and must survive the swap: they are
+        // ELIGIBILITY - which orders may self-release from the WMS convert hook at all. A STOCK
+        // order deliberately does not, because this path copies the payload to the floor without
+        // Route A, and RTG's auto-release is what opens its NetSuite work order (see the note on
+        // clearConvertGate above). isReleasable answers "are the gates clear", never "should this
+        // path release it".
+        if (wo && (wo.orderType === 'sales' || wo.orderClass === 'ORDER_ENTRY') && (wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') && isReleasable(wo)) {
             const released = await releaseFinWoToFloor(wo, operatorName || 'convert-complete');
             if (released) return 'released';
         }
