@@ -7,6 +7,7 @@ import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
 import { groupPickLines, groupingSummary, codeHealth, isDataProblem } from '../Shared/pickOrder';
 import { fetchAvailabilityUnits } from '../Shared/oeReviewPlan';
+import { committedBinOf, committedQtyOf, planCommit, planRelease, totalGathered } from '../Shared/committedBins';
 import { isPaintOnlyOrder, paintOnlyAdjustment, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { db, auth, functions, getOuterIdToken, storage } from '../../firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, getDoc, addDoc, deleteDoc, getDocs, query, where, serverTimestamp, deleteField, arrayUnion, runTransaction } from "firebase/firestore";
@@ -230,6 +231,13 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [platingFocusId, setPlatingFocusId] = useState(null); // the line the scan found
     const [cartQty, setCartQty] = useState({});                 // lineId → good pieces off the pallet
     const [openCartPanel, setOpenCartPanel] = useState(null);   // cartId being put away
+    // THE ORDER RIDES WITH THE PIECES (Brief D · D1). A plating demand knows which sales order it
+    // was raised for — Order Entry stamps soAppId (StockViewTab), the shop stamps salesOrderId /
+    // orderKey / finSiblingId / shopOrderId (Brief C, 334c9c3). The demand is DELETED when the
+    // pull posts, so whatever the returning pieces need to find their way home has to be copied
+    // onto the shipment line first. Without this the plater's pallet comes back anonymous and the
+    // warehouse cannot tell which order it belongs to.
+    const [platingDemandLink, setPlatingDemandLink] = useState(null);
     const [paLineId, setPaLineId] = useState('');               // the line scanned at put-away
     const [paBins, setPaBins] = useState([{ bin: '', qty: '' }]); // where it physically went
     const [paMulti, setPaMulti] = useState(false);              // the rare split across bins
@@ -1112,7 +1120,7 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const c = lineCodeOf(l);
         const st = (soStats[o.id] && soStats[o.id].codes[c]) || null;
         const ordered = Number(l.qty) || 0;
-        const committed = Number((o.committedQty && o.committedQty[c]) || 0);
+        const committed = committedQtyOf(o, c);
         const avail = st && st.avail != null ? st.avail : null;
         const prod = st ? st.prod : 0;
         const covered = committed + (avail != null ? Math.max(0, avail) : 0);
@@ -1129,6 +1137,55 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         if (!lines.length) return false;
         if (!soStats[o.id]) return false;
         return lines.every(l => { const st = lineStats(o, l); return st.state === 'GATHERED' || st.state === 'READY'; });
+    };
+
+    // ── GATHERING PIECES INTO AN ORDER'S COMMITTED BIN ───────────────────────────────────────
+    // The rules live in Shared/committedBins (pure, 34 offline assertions); this is the Firestore
+    // half. NOTHING HERE POSTS TO NETSUITE — a committed bin is app-only by Stuart's instruction,
+    // and NetSuite goes on believing the stock is in its shelf bin while showing it committed.
+    const soOpenFor = (o) => !['Shipped', 'Closed'].includes(String((o && o.status) || ''));
+    const commitToOrder = async (order, { code, qty, ordered, bin }) => {
+        let want = bin || committedBinOf(order);
+        if (!want) {
+            // FIRST PART ON THE ORDER PICKS THE BIN, and every later part is TOLD to follow it.
+            const typed = window.prompt(`Scan the committed bin for ${packRef(order)}.\n\nAny empty committed bin — it becomes this order's until it ships, and the rest of the order will be sent to the same bin.`, '');
+            if (typed === null) return null;
+            want = typed;
+        }
+        const plan = planCommit({ order, code, qty, bin: want, ordered: Number(ordered) || 0, orders: quickShipOrders, isOpen: soOpenFor });
+        if (!plan.ok) { alert(`Cannot gather that into ${packRef(order)}:\n\n${plan.reason}`); return null; }
+        try {
+            await updateDoc(doc(db, 'hq_sales_orders', order.id), {
+                committedBin: plan.bin,
+                [`committedQty.${plan.code}`]: plan.total,
+                committedUpdatedAt: Date.now(), committedUpdatedBy: operator?.name || '',
+                ...(plan.wasFirst ? { committedBinAt: Date.now(), committedBinBy: operator?.name || '' } : {}),
+            });
+            writeLog(`Committed ${plan.qty} × ${plan.code} to ${packRef(order)} in bin ${plan.bin}${plan.wasFirst ? ' (bin assigned)' : ''} — ${plan.total} of ${ordered || '?'} gathered.`, 'wms');
+            return plan;
+        } catch (e) { alert('Could not record it: ' + (e.message || e)); return null; }
+    };
+    const releaseFromOrder = async (order, code, ordered) => {
+        const have = committedQtyOf(order, code);
+        if (have <= 0) return alert('None of this item is gathered for this order.');
+        // PARTIAL IS THE NORMAL CASE — plated poles come back short, part ships and part waits.
+        const typed = window.prompt(`Release how many ${code} from ${packRef(order)}${committedBinOf(order) ? ` (bin ${committedBinOf(order)})` : ''}?\n\n${have} gathered of ${ordered || '?'} ordered. They stop being reserved for this order.`, String(have));
+        if (typed === null) return;
+        const plan = planRelease({ order, code, qty: typed });
+        if (!plan.ok) return alert(plan.reason);
+        const why = window.prompt(`Why? (recorded against the order)`, '');
+        if (why === null) return;
+        const reason = String(why).trim();
+        if (!reason) return alert('A reason is needed — nothing was changed.');
+        try {
+            await updateDoc(doc(db, 'hq_sales_orders', order.id), {
+                [`committedQty.${plan.code}`]: plan.left,
+                ...(plan.emptyAfter ? { committedBin: null, committedBinAt: null } : {}),
+                committedUpdatedAt: Date.now(), committedUpdatedBy: operator?.name || '',
+                committedReleases: arrayUnion({ code: plan.code, qty: plan.qty, at: Date.now(), by: operator?.name || '', reason }),
+            });
+            writeLog(`Released ${plan.qty} × ${plan.code} from ${packRef(order)}: ${reason}${plan.emptyAfter ? ' — bin now free' : ` (${plan.left} still gathered)`}`, 'wms');
+        } catch (e) { alert('Could not release: ' + (e.message || e)); }
     };
 
     const printOrderLineLabels = (job, line) => printStockItemLabels({
@@ -2374,7 +2431,8 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
                 itemId: item.id, netSuiteInternalId: item.netSuiteInternalId, erpId: item.erpId, itemName: item.itemName || '',
                 finishCode, finishName: finish.name || '', targetErpId, // plated finish + the assembly Phase 4b builds back
                 vendorCrmId: finishVendorCrmId, nsVendorId: finishVendorNsId, vendorName: finish.vendor || '', // NS-synced plater from the finish
-                qty, fromBin, platingBin, woNum: (platingWO || '').trim(), operator: operator?.name || 'Unknown', createdAt: serverTimestamp()
+                qty, fromBin, platingBin, woNum: (platingWO || '').trim(), operator: operator?.name || 'Unknown', createdAt: serverTimestamp(),
+                ...(platingDemandLink || {}),
             }).catch(err => console.warn("plating_shipments log failed (is the firestore rule published?)", err)); // non-fatal: the NetSuite move already succeeded
 
             printPlatingLabel({ erpId: item.erpId, itemName: item.itemName, qty, woNum: platingWO, platingBin, finishCode, finishName: finish.name || '', targetErpId });
@@ -2382,7 +2440,7 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
             writeLog(`Plating pull: ${qty} ${item.erpId} ${fromBin} -> ${platingBin} (WIP-Plating).${platingMemo.trim() ? ` Memo: ${platingMemo.trim()}` : ''}`, 'wms');
             // If this pull fulfilled a "Needs Plating" demand, clear it off the queue.
             if (platingDemandId) { await deleteDoc(doc(db, "plating_demand", platingDemandId)).catch(() => {}); }
-            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingFinish(""); setPlatingDemandId(null);
+            setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingFinish(""); setPlatingDemandId(null); setPlatingDemandLink(null);
             pullNetSuiteStock();
         } catch (e) {
             console.error("Plating bin-transfer push failed:", e);
@@ -2840,6 +2898,18 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 binPlacements: bins, putAwayAt: Date.now(), putAwayBy: operator?.name || '',
             }).catch(() => {});
             writeLog(`Plating put-away: ${got} × ${target} built into ${bins.map(p => `${p.qty}@${p.bin}`).join(' + ')} by ${operator?.name || 'Unknown'} (${line.cartLabel || 'cart'}, ${line.shipmentId || line.id}).`, 'wms');
+            // PLATING IS THE HANDLER TO SO PACK FOR PLATED ITEMS (Stuart 2026-09-03). If these
+            // pieces were plated FOR an order, they do not belong on the open shelf — they belong
+            // in that order's committed bin, with the rest of its parts. Anything without an order
+            // is ordinary stock and simply stays where it was put.
+            const soId = line.soAppId || null;
+            const forOrder = soId ? quickShipOrders.find(o => o.id === soId || String(o.soId || '') === String(soId)) : null;
+            if (forOrder) {
+                const oline = (forOrder.lines || []).find(l => String(l.erp || '').toUpperCase() === String(target).toUpperCase());
+                await commitToOrder(forOrder, { code: target, qty: got, ordered: Number(oline && oline.qty) || 0 });
+            } else if (soId) {
+                writeLog(`⚠ Plating put-away: ${target} carries sales order ${soId} but no matching order is open in this brand — left in ${bins.map(p => p.bin).join(', ')} rather than guessed into a committed bin.`, 'wms');
+            }
             alert(`✅ ${got} × ${target} put away and built.\n\n${bins.map(p => `   ${p.qty} → ${p.bin}`).join('\n')}${scrap > 0 ? `\n\n${scrap} short piece(s) scrapped out of WIP-Plating.` : ''}`);
             setPaLineId(''); setPaBins([{ bin: '', qty: '' }]); setPaMulti(false); setPlatingScan(''); setPlatingFocusId(null);
             pullNetSuiteStock();
@@ -4047,6 +4117,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {o.productionNotes && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink, marginTop: '4px' }}>📝 {o.productionNotes}</div>}
                                 </div>
                                 <span onClick={() => setExpandedSo(p => ({ ...p, [o.id]: !p[o.id] }))} title={showLines ? 'Collapse' : 'Show the lines anyway'} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', marginRight: '10px', color: theme.inkSoft }}>{showLines ? '▾' : '▸'}</span>
+                                {committedBinOf(o) && <span title={`${totalGathered(o)} piece(s) gathered for this order. App-only — NetSuite still shows them in their shelf bin.`} style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.06em', color: '#2e7d32', marginRight: '12px' }}>📦 {t('BIN')} {committedBinOf(o)} · {totalGathered(o)}</span>}
                                 {loaded && (ready
                                     ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {t('READY TO PACK')}</span>
                                     : <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.08em', color: theme.brass, marginRight: '12px' }}>{t('waiting on parts')}</span>)}
@@ -4090,6 +4161,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 </>);
                                             })()}
                                             <td style={{ padding: '9px 12px', textAlign: 'right', borderBottom: `1px solid ${theme.paper2}` }}>
+                                                {committedQtyOf(o, l.erp) > 0 && <button onClick={() => releaseFromOrder(o, String(l.erp || '').toUpperCase(), Number(l.qty) || 0)} title={`${committedQtyOf(o, l.erp)} gathered for this order — release some or all back`} style={{ padding: '5px 9px', marginRight: '6px', background: 'transparent', border: '1px solid #d9534f', color: '#c0392b', cursor: 'pointer', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em' }}>{t('Release')}</button>}
                                                 <button onClick={() => printOrderLineLabels(o, l)} title={`Print ${Math.max(1, Math.min(50, Number(l.qty) || 1))} × ${l.erp || ''} item label(s)`} style={{ padding: '5px 9px', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, cursor: 'pointer', fontSize: '12px' }}>🖨</button>
                                             </td>
                                         </tr>
@@ -5594,6 +5666,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 const fin = outsourceFinishes.find(f => finishCodeOf(f) === (d.finishCode || '').toUpperCase());
                                                 setPlatingBase(basePart); setPlatingQty(String(d.qty || '')); setPlatingFinish(fin ? fin.id : '');
                                                 setPlatingSrcScan(''); setPlatingDestScan(''); setPlatingMemo(''); setPlatingWO(d.woNum || ''); setPlatingDemandId(d.id);
+                                                setPlatingDemandLink({
+                                                    soAppId: d.soAppId || d.salesOrderId || null, soRef: d.soRef || d.soId || null,
+                                                    orderKey: d.orderKey || null, finSiblingId: d.finSiblingId || null,
+                                                    shopOrderId: d.shopOrderId || null, custom: !!d.custom,
+                                                    customerName: d.customerName || '', demandWoNum: d.woNum || '',
+                                                });
                                             }} disabled={isSyncing} style={{ padding: '10px 16px', background: '#5e7d54', color: '#fff', border: 'none', cursor: isSyncing ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', whiteSpace: 'nowrap' }}>Pull &amp; Plate →</button>
                                         </div>
                                     ))}

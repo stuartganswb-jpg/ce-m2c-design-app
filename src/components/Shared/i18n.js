@@ -90,6 +90,8 @@ const ES = {
     'SHORT': 'FALTANTE',
     'UNKNOWN': 'SIN DATO',
     'from the floor': 'llega del taller',
+    'BIN': 'UBIC',
+    'Release': 'Liberar',
     'Looking only — nothing is changed until you start packing': 'Solo mirando — nada cambia hasta que empiece el embalaje',
     'Pick a different order, or ask them (or an admin) to release it.': 'Tome otra orden, o pida a esa persona (o a un admin) que la libere.',
     'Line Item': 'Línea',
