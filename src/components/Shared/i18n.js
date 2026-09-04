@@ -118,7 +118,9 @@ const ES = {
     // ── Packing ──────────────────────────────────────────────────────────────────────────────
     'Packing Station': 'Estación de Embalaje',
     'TO PACK': 'POR EMBALAR',
-    'PACKED': 'EMBALADO',
+    'FINISH AS AVAILABLE': 'ACABAR SEGÚN LLEGUEN',
+    'Finish as available': 'Acabar según lleguen',
+    'Waiting off': 'Volver a esperar completo',
     'Complete Packing': 'Completar Embalaje',
     'Put Away to Bin': 'Guardar en Bin',
     'Put-away bin': 'Bin de destino',

@@ -1222,7 +1222,12 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         const c = String(code || '').trim().toUpperCase();
         const plan = planAllocation({ qty, demands: demandsFor(c) });
         if (!plan.allocations.length) return 0;
-        const lines = plan.allocations.map(a => `   ${a.qty} → ${a.ref}${a.qty < a.outstanding ? ` (still short ${a.outstanding - a.qty})` : ''}`).join('\n');
+        const lines = plan.allocations.map(a => {
+            const ord = quickShipOrders.find(x => x.id === a.orderId);
+            // An order set to finish as available does not sit waiting to be whole — say so here,
+            // where the operator is deciding what to do with the pieces in their hands.
+            return `   ${a.qty} → ${a.ref}${a.qty < a.outstanding ? ` (still short ${a.outstanding - a.qty})` : ''}${finishAsAvailable(ord) ? '  ⚡ finishes as available' : ''}`;
+        }).join('\n');
         if (!window.confirm(`⚠ ${qty} × ${c} just arrived, and open orders are waiting for ${plan.demandTotal}.\n\n${lines}\n${plan.toStock > 0 ? `   ${plan.toStock} → stock\n` : ''}\nSend each order's share to its committed bin? You will be asked for the bin once per order.\n\nNo = put it all away as ordinary stock and leave the orders short.`)) {
             writeLog(`Arrival alert declined: ${qty} × ${c} put to stock while ${plan.demandTotal} were outstanding${from ? ` (${from})` : ''}.`, 'wms');
             return 0;
@@ -1237,6 +1242,38 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         }
         writeLog(`Arrival alert: ${allocationSummary(plan, c)}${from ? ` (${from})` : ''} — ${taken} gathered into committed bins.`, 'wms');
         return taken;
+    };
+
+    // ── "FINISH AS AVAILABLE" — the outlier, never the default (Stuart 2026-09-03) ───────────
+    // "a flag on the order, that states 'Finish as available' that would be the outlier, default
+    // would be to wait and finish complete when all available."
+    //
+    // Note the POLARITY, which is deliberate and is the opposite of the first draft: the field
+    // names the EXCEPTION, so its ABSENCE is the normal case. Every order written before today has
+    // no field at all, and absent has to mean "wait" — which it does this way round, and would not
+    // if the flag were named for the default. (Same reasoning as the "Unfinished" item tag.)
+    //
+    // The WAREHOUSE end only. Setting it does not release anything: RTG owns the release and reads
+    // this field. What it changes here is what the screen TELLS the operator to expect — an order
+    // whose parts will leave for finishing as they arrive does not sit waiting to be whole.
+    const finishAsAvailable = (o) => !!(o && o.finishAsAvailable);
+    const toggleFinishAsAvailable = async (o) => {
+        const on = finishAsAvailable(o);
+        const msg = on
+            ? `Turn OFF "Finish as available" for ${packRef(o)}?\n\nBack to the normal way: every part waits, and the order is finished complete once all of them are in.`
+            : `Turn ON "Finish as available" for ${packRef(o)}?\n\nThis is the EXCEPTION. Parts will go to finishing as they arrive instead of waiting for the whole order — used when the last parts will be late and finishing early saves time.`;
+        if (!window.confirm(msg)) return;
+        const why = window.prompt(on ? 'Why is it going back to waiting? (recorded)' : 'Why finish ahead? (recorded — e.g. which parts are late)', '');
+        if (why === null) return;
+        const reason = String(why).trim();
+        if (!reason) return alert('A reason is needed — nothing was changed.');
+        try {
+            await updateDoc(doc(db, 'hq_sales_orders', o.id), {
+                finishAsAvailable: !on, finishAsAvailableAt: Date.now(), finishAsAvailableBy: operator?.name || '',
+                finishAsAvailableReason: reason,
+            });
+            writeLog(`${!on ? 'Finish as available ON' : 'Finish as available OFF'} for ${packRef(o)}: ${reason}`, 'wms');
+        } catch (e) { alert('Could not change it: ' + (e.message || e)); }
     };
 
     const printOrderLineLabels = (job, line) => printStockItemLabels({
@@ -4203,6 +4240,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {o.productionNotes && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.ink, marginTop: '4px' }}>📝 {o.productionNotes}</div>}
                                 </div>
                                 <span onClick={() => setExpandedSo(p => ({ ...p, [o.id]: !p[o.id] }))} title={showLines ? 'Collapse' : 'Show the lines anyway'} style={{ cursor: 'pointer', fontFamily: theme.mono, fontSize: '11px', marginRight: '10px', color: theme.inkSoft }}>{showLines ? '▾' : '▸'}</span>
+                                {finishAsAvailable(o) && <span title={`Parts go to finishing AS THEY ARRIVE instead of waiting for the whole order.${o.finishAsAvailableReason ? ` — ${o.finishAsAvailableReason}` : ''}`} style={{ fontFamily: theme.mono, fontSize: '9px', fontWeight: 700, letterSpacing: '.08em', color: theme.brass, border: `1px solid ${theme.brass}`, padding: '2px 6px', marginRight: '10px' }}>⚡ {t('FINISH AS AVAILABLE')}</span>}
                                 {committedBinOf(o) && <span title={`${totalGathered(o)} piece(s) gathered for this order. App-only — NetSuite still shows them in their shelf bin.`} style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.06em', color: '#2e7d32', marginRight: '12px' }}>📦 {t('BIN')} {committedBinOf(o)} · {totalGathered(o)}</span>}
                                 {loaded && (ready
                                     ? <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: '#2e7d32', marginRight: '12px' }}>✓ {t('READY TO PACK')}</span>
@@ -4259,6 +4297,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                     {o.packStatus === 'Packed'
                                         ? <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: '#3a7d44' }}>📦 Packed · {(o.packPhotos || []).length} photo{(o.packPhotos || []).length === 1 ? '' : 's'} · {o.packedBy || ''}{o.nsIfTran ? ` · IF ${o.nsIfTran}${o.nsFulfillStatus ? ` (${o.nsFulfillStatus})` : ''}` : (o.nsFulfillQueued ? ' · IF queued…' : '')}{(o.trackingNumbers || []).length ? ` · 🚚 ${o.trackingNumbers.join(', ')}` : ''}</span>
                                         : (o.status === 'Picked' && <span style={{ marginRight: 'auto', fontFamily: theme.mono, fontSize: '10px', color: theme.brass }}>→ in the PACKING tab queue</span>)}
+                                    <button onClick={() => toggleFinishAsAvailable(o)} title={finishAsAvailable(o) ? 'Parts are going to finishing as they arrive — switch back to waiting for the whole order' : 'The exception: send parts to finishing as they arrive, rather than waiting for the whole order'} style={{ padding: '9px 14px', background: 'transparent', color: finishAsAvailable(o) ? theme.brass : theme.inkSoft, border: `1px solid ${finishAsAvailable(o) ? theme.brass : theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>⚡ {t(finishAsAvailable(o) ? 'Waiting off' : 'Finish as available')}</button>
                                     <button onClick={() => printAllOrderLabels(o, o.lines || [])} title="Print item labels for every line on this order" style={{ padding: '9px 14px', background: 'transparent', color: theme.ink, border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', cursor: 'pointer' }}>🖨 {t('Labels')}</button>
                                     {/* A stale order had nowhere to die: RTG's board cannot see an Order Entry sale, and RTG
                                         was the only caller of the closer. This is that same closer, reachable from where the
