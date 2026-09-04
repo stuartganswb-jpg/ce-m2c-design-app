@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
 import OrderStatusChips from '../Shared/OrderStatusChips';
-import { orderStatusOf } from '../Shared/orderStatus';
+import { orderStatusOf, customPartsReady } from '../Shared/orderStatus';
 import WhereIsIt from '../Shared/WhereIsIt';
 import { woRefOf } from '../Shared/woRef';
 import { queueNsAssemblyWorkOrder, pickNsWoItem } from '../Shared/nsWorkOrder';
@@ -19,7 +19,7 @@ import { CATEGORY_NAME_RX } from '../Shared/itemCodeMatch';
 import SharedMessaging from '../Shared/SharedMessaging';
 import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
-import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf } from '../Shared/workOrderContract';
+import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
 import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere } from '../Shared/orderLifecycle';
 import { clearConvertGate } from '../Shared/finishedRunPrecheck';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
@@ -841,7 +841,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     // Why it is still upstream — so the window explains itself rather than just listing ids.
     const pendingReasonOf = (j) => {
         if (j.awaitingRodCut) return 'poles being cut';
-        if (j.hasCustomSibling && j.customFabStatus !== 'Complete') return `shop fab ${String(j.customFabStatus || 'not started').toLowerCase()}`;
+        if (!customPartsReady(j)) return j.customFabStatus === 'Sent to Plating'
+            ? 'custom parts at the plater'
+            : `shop fab ${String(j.customFabStatus || 'not started').toLowerCase()}`;
         return 'not released by finishing yet';
     };
     const releasePendingNow = async (job) => {
@@ -2706,8 +2708,22 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             const receiptId = result.id ? String(result.id) : null;
 
             await Promise.all((lineIds || []).map(id => updateDoc(doc(db, "plating_shipments", id), {
-                status: 'received', itemReceiptId: receiptId, receivedAt: serverTimestamp()
+                status: 'received', itemReceiptId: receiptId, receivedAt: serverTimestamp(), receivedAtMs: Date.now()
             }).catch(() => {})));
+            // ── THE RECEIPT TELLS THE ORDER (Brief D · D1) ────────────────────────────────────
+            // Until now the pallet came back and the ORDER heard nothing: no sibling, no board,
+            // no chip. A custom order sat reading "At the plater" with no way to learn otherwise.
+            // The pieces are physically here now — not yet built back, not yet packable — and that
+            // is its own state, so the board can show a pallet that landed days ago and was never
+            // built back. 'Plated' comes later, at put-away.
+            for (const id of (lineIds || [])) {
+                const ln = platingShipped.find(l => l.id === id) || platingReceived.find(l => l.id === id);
+                if (!ln || !ln.finSiblingId) continue;
+                try {
+                    await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                        { finWo: { id: ln.finSiblingId, salesOrderId: ln.soAppId || null, orderKey: ln.orderKey || null }, phase: 'Plating Received', by: operator?.name || '' });
+                } catch (e) { console.warn('RTG propagate failed (the receipt stands):', e); }
+            }
 
             alert(`✅ Plating shipment ${shipmentId} received in NetSuite${receiptId ? ` (item receipt #${receiptId})` : ''}. Lines are ready for build-back.`);
             writeLog(`Plating receive: shipment ${shipmentId} → item receipt ${receiptId || 'n/a'} (PO ${nsPoId}).`, 'wms');
@@ -2973,6 +2989,22 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             // pieces were plated FOR an order, they do not belong on the open shelf — they belong
             // in that order's committed bin, with the rest of its parts. Anything without an order
             // is ordinary stock and simply stays where it was put.
+            // ── THE BUILD-BACK OPENS THE PACK GATE (Brief D · D1) ─────────────────────────────
+            // C1 (334c9c3) made the shop stop lying: a plated custom part now mirrors 'Sent to
+            // Plating' rather than 'Complete', so the pack gate correctly refuses while the pieces
+            // are at the plater. NOTHING re-opened it — this is that half. The plated assembly
+            // exists as of the build above, so the custom half IS complete, and the order can pack.
+            if (line.finSiblingId) {
+                try {
+                    await mirrorCustomStatusToSibling({ finSiblingId: line.finSiblingId }, 'Complete');
+                    await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+                        { finWo: { id: line.finSiblingId, salesOrderId: line.soAppId || null, orderKey: line.orderKey || null }, phase: 'Plated', by: operator?.name || '' });
+                    writeLog(`Plated parts back on ${line.finSiblingId} — custom half Complete, pack gate open (${target} ×${got}).`, 'wms');
+                } catch (e) {
+                    console.warn('sibling/board update failed (the build stands):', e);
+                    alert(`⚠ ${target} built and put away, but the ORDER was not told.\n\n${e.message || e}\n\nThe pack gate may still refuse. Tell Stuart rather than working around it — the NetSuite side is done and must not be repeated.`);
+                }
+            }
             const soId = line.soAppId || null;
             const forOrder = soId ? quickShipOrders.find(o => o.id === soId || String(o.soId || '') === String(soId)) : null;
             if (forOrder) {
@@ -3182,8 +3214,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
             if (smallKey !== custKey) {
                 return alert(`🛑 DIFFERENT ORDERS — DO NOT MIX.\n\nSmall-parts label: ${smallKey}\nCustom label: ${custKey}\n\nSeparate these before staging.`);
             }
-            if (job.customFabStatus !== 'Complete') {
-                return alert(`❌ ${packRef(job)}: custom parts not yet complete in the shop (status: ${job.customFabStatus || 'Pending'}). Wait for the shop to finish + label them.`);
+            // ONE TEST for "are the custom parts ready" (Brief B2's customPartsReady), so this
+            // screen, RTG and the Setup Queue cannot disagree. 'Sent to Plating' is NOT ready —
+            // the pieces are at the plater, and the receiving station's build-back is what makes
+            // them Complete.
+            if (!customPartsReady(job)) {
+                return alert(`❌ ${packRef(job)}: custom parts are not ready (${job.customFabStatus || 'Pending'}).${job.customFabStatus === 'Sent to Plating' ? '\n\nThey are AT THE PLATER. They become packable when the pallet is received and built back on the Plating tab.' : '\n\nWait for the shop to finish + label them.'}`);
             }
         }
 
@@ -4050,7 +4086,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         sitting in pick, that must be marked as picked"). pickStatus alone never
                                         cleared, so a WO that had been through packing hours ago still sat here. */}
                                     {jobs.filter(j => j.pickStatus === 'Picked_Awaiting_Staging' && j.packStatus !== 'Packed' && j.currentPhase !== 'Closed').map(job => {
-                                        const custReady = !job.hasCustomSibling || job.customFabStatus === 'Complete';
+                                        const custReady = customPartsReady(job);
                                         const open = expandedStaged === job.id;
                                         const so = soIndex[String(job.salesOrderId || '')] || soIndex[String(job.soNum || '')] || null;
                                         return (
@@ -4426,6 +4462,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                         return (
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', marginBottom: '14px', border: `1px solid ${held ? '#d9534f' : (mine ? '#3a7d44' : theme.line)}`, background: held ? '#fdf3f3' : (mine ? '#f0f7f1' : theme.paper) }}>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '10px', letterSpacing: '.05em', color: held ? '#c0392b' : (mine ? '#3a7d44' : theme.inkSoft), textTransform: 'uppercase' }}>
+                                                    {committedBinOf(soIndex[String(packJob.salesOrderId || packJob.id)] || packJob) && `📦 ${t('Parts for this order are in bin')} ${committedBinOf(soIndex[String(packJob.salesOrderId || packJob.id)] || packJob)} · `}
                                                     {held ? `🔒 ${c.by} ${t('is packing this')} · ${t('since')} ${claimSince(c)}`
                                                         : mine ? `🔒 ${t('You are packing this')}`
                                                             : `👁 ${t('Looking only — nothing is changed until you start packing')}`}

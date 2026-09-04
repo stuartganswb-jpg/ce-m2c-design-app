@@ -121,6 +121,7 @@ const ES = {
     'FINISH AS AVAILABLE': 'ACABAR SEGÚN LLEGUEN',
     'Finish as available': 'Acabar según lleguen',
     'Waiting off': 'Volver a esperar completo',
+    'Parts for this order are in bin': 'Las piezas de esta orden están en la ubicación',
     'Complete Packing': 'Completar Embalaje',
     'Put Away to Bin': 'Guardar en Bin',
     'Put-away bin': 'Bin de destino',
