@@ -521,10 +521,147 @@ const AuthoringGuide = () => (
     </div>
 );
 
+const WmsGuide = () => (
+    <div>
+        <h2 style={S.h2}>The idea in one minute</h2>
+        <p style={S.p}>The warehouse is where every loop ends. Parts are <b>picked</b>, orders are <b>packed</b>,
+        finished stock is <b>put away</b>, and things that went out — to the plater, to the saw — come <b>back</b>.
+        Nothing here decides where work goes; that is decided upstream and the warehouse is told. What the warehouse
+        decides is <b>physical</b>: which bin, how many, and whether the pieces in your hands belong to a customer's
+        order or to the shelf. Getting that last one wrong is the mistake this whole tab is shaped to prevent.</p>
+        <div style={{ overflowX: 'auto' }}>
+            <table style={S.table}>
+                <thead><tr><th style={S.th}>You want to…</th><th style={S.th}>Go to</th></tr></thead>
+                <tbody>
+                    <tr><td style={S.td}>Pick the parts for an order the floor has released</td><td style={S.td}><b>Pick Queue</b></td></tr>
+                    <tr><td style={S.td}>See a customer order and whether all of its parts are in yet</td><td style={S.td}><b>SO Pack</b></td></tr>
+                    <tr><td style={S.td}>Box an order, or put finished stock on the shelf</td><td style={S.td}><b>Packaging Prep</b></td></tr>
+                    <tr><td style={S.td}>Send raw parts out for plating, or receive them back</td><td style={S.td}><b>Plating</b></td></tr>
+                    <tr><td style={S.td}>Turn raw stock into phosphated /P stock</td><td style={S.td}><b>Convert</b></td></tr>
+                    <tr><td style={S.td}>Cut an 8 ft rod down, or build a ring pack</td><td style={S.td}><b>Rod Cuts &amp; Ring Packs</b></td></tr>
+                    <tr><td style={S.td}>Count a bin, or move stock between bins</td><td style={S.td}><b>Bin Count</b> / <b>Transfer</b></td></tr>
+                    <tr><td style={S.td}>Find out where something is</td><td style={S.td}><b>Where is it?</b> in the header — a work order, a sales order or an item</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h2 style={S.h2}>One order, one pair of hands</h2>
+        <p style={S.p}>When you start a pick, or press <b>Start packing</b>, the order becomes <b>yours</b>. Every
+        other tablet sees a lock with your name and the time, and cannot start it. This exists because two people
+        walking the rack for one order is how a box ships short.</p>
+        <Screen title="Opening a card is looking, not taking" tag="you can always look">
+            <p style={S.p}>Tap an order to <b>read</b> it — its lines, its quantities, where its parts are. Nothing is
+            claimed and nothing changes. Only <b>Start packing</b> takes the order. <b>Close</b> leaves; if the order
+            was yours it is released, and if you were only looking at someone else's it is untouched.</p>
+            <p style={S.p}>Ticking a line or completing a pack on an order that is not yours is refused, and the
+            screen says who has it.</p>
+        </Screen>
+        <Path name="A lock that will not go away" goes="an admin can release it, with a reason, which is recorded">
+            A tablet that died mid-pick leaves the order locked. After four hours the card says so in red. Nothing
+            releases on its own — an order is never quietly taken off the person holding it.
+        </Path>
+
+        <h2 style={S.h2}>SO Pack <span style={S.tabno}>(customer orders)</span></h2>
+        <p style={S.p}>Every order for a customer, from either door: typed on Order Entry, or configured in CPQ.
+        This is the <b>view</b> — the packing happens on Packaging Prep.</p>
+        <Screen title="Four numbers, and the word that follows from them" tag="ordered · on hand · in production · committed">
+            <p style={S.p}><b>Ordered</b> is what the customer asked for. <b>On hand</b> is <i>free</i> stock —
+            what is on the shelf and promised to nobody; it already excludes anything another order has been
+            promised. <b>In production</b> is what is being made or bought <i>for this order</i>. <b>Committed</b> is
+            what is physically <i>gathered</i> for it, waiting in its bin.</p>
+            <p style={S.p}>A card stays <b>closed</b> while the order is missing parts, and turns <b>green and opens
+            </b> when everything is there. That is not decoration: an order missing parts is not work you can do, and
+            a screen that showed it the same way as a ready one would send you to a shelf for a piece still at the
+            plater. Use <b>▸</b> to open any card anyway and look.</p>
+            <p style={S.p}>A line that reads <b>from the floor</b> is made to order. It arrives from finishing or from
+            the plater — never pull it off a shelf.</p>
+        </Screen>
+        <Path name="Nothing on this order is committed" goes="check the sales order's LOCATION in NetSuite before you suspect the items">
+            NetSuite commits stock per location. When a <i>whole</i> order reads uncommitted while the bins plainly
+            have stock, the pattern is the diagnosis and it points at the order, not the parts.
+        </Path>
+
+        <h2 style={S.h2}>Committed bins — where an order's parts wait for each other</h2>
+        <p style={S.p}>Some orders arrive in pieces over days: the small parts are on the shelf, the poles are at the
+        plater. Rather than leave the early parts loose in stock, where the next order takes them, they wait together
+        in a <b>committed bin</b> belonging to that order.</p>
+        <Screen title="How a bin gets its order" tag="scan once, then follow it">
+            <p style={S.p}>The <b>first</b> part gathered for an order asks you to scan a bin. Scan any <b>empty</b>
+            committed bin — it becomes that order's until it ships, and from then on every other part for the order is
+            sent to the same bin, so you are told rather than having to remember.</p>
+            <p style={S.p}>A bin already holding another open order is <b>refused</b>, and the screen names the order
+            in it. Gathering <i>more</i> than the order asked for is refused too — the surplus belongs to stock, or to
+            another customer.</p>
+        </Screen>
+        <Path name="Some of it has to come back out" goes="Release, on the line, with a reason">
+            An order is cancelled, or plated pieces come back short and part of the bin ships while part waits.
+            Release takes a <b>quantity</b>, not just the whole bin, because part is the normal case. When the last
+            piece leaves, the bin is free for another order.
+        </Path>
+        <Path name="NetSuite never hears about the committed bin" goes="it still shows the stock in its shelf bin, marked committed to the order">
+            This is deliberate. The committed bin is the app's finer detail about <i>where the pieces physically are</i>
+            and <i>whose they are</i>. NetSuite keeps the accounting.
+        </Path>
+
+        <h2 style={S.h2}>"20 arrived, 10 are for an order"</h2>
+        <p style={S.p}>Small parts are usually bought or plated in <b>bulk for stock</b>, and the orders waiting on
+        them are invisible at the dock. So when finished pieces are put away — on <b>Packaging Prep</b> for painted and
+        stained work, on <b>Plating</b> for plated work — the screen asks whether any of them are spoken for.</p>
+        <Screen title="The split" tag="oldest need first">
+            <p style={S.p}>It lists which orders are short, how many each should take, and what is left for stock.
+            Orders are served <b>oldest need first</b>, so a newer order cannot jump an older one just because its
+            pallet happened to land today. Say <b>yes</b> and each order's share goes to its committed bin, asking for
+            that bin once per order. Say <b>no</b> and it all goes to stock — which is recorded, along with how many
+            were left outstanding, so the decision is on the books either way.</p>
+            <p style={S.p}>Pieces plated <i>for</i> one order carry that order with them and skip this question
+            entirely — they go straight to its bin.</p>
+        </Screen>
+
+        <h2 style={S.h2}>Plating <span style={S.tabno}>(out to the plater, and back)</span></h2>
+        <p style={S.p}>Four steps, in order: a <b>demand</b> appears; you <b>pull</b> the raw stock to the plating
+        bin; the weekly <b>shipment</b> goes out with a purchase order and a packing list; and the pallet comes
+        <b> back</b>.</p>
+        <Screen title="Receiving a pallet" tag="scan → cart → bin">
+            <p style={S.p}><b>Scan to find.</b> One box at the top: scan or type either the raw code or the plated
+            code, and that line jumps up and highlights. No reading down a wall of rows.</p>
+            <p style={S.p}><b>Receive to a cart.</b> Enter how many good pieces came back and add them. Several carts
+            per purchase order. <b>Save cart</b> closes one. Nothing reaches NetSuite at this step.</p>
+            <p style={S.p}><b>Put away, which is what posts the build.</b> Open a saved cart, pick the line, scan the
+            <b> bin</b>. One bin normally; <b>Multiple bins</b> for the rare split, where the quantities must add up.
+            Only now does NetSuite hear anything.</p>
+        </Screen>
+        <Path name="Fewer came back than went out" goes="the difference is scrapped out of plating, once, with your name on it">
+            Enter what actually arrived. The build and the return-to-stock cover the good pieces; the missing ones are
+            adjusted out rather than left on the books forever.
+        </Path>
+        <Path name="Why the bin scan matters" goes="a plated assembly is bin-managed — a build with no bin is refused by NetSuite">
+            The bin is not looked up, it is where you <i>put</i> them. That is why the build waits for the scan.
+        </Path>
+
+        <h2 style={S.h2}>Edges worth knowing</h2>
+        <div style={{ overflowX: 'auto' }}>
+            <table style={S.table}>
+                <thead><tr><th style={S.th}>What you see</th><th style={S.th}>What it means</th></tr></thead>
+                <tbody>
+                    <tr><td style={S.td}>An order in the pending window, "still upstream"</td><td style={S.td}>The floor has not released its parts yet. You can pull one forward deliberately; it is recorded that you picked ahead.</td></tr>
+                    <tr><td style={S.td}>Pack refused — custom parts not complete</td><td style={S.td}>The poles are still on the shop floor or at the plater. The box would ship short.</td></tr>
+                    <tr><td style={S.td}>"At the plater"</td><td style={S.td}>Correct, and it clears itself when the pallet is received and put away on the Plating tab.</td></tr>
+                    <tr><td style={S.td}>A bin the screen does not recognise</td><td style={S.td}>Scan the bin label rather than typing it. A bin NetSuite does not have makes the whole posting fail, and the stock would go missing on paper.</td></tr>
+                    <tr><td style={S.td}>A put-away bin that looks like an item code</td><td style={S.td}>You scanned the item label instead of the bin. The screen refuses it.</td></tr>
+                    <tr><td style={S.td}>A stale order nobody will ship</td><td style={S.td}><b>Close order</b> on its SO Pack card, with a reason. It also has to be closed in NetSuite, or its stock stays promised to it.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p style={S.p}>Everything on these screens is in <b>English or Spanish</b> — the <b>EN / ES</b> buttons top
+        left, remembered per tablet.</p>
+    </div>
+);
+
 const SECTIONS = [
     { key: 'WO', label: 'Work Orders', comp: WorkOrdersGuide },
     { key: 'OC', label: 'Orders & Customers', comp: OrdersCustomersGuide },
     { key: 'SF', label: 'Shop Floor', comp: ShopFloorGuide },
+    { key: 'WMS', label: 'Warehouse (WMS)', comp: WmsGuide },
     { key: 'RP', label: 'Rod Pieces', comp: RodPiecesGuide },
     { key: 'APP', label: 'Working on the App', comp: AppWorkGuide },
     { key: 'AU', label: '1.6 / 1.5 Authoring', comp: AuthoringGuide },
