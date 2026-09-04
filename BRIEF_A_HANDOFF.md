@@ -373,6 +373,52 @@ gate where a person approves it. The Backorder window has **no such gate**, so i
 `codeHealth` instead. Fixing `stockCheckReport` to stop calling unknown a zero is a behaviour change
 to a gated path → goes to Stuart as a proposal, never a silent tidy.
 
+## 3j. Approved-but-unbuilt, agreed across sessions 2026-09-03 (nothing started)
+
+**`awaitingReceipt` — a new gate. A sets and clears it; B reads it; D triggers the clear.**
+Stuart approved (relayed): a sales order's bought BOTH raw part parks its work order until the PO
+is received. Field names follow the existing pattern (`awaiting<Thing>` / `<thing>Id(s)` /
+`<thing>Note`):
+
+    awaitingReceipt: true
+    receiptRefs: [{ poId, itemId, qtyNeeded }]     // + a flattened receiptPoIds for array-contains
+    receiptGateNote: "12 x H1-75DS on PO-1044 (Dayton Grey)"
+
+Two shape decisions taken deliberately, both cheap now and a migration later:
+- **ARRAY, not a scalar `receiptPoId`.** A WO can wait on more than one PO — `planMakeupActions`
+  emits a BUY_NOTE per short component, and two bought shorts from two vendors are two POs.
+  `awaitingComponents`/`componentShopWoIds` is the plural precedent. A scalar would silently drop
+  the second PO and release the order with half its material.
+- **IT CARRIES THE QUANTITY.** Clearing on "the PO was received" is wrong: a PO for 12 arriving as 5
+  does not make the order runnable. The gate clears only when received covers `qtyNeeded` — the same
+  covering arithmetic as the Backorder window, and the same reason we read `quantity − received`
+  rather than header status. Partial receipt keeps it closed and says "5 of 12 arrived".
+
+A exports the clearer, D calls it — the WMS must never write `hq_work_orders`, symmetric with the
+rule that A never writes from the WMS side:
+
+    clearReceiptGate({ poId, itemId, receivedQty, operatorName }) -> 'released' | 'cleared' | false
+
+B's GATES entry: `open: (wo) => !!wo.awaitingReceipt`, detail from `receiptGateNote`, and `clearedBy`
+worded as *"the WMS receiving tab recording enough received quantity to cover the line
+(clearReceiptGate)"* — **not** "the PO being received", because those differ and the difference is
+the bug.
+
+**Open POs — TWO things, not one, and the RTG half is not optional.** Stuart: *"we can have an open
+po button just like the open wo button to review."* The Open WOs button he means is A's
+(`StockViewTab :2573`), so:
+- **A builds the twin** in Stock View: every PO `isOpenPo` calls open, with vendor, lines, ordered vs
+  received, NetSuite PO #, the vendor acknowledgement and ready date, and PO-appropriate repair
+  actions. A cleanup/review tool — where you go to find what is STUCK.
+- **B swaps the RTG PO panel to `isOpenPo` + adds a live PO mirror.** This is NOT the same
+  requirement: it is the fix for §3h, required by *"EVERY ORDER via RTG always … master single
+  source control of all"*. **B must not hold it waiting on A's twin** — the defect is live now.
+- The distinction: RTG is where an order is SEEN AND CONTROLLED for its whole life, every order every
+  door; the Stock View panel shows only what needs attention. Different questions, different
+  lifespans, no duplication.
+- **Flagged to Stuart** in case he meant only one of them — but neither reading makes the RTG fix
+  optional.
+
 ## 4. Blocked / waiting on others
 
 - Writer 7 on B's B1 (`buildFinDoc`). B will send the hash.
