@@ -22,6 +22,10 @@ export default function PartLookupPanel({
     customerName = '',
     compact = false,
     loading = false,
+    // Which flow is open. A verdict is only meaningful for rows belonging to it — judging a part
+    // from ANOTHER flow against this configuration would confidently print a reason drawn from the
+    // wrong assembly, which is worse than printing nothing.
+    activeFlowId = '',
     // Fired once, on first focus. The cross-flow index costs a read per assembly, so the tab that
     // needs one builds it when somebody actually searches rather than on every visit to the page.
     onFirstUse = null,
@@ -91,7 +95,9 @@ export default function PartLookupPanel({
                         </div>
                     )}
                     {!loading && hits.map(row => {
-                        const verdict = live ? verdictFor(row, { choices, answers }) : null;
+                        const judgeable = live && (!activeFlowId || row.flowId === activeFlowId);
+                        const verdict = judgeable ? verdictFor(row, { choices, answers }) : null;
+                        const otherFlow = !!(activeFlowId && row.flowId && row.flowId !== activeFlowId);
                         const blocked = verdict && verdict.ok === false;
                         return (
                             <div key={row.key} style={{ padding: '11px 13px', borderBottom: '1px solid var(--line)' }}>
@@ -136,6 +142,11 @@ export default function PartLookupPanel({
                                 {verdict && verdict.ok && (
                                     <div style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px' }}>
                                         ✓ selectable on this configuration
+                                    </div>
+                                )}
+                                {otherFlow && (
+                                    <div style={{ ...mono, fontSize: '9px', color: 'var(--ink-soft)', marginTop: '6px', textTransform: 'none', letterSpacing: 0 }}>
+                                        lives in another flow — switch to it to see whether this configuration can take it
                                     </div>
                                 )}
                             </div>

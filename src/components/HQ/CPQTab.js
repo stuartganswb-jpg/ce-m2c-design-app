@@ -633,6 +633,10 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   // search box, because it is a read per assembly and most visits never search.
   const [lookupPins, setLookupPins] = useState(null);   // null = never asked; Map(itemId → pins)
   const [lookupLoading, setLookupLoading] = useState(false);
+  // What the engine is currently offering, published up so the lookup box beside the flow picker
+  // can judge a part against the live configuration. The box sits ABOVE the engine because it has
+  // to answer "which flow?" before one is open.
+  const [engineLookup, setEngineLookup] = useState({ choices: [], answers: {}, index: [] });
 
   const [globalLists, setGlobalLists] = useState({
       inventoryTypes: [], assemblyTypes: [], prodTypes: [], customers: [], bracketMounts: [], feeTypes: []
@@ -4952,6 +4956,32 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                               ))}
                           </div>
                           ); })()}
+
+                          {/* ── LOOK UP A PART NUMBER · BESIDE THE FLOW, NOT UNDER THE STEPS ──────
+                              Stuart 2026-09-03: "can't we put it up top next to the flow choices as
+                              ideally we need it to decide which flow to pick." Exactly — the first
+                              thing a Fabricut order asks is which flow H2578F even belongs to, and
+                              that question is dead by the time you are standing on a step.
+
+                              So it lives here, above the walk: reachable before any flow is open,
+                              still on screen at every step afterwards. Once a flow IS open the
+                              engine publishes its configuration up (onEngineState) and the same box
+                              adds the verdict — the projection tag that hid a part, in one line.
+
+                              READ-ONLY: it names a flow, it never launches one. */}
+                          <div style={{ marginBottom: '14px' }}>
+                              <PartLookupPanel
+                                  index={flowLookupIndex.length ? flowLookupIndex : engineLookup.index}
+                                  choices={engineLookup.choices}
+                                  answers={engineLookup.answers}
+                                  activeFlowId={activeFlowId}
+                                  loading={lookupLoading}
+                                  onFirstUse={loadLookupPins}
+                                  customerName={lookupAliasCtx.customer?.name || lookupAliasCtx.customer?.companyName || ''}
+                                  placeholder="Part # — theirs or ours (e.g. H2578F, H3553F) to find its flow"
+                                  compact
+                              />
+                          </div>
                           {activeAssembly ? (
                               /* Mounted for as long as the engine is on, and keyed on the assembly
                                  ID alone. Swapping it for a loading element — or keying it on an
@@ -4975,6 +5005,7 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                                   customer={liveCustomers.find(c => c.id === (jobData.customerId || activeFlow?.customerId)) || null}
                                   priceLevel={priceLevel}
                                   outsourceCodes={outsourceFinishes}
+                                  onEngineState={setEngineLookup}
                                   flow={activeFlow}
                                   /* The engine's finished configuration lands in the SAME cart the
                                      old one fills, in the same shape — so checkout, the floors, RTG

@@ -17,7 +17,6 @@ import { priceConfiguration, priceChoice, pricingWarnings, aliasFor } from './ha
 import { priceLevelShort, customerPriceLevel } from './priceLevels';
 import { findClientPriceRow, customerKeys } from './clientPricing';
 import { indexForAssembly } from './partLookup.js';
-import PartLookupPanel from './PartLookupPanel.js';
 import { handoffItem, customerLines } from './hardwareHandoff';
 import { finishLabelOf, takesNoFinish } from './finishLabel';
 import { bracketAdviceFor, ftIn, FABRIC_CLASSES, DEFAULT_DROP_FT } from './bracketSpan';
@@ -127,6 +126,9 @@ function HardwareConfiguratorInner({
     kits = [],
     kitsUnaligned = 0,
     kitSeedDiag = null,
+    // Publishes { choices, answers, index } so the part-lookup box ABOVE this component can judge a
+    // part against the live configuration. Read-only: the engine tells, it is never told.
+    onEngineState = null,
 }) {
     const [answers, setAnswers] = useState({});
     const [picks, setPicks] = useState({});     // slot key -> choice id
@@ -770,6 +772,15 @@ function HardwareConfiguratorInner({
     const lookupIndex = useMemo(
         () => indexForAssembly({ assembly, pins, flow, findPart, aliasCtx: priceCtx }),
         [assembly, pins, flow, findPart, priceCtx]);
+    // ⚠ THE SEARCH BOX LIVES ABOVE THIS COMPONENT, BESIDE THE FLOW PICKER (Stuart 2026-09-03:
+    // "can't we put it up top next to the flow choices as ideally we need it to decide which flow
+    // to pick"). It has to be reachable BEFORE a flow is open — which is before this component
+    // exists — so the panel cannot live in here. What it needs from the engine is the live
+    // configuration to judge against, so that is published upward and nothing else changes.
+    useEffect(() => {
+        if (typeof onEngineState !== 'function') return;
+        onEngineState({ choices, answers: effAnswers, index: lookupIndex });
+    }, [onEngineState, choices, effAnswers, lookupIndex]);
     // The finishes this configuration actually wears — the configuration's own, plus any per-part
     // exception. RTG reads the label off this, so it must be what is on the parts, not what is
     // selected in the panel.
@@ -1940,25 +1951,6 @@ function HardwareConfiguratorInner({
                                     style={{ width: '64px', padding: '8px 6px', border: `1px solid ${cfgQtyN > 1 ? 'var(--brass)' : 'var(--line)'}`, fontFamily: 'var(--mono)', fontSize: '14px', textAlign: 'center', background: '#fff', color: 'var(--ink)', fontWeight: cfgQtyN > 1 ? 700 : 400 }} />
                             </div>
                         )}
-                        {/* ── LOOK UP A PART NUMBER, THEIRS OR OURS (Stuart 2026-09-03) ────────
-                            "when we get to the bracket step we could enter up the bracket there and
-                            it would return the projection (in description and tag) … it would also
-                            be a great tool to check so above can be fixed when it occurs."
-
-                            "Above" is CE-INV-60175 — the 4-5/8" in-line bracket carrying a 3.625"
-                            projection tag, so the customer's H3553F could not be picked at 4-5/8"
-                            and nothing said why until "why not the other 13?" was opened. The panel
-                            answers the same question from the other end: name the part, get its tag
-                            and, on an open configuration, the admits() verdict verbatim.
-
-                            READ-ONLY. It selects nothing — see PartLookupPanel. */}
-                        <PartLookupPanel
-                            index={lookupIndex}
-                            choices={choices}
-                            answers={effAnswers}
-                            customerName={customer?.name || customer?.companyName || ''}
-                            compact
-                        />
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', paddingTop: '3px' }}>
                             <button onClick={() => setStepIx(Math.max(0, ix - 1))} disabled={ix === 0}
                                 style={{ ...chip(false), opacity: ix === 0 ? .35 : 1, cursor: ix === 0 ? 'not-allowed' : 'pointer' }}>Back</button>
