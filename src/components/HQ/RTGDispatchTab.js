@@ -530,7 +530,17 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         // Every gate — SO accept, NetSuite WO # (Stuart 2026-08-29: the outbox writeBack stamps
         // nsWoId and the next refresh releases), components, convert, rod cut, released-once — is
         // the one list in orderStatus.gatesOf.
-        const wo = liveWO.find(o => (o.autoFlow || o.orderClass === 'ORDER_ENTRY') && o.status === 'Approved' && o.finPayload
+        //
+        // THE DOOR MATCHES THE ORDER (Stuart 2026-09-04, five unanchored builds on the floor). Since
+        // A's parkWorkOrder stamps autoFlow:true on EVERY stock order (2026-09-02), this effect was
+        // taking stock orders through the SALES door — releaseFinWoToFloor copies the payload and
+        // queues no NetSuite work order, because a sales order's NetSuite record is the sales order.
+        // A stock build's anchor is Route A, queued at release by pushToFinishing. So: sales →
+        // the direct release; stock → pushToFinishing (Route A); a SHOP route → pushToShop. One
+        // effect, the right door for each, and nothing reaches a floor unanchored.
+        const isSalesFlow = (o) => o.orderType === 'sales' || o.orderClass === 'ORDER_ENTRY' || (o.finPayload && o.finPayload.orderType === 'sales');
+        const wo = liveWO.find(o => (o.autoFlow || o.orderClass === 'ORDER_ENTRY') && o.status === 'Approved'
+            && (o.routeTo === 'SHOP' || o.finPayload)
             && isReleasable(o)
             && !o.stopped && !autoTriedRef.current.has(`flow:${o.id}`));
         if (!wo) return;
@@ -538,8 +548,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         autoTriedRef.current.add(`flow:${wo.id}`);
         (async () => {
             try {
-                addLog(`🔁 Auto-flow: ${wo.id} — gates open, releasing to the finishing floor…`, 'info');
-                await releaseFinWoToFloor(wo, currentUser || 'auto-flow');
+                if (wo.routeTo === 'SHOP') {
+                    addLog(`🔁 Auto-flow: ${wo.id} — gates open, releasing to the shop floor…`, 'info');
+                    await pushToShop(wo, wo.orderType || 'stock', { auto: true });
+                } else if (isSalesFlow(wo)) {
+                    addLog(`🔁 Auto-flow: ${wo.id} — gates open, releasing to the finishing floor (sales order is the NetSuite record)…`, 'info');
+                    await releaseFinWoToFloor(wo, currentUser || 'auto-flow');
+                } else {
+                    addLog(`🔁 Auto-flow: ${wo.id} — gates open, releasing to the finishing floor and queuing its NetSuite work order (Route A)…`, 'info');
+                    await pushToFinishing(wo, 'stock', { auto: true });
+                }
             } catch (e) { addLog(`🔁 Auto-flow release FAILED for ${wo.id}: ${e.message} — left parked.`, 'error'); }
             finally { autoBusyRef.current = false; setTimeout(() => loadRTGOrders(), 900); }
         })();
@@ -2674,7 +2692,7 @@ Each closes EVERYWHERE (RTG, finishing, shop, WMS demands; NetSuite closes queue
                                             itself the moment its gates open. */}
                                         {(wo.autoFlow || wo.orderClass === 'ORDER_ENTRY') ? (
                                             <span title="Auto-flow: components in stock → straight to finishing; /P short → releases when the WMS convert posts; raw short → its milling WO is already on the shop floor." style={{ flex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '10px', fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', fontWeight: 700, color: 'var(--brass)', border: '1px dashed var(--brass)', background: '#fdf8ef' }}>
-                                                🔁 AUTO-FLOW · {gateSummary(wo) || 'releasing…'}
+                                                🔁 AUTO-FLOW · {gateSummary(wo) || ((wo.routeTo === 'SHOP' || wo.finPayload) ? 'releasing…' : 'no floor payload on this record — see View')}
                                             </span>
                                         ) : (<>
                                         <button style={{ ...btnStyle, flex: 1, background: wo.pushedToFinishing ? 'var(--paper-2)' : 'var(--ink)', color: wo.pushedToFinishing ? 'var(--ink-soft)' : '#fff', border: wo.pushedToFinishing ? '1px solid var(--line)' : 'none' }} onClick={() => pushToFinishing(wo, 'stock')}>
