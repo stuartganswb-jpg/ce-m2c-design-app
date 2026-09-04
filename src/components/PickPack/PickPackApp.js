@@ -837,7 +837,10 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // Something to pick, eventually: either real BOM lines or a stock pull the Setup Queue
         // will synthesize. An order with neither is never going to reach her.
         && ((Array.isArray(j.partsList) && j.partsList.length > 0) || j.stockErpId || j.orderType === 'stock')
-    ).sort((a, b) => String(a.reqDate || '').localeCompare(String(b.reqDate || ''))), [finAll, activeBrand]);
+        // Sorted by the date the customer needs it. `needBy` is the one key (Brief E); the fin doc
+        // still carries `reqDate`, written by RTG's split from that header, so both are read until
+        // B's split is on the new name.
+    ).sort((a, b) => String(a.needBy || a.reqDate || '￿').localeCompare(String(b.needBy || b.reqDate || '￿'))), [finAll, activeBrand]);
     // Why it is still upstream — so the window explains itself rather than just listing ids.
     const pendingReasonOf = (j) => {
         if (j.awaitingRodCut) return 'poles being cut';
@@ -3953,7 +3956,7 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                                 {woItemCodeOf(j) && <span style={{ fontFamily: theme.mono, fontSize: '0.8rem', color: theme.ink, fontWeight: 600 }}>{woItemCodeOf(j)}</span>}
                                                 <span style={{ fontFamily: theme.sans, fontSize: '0.8rem', color: theme.inkSoft }}>×{j.totalParts || 0}{j.recipe ? ` · ${j.recipe}` : ''}</span>
                                                 <span style={{ fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.06em', color: theme.brass, border: `1px solid ${theme.brass}`, padding: '2px 7px' }}>{t(pendingReasonOf(j))}</span>
-                                                {j.reqDate && <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft }}>{t('need by')} {j.reqDate}</span>}
+                                                {(j.needBy || j.reqDate) && <span style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft }}>{t('need by')} {j.needBy || j.reqDate}</span>}
                                                 <button onClick={() => releasePendingNow(j)} title="Pick it now, ahead of the floor asking — it moves to Awaiting Pick and can be sent back at any time."
                                                     style={{ marginLeft: 'auto', background: 'transparent', border: `1px solid ${theme.line}`, color: theme.ink, padding: '6px 12px', fontFamily: theme.mono, fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em', cursor: 'pointer' }}>▶ {t('Pick now')}</button>
                                             </div>
@@ -4257,7 +4260,12 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                                 <div>
                                     <span style={{ fontFamily: theme.serif, fontSize: '1.2rem', color: theme.ink, fontWeight: 500 }}>{o.customer || 'Customer'}</span>
                                     <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>SO {o.soId || o.id} · {o.totalParts || 0} pcs{o.jobName ? ` · ${o.jobName}` : ''}</span>
-                                    {o.needByDate && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>NEED BY {o.needByDate}</span>}
+                                    {/* ONE DATE KEY (Brief E's header): `needBy`. `needByDate` and
+                                        `reqDate` are aliases E writes equal to it for one release,
+                                        kept here only so orders saved BEFORE the header landed still
+                                        show a date. E deletes the aliases once every reader has
+                                        moved; this one has. */}
+                                    {(o.needBy || o.needByDate) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>{t('NEED BY')} {o.needBy || o.needByDate}</span>}
                                     {/* Made-to-order lines arrive from the floors over days/weeks — the order
                                         typically PACKS & HOLDS in a bin until every part is in. */}
                                     {(o.lines || []).some(l => l.toBeFinished) && <span style={{ fontFamily: theme.mono, fontSize: '9px', fontWeight: 700, color: theme.brass, marginLeft: '12px', letterSpacing: '.05em' }}>📦 PACK &amp; HOLD — parts arrive from the floors</span>}
