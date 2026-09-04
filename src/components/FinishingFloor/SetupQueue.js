@@ -859,7 +859,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
 
                 <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
                     <button onClick={() => setActiveSpecs(wo)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>Specs</button>
-                    {wo.quoteId && <button onClick={() => setCfgQuote(wo.quoteId)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>🔍 View Item</button>}
+                    {/* JUST FOR PAINT (Stuart 2026-09-04): a JFP order's quoteId is the JFP TEMPLATE's library
+                        record, so the viewer would show "JFP" — not the item being painted, not the raw item
+                        the WMS pulls. Its facts live on the order itself; open those instead. */}
+                    {wo.paintOnly === true
+                        ? <button onClick={() => setActiveSpecs(wo)} title={`${wo.jfpItemCode || ''} — painted from ${wo.jfpPullFrom || wo.jfpItemCode || ''}`} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>🔍 View Item</button>
+                        : wo.quoteId && <button onClick={() => setCfgQuote(wo.quoteId)} style={{ ...btnStyle, flex: 1, background: 'var(--paper-2)', color: 'var(--ink)', border: '1px solid var(--line)' }}>🔍 View Item</button>}
                     {isMatched ? (
                         <button onClick={() => stageToFloor(wo)} style={{ ...btnStyle, flex: 2, background: '#3a7d44', color: '#fff', border: 'none' }}>✓ Push to Active Floor</button>
                     ) : wo.stepStatus === "Pending" ? (
@@ -918,7 +923,12 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                                   ['Quantity', activeSpecs.totalParts || activeSpecs.qty || ''],
                                   ['NetSuite WO', activeSpecs.nsWoTran || activeSpecs.nsWoId || ''],
                                   ['Need by', activeSpecs.needBy || activeSpecs.reqDate || ''],
-                                  ['Pull source', activeSpecs.jfpPullFrom || ''],
+                                  // JFP: what it becomes, and what the WMS actually pulls to paint it — the
+                                  // template record says neither (Stuart 2026-09-04, WO-JFP-HSMCB1-04-382619).
+                                  ['Painting into', activeSpecs.paintOnly === true ? [activeSpecs.jfpItemCode, activeSpecs.jfpItemName].filter(Boolean).join(' · ') : ''],
+                                  ['Pull source (WMS picks this)', activeSpecs.paintOnly === true
+                                      ? (activeSpecs.jfpPullFrom ? [activeSpecs.jfpPullFrom, activeSpecs.jfpPullFromName].filter(Boolean).join(' · ') : `${activeSpecs.jfpItemCode || ''} (the item itself — repaint)`)
+                                      : (activeSpecs.jfpPullFrom || '')],
                               ].filter(([, v]) => v !== '' && v !== undefined && v !== null);
                               if (!rows.length) return null;
                               return (
