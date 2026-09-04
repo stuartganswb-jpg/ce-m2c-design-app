@@ -26,7 +26,7 @@
 // Brief D's, and it reads what is written here.
 
 import { db } from '../../firebase';
-import { doc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { enqueueNsWrite } from './nsOutbox';
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { reserveShortNo } from './shortId';
@@ -41,7 +41,25 @@ export const PO_STATUS = {
     QUEUED: 'Queued to NetSuite',
     PUSHED: 'Pushed to NetSuite',         // has its real PO number
     SENT: 'Sent to Vendor',
+    SENT_TO_PLATER: 'Sent to Plater',     // the WMS weekly plating shipment creates AND sends in one act
+    PARTIAL: 'Partially Received',        // some arrived — OPEN, and the one people chase
+    RECEIVED: 'Received',                 // everything arrived
+    CLOSED: 'Closed',
+    DELETED: 'Deleted',                   // soft delete
 };
+
+// ── WHICH POs ARE STILL LIVE ───────────────────────────────────────────────────────────────────
+// The RTG board asked `status == 'Approved'` and nothing else, so a PO was invisible to it for the
+// whole of its real life: born Draft, then Queued → Pushed → Sent, never passing through the one
+// status the board looked for. Every reader asks THIS instead, so the board, the Open POs review
+// and the receiving station cannot drift apart, and a status added later is honoured everywhere at
+// once. Terminal is only: everything arrived, or somebody closed or deleted it.
+export const PO_TERMINAL_STATUSES = [PO_STATUS.RECEIVED, PO_STATUS.CLOSED, PO_STATUS.DELETED];
+export const isOpenPo = (po) => !!po && !po.deleted && !PO_TERMINAL_STATUSES.includes(String(po.status || ''));
+// What is still owed on one line: ordered minus what has actually ARRIVED. Never header status —
+// a PO for 5 that returned 4 with 1 short still owes 1, and reading the header would hide it.
+export const openQtyOf = (line) => Math.max(0, (Number(line && line.quantity) || 0) - (Number(line && line.received) || 0));
+export const poFullyReceived = (po) => ((po && po.items) || []).every(l => openQtyOf(l) === 0);
 export const isDraftPo = (po) => String((po && po.status) || '') === PO_STATUS.DRAFT;
 export const hasNsNumber = (po) => !!(po && (po.nsPoTran || po.nsPoId));
 export const poRef = (po) => String((po && (po.nsPoTran || po.poId || po.id)) || '');
@@ -289,3 +307,114 @@ export const acknowledgePurchaseOrder = async ({ poId, ackRef = '', readyDate = 
         // The date the rest of the app already reads for an expected arrival.
         ...(readyDate ? { expectedReceiveDate: readyDate } : {}),
     });
+
+// ── READ A PURCHASE ORDER FROM NETSUITE ────────────────────────────────────────────────────────
+// Receiving must work for a PO the app never raised. Most POs on the dock today were keyed
+// straight into NetSuite, so "type the PO number and show me its lines" cannot depend on an
+// hq_purchase_orders doc existing — it has to ask NetSuite.
+//
+// The join is Stock View's proven inbound-supply query (`transaction ⋈ transactionline`, ordered =
+// ABS(quantity), already-received = quantityshiprecv), filtered by TRANID instead of by item, with
+// `item` joined so the operator sees the code they are about to scan rather than an internal id.
+// Non-item lines (the header, freight, a service charge) carry no item and drop out of the join on
+// their own — which is right: you cannot scan a freight line onto a cart.
+export const fetchNsPurchaseOrder = async (tranId) => {
+    const tran = String(tranId || '').trim().toUpperCase();
+    if (!tran) return null;
+    const { nsProxyFetch } = await import('./nsProxy');
+    const q = `SELECT t.id AS tran_internal, t.tranid AS tranid, t.trandate AS trandate, t.duedate AS duedate, ` +
+        `BUILTIN.DF(t.status) AS statusname, BUILTIN.DF(t.entity) AS vendor, ` +
+        `tl.id AS line_id, tl.item AS item_internal, i.itemid AS itemid, i.displayname AS itemname, ` +
+        `ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done, NVL(tl.rate,0) AS rate ` +
+        `FROM transaction t JOIN transactionline tl ON tl.transaction = t.id JOIN item i ON i.id = tl.item ` +
+        `WHERE t.type = 'PurchOrd' AND UPPER(t.tranid) = '${tran.replace(/'/g, "''")}'`;
+    const resp = await nsProxyFetch({
+        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+        method: 'POST', payload: { q },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 300));
+    const rows = data.items || [];
+    if (!rows.length) return null;
+    const head = rows[0];
+    return {
+        nsPoId: String(head.tran_internal),
+        nsPoTran: String(head.tranid || tran),
+        vendor: String(head.vendor || ''),
+        status: String(head.statusname || ''),
+        tranDate: String(head.trandate || ''),
+        reqDate: String(head.duedate || ''),
+        items: rows.map(r => ({
+            itemId: String(r.itemid || '').toUpperCase(),
+            nsItemId: String(r.item_internal),
+            nsLineId: String(r.line_id || ''),
+            description: String(r.itemname || ''),
+            quantity: Number(r.ordered) || 0,
+            // NetSuite's own received figure is the truth for a PO the app never saw.
+            received: Number(r.done) || 0,
+            rate: Number(r.rate) || 0,
+        })),
+    };
+};
+
+// The app's record of a NetSuite-raised PO, created the first time somebody receives against it.
+// Two reasons this is worth doing rather than receiving against nothing: the receipt has somewhere
+// to accumulate (received per line, who and when), and the PO becomes visible to RTG — which is the
+// standing rule that every order lands there whichever door it came through.
+export const importNsPurchaseOrder = async ({ nsPo, brand, createdBy = '' }) => {
+    if (!nsPo || !nsPo.nsPoTran) throw new Error('No NetSuite purchase order to import.');
+    const poId = `PO-NS-${String(nsPo.nsPoTran).replace(/[^A-Za-z0-9]+/g, '')}`;
+    const po = {
+        id: poId, poId, brand, status: PO_STATUS.SENT,
+        vendor: nsPo.vendor || '', nsVendorId: null, vendorCrmId: null,
+        nsPoId: nsPo.nsPoId, nsPoTran: nsPo.nsPoTran,
+        items: (nsPo.items || []).map(l => ({ ...l, received: Number(l.received) || 0 })),
+        source: 'NETSUITE', note: `Raised in NetSuite · imported at receiving`,
+        reqDate: nsPo.reqDate || '', importedFromNetSuite: true,
+        createdAt: Date.now(), createdBy,
+    };
+    await setDoc(doc(db, 'hq_purchase_orders', poId), po, { merge: true });
+    return po;
+};
+
+// ── RECORD WHAT ARRIVED ────────────────────────────────────────────────────────────────────────
+// Receipts are recorded BY LINE INDEX, never by item code, and that is deliberate: a PO can carry
+// the same code twice on purpose — once for stock and once for a sales order — and matching by code
+// would credit the wrong one and lose the link that says who the pieces are for.
+//
+// `received` accumulates and is clamped to what the line still owes, so a double-tap cannot receive
+// more than was ordered. A short delivery is simply a smaller number: on a vendor PO the missing
+// pieces are a BACKORDER, not scrap, and the line stays open until they arrive.
+export const recordPoReceipt = async ({ poId, receipts = [], by = '', nsReceiptId = null }) => {
+    const ref = doc(db, 'hq_purchase_orders', poId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) throw new Error(`${poId}: no purchase order record to receive against.`);
+    const po = { id: snap.id, ...snap.data() };
+    const items = [...(po.items || [])];
+    const applied = [];
+    receipts.forEach(r => {
+        const i = Number(r.index);
+        const line = items[i];
+        if (!line) return;
+        const room = openQtyOf(line);
+        const got = Math.max(0, Math.min(room, Number(r.qty) || 0));
+        if (!got) return;
+        items[i] = {
+            ...line,
+            received: (Number(line.received) || 0) + got,
+            receivedAt: Date.now(), receivedBy: by,
+            ...(r.bin ? { receivedBin: r.bin } : {}),
+        };
+        applied.push({ index: i, itemId: line.itemId, qty: got, bin: r.bin || '', soAppId: line.soAppId || null, soRef: line.soRef || '' });
+    });
+    if (!applied.length) return { po, applied: [] };
+    const done = items.every(l => openQtyOf(l) === 0);
+    const patch = {
+        items,
+        status: done ? PO_STATUS.RECEIVED : PO_STATUS.PARTIAL,
+        lastReceivedAt: Date.now(), lastReceivedBy: by,
+        ...(nsReceiptId ? { nsReceiptId: String(nsReceiptId) } : {}),
+    };
+    await updateDoc(ref, patch);
+    return { po: { ...po, ...patch }, applied, fullyReceived: done };
+};

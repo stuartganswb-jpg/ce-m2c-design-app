@@ -36,6 +36,7 @@ import { readConvertDiag, diagSummary, isHealthyState } from '../Shared/convertD
 import { useRetiredSet } from '../Shared/retiredItems';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { enqueueNsWrite } from "../Shared/nsOutbox";
+import { fetchNsPurchaseOrder, importNsPurchaseOrder, recordPoReceipt, openQtyOf, poRef } from "../Shared/purchaseOrders";
 
 const theme = { paper: '#faf8f4', paper2: '#f2efe8', ink: '#1c1a16', inkSoft: '#524e46', brass: '#b08d57', line: 'rgba(28,26,22,.14)', serif: "'Cormorant Garamond', Georgia, serif", sans: "'Inter', -apple-system, sans-serif", mono: "'IBM Plex Mono', monospace" };
 
@@ -226,6 +227,24 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
     const [platingFees, setPlatingFees] = useState({}); // system/plating_fees.rules — { PRODUCTTYPE: { fee, unit } }
     const [expandedShip, setExpandedShip] = useState({}); // out-at-plater shipments: collapsed by default
     const [expandedSo, setExpandedSo] = useState({});     // SO Pack: force a not-yet-ready card open
+
+    // ── THE VENDOR DOCK — RECEIVING (PO) (Stuart 2026-09-04) ──────────────────────────────────
+    // "we enter po, we have a scan field to enter item id to find item on po, we receive it to
+    //  cart, print labels and then scan it to final home. we also have the feature that if any
+    //  outstanding backorders are waiting on these items, then they get routed directly to the
+    //  finishing floor."
+    //
+    // Deliberately the SAME five steps as the plating receiving station below, because it is the
+    // same job with a different supplier: find the line, say how many came, label them, put them
+    // away, and — before they disappear onto a shelf — offer them to the orders that are waiting.
+    // That last step is not new code: offerAllocation already does it for plated returns.
+    const [rcvPoInput, setRcvPoInput] = useState('');    // the PO number typed or scanned at the dock
+    const [rcvPo, setRcvPo] = useState(null);            // the resolved purchase order (app record)
+    const [rcvBusy, setRcvBusy] = useState(false);
+    const [rcvScan, setRcvScan] = useState('');          // the find box
+    const [rcvFocusIdx, setRcvFocusIdx] = useState(null); // the line the scan found
+    const [rcvQty, setRcvQty] = useState({});            // line index → how many arrived
+    const [rcvBin, setRcvBin] = useState('');            // the home bin being scanned at put-away
     // ── THE RECEIVING STATION (Stuart 2026-09-03, receiving PLT-CE-1782150374239) ──────────────
     // Scan to find, receive to a cart, put the cart away — and the BUILD POSTS AT THE BIN SCAN.
     const [platingScan, setPlatingScan] = useState('');        // the find box (scanner or typing)
@@ -842,6 +861,152 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
         // B's split is on the new name.
     ).sort((a, b) => String(a.needBy || a.reqDate || '￿').localeCompare(String(b.needBy || b.reqDate || '￿'))), [finAll, activeBrand]);
     // Why it is still upstream — so the window explains itself rather than just listing ids.
+    // ══ RECEIVING (PO) — the vendor dock ═══════════════════════════════════════════════════
+    // Find the purchase order, whichever way it was raised. Most POs on this dock were keyed
+    // straight into NetSuite and the app has never seen them, so a miss against our own records is
+    // not an error — it is the normal case, and we go and read NetSuite. Importing it gives the
+    // receipt somewhere to accumulate AND puts the PO on the RTG board, which is the standing rule
+    // that every order lands there whichever door it came through.
+    const rcvLoadPo = async () => {
+        const tran = String(rcvPoInput || '').trim().toUpperCase();
+        if (!tran) return;
+        setRcvBusy(true);
+        try {
+            let found = null;
+            for (const field of ['poId', 'nsPoTran', 'nsPoId']) {
+                const snap = await getDocs(query(collection(db, 'hq_purchase_orders'), where(field, '==', tran)));
+                const hit = snap.docs.map(d => ({ id: d.id, ...d.data() })).find(p => !p.deleted && p.status !== 'Deleted');
+                if (hit) { found = hit; break; }
+            }
+            if (!found) {
+                const nsPo = await fetchNsPurchaseOrder(tran);
+                if (!nsPo) {
+                    alert(`No purchase order "${tran}".\n\nChecked this app's records and NetSuite. Check the number — receiving posts against the real PO, so it has to be the right one.`);
+                    return;
+                }
+                found = await importNsPurchaseOrder({ nsPo, brand: activeBrand, createdBy: operator?.name || '' });
+                writeLog(`Receiving: ${tran} was raised in NetSuite — imported so the receipt has a record and the PO shows in RTG.`, 'wms');
+            }
+            setRcvPo(found); setRcvScan(''); setRcvFocusIdx(null); setRcvQty({}); setRcvBin('');
+        } catch (e) {
+            console.error('Receiving: PO lookup failed', e);
+            alert(`Could not read ${tran}:\n\n${e.message || e}\n\nNothing was changed.`);
+        } finally { setRcvBusy(false); }
+    };
+
+    // Scan to find — exact code first, then a prefix, the same rule the plating station uses.
+    const rcvFindIdx = (code, po) => {
+        const c = String(code || '').trim().toUpperCase();
+        if (!c || !po) return -1;
+        const lines = po.items || [];
+        const exact = lines.findIndex(l => String(l.itemId || '').toUpperCase() === c && openQtyOf(l) > 0);
+        if (exact >= 0) return exact;
+        return lines.findIndex(l => String(l.itemId || '').toUpperCase().startsWith(c) && openQtyOf(l) > 0);
+    };
+
+    // The cart lives ON the purchase order, not in this component: a dock tablet that reloads
+    // mid-receipt must not lose what is already counted onto the trolley.
+    const rcvCart = (rcvPo && Array.isArray(rcvPo.receivingCart)) ? rcvPo.receivingCart : [];
+    const rcvSaveCart = async (cart) => {
+        if (!rcvPo) return;
+        await updateDoc(doc(db, 'hq_purchase_orders', rcvPo.id), { receivingCart: cart });
+        setRcvPo(p => ({ ...p, receivingCart: cart }));
+    };
+    const rcvAddToCart = async (idx) => {
+        const line = (rcvPo.items || [])[idx];
+        if (!line) return;
+        const room = openQtyOf(line);
+        const asked = rcvQty[idx] != null && rcvQty[idx] !== '' ? parseInt(rcvQty[idx], 10) : room;
+        const got = Math.max(0, Math.min(room, parseInt(asked, 10) || 0));
+        if (!got) return alert('How many arrived? A receipt of nothing is not a receipt.');
+        if (asked > room) alert(`${room} still outstanding on that line — receiving ${got}. The rest of the order stays open.`);
+        try {
+            const next = [...rcvCart.filter(c => c.index !== idx), { index: idx, itemId: line.itemId, qty: got }];
+            await rcvSaveCart(next);
+            setRcvQty(q => ({ ...q, [idx]: '' })); setRcvScan(''); setRcvFocusIdx(null);
+            writeLog(`Receiving ${poRef(rcvPo)}: ${got} × ${line.itemId} onto the cart.`, 'wms');
+        } catch (e) { alert('Could not add it to the cart: ' + (e.message || e)); }
+    };
+    const rcvRemoveFromCart = async (idx) => {
+        try { await rcvSaveCart(rcvCart.filter(c => c.index !== idx)); }
+        catch (e) { alert('Could not take it off the cart: ' + (e.message || e)); }
+    };
+
+    // PUT AWAY = the whole close for this cart, in order, each step guarded:
+    //   1 the bin is real          same validator the pack put-away uses: refuse only on complete
+    //                              knowledge, warn otherwise
+    //   2 the app record           received accumulates per LINE (never per code — a PO carries the
+    //                              same code twice on purpose, once for stock and once for an order)
+    //   3 NetSuite                 the item receipt, through the outbox: deterministic id so a
+    //                              double-tap cannot post twice, retried, and a real error in 11.1
+    //   4 the waiting orders       offerAllocation, before the pieces vanish onto a shelf
+    const rcvPutAway = async () => {
+        if (!rcvPo || !rcvCart.length) return;
+        const bin = String(rcvBin || '').trim().toUpperCase();
+        if (!bin) return alert('Scan the home bin — the pieces have to land somewhere.');
+        const chk = await platingBinCheck(bin);
+        if (!chk.ok) return alert(chk.msg || `"${bin}" is not a bin here.`);
+        const pcs = rcvCart.reduce((a, c) => a + (Number(c.qty) || 0), 0);
+        if (!window.confirm(`Put away ${rcvCart.length} line(s) / ${pcs} pcs from ${poRef(rcvPo)} into ${bin}?\n\n${rcvCart.map(c => `   ${c.qty} × ${c.itemId}`).join('\n')}\n\nThe receipt posts to NetSuite from the queue, and any order waiting on these pieces is offered them next.`)) return;
+        setRcvBusy(true);
+        try {
+            // 2 — the app's own record first, so what physically arrived is known even if NetSuite argues.
+            const res = await recordPoReceipt({
+                poId: rcvPo.id, by: operator?.name || '',
+                receipts: rcvCart.map(c => ({ index: c.index, qty: c.qty, bin })),
+            });
+            await rcvSaveCart([]);
+            setRcvPo(p => ({ ...(res.po || p), receivingCart: [] }));
+
+            // 3 — NetSuite. Queued, never immediate: nobody waits on a receipt, and the outbox
+            // gives it the guards every other write has.
+            if (rcvPo.nsPoId) {
+                try {
+                    await enqueueNsWrite({
+                        dedupeKey: `porcv-${String(rcvPo.id)}-${Date.now()}`,
+                        kind: 'itemreceipt',
+                        label: `Receipt — ${poRef(rcvPo)} (${pcs} pcs → ${bin})`,
+                        sourceApp: 'WMS', createdBy: operator?.name || '',
+                        targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder/${rcvPo.nsPoId}/!transform/itemreceipt`,
+                        method: 'POST',
+                        payload: {
+                            memo: nsMemo(`PO ${poRef(rcvPo)} received ${pcs} pcs @ ${bin}`),
+                            item: { items: res.applied.map(a => {
+                                const l = (rcvPo.items || [])[a.index] || {};
+                                return {
+                                    ...(l.nsItemId ? { item: { id: String(l.nsItemId) } } : {}),
+                                    quantity: a.qty,
+                                    inventoryDetail: { quantity: a.qty, inventoryAssignment: { items: [{ binNumber: { refName: bin }, quantity: a.qty }] } },
+                                };
+                            }) },
+                        },
+                    });
+                    writeLog(`Receiving ${poRef(rcvPo)}: item receipt queued — ${pcs} pcs into ${bin}.`, 'wms');
+                } catch (nsErr) {
+                    alert(`⚠ The pieces are recorded as received in the app, but the NETSUITE receipt could not be queued:\n\n${nsErr.message || nsErr}\n\nNothing is lost — raise it from 11.1, or tell Stuart. Do not receive it a second time.`);
+                }
+            } else {
+                writeLog(`Receiving ${poRef(rcvPo)}: recorded in the app only — this PO has no NetSuite id on file, so no receipt was posted.`, 'wms');
+            }
+
+            // 4 — THE ORDERS THAT WERE WAITING. Before anything goes on a shelf: an order placed
+            // with no stock has been sitting parked here waiting for exactly this delivery
+            // (Stuart 2026-09-04). offerAllocation names them, and gathers the pieces into the
+            // order's committed bin for the ones the operator takes.
+            let taken = 0;
+            for (const a of res.applied) {
+                try { taken += await offerAllocation(a.itemId, a.qty, { from: `receiving ${poRef(rcvPo)}` }) || 0; }
+                catch (e) { console.warn('arrival alert failed (the receipt stands):', e); }
+            }
+            alert(`✅ ${pcs} pcs received against ${poRef(rcvPo)} into ${bin}.${taken ? `\n\n${taken} went to orders that were waiting.` : ''}${rcvPo.nsPoId ? '\n\n📤 The NetSuite receipt is queued (11.1 → Sync Queue).' : ''}`);
+            setRcvBin('');
+            pullNetSuiteStock();
+        } catch (e) {
+            console.error('Receiving put-away failed', e);
+            alert('❌ Put-away problem:\n\n' + (e.message || e) + '\n\nCheck the PO before receiving again — the app record is written first, so some lines may already be counted.');
+        } finally { setRcvBusy(false); }
+    };
+
     const pendingReasonOf = (j) => {
         if (j.awaitingRodCut) return 'poles being cut';
         if (!customPartsReady(j)) return j.customFabStatus === 'Sent to Plating'
@@ -5807,6 +5972,98 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 )}
 
                 {/* ⚗ TAB: PLATING (pull raw stock to plating WIP via inventory status change) */}
+                {activeTab === 'RECEIVING' && (() => {
+                    const po = rcvPo;
+                    const lines = (po && po.items) || [];
+                    const owed = lines.map((l, i) => ({ l, i })).filter(x => openQtyOf(x.l) > 0);
+                    const inCart = new Set(rcvCart.map(c => c.index));
+                    const pcs = rcvCart.reduce((a, c) => a + (Number(c.qty) || 0), 0);
+                    const inp = { padding: '9px 10px', border: `1px solid ${theme.line}`, fontFamily: theme.mono, fontSize: '12px', background: '#fff', color: theme.ink };
+                    const btn = (bg, fg) => ({ padding: '9px 14px', background: bg, color: fg, border: 'none', cursor: rcvBusy ? 'wait' : 'pointer', fontFamily: theme.mono, fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' });
+                    const rowBox = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', borderTop: `1px solid ${theme.line}`, padding: '10px 0', flexWrap: 'wrap' };
+                    return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                            <div style={{ background: '#fff', border: `1px solid ${theme.line}`, padding: '20px' }}>
+                                <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '12px' }}>{t('Receiving — the vendor dock')}</div>
+                                <form onSubmit={(e) => { e.preventDefault(); rcvLoadPo(); }} style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <input autoFocus value={rcvPoInput} onChange={(e) => setRcvPoInput(e.target.value)} placeholder={t('Purchase order # — e.g. PO2296')} style={{ ...inp, flex: '1 1 220px', textTransform: 'uppercase' }} />
+                                    <button type="submit" disabled={rcvBusy} style={btn(theme.ink, '#fff')}>{rcvBusy ? t('Looking…') : t('Open PO')}</button>
+                                    {po && <button type="button" onClick={() => { setRcvPo(null); setRcvPoInput(''); setRcvScan(''); setRcvFocusIdx(null); setRcvBin(''); }} style={{ ...btn('transparent', theme.ink), border: `1px solid ${theme.line}` }}>{t('Close')}</button>}
+                                </form>
+                                <div style={{ fontSize: '0.8rem', color: theme.inkSoft, marginTop: '8px' }}>
+                                    {t('Raised here or straight in NetSuite — either works. A PO the app has never seen is read from NetSuite and recorded, so the receipt has a home and the PO shows in RTG.')}
+                                </div>
+                            </div>
+
+                            {po && (
+                                <div style={{ background: '#fff', border: `1px solid #7d9a6f`, padding: '20px' }}>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '12px', color: theme.ink, marginBottom: '4px' }}>
+                                        {poRef(po)} · {po.vendor || t('vendor not named')} {po.importedFromNetSuite ? `· ${t('from NetSuite')}` : ''}
+                                    </div>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '14px' }}>
+                                        {lines.length} {t('line(s)')} · {owed.length} {t('still outstanding')} · {String(po.status || '')}
+                                    </div>
+
+                                    {/* SCAN TO FIND — the label, not a scroll through the whole order. */}
+                                    <form onSubmit={(e) => { e.preventDefault();
+                                        const hit = rcvFindIdx(rcvScan, po);
+                                        if (hit < 0) return alert(`Nothing outstanding on ${poRef(po)} matches "${rcvScan}".\n\nScan the item code exactly as it prints on the label. A line already fully received will not match.`);
+                                        setRcvFocusIdx(hit);
+                                    }} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+                                        <input value={rcvScan} onChange={(e) => setRcvScan(e.target.value)} placeholder={t('Scan or type the item code')} style={{ ...inp, flex: '1 1 240px', textTransform: 'uppercase' }} />
+                                        <button type="submit" style={btn(theme.ink, '#fff')}>{t('Find')}</button>
+                                        {(rcvScan || rcvFocusIdx != null) && <button type="button" onClick={() => { setRcvScan(''); setRcvFocusIdx(null); }} style={{ ...btn('transparent', theme.ink), border: `1px solid ${theme.line}` }}>{t('Clear')}</button>}
+                                    </form>
+
+                                    {/* 1 — OFF THE PALLET, ONTO THE CART. Nothing posts here. */}
+                                    <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '4px' }}>{t('1 · Onto the cart')}</div>
+                                    {owed.length === 0 && <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontSize: '0.9rem', padding: '8px 0' }}>{t('Every line on this PO has been received.')}</div>}
+                                    {owed.filter(x => !inCart.has(x.i)).map(({ l, i }) => {
+                                        const dim = rcvFocusIdx != null && rcvFocusIdx !== i;
+                                        const hit = rcvFocusIdx === i;
+                                        const room = openQtyOf(l);
+                                        const copies = Math.max(1, Math.min(50, parseInt(rcvQty[i] || room, 10) || 1));
+                                        return (
+                                            <div key={i} style={{ ...rowBox, opacity: dim ? 0.28 : 1, background: hit ? '#fdf6e3' : 'transparent' }}>
+                                                <div style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink }}>
+                                                    {l.itemId} · {t('ordered')} {l.quantity} · {t('received')} {Number(l.received) || 0} · <span style={{ color: theme.brass }}>{room} {t('outstanding')}</span>
+                                                    {l.soRef && <span style={{ color: theme.brass }}> · SO {l.soRef}</span>}
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                    <input type="number" min="0" max={room} value={rcvQty[i] != null ? rcvQty[i] : ''} onChange={(e) => setRcvQty(q => ({ ...q, [i]: e.target.value }))} placeholder={String(room)} style={{ ...inp, width: '78px' }} />
+                                                    <button title={`Print ${copies} label(s) for ${l.itemId}`} onClick={() => printStockItemLabels({ itemId: l.itemId, itemName: l.description || '', uom: 'EA', woNum: poRef(po), copies })}
+                                                        style={{ ...btn('transparent', theme.ink), border: `1px solid ${theme.line}` }}>🏷 {t('Labels')}</button>
+                                                    <button disabled={rcvBusy} onClick={() => rcvAddToCart(i)} style={btn('#7d9a6f', '#fff')}>{t('Receive')}</button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+
+                                    {/* 2 — THE CART, AND THE BIN THAT CLOSES IT. */}
+                                    {rcvCart.length > 0 && (
+                                        <div style={{ marginTop: '18px', border: `1px solid ${theme.brass}`, padding: '14px' }}>
+                                            <div style={{ fontFamily: theme.mono, fontSize: '9px', color: theme.brass, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '8px' }}>{t('2 · On the cart')} — {rcvCart.length} {t('line(s)')} / {pcs} {t('pcs')}</div>
+                                            {rcvCart.map(c => (
+                                                <div key={c.index} style={rowBox}>
+                                                    <span style={{ fontFamily: theme.mono, fontSize: '11px' }}>{c.qty} × {c.itemId}</span>
+                                                    <button onClick={() => rcvRemoveFromCart(c.index)} style={{ ...btn('transparent', theme.inkSoft), border: `1px solid ${theme.line}` }}>{t('Take off')}</button>
+                                                </div>
+                                            ))}
+                                            <form onSubmit={(e) => { e.preventDefault(); rcvPutAway(); }} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap' }}>
+                                                <input value={rcvBin} onChange={(e) => setRcvBin(e.target.value)} placeholder={t('Scan the home bin')} style={{ ...inp, flex: '1 1 180px', textTransform: 'uppercase' }} />
+                                                <button type="submit" disabled={rcvBusy} style={btn(theme.ink, '#fff')}>{rcvBusy ? t('Posting…') : t('Put away')}</button>
+                                            </form>
+                                            <div style={{ fontSize: '0.78rem', color: theme.inkSoft, marginTop: '8px' }}>
+                                                {t('Put-away records the receipt, queues the NetSuite item receipt, and then offers these pieces to any order that has been waiting for them.')}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })()}
+
                 {activeTab === 'PLATING' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px', height: '100%' }}>
 

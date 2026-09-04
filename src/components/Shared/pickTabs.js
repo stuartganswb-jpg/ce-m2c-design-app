@@ -8,7 +8,7 @@
 //
 // KEYS ARE PERMISSION IDENTITY. pick_config/permissions stores each role's allowed tabs BY KEY, so
 // renaming one silently revokes that tab for every role. Rename the LABEL below instead.
-export const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'ROD CUTS', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING', 'APP IMP'];
+export const PICK_TABS = ['QUEUE', 'STOCK', 'PACKING', 'COUNT', 'CONVERT', 'RECEIVING', 'ROD CUTS', 'TRANSFER', 'PLATING', 'CHIPS', 'GALLERY', 'MESSAGING', 'APP IMP'];
 
 // Display name for a tab key — used by the WMS nav and by the permission matrix, so an admin
 // ticking a row sees exactly the words the operator sees on the floor.
@@ -22,4 +22,8 @@ export const pickTabLabel = (tab) => String(tab || '')
     .replace('PACKING', 'PACKAGING PREP')
     .replace('GALLERY', 'ASSET GALLERY')
     .replace('COUNT', 'BIN COUNT')
-    .replace('ROD CUTS', 'ROD CUTS & RING PACKS');
+    .replace('ROD CUTS', 'ROD CUTS & RING PACKS')
+    // The vendor dock: a purchase order arrives, its lines are received onto a cart, labelled, and
+    // put away — and any order that was waiting on those pieces is offered them before they vanish
+    // onto the shelf.
+    .replace('RECEIVING', 'RECEIVING (PO)');
