@@ -305,3 +305,15 @@ Contract text: `WORK_ORDER_CONTRACT.md` §5 / §5a.
 `BRIEF_C_HANDOFF.md`: what shipped (commit, run, proof), the state of C1–C8, what waits on B/D,
 anything named and not fixed. Update `SYSTEM_FLOW_AUDIT.md` §7 (shop) and §8 (the anchor row) to
 the new state. **The guide (S2):** the sections in C8, listed.
+
+### Hand-off from B — Shop REOPEN of a plated order leaves its plating demand alive (sweep, 2026-09-04)
+
+`ShopFloor.js` Reopen (complete → In Process, ~:1259) mirrors `'In Process'` back to the
+finishing sibling (correct) but the `plating_demand` that Complete & Label raised
+(`platingDemandCreated` / `platingDemandId` on the shop doc) stays OPEN on the WMS Plating tab —
+a stale demand for parts that are back on the bench. Patch (C's handler, D's collection):
+on Reopen, if `order.platingDemandId` and the demand is still `status:'open'` and not yet on a
+`plating_shipments` line, set it `status:'CANCELLED', cancelReason:'shop reopened <woNum>'` and
+clear `platingDemandCreated` so a second Complete raises a fresh one; if it HAS shipped, refuse
+the reopen ("parts are at the plater — receive them first"). D: `cancelPlatingDemand(id, reason)`
+exported from the plating module so C never writes the collection directly.

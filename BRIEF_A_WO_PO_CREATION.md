@@ -508,3 +508,16 @@ dispatchedAt… }))` with `setDoc(doc(db, 'fin_workorders', fp.id), buildFinDoc(
 finPayload: fp, by }))`. Behaviour identical for what you stamp today; the sales release gains
 urgent/holds/needBy for free and can never write both streams. Then the Library run (writer 7)
 converts to parkWorkOrder + the auto path, as agreed.
+
+### Hand-off from B — "↩ Reset → Setup" must tell the RTG record (sweep, 2026-09-04)
+
+`StockViewTab.resetWoToSetup` puts a finished/shelved order back to the Setup Queue (fin doc →
+Setup, coat 1, completion/pack/NetSuite-build stamps cleared; hq status → Dispatched) but stamps
+nothing on the RTG record's floor state, so `floorPhase` stays 'Complete' / 'Shelved' with its
+`floorCompletedAt`, and RTG's row keeps saying the floor finished it. One call after the reset:
+```js
+await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc },
+    { finWo: { ...fin, currentPhase: 'Setup' }, phase: 'Setup', by: currentUser || 'Stock View',
+      extra: { floorCompletedAt: null, floorCompletedBy: null, floorResetAt: Date.now(), floorResetBy: currentUser || '' } });
+```
+(`extra` on propagateFloorState lands with B's scrap commit today.) Nothing else changes.

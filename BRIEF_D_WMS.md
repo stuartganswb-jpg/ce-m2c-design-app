@@ -427,3 +427,15 @@ with NO RTG tab open → the Setup Queue shows the order within seconds and 11.1
 `BRIEF_D_HANDOFF.md`: what shipped (commit, deploy, run, proof), the state of D1–D8, what waits on
 Eric / C / B / E, anything named and not fixed. Update `SYSTEM_FLOW_AUDIT.md` §8 to the new state.
 **The guide (S2):** the new WMS section, listed.
+
+### Hand-off from B — Shop REOPEN of a plated order leaves its plating demand alive (sweep, 2026-09-04)
+
+`ShopFloor.js` Reopen (complete → In Process, ~:1259) mirrors `'In Process'` back to the
+finishing sibling (correct) but the `plating_demand` that Complete & Label raised
+(`platingDemandCreated` / `platingDemandId` on the shop doc) stays OPEN on the WMS Plating tab —
+a stale demand for parts that are back on the bench. Patch (C's handler, D's collection):
+on Reopen, if `order.platingDemandId` and the demand is still `status:'open'` and not yet on a
+`plating_shipments` line, set it `status:'CANCELLED', cancelReason:'shop reopened <woNum>'` and
+clear `platingDemandCreated` so a second Complete raises a fresh one; if it HAS shipped, refuse
+the reopen ("parts are at the plater — receive them first"). D: `cancelPlatingDemand(id, reason)`
+exported from the plating module so C never writes the collection directly.
