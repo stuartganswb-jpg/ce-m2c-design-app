@@ -15,7 +15,7 @@ import { selectedFinishes, finishLabelOf, finishLabelOfItem } from '../Shared/fi
 import { cutText } from '../Shared/configQty';
 import { db, storage, functions } from '../../firebase';
 import { httpsCallable } from 'firebase/functions';
-import { collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, updateDoc, serverTimestamp, query, where } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, getDocs, updateDoc, serverTimestamp, query, where } from "firebase/firestore";
 import { queueNsTransaction, jobsEstimateWriteBack, jobsSalesOrderWriteBack, boardSalesOrderWriteBack } from '../Shared/nsTransmit';
 import { soHeaderOf, stampLineFinishRouting, readyDateOf, leadText, isRushFeeItem } from '../Shared/salesOrderHeader';
 import * as THREE from 'three';
@@ -29,6 +29,8 @@ import { buildFeeCatalog, buildCheckoutCatalog, buildAddOnLines, addOnsTotal, ch
 import { platePrice } from '../Shared/plateRules';
 import AddOnPicker from '../Shared/AddOnPicker';
 import { customerKeys, clientPriceFor } from '../Shared/clientPricing';
+import { buildLookupIndex } from '../Shared/partLookup.js';
+import PartLookupPanel from '../Shared/PartLookupPanel.js';
 
 const globalTextureCache = {};
 
@@ -625,7 +627,12 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
   
   const [libraryParts, setLibraryParts] = useState([]);
   const [kitLibrary, setKitLibrary] = useState([]);   // Kit-class records carrying a kitAlign
-  const [activeBomPins, setActiveBomPins] = useState([]); 
+  const [activeBomPins, setActiveBomPins] = useState([]);
+  // PART LOOKUP (Stuart 2026-09-03) — pins for EVERY flow's assembly, so "which flow is this
+  // customer's part in?" can be answered before a flow is open. Read once, on first use of the
+  // search box, because it is a read per assembly and most visits never search.
+  const [lookupPins, setLookupPins] = useState(null);   // null = never asked; Map(itemId → pins)
+  const [lookupLoading, setLookupLoading] = useState(false);
 
   const [globalLists, setGlobalLists] = useState({
       inventoryTypes: [], assemblyTypes: [], prodTypes: [], customers: [], bracketMounts: [], feeTypes: []
@@ -1093,6 +1100,69 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           setActiveAssemblyId(activeFlow.linkedAssemblyId);
       }
   }, [activeFlow]);
+
+  // ── PART LOOKUP · THE CROSS-FLOW INDEX ───────────────────────────────────────────────────────
+  // Stuart 2026-09-03: "we could enter in fabricut part# for pole and know which flow to choose".
+  // Answering that BEFORE a flow is open means reading every flow's pins, so it is done once, on
+  // demand, with getDocs rather than a subscription — this is reference data for a search box, not
+  // something the page must track live.
+  //
+  // A flow's linkedAssemblyId may hold the Approved_Designs doc id OR the itemId — the same
+  // tolerance the BOM Engine and the draft resolver already use.
+  const assemblyForFlow = useCallback((flow) => {
+      const key = flow?.linkedAssemblyId;
+      if (!key) return null;
+      return liveAssemblies.find(a => a.id === key || a.itemId === key) || null;
+  }, [liveAssemblies]);
+
+  const loadLookupPins = useCallback(async () => {
+      if (lookupPins || lookupLoading) return;              // asked once; null means never asked
+      setLookupLoading(true);
+      try {
+          const wanted = new Map();                          // itemId → assembly (deduped: flows share assemblies)
+          cpqFlows.forEach(f => {
+              const asm = assemblyForFlow(f);
+              if (asm?.itemId) wanted.set(asm.itemId, asm);
+          });
+          const pairs = await Promise.all([...wanted.keys()].map(async (itemId) => {
+              try {
+                  const snap = await getDocs(query(collection(db, "assembly_pins"), where("assemblyId", "==", itemId)));
+                  return [itemId, snap.docs.map(d => ({ id: d.id, ...d.data() }))];
+              } catch {
+                  return [itemId, []];                       // one unreadable assembly must not blank the box
+              }
+          }));
+          setLookupPins(new Map(pairs));
+      } finally {
+          setLookupLoading(false);
+      }
+  }, [cpqFlows, assemblyForFlow, lookupPins, lookupLoading]);
+
+  // Resolved the same tolerant way the pricing chain resolves parts, so the panel names a part
+  // exactly as the option cards do.
+  const lookupFindPart = useCallback((key) => {
+      if (!key) return null;
+      const all = [...libraryParts, ...liveAssemblies];
+      return all.find(p => p.id === key || p.itemId === key || p.legacyErpId === key) || null;
+  }, [libraryParts, liveAssemblies]);
+
+  const lookupAliasCtx = useMemo(() => ({
+      customerId: jobData.customerId || activeFlow?.customerId || '',
+      customer: combinedCustomers.find(c => c.id === (jobData.customerId || activeFlow?.customerId)) || null,
+      outsourceCodes: outsourceFinishes,
+      findByCode: lookupFindPart,
+  }), [jobData.customerId, activeFlow, combinedCustomers, outsourceFinishes, lookupFindPart]);
+
+  const flowLookupIndex = useMemo(() => {
+      if (!lookupPins) return [];
+      return buildLookupIndex({
+          flows: cpqFlows,
+          assemblyFor: assemblyForFlow,
+          pinsFor: (asm) => lookupPins.get(asm?.itemId) || [],
+          findPart: lookupFindPart,
+          aliasCtx: lookupAliasCtx,
+      });
+  }, [lookupPins, cpqFlows, assemblyForFlow, lookupFindPart, lookupAliasCtx]);
 
   useEffect(() => {
       if (activeAssemblyId) {
@@ -4300,7 +4370,25 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                  <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Step 1: Select Flow</div>
                  <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    
+
+                    {/* ── WHICH FLOW IS THIS PART IN? (Stuart 2026-09-03) ──────────────────────
+                        "maybe the engine has the option at the very start when selecting which flow
+                        there is an entry box there where we enter in part# (ours or customers) for
+                        the pole" — so a Fabricut order naming H2578F can be started without anyone
+                        having to remember that it is our H1-75R and therefore the 3/4" flow.
+
+                        READ-ONLY: it names the flow, it does not launch one. Choosing is still a
+                        deliberate act on the picker below. */}
+                    {cpqFlows.length > 0 && (
+                        <PartLookupPanel
+                            index={flowLookupIndex}
+                            loading={lookupLoading}
+                            onFirstUse={loadLookupPins}
+                            customerName={lookupAliasCtx.customer?.name || lookupAliasCtx.customer?.companyName || ''}
+                            placeholder="Part # — theirs or ours (e.g. H2578F, H1-75R) to find its flow"
+                        />
+                    )}
+
                     {cpqFlows.length > 0 && (() => {
                         // Flows stamped sizeGroupLabel/sizeGroupChoice (single-assembly generator)
                         // collapse into ONE entry — picking it shows Rod Diameter cards first; each
