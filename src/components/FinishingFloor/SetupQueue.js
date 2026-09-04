@@ -14,7 +14,7 @@ import { runBatchPrecheck, executeMakeupActions } from '../Shared/finishedRunPre
 import PullLinesLive from '../Shared/PullLinesLive';
 import { woRefOf } from '../Shared/woRef';
 import { BRAND_NETSUITE_MAP } from '../Shared/brandNetsuite';
-import { closeOrderEverywhere, propagateFloorState } from '../Shared/orderLifecycle';
+import { closeOrderEverywhere, propagateFloorState, linkedDocsOf } from '../Shared/orderLifecycle';
 import { holdOrder, releaseHold, HOLD_STAGES } from '../Shared/orderHold';
 import HeldOrdersBanner from '../Shared/HeldOrdersBanner';
 import OrderStatusChips from '../Shared/OrderStatusChips';
@@ -176,8 +176,21 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
       } catch (e) { console.warn('RTG propagate failed (floor state stands):', e); }
   };
 
+  // THE POLES DO NOT EXIST YET (Stuart 2026-09-04, after WO11582 ran with its rod cut still open).
+  // The rod-cut gate lives on the RTG record, not on this floor doc — so the floor could start an
+  // order whose 8 ft rods were never cut, and the operator covered it by hand. Read the record
+  // once and refuse, naming the cut; the WMS Rod Cuts tab clears it and the order releases itself.
+  const rodCutStillOpen = async (wo) => {
+      try {
+          const links = await linkedDocsOf({ db, doc, getDoc, getDocs, query, collection, where }, wo, wo.orderType === 'sales' ? 'sales' : 'stock');
+          const hq = links && links.hq && links.hq.data;
+          return hq && hq.awaitingRodCut ? (hq.rodCutNote || hq.rodCutId || 'its rod cut') : '';
+      } catch (e) { return ''; }   // the record could not be read — do not invent a gate
+  };
   const startSetup = async (wo) => {
     try {
+        const cut = await rodCutStillOpen(wo);
+        if (cut) return alert(`✂ ${woRefOf(wo)} cannot start — its rod cut is still OPEN on the WMS (${cut}).\n\nThe poles do not exist yet. Complete the cut at WMS → ROD CUTS → Cuts for Finishing; that clears the gate and prints this order's label.`);
         // Start Setup RELEASES THE PARTS PICK (Stuart 2026-07-18): warehouse pulls the small
         // parts on the WMS pick app while setup runs — not just a button-status change.
         const { patch, note } = releasePickPatch(wo);
@@ -195,6 +208,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
   const stageToFloor = async (wo) => {
     const pieces = Number(wo.totalParts) || 0;
     try {
+        const cut = await rodCutStillOpen(wo);
+        if (cut) return alert(`✂ ${woRefOf(wo)} cannot be staged — its rod cut is still OPEN on the WMS (${cut}).\n\nComplete the cut at WMS → ROD CUTS → Cuts for Finishing first.`);
         // Safety net: an order that went Running before the Start-Setup release fix (or was
         // never released) still gets its parts pick sent to WMS at the latest possible gate.
         const { patch, note } = releasePickPatch(wo);

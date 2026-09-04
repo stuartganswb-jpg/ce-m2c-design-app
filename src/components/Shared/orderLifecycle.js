@@ -114,6 +114,32 @@ export async function closeOrderEverywhere(ctx, { order, kind, by, from, reason,
         done.hq++;
     }
 
+    // AN OPEN ROD CUT DIES WITH ITS ORDER (Stuart 2026-09-04: WO11582 was completed and closed
+    // while its cut — 10 × HTA835 → HTA635 — stayed OPEN on the WMS Rod Cuts tab; the operator had
+    // covered the poles another way and adjusted stock by hand). A cut nothing is waiting for is
+    // pieces nobody asked for: it is CANCELLED here, with the reason on it, so the saw never sees
+    // it and the orphan audit has nothing to find. Never DONE — no inventory moved.
+    done.rodCuts = 0;
+    try {
+        const { getDocs, query, collection, where } = ctx;
+        if (getDocs && query && collection && where) {
+            const keys = identityKeysOf(order).concat(links.hq ? [String(links.hq.id)] : []);
+            const uniq = [...new Set(keys)].filter(Boolean);
+            for (let i = 0; i < uniq.length; i += 10) {
+                const snap = await getDocs(query(collection(db, 'rod_cut_orders'), where('finWoId', 'in', uniq.slice(i, i + 10))));
+                for (const d of snap.docs) {
+                    const st = String((d.data() || {}).status || 'OPEN').toUpperCase();
+                    if (['DONE', 'CANCELLED'].includes(st)) continue;
+                    await updateDoc(doc(db, 'rod_cut_orders', d.id), {
+                        status: 'CANCELLED', cancelledAt: Date.now(), cancelledBy: by || '',
+                        cancelReason: `order ${order.id} closed${from ? ` from ${from}` : ''}${reason ? ` — ${reason}` : ''} — the cut was still open; no inventory moved`,
+                    });
+                    done.rodCuts++;
+                }
+            }
+        }
+    } catch (e) { console.warn('rod cut cancel on close failed (order is closed regardless):', e); }
+
     // NetSuite: one close per order, and only when a work order is actually open there.
     const nsSrc = [...links.fin.entries()].find(([, d]) => d.nsWoId && !d.nsWoClosed && !d.nsWoCompletionPosted);
     const ns = nsSrc
