@@ -7,6 +7,7 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, car
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
+import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared } from '../Shared/floorRelease';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
@@ -1345,77 +1346,10 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
     //
     // Extracted here so BOTH release paths queue it from the same code. Sales orders are excluded by
     // the caller — their NetSuite side is an estimate, not a stock-build work order.
-    const queueNsStockWorkOrder = async (hqOrder, fp) => {
-        // A SALES-typed payload (Order Entry to-be-finished lines) never queues an app-created
-        // NetSuite work order: the SALES ORDER is its NetSuite record, exactly like CPQ customs —
-        // and the finished-variant code (RAW/FIN) may not even exist as a NetSuite item.
-        if (fp && fp.orderType === 'sales') return '';
-        try {
-            const nsConfig = BRAND_NETSUITE_MAP[activeBrand] || {};
-            // Resolve the assembly's NetSuite internal id from FOUR sources — the payload field →
-            // the item # (payload or the WO doc's own partErpId) → the WO id — so one dropped field
-            // can never silently skip the NetSuite work order.
-            let nsAsmId = String(fp.stockInternalId || '');
-            let idSrc = 'payload';
-            const erp = fp.stockErpId || hqOrder.partErpId || hqOrder.rootItem || hqOrder.variantErpId || '';
-            if (!nsAsmId && erp) {
-                try {
-                    const libSnap = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', erp)));
-                    const hit = libSnap.docs.map(d => d.data()).find(p => p.netSuiteInternalId);
-                    if (hit) { nsAsmId = String(hit.netSuiteInternalId); idSrc = 'library'; }
-                } catch (lookErr) { /* fall through to the WO-id parse */ }
-            }
-            if (!nsAsmId) {
-                const m = String(hqOrder.id || '').match(/^WO-STK-(\d+)-/);
-                if (m) { nsAsmId = m[1]; idSrc = 'wo-id'; }
-            }
-            // STOP MECHANISM: one NetSuite work order per app WO, ever — a re-release (or double
-            // tap) must not queue a second one.
-            if (nsAsmId && nsConfig.location && (hqOrder.nsWoQueued || hqOrder.nsWoId || fp.nsWoId)) {
-                addLog(`ℹ NetSuite WO already queued/created for ${fp.woNum || fp.id} — not queued again.`, 'warn');
-                return '\n\nℹ The NetSuite work order was already queued/created earlier — NOT duplicated.';
-            }
-            if (nsAsmId && nsConfig.location) {
-                await enqueueNsWrite({
-                    kind: 'workorder',
-                    // The outbox duplicate guard (2026-08-31) — belt under the nsWoQueued STOP.
-                    dedupeKey: `wo:hq_work_orders:${hqOrder.id}`,
-                    label: `NS WO — build ${erp || fp.id} ×${fp.totalParts}`,
-                    sourceApp: 'RTG', createdBy: currentUser || '',
-                    targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/workorder',
-                    method: 'POST',
-                    payload: {
-                        // NetSuite's workorder record names the assembly field `assemblyItem`
-                        // (plain `item` is rejected with FIELD_PARAM_REQD — learned 2026-07-17).
-                        assemblyItem: { id: nsAsmId },
-                        quantity: Number(fp.totalParts) || 1,
-                        location: { id: nsConfig.location },
-                        subsidiary: { id: nsConfig.subsidiary },
-                        ...(fp.reqDate ? { endDate: fp.reqDate } : {}),
-                        memo: `Stock build ${fp.woNum || fp.id}`
-                    },
-                    // Ids stamp back onto BOTH docs: the floor card shows the WO#, and the
-                    // completion trigger needs nsWoId on the fin doc.
-                    writeBack: [
-                        { collection: 'fin_workorders', docId: fp.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' },
-                        { collection: 'hq_work_orders', docId: hqOrder.id, patch: {}, idField: 'nsWoId', tranField: 'nsWoTran' }
-                    ]
-                });
-                await updateDoc(doc(db, "hq_work_orders", hqOrder.id), { nsWoQueued: true });
-                addLog(`📤 NetSuite work order queued: ${erp || fp.id} ×${fp.totalParts}${idSrc !== 'payload' ? ` (internal id recovered via ${idSrc})` : ''}.`, 'success');
-                return '\n\n📤 A real NetSuite work order is queued (11.1 → NetSuite Sync Queue) — On-Ord picks it up on the next live pull, and completion posts automatically when the bake finishes.';
-            }
-            const why = !nsAsmId
-                ? `no NetSuite internal id found for ${erp || 'this order'} — check the item is synced (11.1 → Sync Master Library)`
-                : 'no NetSuite location mapping for this brand';
-            addLog(`⚠ No NetSuite WO queued for ${fp.woNum || fp.id} — ${why}.`, 'warn');
-            return `\n\n⚠ No NetSuite work order queued — ${why}.`;
-        } catch (nsErr) {
-            console.error('Route A queue failed:', nsErr);
-            addLog(`⚠ NetSuite WO queue failed for ${fp.woNum || fp.id}: ${nsErr.message || nsErr} — the floor job still went out.`, 'warn');
-            return `\n\n⚠ The NetSuite work order could not be queued (${nsErr.message || nsErr}). The floor job WAS released.`;
-        }
-    };
+    // MOVED to Shared/floorRelease.js (Stuart 2026-09-04: a release must never depend on the RTG
+    // tab being open) — the WMS rod-cut / convert completions and A's clearConvertGate call the same
+    // function. This wrapper keeps RTG's three callers and their addLog wiring unchanged.
+    const queueNsStockWorkOrder = (hqOrder, fp) => queueNsStockWorkOrderShared({ hqOrder, fp, brand: activeBrand, by: currentUser || '', log: addLog });
 
     const pushToFinishing = async (hqOrder, orderType, opts = {}) => {
         // ⚡ AUTO mode (Stuart 2026-08-26): no dialogs — gated or already-dispatched orders are
@@ -1444,21 +1378,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         if (hqOrder.finPayload && hqOrder.finPayload.id) {
             try {
                 const fp = hqOrder.finPayload;
-                // The urgent flag rides the release. It may have been set at Stock View's Generate
-                // press (already in the payload) or raised here while the order waited — the board's
-                // value wins, since it is the later statement of intent.
-                await setDoc(doc(db, "fin_workorders", fp.id), withItemCode({
-                    ...fp,
-                    ...(isUrgent(hqOrder) ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || fp.needBy || fp.reqDate || '', urgentBy: hqOrder.urgentBy || currentUser || '', urgentAt: hqOrder.urgentAt || Date.now() } : {}),
-                    dispatchedAt: Date.now(), dispatchedBy: currentUser || ''
-                }));
-                await updateDoc(doc(db, "hq_work_orders", hqOrder.id), { pushedToFinishing: true, status: "Dispatched" });
-                // ROUTE A (2026-07-16): these stocked items are real NetSuite assemblies with BOMs,
-                // so releasing to the floor ALSO queues a real NetSuite work order (outbox — serial,
-                // retried, idempotent). On-Ord sees it on the next live pull; component demand is
-                // real; the floor's bake-complete auto-queues the WO COMPLETION (server trigger).
-                const nsQueuedNote = await queueNsStockWorkOrder(hqOrder, fp);
-                alert(`Successfully pushed ${fp.id} to Finishing Floor Setup Queue!${nsQueuedNote}`);
+                // ONE shared release (Shared/floorRelease.releaseStockWoToFloor): the verbatim
+                // payload, the board's later urgent statement winning, the dispatched stamps, then
+                // Route A. The WMS completions call the same function — no tab required.
+                // A supervisor's deliberate re-release (the scary confirm above) still copies the
+                // card: pass the record as not-yet-dispatched for that one call.
+                const res = await releaseStockWoToFloor({ hqOrder: { ...hqOrder, pushedToFinishing: false }, brand: activeBrand, by: currentUser || '', log: addLog });
+                if (!res.released) { alert(`Not released — ${res.why}.`); return; }
+                if (!opts.auto) alert(`Successfully pushed ${fp.id} to Finishing Floor Setup Queue!${res.nsNote}`);
                 loadRTGOrders();
             } catch (error) {
                 console.error("Dispatch Error:", error);
