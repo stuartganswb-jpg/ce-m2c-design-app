@@ -4158,6 +4158,23 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                         }
                         catch (e) { alert('Update failed: ' + e.message); }
                     };
+                    // ── SO PACK SHOWS BOTH DOORS (Stuart 2026-09-03: "so pack shows both, but
+                    // packaging prep does the heavy lifting") ──────────────────────────────────────
+                    // A CPQ order is a different animal and the card says so honestly rather than
+                    // faking the four numbers. Its sales-order doc carries NO lines[] at all — the
+                    // parts live on the fin_workorders RTG split out of it — so there is nothing to
+                    // ask NetSuite about per line. What the warehouse actually needs from a custom
+                    // order is WHERE ITS PIECES ARE: which floor documents exist, what each is doing,
+                    // and whether anything is already gathered in the order's committed bin. That is
+                    // the view; the packing itself stays on Packaging Prep, which is the heavy
+                    // lifting Stuart means.
+                    const cpqOrders = Object.values(soIndex)
+                        .filter((so, i, arr) => arr.findIndex(x => x.id === so.id) === i)   // soIndex is keyed twice
+                        .filter(so => so && (so.brand || 'ce') === activeBrand && so.orderClass !== 'QUICKSHIP'
+                            && !so.deleted && !['Shipped', 'Closed', 'Deleted'].includes(String(so.status || '')))
+                        .map(so => ({ so, docs: finAll.filter(f => f.salesOrderId && (f.salesOrderId === so.id || String(f.salesOrderId) === String(so.soId || ''))) }))
+                        .filter(x => x.docs.length)
+                        .sort((a, b) => String(a.so.needBy || a.so.needByDate || '￿').localeCompare(String(b.so.needBy || b.so.needByDate || '￿')));
                     const open = quickShipOrders.filter(o => (o.status || 'Pending') !== 'Shipped');
                     const shipped = quickShipOrders.filter(o => o.status === 'Shipped');
                     // Load the four numbers for the OPEN orders only, once each (soStatsRef), and
@@ -4260,6 +4277,42 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                             <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, letterSpacing: '.05em', marginBottom: '24px' }}>Pre-finished stocked goods — pick off the shelf. Separate from custom orders.</div>
                             {open.length === 0 && <div style={{ color: theme.inkSoft, fontStyle: 'italic', fontFamily: theme.serif }}>No open stock orders.</div>}
                             {open.map(o => <Card key={o.id} o={o} />)}
+                            {cpqOrders.length > 0 && (
+                                <div style={{ marginTop: '26px' }}>
+                                    <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', marginBottom: '10px' }}>
+                                        {t('Configured orders in production')} · {cpqOrders.length} — {t('packed on Packaging Prep; this is where their pieces are')}
+                                    </div>
+                                    {cpqOrders.map(({ so, docs }) => {
+                                        const allDone = docs.every(d => d.packStatus === 'Packed' || d.currentPhase === 'Complete');
+                                        return (
+                                            <div key={so.id} style={{ border: `1px solid ${allDone ? '#3a7d44' : theme.line}`, boxShadow: allDone ? '0 0 0 2px rgba(58,125,68,0.18)' : 'none', marginBottom: '14px', background: '#fff' }}>
+                                                <div style={{ padding: '12px 18px', borderBottom: `1px solid ${theme.line}`, background: theme.paper, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                                    <div>
+                                                        <span style={{ fontFamily: theme.serif, fontSize: '1.1rem', color: theme.ink, fontWeight: 500 }}>{so.customer || so.customerName || 'Customer'}</span>
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginLeft: '12px' }}>SO {so.soId || so.id} · {docs.length} {docs.length === 1 ? t('work order') : t('work orders')}</span>
+                                                        {(so.needBy || so.needByDate) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#d9534f', marginLeft: '12px' }}>{t('NEED BY')} {so.needBy || so.needByDate}</span>}
+                                                        {so.sidemark && <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, marginTop: '3px', textTransform: 'uppercase', letterSpacing: '.05em' }}>REF: {so.sidemark}</div>}
+                                                    </div>
+                                                    <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                        {committedBinOf(so) && <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, color: '#2e7d32' }}>📦 {t('BIN')} {committedBinOf(so)} · {totalGathered(so)}</span>}
+                                                        <span style={{ fontFamily: theme.mono, fontSize: '10px', fontWeight: 700, letterSpacing: '.1em', color: allDone ? '#2e7d32' : theme.brass }}>{allDone ? `✓ ${t('ALL PARTS DONE')}` : t('in production')}</span>
+                                                    </span>
+                                                </div>
+                                                <div style={{ padding: '6px 18px 12px' }}>
+                                                    {docs.map(d => (
+                                                        <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', padding: '8px 0', borderBottom: `1px solid ${theme.paper2}` }}>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.ink, minWidth: '150px' }}>{woRefOf(d)}</span>
+                                                            <span style={{ fontFamily: theme.mono, fontSize: '11px', color: theme.inkSoft, flex: 1, minWidth: '160px' }}>{woItemCodeOf(d) || '—'}{woItemNameOf(d) ? ` · ${woItemNameOf(d)}` : ''}</span>
+                                                            <OrderStatusChips wo={d} showWho={false} />
+                                                            {d.packStatus === 'Packed' && <span style={{ fontFamily: theme.mono, fontSize: '9px', color: '#3a7d44', letterSpacing: '.06em' }}>📦 {t('PACKED')}</span>}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
                             {shipped.length > 0 && (
                                 <>
                                     <div style={{ fontFamily: theme.mono, fontSize: '10px', color: theme.inkSoft, textTransform: 'uppercase', letterSpacing: '.1em', margin: '30px 0 14px' }}>Shipped ({shipped.length})</div>
