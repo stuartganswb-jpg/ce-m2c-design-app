@@ -2697,15 +2697,30 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
         if (!nsPoId) return alert("This shipment has no NetSuite PO id on file — can't create the item receipt. (Was the PO created in Phase 3?)");
         try {
             setIsSyncing(true);
-            const payload = {
+            // ── THE RECEIPT RIDES THE OUTBOX (Brief D · D5; Stuart 2026-09-03: "receive and
+            // build-back move to the queue while the pull stays immediate") ────────────────────
+            // The pull stays synchronous because Sandra is standing at the bin and needs
+            // NetSuite's answer before she stages the part. A RECEIPT is not like that — nobody
+            // waits on it — and putting it on the one write path buys the guards every other write
+            // already has: a DETERMINISTIC id, so a double-tap cannot post two receipts against
+            // one plater PO; marker recovery, so a retry after a crash finds the posted copy
+            // instead of duplicating it; retries with backoff; and a row in 11.1 with the real
+            // error rather than an alert nobody kept.
+            // enqueueNsWrite mints its own entry id, so the guard here is the DEDUPE KEY: a second
+            // Receive is refused while one is still PENDING/POSTING. Once it has posted the lines
+            // are 'received' and leave this list, so the button is gone.
+            const obId = `platercv-${String(shipmentId).replace(/[^A-Za-z0-9_-]/g, '_')}`;
+            await enqueueNsWrite({
+                dedupeKey: obId,
+                kind: 'itemreceipt',
+                label: `Plating receipt — ${shipmentId} (PO ${nsPoId})`,
+                sourceApp: 'WMS', createdBy: operator?.name || '',
                 targetUrl: `https://3728153.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseorder/${nsPoId}/!transform/itemreceipt`,
                 method: 'POST',
-                payload: { memo: nsMemo(`Plating return received ${shipmentId}`) }
-            };
-            const response = await nsProxyFetch(payload);
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(typeof result === 'object' ? JSON.stringify(result) : String(result));
-            const receiptId = result.id ? String(result.id) : null;
+                payload: { memo: nsMemo(`Plating return received ${shipmentId}`) },
+                writeBack: (lineIds || []).map(id => ({ collection: 'plating_shipments', docId: id, patch: { itemReceiptPosted: true }, idField: 'itemReceiptId' })),
+            });
+            const receiptId = null;   // it lands via writeBack when the worker posts it (~1 min)
 
             await Promise.all((lineIds || []).map(id => updateDoc(doc(db, "plating_shipments", id), {
                 status: 'received', itemReceiptId: receiptId, receivedAt: serverTimestamp(), receivedAtMs: Date.now()
@@ -2725,11 +2740,11 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 } catch (e) { console.warn('RTG propagate failed (the receipt stands):', e); }
             }
 
-            alert(`✅ Plating shipment ${shipmentId} received in NetSuite${receiptId ? ` (item receipt #${receiptId})` : ''}. Lines are ready for build-back.`);
-            writeLog(`Plating receive: shipment ${shipmentId} → item receipt ${receiptId || 'n/a'} (PO ${nsPoId}).`, 'wms');
+            alert(`✅ Plating shipment ${shipmentId} received — lines are ready for build-back now.\n\n📤 The NetSuite item receipt is QUEUED (PO ${nsPoId}) and posts within about a minute; watch it in HQ 11.1 → NetSuite Sync Queue. A second Receive while it is in flight is refused.`);
+            writeLog(`Plating receive: shipment ${shipmentId} queued as item receipt against PO ${nsPoId}.`, 'wms');
         } catch (e) {
             console.error("Plating receive (item receipt) failed:", e);
-            alert("❌ NetSuite rejected the item receipt:\n\n" + (e.message || e) + "\n\nFirst item receipt we've posted (PO→receipt transform) — if it names a path/field, paste it and I'll correct it (may need createdFrom instead of the transform URL).");
+            alert("❌ Could not QUEUE the item receipt:\n\n" + (e.message || e) + "\n\nNothing was posted. If it says 'already queued', the receipt is already on its way — check 11.1 rather than retrying.");
         } finally {
             setIsSyncing(false);
         }
@@ -2949,6 +2964,8 @@ ${fin ? `<div class="line"><b>Finish:</b> ${esc(fin)}</div>` : ''}
                 const sr = await nsProxyFetch(sp);
                 const sb = await sr.json().catch(() => ({}));
                 if (!sr.ok) throw new Error('Short-piece scrap failed: ' + (typeof sb === 'object' ? JSON.stringify(sb) : String(sb)));
+                // Stays synchronous ON PURPOSE: it runs between the reversal and the build, and the
+                // build must not go out if the scrap failed — the quantities would not agree.
                 await updateDoc(doc(db, 'plating_shipments', line.id), { scrapPosted: true, scrapPostedAt: Date.now() }).catch(() => {});
                 writeLog(`Plating short: ${scrap} × ${line.erpId} scrapped out of WIP-Plating @ ${line.platingBin} (${line.shipmentId || line.id}).`, 'wms');
             }
