@@ -81,12 +81,17 @@ const doneShop = orderStatusOf({ hasCustomSibling: true, customFabStatus: 'Compl
 eq('Complete still reads FINISHED (unchanged)', doneShop.streams.find(s => s.key === 'CUSTOM').stage, 'FINISHED');
 
 // ── a stocked (Order Entry / Quick Ship) sales order's stage, from the SO doc the WMS stamps ──
+// The QUICKSHIP vocabulary is status === pickStatus in {'Pending','Picked','Shipped'} (D's
+// setQSStatus writes both together) — never the finishing job's pickStatus values.
 eq('QS: NS_QUEUED = awaiting NetSuite', quickShipStatusOf({ status: 'NS_QUEUED' }).stage, 'AWAITING_NS');
-eq('QS: accepted, nothing picked = in the pick queue', quickShipStatusOf({ status: 'Pending', pickStatus: 'Pending' }).stage, 'PICKING');
-eq('QS: picking claimed names the picker', quickShipStatusOf({ status: 'Pending', pickInProgress: { by: 'Andrea', startedAt: 1 } }).by, 'Andrea');
-eq('QS: picked = awaiting pack', quickShipStatusOf({ status: 'Pending', pickStatus: 'Picked_Awaiting_Staging' }).stage, 'PICKED');
-eq('QS: packed, no fulfilment yet', quickShipStatusOf({ status: 'Pending', packStatus: 'Packed' }).stage, 'PACKED');
-eq('QS: packed with fulfilment = shipped', quickShipStatusOf({ status: 'Pending', packStatus: 'Packed', nsIfTran: 'IF123' }).stage, 'SHIPPED');
+eq('QS: Pending = in the pick queue', quickShipStatusOf({ status: 'Pending', pickStatus: 'Pending' }).stage, 'PICKING');
+eq('QS: a pick CLAIM names who has it open', quickShipStatusOf({ status: 'Pending', pickInProgress: { by: 'Andrea', startedAt: 1 } }).by, 'Andrea');
+eq('QS: a pick claim is "open on a tablet", not progress', quickShipStatusOf({ status: 'Pending', pickInProgress: { by: 'Andrea', startedAt: 1 } }).detail, 'open on a pick tablet');
+eq('QS: Picked (both fields) = awaiting pack', quickShipStatusOf({ status: 'Picked', pickStatus: 'Picked' }).stage, 'PICKED');
+eq('QS: the finishing vocabulary is NOT read as picked', quickShipStatusOf({ status: 'Pending', pickStatus: 'Picked_Awaiting_Staging' }).stage, 'PICKING');
+eq('QS: packed, no fulfilment yet', quickShipStatusOf({ status: 'Picked', packStatus: 'Packed' }).stage, 'PACKED');
+eq('QS: Shipped', quickShipStatusOf({ status: 'Shipped', pickStatus: 'Shipped', nsIfTran: 'IF123' }).stage, 'SHIPPED');
+eq('QS: fulfilment present but not marked shipped = packed, fulfilment posted', quickShipStatusOf({ status: 'Picked', packStatus: 'Packed', nsIfTran: 'IF123' }).detail, 'fulfilment IF123 posted');
 eq('QS: closed', quickShipStatusOf({ status: 'Closed' }).stage, 'CLOSED');
 eq('QS: null in, null out', quickShipStatusOf(null), null);
 ok('AWAITING_NS ranks below everything started', STAGES.AWAITING_NS.rank < STAGES.RELEASED.rank);

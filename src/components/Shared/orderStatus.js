@@ -202,16 +202,22 @@ export function orderStatusOf(wo, { recipeLen = 0, poleRecipeLen } = {}) {
 export const quickShipStatusOf = (so) => {
     if (!so) return null;
     const S = { key: 'ORDER', label: 'Stocked order' };
-    if (so.currentPhase === 'Closed' || so.status === 'Closed' || so.closed === true || so.status === 'CANCELLED') return { ...S, stage: 'CLOSED', detail: 'closed', since: so.closedAt || null, by: so.closedBy || '' };
-    if (so.status === 'NS_QUEUED') return { ...S, stage: 'AWAITING_NS', detail: so.nsQueuedAt ? '' : 'queued', since: so.nsQueuedAt || so.createdAt || null };
-    if (so.packStatus === 'Packed') {
-        if (so.nsIfTran) return { ...S, stage: 'SHIPPED', detail: `fulfilment ${so.nsIfTran}`, since: so.packedAt || null, by: so.packedBy || '' };
-        return { ...S, stage: 'PACKED', detail: so.nsFulfillQueued ? 'fulfilment queued' : 'awaiting shipment', since: so.packedAt || null, by: so.packedBy || '' };
-    }
-    if (so.packInProgress && so.packInProgress.by) return { ...S, stage: 'PACKED', detail: 'packing now', since: so.packInProgress.startedAt || null, by: so.packInProgress.by };
-    if (so.pickStatus === 'Staged_Ready_For_Finishing') return { ...S, stage: 'STAGED', detail: 'picked & staged', since: so.stagedAt || null };
-    if (so.pickStatus === 'Picked_Awaiting_Staging') return { ...S, stage: 'PICKED', detail: 'awaiting pack', since: so.pickedAt || null };
-    if (so.pickInProgress && so.pickInProgress.by) return { ...S, stage: 'PICKING', detail: 'picking now', since: so.pickInProgress.startedAt || null, by: so.pickInProgress.by };
+    // THE QUICKSHIP VOCABULARY (D, verified 2026-09-03): the WMS's setQSStatus writes `status` and
+    // `pickStatus` TOGETHER with the same value — 'Pending' | 'Picked' | 'Shipped' — so they are one
+    // field here. This is NOT the finishing job's pickStatus ('Picked_Awaiting_Staging' /
+    // 'Staged_Ready_For_Finishing'); a stocked order never carries those.
+    const st = String(so.status || so.pickStatus || '');
+    if (so.currentPhase === 'Closed' || st === 'Closed' || so.closed === true || st === 'CANCELLED') return { ...S, stage: 'CLOSED', detail: 'closed', since: so.closedAt || null, by: so.closedBy || '' };
+    if (st === 'NS_QUEUED') return { ...S, stage: 'AWAITING_NS', detail: '', since: so.nsQueuedAt || so.createdAt || null };
+    if (st === 'Shipped') return { ...S, stage: 'SHIPPED', detail: so.nsIfTran ? `fulfilment ${so.nsIfTran}` : 'marked shipped', since: so.shippedAt || so.packedAt || null, by: so.shippedBy || so.packedBy || '' };
+    if (so.packStatus === 'Packed') return { ...S, stage: 'PACKED', detail: so.nsIfTran ? `fulfilment ${so.nsIfTran} posted` : 'awaiting shipment', since: so.packedAt || null, by: so.packedBy || '' };
+    // pick/packInProgress are CLAIMS ("this person has it open on a tablet"), not progress — cleared
+    // on complete/abort, kept on logout, so an old one means a tablet died, not a slow picker.
+    const claim = (c) => (c && c.by) ? { by: c.by, since: c.startedAt || null } : null;
+    const packing = claim(so.packInProgress), picking = claim(so.pickInProgress);
+    if (packing) return { ...S, stage: 'PICKED', detail: 'open on a packing tablet', since: packing.since, by: packing.by };
+    if (st === 'Picked') return { ...S, stage: 'PICKED', detail: 'awaiting pack', since: so.pickedAt || null, by: so.pickedBy || '' };
+    if (picking) return { ...S, stage: 'PICKING', detail: 'open on a pick tablet', since: picking.since, by: picking.by };
     return { ...S, stage: 'PICKING', detail: 'in the WMS pick queue', since: so.soAcceptedAt || null };
 };
 
