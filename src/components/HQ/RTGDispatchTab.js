@@ -7,7 +7,7 @@ import { classifyLine, isDisplayOnlyLine, DIVISION_CUSTOM, customerDocLines, car
 import { customerKeys, findClientPriceRow } from '../Shared/clientPricing';
 import { makeFullTasks, woItemCodeOf, withItemCode } from '../Shared/workOrderContract';
 import { releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
-import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc } from '../Shared/floorRelease';
+import { releaseStockWoToFloor, queueNsStockWorkOrder as queueNsStockWorkOrderShared, buildFinDoc, buildShopDoc } from '../Shared/floorRelease';
 import { parkWorkOrder, INTENT, ParkRefusal } from '../Shared/workOrderCreate';
 import { closeOrderEverywhere as closeEverywhere, linkedDocsOf, auditOrphans, confirmNsClosed, softDeleteOrder, hardDeleteWithLedger, deleteLinkedDemands, DELETION_LEDGER, isClosedState, isDoneState } from '../Shared/orderLifecycle';
 import { woRefOf } from '../Shared/woRef';
@@ -1167,6 +1167,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             const cartItems = job.cpqData?.cartItems || [];
             const visionNotes = cartItems.flatMap(it => Array.isArray(it.generalNotes) ? it.generalNotes : []).map(s => String(s || '').trim()).filter(Boolean);
             const bracketNotes = cartItems.flatMap(it => Array.isArray(it.bracketNotes) ? it.bracketNotes : []).filter(b => b && b.note && String(b.note).trim());
+            // THE CUT SHEET (C, 2026-09-03): a custom pole line with a cutLength whose job has no
+            // Vision engineering (no shape / O2O / per-pole lengths) reaches the shop with nothing to
+            // cut to. Stamped on the floor docs as a FACT; the shop card shows its red notice only when
+            // a Vision draft existed and still produced none (cutSheetMissing && visionUsed) — a plain
+            // straight cut stays quiet (Stuart). The board says so at the split.
+            const visionUsed = !!(Object.keys(eng).length || (Array.isArray(eng.hangerLocations) && eng.hangerLocations.length) || bracketNotes.length);
+            const cutSheetMissing = customLines.some(l => l.cutLength) && !eng.shape && !eng.poleO2O && eng.pole1 == null && eng.pole2 == null && eng.pole3 == null;
+            if (cutSheetMissing) addLog(`⚠ SO ${orderKey}: custom pole with NO cut sheet — the job has no Vision engineering specs${visionUsed ? '' : ' (no Vision draft on this job)'}; the shop card will say so.`, 'warn');
             const drawingUrl = svgUri
                 || (eng.svgString ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(eng.svgString) : null)
                 || job.finalImageUrl || null;
@@ -1194,14 +1202,6 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     ? Object.keys(paintSizes).sort((a, b) => paintSizes[b] - paintSizes[a]).find(k => paintSizes[k] > 0)
                     : null;
 
-                // THE CUT SHEET (C, 2026-09-03): a custom pole line with a cutLength whose job has no
-                // Vision engineering (no shape / O2O / per-pole lengths) reaches the shop with nothing to
-                // cut to. Stamped on the floor docs as a FACT; the shop card shows its red notice only when
-                // a Vision draft existed and still produced none (cutSheetMissing && visionUsed) — a plain
-                // straight cut stays quiet (Stuart). The board says so at the split.
-                const visionUsed = !!(Object.keys(eng).length || (Array.isArray(eng.hangerLocations) && eng.hangerLocations.length) || bracketNotes.length);
-                const cutSheetMissing = customLines.some(l => l.cutLength) && !eng.shape && !eng.poleO2O && eng.pole1 == null && eng.pole2 == null && eng.pole3 == null;
-                if (cutSheetMissing) addLog(`⚠ SO ${orderKey}: custom pole with NO cut sheet — the job has no Vision engineering specs${visionUsed ? '' : ' (no Vision draft on this job)'}; the shop card will say so.`, 'warn');
                 // ONE builder (Shared/floorRelease.buildFinDoc): the split computes the payload, the
                 // builder adds what every release carries — needBy, urgent, anchor, holds, the pole/sled
                 // assertion, the dispatched stamps — so this doc and a stock release have one shape.
@@ -1247,16 +1247,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
 
             // --- Shop (custom fabrication) ---
             if (hasCustom) {
+                // OUTSOURCED, PHOSPHATE, ROUTE, SIBLINGS — decided in ONE place (buildShopDoc); the
+                // hq_outsource_finishes name-includes match is gone (two tests for one fact). The
+                // plater's price still comes from that list, for the card.
                 const outSnap = await getDocs(collection(db, "hq_outsource_finishes"));
-                const outsourceFinishes = outSnap.docs.map(d => d.data());
-                const matchedOutsource = outsourceFinishes.find(f => finishRecipe.toUpperCase().includes(String(f.name).toUpperCase()));
-                const isOutsourced = !!matchedOutsource;
-                // Fundamental rule (Stuart 2026-07-15): ANY in-house finish (a real recipe that
-                // isn't an outsourced-plating match and isn't mill/raw) → the custom parts get
-                // phosphated at the station adjacent to custom fab. The shop card renders
-                // "Parts Require Phosphate" as the last router step (checkbox reminder only —
-                // no NetSuite /P conversion like small parts).
-                const needsPhosphating = !isOutsourced && finishRecipe !== 'PENDING-RECIPE' && !/\b(MILL|RAW|UNFINISHED)\b/i.test(finishRecipe);
+                const matchedOutsource = outSnap.docs.map(d => d.data()).find(f => finishRecipe.toUpperCase().includes(String(f.name).toUpperCase()));
                 const cutLine = customLines.find(l => l.cutLength);
                 const cpqSpecs = {};
                 customLines.forEach(l => { cpqSpecs[cleanLineName(l.name)] = `Qty: ${l.qty}`; });
@@ -1273,36 +1268,32 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     legacyErpId: l.legacyErpId || l.partId || null
                 }));
                 const qty = customLines.reduce((s, l) => s + (Number(l.qty) || 0), 0) || customLines.length;
+                const firstPart = customLines[0] && customLines[0].partId ? partCache.get(customLines[0].partId) : null;
 
-                await setDoc(doc(db, "shop_custom_orders", shopId), {
-                    id: shopId, woNum: shopId,
-                    orderKey, quoteId: so.hqJobId, salesOrderId: so.soId || null,
-                    // soNum: what the shop cards/labels print — "SO: undefined" was the shop-side
-                    // fallback chain's last resort before this (shop session spec, 2026-08-27).
-                    soNum: so.soId || orderKey,
-                    // A single-line custom order carries its item identity canonically.
-                    ...(customLines.length === 1 && (customLines[0].legacyErpId || customLines[0].partId) ? { itemCode: String(customLines[0].legacyErpId || customLines[0].partId).toUpperCase() } : {}),
-                    finSiblingId: hasSmall ? finId : null, hasSmallSibling: hasSmall,
-                    status: 'Pending',
-                    item: cleanLineName(customLines[0]?.name) || job.cpqData?.cartItems?.[0]?.assemblyName || 'Custom App Order',
-                    partNum: customLines[0]?.legacyErpId || customLines[0]?.partId || '',
-                    qty,
-                    cutLength: cutLine?.cutLength || null,
-                    cutList,
-                    clientName: customerName, customerId,
-                    isOutsourced, finishRecipe, needsPhosphating,
-                    outsourcePrice: isOutsourced ? (matchedOutsource.multiplier || 0) : 0,
-                    category: 'Custom Fabrication',
-                    priority: 999,
-                    brand: activeBrand,
-                    note: so.memo || job.sidemark || "",
-                    visionNotes, bracketNotes,
-                    cpqSpecs,
-                    imageUrl: drawingUrl,
-                    fabNotes, fabMethod,
-                    reqDate: so.reqDate || "",
-                    createdAt: Date.now(), createdBy: currentUser
-                });
+                await setDoc(doc(db, "shop_custom_orders", shopId), buildShopDoc({
+                    hqOrder: { ...so, hqJobId: so.hqJobId, soId: so.soId || null, orderKey, brand: activeBrand },
+                    orderType: 'sales', shopId, finishRecipe, finSiblingId: hasSmall ? finId : null,
+                    part: firstPart, by: currentUser || '',
+                    fields: {
+                        quoteId: so.hqJobId,
+                        // A single-line custom order carries its item identity canonically.
+                        ...(customLines.length === 1 && (customLines[0].legacyErpId || customLines[0].partId) ? { itemCode: String(customLines[0].legacyErpId || customLines[0].partId).toUpperCase() } : {}),
+                        item: cleanLineName(customLines[0]?.name) || job.cpqData?.cartItems?.[0]?.assemblyName || 'Custom App Order',
+                        partNum: customLines[0]?.legacyErpId || customLines[0]?.partId || '',
+                        qty,
+                        cutLength: cutLine?.cutLength || null,
+                        cutList,
+                        clientName: customerName, customerId,
+                        outsourcePrice: matchedOutsource ? (matchedOutsource.multiplier || 0) : 0,
+                        note: so.memo || job.sidemark || "",
+                        visionNotes, bracketNotes,
+                        cpqSpecs,
+                        imageUrl: drawingUrl,
+                        fabNotes, fabMethod,
+                        reqDate: so.reqDate || "",
+                    },
+                    extra: { cutSheetMissing, visionUsed },
+                }));
                 addLog(`Created Shop custom order ${shopId}${fabMethod ? ` [${fabMethod}]` : ''} (${customLines.length} custom lines).`, "success");
             }
 
@@ -1632,67 +1623,32 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             }
 
             const shopJobId = `SHOP-${hqOrder.id}`;
-            
+            // The plater's price for the card — the OUTSOURCED decision itself is buildShopDoc's
+            // (the shared finish rule), not this name-includes match.
             const outSnap = await getDocs(collection(db, "hq_outsource_finishes"));
-            const outsourceFinishes = outSnap.docs.map(d => d.data());
-            const matchedOutsource = outsourceFinishes.find(f => finishRecipe.toUpperCase().includes(f.name.toUpperCase()));
-            
-            const isOutsourced = !!matchedOutsource;
-            const outsourcePrice = isOutsourced ? (matchedOutsource.multiplier || 0) : 0;
+            const matchedOutsource = outSnap.docs.map(d => d.data()).find(f => finishRecipe.toUpperCase().includes(String(f.name || '').toUpperCase()));
+            // The item record, for C's shopInstruction — by the code the order carries.
+            let part = null;
+            try {
+                const code = String(hqOrder.rootItem || hqOrder.variantErpId || hqOrder.partErpId || '').toUpperCase();
+                if (code) { const ps = await getDocs(query(collection(db, 'Approved_Designs'), where('legacyErpId', '==', code))); part = ps.docs.length ? { id: ps.docs[0].id, ...ps.docs[0].data() } : null; }
+            } catch (e) { /* no instruction, nothing else changes */ }
 
-            // Unified contract (§4). No SO for stock builds -> orderKey falls back to the WO/quote id.
-            const orderKey = (orderType === 'sales' ? hqOrder.soId : null) || hqOrder.hqJobId || hqOrder.id;
-            // §12.3: stock replenishment goes into the milling pipeline (milling backlog ->
-            // scheduler), NOT the custom-fab finish flow. Tag it so the Shop Floor routes it
-            // to the Milling tab's intake instead of the Custom tab's Start/Complete cards.
-            const isStock = orderType === 'stock';
-            const shopPayload = {
-                id: shopJobId,
-                woNum: shopJobId,
-                orderKey,
-                quoteId: hqOrder.hqJobId || null,
-                salesOrderId: (orderType === 'sales' ? hqOrder.soId : null) || null,
-                // CARRY THE SIBLING (Stuart 2026-09-01). These were hard-coded null/false, so every
-                // shop order this created was an orphan: Shared/workOrderContract's
-                // releaseSiblingToPickPack (§A1) and mirrorCustomStatusToSibling (§5) both return
-                // early without a finSiblingId, so the shop operator's START released no pick and
-                // the finishing side never learned the custom parts were done. A source order that
-                // names its sibling now keeps it; one that doesn't is unchanged.
-                finSiblingId: hqOrder.finSiblingId || null,
-                hasSmallSibling: !!hqOrder.finSiblingId,
-                soNum: hqOrder.soId || hqOrder.woId || 'N/A',
-                isStock,
-                routeTo: isStock ? 'MILLING' : 'CUSTOM_FAB',
-                partNum: hqOrder.rootItem || hqOrder.variantErpId || '',
-                isOutsourced: isOutsourced,
-                finishRecipe: finishRecipe,
-                outsourcePrice: outsourcePrice,
-                // Ensure the itemName gets populated correctly for stock builds
-                item: originalJob?.itemName || originalJob?.name || hqOrder.variantErpId || hqOrder.rootItem || hqOrder.hqJobId || 'Custom App Order',
-                qty: Number(hqOrder.totalParts) || 1,
-                reqDate: hqOrder.reqDate || "",
-                category: isStock ? 'Stock Milling' : 'Custom Fabrication',
-                status: 'Pending',
-                priority: 999,
-                brand: activeBrand,
-                customerId: originalJob?.customer?.id || null,
-                clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
-                note: hqOrder.memo || originalJob?.sidemark || "",
-                cpqSpecs: cpqSpecs,
-                imageUrl: svgUri || originalJob?.finalImageUrl || null,
-                // Explicit flag from the stock order wins; otherwise the in-house-finish rule
-                // applies (real recipe, not outsourced, not mill/raw → phosphate last step).
-                needsPhosphating: hqOrder.needsPhosphating || (!isOutsourced && finishRecipe !== 'PENDING-RECIPE' && !/\b(MILL|RAW|UNFINISHED)\b/i.test(finishRecipe)),
-                isPlatingDemand: hqOrder.isPlatingDemand || false,
-                rootItem: hqOrder.rootItem || '',
-                createdAt: Date.now(),
-                createdBy: currentUser
-            };
-
-            await setDoc(doc(db, "shop_custom_orders", shopJobId), withItemCode({
-                ...shopPayload,
-                // Same flag, same field names as the finishing side — the shop list sorts on it.
-                ...(isUrgent(hqOrder) ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || hqOrder.reqDate || '', urgentBy: hqOrder.urgentBy || currentUser || '', urgentAt: hqOrder.urgentAt || Date.now() } : {}),
+            await setDoc(doc(db, "shop_custom_orders", shopJobId), buildShopDoc({
+                hqOrder: { ...hqOrder, brand: activeBrand }, orderType, shopId: shopJobId, finishRecipe,
+                finSiblingId: hqOrder.finSiblingId || null, part, by: currentUser || '',
+                fields: {
+                    partNum: hqOrder.rootItem || hqOrder.variantErpId || '',
+                    outsourcePrice: matchedOutsource ? (matchedOutsource.multiplier || 0) : 0,
+                    // Ensure the itemName gets populated correctly for stock builds
+                    item: originalJob?.itemName || originalJob?.name || hqOrder.variantErpId || hqOrder.rootItem || hqOrder.hqJobId || 'Custom App Order',
+                    qty: Number(hqOrder.totalParts) || 1,
+                    customerId: originalJob?.customer?.id || null,
+                    clientName: originalJob?.customer?.name || hqOrder.customer || "Internal Stock",
+                    note: hqOrder.memo || originalJob?.sidemark || "",
+                    cpqSpecs,
+                    imageUrl: svgUri || originalJob?.finalImageUrl || null,
+                },
             }));
 
             // Change status to Dispatched so it leaves the RTG board

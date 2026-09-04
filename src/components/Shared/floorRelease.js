@@ -24,6 +24,7 @@ import { collection, doc, getDocs, query, setDoc, updateDoc, where } from 'fireb
 import { BRAND_NETSUITE_MAP } from './brandNetsuite';
 import { enqueueNsWrite } from './nsOutbox';
 import { withItemCode } from './workOrderContract';
+import { isOutsourcedFinishCode, finishRouteOf } from './finishRouting';
 
 const noop = () => {};
 
@@ -173,4 +174,70 @@ export async function releaseStockWoToFloor({ hqOrder, brand, by = '', log = noo
     const nsNote = await queueNsStockWorkOrder({ hqOrder, fp, brand, by, log });
     log(`🏭 ${fp.woNum || fp.id} released to the finishing floor and its NetSuite work order queued (Route A).`, 'success');
     return { released: true, nsNote, finId: fp.id };
+}
+
+// ── THE SHOP DOCUMENT, BUILT ONCE (Brief B1) ─────────────────────────────────────────────────
+// pushToShop's payload, the CPQ split's shop half and (through parkWorkOrder + pushToShop) A's
+// component milling orders all wrote shop_custom_orders by hand. The decisions they must agree on
+// live here: category/routeTo from the order type, the sibling links always carried, OUTSOURCED by
+// the shared finish rule (never the hq_outsource_finishes name-includes match — two tests for one
+// fact), phosphate by the one rule, a caller-supplied id (the Order Entry pair's '<woId>-C'), the
+// urgent flag, the item's shopInstruction for C's card, and the cut-sheet facts. The caller passes
+// what only it knows (lines, cut list, fab notes, drawing, customer) in `fields`.
+const MILL_RE = /\b(MILL|RAW|UNFINISHED)\b/i;
+export const isOutsourcedRecipe = (recipe) => {
+    const r = String(recipe || '').trim();
+    if (!r) return false;
+    return isOutsourcedFinishCode(r) || !!finishRouteOf({ recipe: r }).outsourced;
+};
+/**
+ * @param {object} p.hqOrder       the RTG record (hq_work_orders / hq_sales_orders)
+ * @param {'stock'|'sales'} p.orderType
+ * @param {string} p.shopId        the doc id (SHOP-<hq id> by convention; the OE pair passes its own)
+ * @param {string} p.finishRecipe  the recipe code or label as resolved by the caller
+ * @param {string|null} p.finSiblingId
+ * @param {object} [p.part]        the library record for the item (shopInstruction comes from it)
+ * @param {object} [p.fields]      caller-specific fields (item, partNum, qty, cutList, fabNotes, imageUrl…)
+ * @param {object} [p.extra]       stamps (cutSheetMissing, visionUsed)
+ */
+export function buildShopDoc({ hqOrder = {}, orderType = 'stock', shopId, finishRecipe = '', finSiblingId = null, part = null, by = '', now = Date.now(), fields = {}, extra = {} }) {
+    if (!shopId) throw new Error('buildShopDoc: shopId is required');
+    const isStock = orderType === 'stock';
+    const recipe = String(finishRecipe || '');
+    const isOutsourced = isOutsourcedRecipe(recipe);
+    // Fundamental rule (Stuart 2026-07-15): ANY in-house finish (a real recipe that is not outsourced
+    // and not mill/raw) → the custom parts get phosphated at the station adjacent to custom fab.
+    // An explicit flag on the record wins.
+    const needsPhosphating = hqOrder.needsPhosphating === true
+        || (!isOutsourced && recipe && recipe !== 'PENDING-RECIPE' && !MILL_RE.test(recipe));
+    const orderKey = (orderType === 'sales' ? (hqOrder.soId || hqOrder.orderKey) : null) || hqOrder.hqJobId || hqOrder.id;
+    const spec = part && part.manufacturingSpecs ? part.manufacturingSpecs : null;
+    const docOut = {
+        id: shopId, woNum: shopId,
+        orderKey,
+        quoteId: hqOrder.hqJobId || hqOrder.quoteId || null,
+        salesOrderId: (orderType === 'sales' ? (hqOrder.soId || null) : null),
+        soNum: hqOrder.soId || hqOrder.woId || orderKey || 'N/A',
+        // CARRY THE SIBLING (Stuart 2026-09-01): releaseSiblingToPickPack and the customFabStatus
+        // mirror both key entirely on this.
+        finSiblingId: finSiblingId || null, hasSmallSibling: !!finSiblingId,
+        isStock,
+        routeTo: isStock ? 'MILLING' : 'CUSTOM_FAB',
+        category: isStock ? 'Stock Milling' : 'Custom Fabrication',
+        status: 'Pending', priority: 999,
+        brand: hqOrder.brand || fields.brand || null,
+        isOutsourced, finishRecipe: recipe, needsPhosphating,
+        isPlatingDemand: hqOrder.isPlatingDemand || false,
+        rootItem: hqOrder.rootItem || '',
+        reqDate: hqOrder.reqDate || fields.reqDate || '',
+        needBy: hqOrder.needBy || fields.needBy || '',
+        // The per-item shop instruction (C, Stuart: "on the item") — the card reads this first.
+        ...(spec && spec.shopInstruction ? { shopInstruction: String(spec.shopInstruction) } : {}),
+        ...fields,
+        // Same flag, same field names as the finishing side — the shop list sorts on it.
+        ...(hqOrder.urgent ? { urgent: true, urgentAck: false, needBy: hqOrder.needBy || hqOrder.reqDate || fields.needBy || '', urgentBy: hqOrder.urgentBy || by || '', urgentAt: hqOrder.urgentAt || now } : {}),
+        ...extra,
+        createdAt: now, createdBy: by || '',
+    };
+    return withItemCode(docOut);
 }
