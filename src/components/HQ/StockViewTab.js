@@ -3595,7 +3595,13 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         <span style={{ fontFamily: 'var(--serif)', fontSize: '1.4rem', fontWeight: 500, color: 'var(--ink)' }}>Global Inventory Health</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#d9534f', border: '1px solid #d9534f', padding: '4px 8px' }}>Highlighted = At or Below ROP</span>
                         <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#7c4dff', border: '1px solid #7c4dff', padding: '4px 8px', marginLeft: '8px' }}>Purple On-Order = in-app plating WIP (no NetSuite PO)</span>
-                        <button onClick={openSalesHistory} style={{ marginLeft: 'auto', padding: '8px 14px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>📈 Stocked Sales Snapshot</button>
+                        {/* ⚠ MUST pass the argument explicitly. `onClick={openSalesHistory}` handed React's
+                            click event in as `forceRebuild` — and a MouseEvent is truthy, so every open
+                            skipped the cache read and re-derived all 12 months from NetSuite, then rewrote
+                            11 cache docs it never read. The month caching below worked perfectly and was
+                            simply never asked a question (Stuart 2026-09-04: "it is almost like the cached
+                            sales data made no difference"). It made none. */}
+                        <button onClick={() => openSalesHistory(false)} style={{ marginLeft: 'auto', padding: '8px 14px', background: 'var(--brass)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>📈 Stocked Sales Snapshot</button>
                         <button onClick={() => setLabelTool(true)} style={{ padding: '8px 14px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em' }}>🏷 Print Labels</button>
                     </div>
 
