@@ -1020,6 +1020,16 @@ function HardwareConfiguratorInner({
         model.slots.filter(s => s.kind !== 'BACKPLATE').forEach(s => {
             if (!s.options.length && !s.suppressedBy) return;
             if (settledKeys.has(s.key)) return;      // answered by the drive — see settledKeys
+            // ── A TRACK END IS NEVER A STEP (Stuart 2026-09-06) ────────────────────────────
+            // "can't we remove steps 14+15 for the track ends since these are decided when
+            //  choosing manual or motorized — there is no reason to have them as steps … they are
+            //  chosen in step one and do not need their own steps as there are no options."
+            // A settled end was already skipped (one option → auto-picked, above). A SUPPRESSED
+            // front end on a fascia-front double still drew as "not asked", and an end with two
+            // options — drive not yet answered — drew as a question that step one answers. None of
+            // those is a decision made here. The pick still happens: the drive answer settles it
+            // and livePicks carries it, so the end still renders and bills.
+            if (s.kind === 'TRV_END') return;
             // A plate belongs to the arm that carries it. Normally that is the bracket — but when a
             // RETURN has taken that end the bracket step is suppressed, and the return is the arm
             // (see bracketAt in hardwareModel), so the plate travels to the END step instead. Left

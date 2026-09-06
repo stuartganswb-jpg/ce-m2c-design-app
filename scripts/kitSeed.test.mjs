@@ -108,6 +108,33 @@ const kit = (align, code = 'HTS7504F') => ({ legacyErpId: code, partClass: 'Kit'
     eq('and it does not block — the rest of the kit is still buildable', r.blocked, null);
 }
 
+// ── 6b. THE FRONT OF A DOUBLE IS ANSWERED BY THE KIT (Stuart 2026-09-06, the 4 ft kits) ──────
+// Since 08-31 it is an asked question; the -4FRT / -4MFRT kits are the fascia-front doubles.
+{
+    const trv = [
+        C({ id: 'TRK-F', partId: 'H1-2TRV', role: 'TRACK', rodKind: 'TRAVERSE', tier: 'FRONT', nodes: ['tf'] }),
+        C({ id: 'TRK-B', partId: 'H1-2TRV', role: 'TRACK', rodKind: 'TRAVERSE', tier: 'BACK', setup: 'DOUBLE', nodes: ['tb'] }),
+        C({ id: 'FAS', partId: 'H1-2RCTAR', role: 'FASCIA', rodKind: 'TRAVERSE', tier: 'FRONT', nodes: ['fa'] }),
+        C({ id: 'BKT-S', partId: 'TB-S', role: 'BRACKET', position: 'CENTER', setup: 'SINGLE', mount: 'WALL', nodes: ['bs'] }),
+        C({ id: 'BKT-D', partId: 'TB-D', role: 'BRACKET', position: 'CENTER', setup: 'DOUBLE', mount: 'WALL', nodes: ['bd'] }),
+        C({ id: 'RING-F', partId: 'RG', role: 'RING', position: 'CENTER', nodes: ['rg'] }),
+    ];
+    const m = resolve({ choices: trv, answers: {} });
+    const frt = seedFromKit({ model: m, kit: kit({ setup: 'DOUBLE', frontRail: 'RING' }, 'H1-2TRV-4FRT/P') });
+    eq('a stationary-front kit answers the Front of the Double as fascia', frt.answers.frontLayer, 'FASCIA');
+    ok('and says so', frt.carried.some(c => /stationary fascia/.test(c)));
+    const dbl = seedFromKit({ model: m, kit: kit({ setup: 'DOUBLE', frontRail: 'TRACK' }, 'H1-2TRV-4D/P') });
+    eq('a double-track kit answers it as track', dbl.answers.frontLayer, 'TRACK');
+    const sgl = seedFromKit({ model: m, kit: kit({ setup: 'SINGLE', frontRail: 'RING' }, 'H1-2TRV-4/P') });
+    ok('a single kit never answers a question it is not asked', !('frontLayer' in sgl.answers));
+    const none = seedFromKit({ model: m, kit: kit({ setup: 'DOUBLE' }, 'H1-2TRV-4D/P') });
+    ok('no front rail on record → left to the operator, and not reported missing',
+        !('frontLayer' in none.answers) && !none.missed.some(x => x.what === 'front of the double'));
+    const noFas = seedFromKit({ model: wallModel, kit: kit({ setup: 'DOUBLE', frontRail: 'RING' }) });
+    ok('a fascia the assembly cannot offer is reported, not forced',
+        noFas.missed.some(x => x.what === 'front of the double') && !('frontLayer' in noFas.answers));
+}
+
 // ── 7. THINGS THAT ARE NOT KITS ──────────────────────────────────────────────────────────────
 {
     ok('a record with no alignment is refused', !!seedFromKit({ model: wallModel, kit: { partClass: 'Kit' } }).blocked);

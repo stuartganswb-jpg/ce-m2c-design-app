@@ -134,6 +134,32 @@ export function seedFromKit({ model, kit }) {
         else missed.push({ what: 'front rail', why: 'the kit puts rings on the front rod, and no front slot here offers a ring — choose the front rail by hand' });
     }
 
+    // ── THE FRONT OF A DOUBLE IS AN AXIS NOW, SO THE KIT ANSWERS IT (Stuart 2026-09-06) ──────
+    // "make sure we did not break the linkage with the 4ft kits." Since 08-31 the Front of the
+    // Double is an ASKED question, and no kit answered it — so a -4FRT / -4MFRT "stationary front"
+    // kit seeded a double, left the question open, the front track auto-picked itself, and the
+    // ring pick above landed in a slot that only opens once the answer is FASCIA. A double kit
+    // says which front it is: frontRail RING is a stationary fascia with rings, anything else on
+    // record is a track front & rear; no front rail on record leaves it to the operator.
+    // The axis is gated on setup, so it is absent from a model resolved before setup is answered —
+    // the PARTS are read instead: a fascia choice, or a front-capable track.
+    if (U(align.setup) === 'DOUBLE' && U(align.frontRail)) {
+        const wantFront = U(align.frontRail) === 'RING' ? 'FASCIA' : 'TRACK';
+        const parts = model.choices || [];
+        const can = wantFront === 'FASCIA'
+            ? parts.some(c => U(c.role) === 'FASCIA')
+            : parts.some(c => U(c.role) === 'TRACK' && (U(c.tier) || 'FRONT') === 'FRONT');
+        if (can) {
+            answers.frontLayer = wantFront;
+            carried.push(wantFront === 'FASCIA' ? 'stationary fascia with rings in front' : 'track front & rear');
+        } else {
+            missed.push({
+                what: 'front of the double',
+                why: `${code} puts ${wantFront === 'FASCIA' ? 'a stationary fascia with rings' : 'a second track'} in front, and this assembly offers no ${wantFront === 'FASCIA' ? 'fascia' : 'front track'} — answer the Front-of-the-Double question by hand`,
+            });
+        }
+    }
+
     // ── THE FINISH ───────────────────────────────────────────────────────────────────────────
     // Reported, never chosen. `material` is a FAMILY (P paint / EP plated / W wood), and the order
     // needs one exact code out of a hundred. Picking one for the operator would put a finish on a
