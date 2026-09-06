@@ -74,6 +74,7 @@ function rowOf({ choice, part, flow, aliasCtx }) {
             tier: clean(choice.tier),
             passing: clean(choice.passing),
             drive: clean(choice.drive),
+            frontLayer: clean(choice.frontLayer),
             rodKind: clean(choice.rodKind),
             fits: Array.isArray(choice.fits) ? choice.fits : [],
             fitsExplicit: !!choice.fitsExplicit,
@@ -245,6 +246,7 @@ export function tagLinesOf(row) {
     }
     if (t.setup) out.push({ label: 'setup', value: t.setup, key: 'setup' });
     if (t.drive) out.push({ label: 'drive', value: t.drive, key: 'drive' });
+    if (t.frontLayer) out.push({ label: 'front', value: t.frontLayer === 'FASCIA' ? 'fascia (rings)' : 'track', key: 'frontLayer' });
     if (t.mount) out.push({ label: 'mount', value: t.mount, key: 'mount' });
     if (t.position) out.push({ label: 'position', value: t.position, key: 'position' });
     if (t.tier) out.push({ label: 'tier', value: t.tier, key: 'tier' });

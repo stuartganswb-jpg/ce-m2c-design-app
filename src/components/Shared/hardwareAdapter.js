@@ -163,6 +163,8 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         // and what every part that is neither a bracket nor a ring is.
         passing: U(pin.passing),
         drive: U(pin.driveType),
+        // Which FRONT of a double this bracket carries (fascia with rings, or a track) — see admits().
+        frontLayer: U(pin.frontLayer),
         proj: pin.projInches || '',
         mount: U(pin.mountType) || normalizeLocation(cluster?.location) || '',
         position: normalizePosition(cluster?.position) || U(cluster?.position) || '',

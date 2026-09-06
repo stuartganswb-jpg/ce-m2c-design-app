@@ -1981,6 +1981,56 @@ eq('nonsense is null', measureOf('n/a'), null);
         fee.options.length === 3 && fee.options.every(o => o.returnOnly));
 }
 
+// ── A DOUBLE BRACKET SERVES ONE FRONT, AND CARRIERS RIDE THEIR OWN TRACK (Stuart 2026-09-06) ──
+// "when you choose Stationary fascia with rings that should present the only bracket option of
+//  H1-2TRV-DRTWB and if we choose Traverse track front & rear then present H1-2TRV-DWB … also when
+//  the stationary is chosen then you should hide the traverse carriers."
+{
+    const N = (cs) => applyFitsDefaults(cs.map(normalizeChoice));
+    const trv = [
+        { id: 'TRK-F', partId: 'H1-2TRV', role: 'TRACK', tier: 'FRONT', position: 'CENTER', nodes: ['tf'] },
+        { id: 'TRK-B', partId: 'H1-2TRV', role: 'TRACK', tier: 'BACK', setup: 'DOUBLE', position: 'CENTER', nodes: ['tb'] },
+        { id: 'FAS', partId: 'H1-2RCTAR', role: 'FASCIA', tier: 'FRONT', position: 'CENTER', nodes: ['fa'] },
+        // the two doubles, tagged as Stuart will tag them, plus one left untagged
+        { id: 'DRTWB', partId: 'H1-2TRV-DRTWB', role: 'BRACKET', setup: 'DOUBLE', frontLayer: 'FASCIA', proj: 'FRONT:6.5,BACK:3.25', position: 'LEFT', fits: ['TRAVERSE'], nodes: ['drt'] },
+        { id: 'DWB', partId: 'H1-2TRV-DWB', role: 'BRACKET', setup: 'DOUBLE', frontLayer: 'TRACK', proj: 'FRONT:6.5,BACK:3.25', position: 'LEFT', fits: ['TRAVERSE'], nodes: ['dwb'] },
+        { id: 'ANY', partId: 'H1-2TRV-XWB', role: 'BRACKET', setup: 'DOUBLE', proj: 'FRONT:6.5,BACK:3.25', position: 'LEFT', fits: ['TRAVERSE'], nodes: ['any'] },
+        // riders: front carrier (FRONT), rear carrier (BACK, double), an untiered clip
+        { id: 'CAR-F', partId: 'HTSLNTCAR', role: 'CARRIER', tier: 'FRONT', alwaysShown: true, nodes: ['cf'] },
+        { id: 'CAR-B', partId: 'HTSLNTCAR', role: 'CARRIER', tier: 'BACK', setup: 'DOUBLE', alwaysShown: true, nodes: ['cb'] },
+        { id: 'CLIP', partId: 'H1-2TRVCLP', role: 'FCLIP', alwaysShown: true, nodes: ['cl'] },
+    ];
+    const bkt = (answers) => resolve({ choices: trv, answers, selectedIds: [] })
+        .slots.find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
+    const ids = (s) => s.options.map(o => o.id).sort();
+
+    const fascia = bkt({ rodKind: 'TRAVERSE', setup: 'DOUBLE', frontLayer: 'FASCIA' });
+    eq('fascia front: DRTWB and the untagged one, never DWB', ids(fascia), ['ANY', 'DRTWB']);
+    const why = fascia.rejected.find(r => r.choice.id === 'DWB');
+    ok('and says why, in the words of the question', why && why.rule === 'front layer' && /track front & rear/.test(why.detail), why && why.detail);
+
+    const track = bkt({ rodKind: 'TRAVERSE', setup: 'DOUBLE', frontLayer: 'TRACK' });
+    eq('track front: DWB and the untagged one, never DRTWB', ids(track), ['ANY', 'DWB']);
+
+    // Unanswered front → nothing filters; a SINGLE never asks, so the tag is inert there.
+    eq('front not yet answered: all three stand', ids(bkt({ rodKind: 'TRAVERSE', setup: 'DOUBLE' })), ['ANY', 'DRTWB', 'DWB']);
+    const single = N([{ id: 'S', partId: 'X', role: 'BRACKET', frontLayer: 'FASCIA', position: 'LEFT', fits: ['TRAVERSE'], nodes: ['s'] }]);
+    ok('a single order never sees the tag', admits(single[0], { rodKind: 'TRAVERSE', setup: 'SINGLE' }).ok);
+
+    // Riders. Fascia-front double: rear track + fascia chosen → the FRONT carrier stays away.
+    const n = N(trv);
+    const ride = (answers, sel) => ridersFor(n, answers, sel).map(c => c.id).sort();
+    eq('fascia front: rear carrier and the clip ride, the front carrier does not',
+        ride({ rodKind: 'TRAVERSE', setup: 'DOUBLE', frontLayer: 'FASCIA' }, ['TRK-B', 'FAS']), ['CAR-B', 'CLIP']);
+    eq('track front & rear: both carriers ride',
+        ride({ rodKind: 'TRAVERSE', setup: 'DOUBLE', frontLayer: 'TRACK' }, ['TRK-F', 'TRK-B']), ['CAR-B', 'CAR-F', 'CLIP']);
+    eq('single track: its carrier rides, the double-only one does not',
+        ride({ rodKind: 'TRAVERSE', setup: 'SINGLE' }, ['TRK-F']), ['CAR-F', 'CLIP']);
+    // An untiered rod still carries a tiered rider — single-rod collections read exactly as before.
+    const plain = N([{ id: 'R', partId: 'R', role: 'TRACK', nodes: ['r'] }, { id: 'C', partId: 'C', role: 'CARRIER', tier: 'FRONT', alwaysShown: true, nodes: ['c'] }]);
+    eq('an untiered rod carries a tiered rider', ridersFor(plain, {}, ['R']).map(c => c.id), ['C']);
+}
+
 // ── HOW MANY ──────────────────────────────────────────────────────────────────────────────────
 // "rings set a recommended amount at 4 per ft plus 2 per rod, same for carriers on track it is 4
 //  per ft and 1 extra for the ends which is the plus 2."

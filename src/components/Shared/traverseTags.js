@@ -44,6 +44,11 @@ export const DRIVE_TYPES = ['MOTORIZED', 'MANUAL'];
 // handful, and it makes an UNTAGGED part safe: it shows on a single, which is what it almost always
 // is, instead of showing on everything.
 export const TRV_SETUPS = ['SINGLE', 'DOUBLE', 'BOTH'];
+// WHICH FRONT A DOUBLE BRACKET SERVES (Stuart 2026-09-06, H1-2TRV): "the double brackets are one or
+// the other, not interchangeable" — DRTWB carries a stationary fascia with rings in front of the
+// track, DWB carries two tracks. Blank = either, which is every bracket that is not a double.
+export const FRONT_LAYERS = ['FASCIA', 'TRACK'];
+export const FRONT_LAYER_LABEL = { FASCIA: 'fascia (rings)', TRACK: 'track' };
 // ⚠ REVERTED 2026-08-04, and his own tag dump is why. Blank meant SINGLE for exactly one commit,
 // on the theory that "most parts are single parts". The H1-2TRV data says otherwise: rings, plugs,
 // drive pulleys, carriers, nuts, the centre/right brackets and every return arm are untagged — and

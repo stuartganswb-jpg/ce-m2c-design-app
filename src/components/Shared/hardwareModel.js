@@ -337,6 +337,7 @@ export function normalizeChoice(input = {}) {
         // position decide" (see carriesRings), which is the normal case for every existing pin.
         ...(input.carriesRings === true || input.carriesRings === false ? { carriesRings: input.carriesRings } : {}),
         drive: U(input.drive),                       // '' = suits every drive (a fascia is a fascia)
+        frontLayer: U(input.frontLayer),             // '' = either front — every bracket that is not a double
         // A per-tier tag is NOT a list of alternatives, so it never lands in `projs` — otherwise a
         // double bracket would appear once per depth, each time judged against the wrong rod.
         projs: Object.keys(parseProjTiers(input.proj)).length ? [] : measureList(input.proj),
@@ -563,6 +564,18 @@ export function admits(choice, ctx = {}, { ignore = [] } = {}) {
     if (!skip('drive') && ctx.drive && choice.drive && choice.drive !== ctx.drive) {
         return no('drive', `tagged ${choice.drive}, this order is ${ctx.drive}`);
     }
+    // ── A DOUBLE BRACKET SERVES ONE FRONT (Stuart 2026-09-06, H1-2TRV) ────────────────────────
+    // "when you choose Stationary fascia with rings that should present the only bracket option of
+    //  H1-2TRV-DRTWB and if we choose Traverse track front & rear then present H1-2TRV-DWB — the
+    //  double brackets are one or the other, not interchangeable."
+    // The frontLayer ANSWER already existed (the Front-of-the-Double axis); nothing on the bracket
+    // could say which front it carries, so both were offered under both. Now the pin says. Blank
+    // never filters, and only a DOUBLE ever has this answer — a single, and every solid collection,
+    // never reaches this line.
+    if (!skip('frontLayer') && ctx.frontLayer && choice.frontLayer && choice.frontLayer !== ctx.frontLayer) {
+        const say = (v) => (v === 'FASCIA' ? 'a stationary fascia with rings' : 'a track front & rear');
+        return no('front layer', `built for ${say(choice.frontLayer)}, this order is ${say(ctx.frontLayer)}`);
+    }
     if (!skip('mount') && ctx.mount && choice.mount && choice.mount !== ctx.mount) {
         return no('mount', `tagged ${choice.mount}, this order is ${ctx.mount}`);
     }
@@ -671,11 +684,20 @@ export function judge(choices, answers = {}, { position } = {}) {
 export function ridersFor(choices, answers = {}, selectedIds = []) {
     const ctx = contextOf(choices, answers);
     const want = new Set((selectedIds || []).filter(Boolean).map(String));
-    const chosenWorlds = new Set(choices
-        .filter(c => want.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind)
-        .map(c => c.rodKind));
-    if (!chosenWorlds.size) return [];
-    return choices.filter(c => c.always && admits(c, ctx).ok && c.fits.some(f => chosenWorlds.has(f)));
+    const chosenRods = choices.filter(c => want.has(c.id) && ROD_ROLES.includes(c.role) && c.rodKind);
+    if (!chosenRods.length) return [];
+    // ⚠ A RIDER RIDES A ROD OF ITS OWN TIER (Stuart 2026-09-06, H1-2TRV: "when the stationary is
+    // chosen then you should hide the traverse carriers"). The rule read only the rod's WORLD, so
+    // the moment the rear track of a fascia-front double was chosen, the FRONT carriers rode too —
+    // with no front track to ride in. The tier is part of a rod's identity everywhere else in this
+    // engine; it is here now. An untiered rider rides any rod it fits; an untiered rod carries any
+    // rider — so single-rod collections read exactly as before.
+    // And a carrier or clip rides a TRACK, never a fascia: the fascia is the front layer's rod on a
+    // fascia-front double, and it carries rings, not carriers.
+    return choices.filter(c => c.always && admits(c, ctx).ok && chosenRods.some(r =>
+        c.fits.includes(r.rodKind)
+        && (!c.tier || !r.tier || (r.tier || '') === c.tier)
+        && (!RIDER_ROLES.includes(c.role) || r.role !== 'FASCIA')));
 }
 
 /**
