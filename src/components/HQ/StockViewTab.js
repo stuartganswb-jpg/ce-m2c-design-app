@@ -809,8 +809,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // "STD-<SKU>". The prior scheme (new = "<base>-N", old = "<base>") is kept as a fallback for any
     // stragglers. Each month cell shows the CURRENT item's sales in BLACK, falling back to the OLD
     // item's sales in BLUE where the current item had none — so a renamed SKU reads blue on the left and
-    // fills black from the right over time. Sales are CHUNKED (60 ids/query) to stay under NetSuite's
-    // 1000-row SuiteQL cap (that truncation was why items showed no history).
+    // fills black from the right over time. Sales are CHUNKED to stay under NetSuite's 1000-row
+    // SuiteQL cap (that truncation was why items showed no history) — the chunk is sized to the
+    // months actually being fetched, and guarded against clipping; see runChunked.
     const openSalesHistory = async (forceRebuild = false) => {
         const months = last12Months(new Date());
         setSalesHist({ loading: true, error: null, rows: [], months, generatedAt: new Date().toLocaleString(), withOld: 0 });
@@ -824,6 +825,44 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const b = await r.json().catch(() => ({}));
                 if (!r.ok) throw new Error(typeof b === 'object' ? JSON.stringify(b) : String(b));
                 return b.items || [];
+            };
+            // ── CHUNKED READS: SIZED TO THE ROW BUDGET, NEVER SILENTLY TRUNCATED ──────────────
+            // SuiteQL returns AT MOST 1000 rows per response and says NOTHING when it clips — the
+            // failure this file has already been bitten by twice (the unpaginated item universe
+            // below; the Fabricut "999" report). So a chunk size here does not mean "how many ids
+            // is it polite to ask about", it means "how many ids can I ask about before the ANSWER
+            // might exceed 1000 rows" — which depends on how many rows ONE id can produce: exactly
+            // one for availability, one per month in range for sales, one per open line for PO/WO.
+            //
+            // Sizes had drifted badly out of step with that. Sales chunked 60 ids because 60 x 12
+            // months = 720 rows; once the month cache landed (2026-09-04) the normal fetch became
+            // ONE month, so 60 ids returned at most 60 rows — 6% of the budget at twelve times the
+            // round trips. The size is now derived from the months actually being fetched.
+            //
+            // Two guarantees make choosing a size safe rather than merely prudent:
+            //   · SPLIT ON SUSPICION — any chunk answering at or over the cap is re-run as two
+            //     halves, recursively, until every answer sits inside it. Costs nothing when it
+            //     never fires, and makes silent truncation structurally impossible at any size.
+            //   · BOUNDED WIDTH — 4 in flight. The proxy shares an account-wide NetSuite
+            //     concurrency limit of about five, and the rest of the app is talking to NetSuite
+            //     while this runs; 4 leaves it room.
+            const ROW_CAP = 1000, WIDTH = 4;
+            const runChunked = async (ids, size, fetchChunk, onRows) => {
+                const jobs = [];
+                for (let i = 0; i < ids.length; i += size) jobs.push(ids.slice(i, i + size));
+                const run = async (chunk) => {
+                    const rows = await fetchChunk(chunk);
+                    if (rows.length >= ROW_CAP && chunk.length > 1) {
+                        const half = Math.ceil(chunk.length / 2);
+                        await run(chunk.slice(0, half));
+                        await run(chunk.slice(half));
+                        return;
+                    }
+                    onRows(rows);
+                };
+                for (let i = 0; i < jobs.length; i += WIDTH) {
+                    await Promise.all(jobs.slice(i, i + WIDTH).map(run));
+                }
             };
             // 1) Item universe: stocked items (the rows) + old items (the blue fallback source).
             // ROWS require an ACTIVE item — an inactive item with a stray Stocked flag was surfacing
@@ -865,7 +904,6 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // corrected, which is what makes caching safe to do at all.
             const allIds = itemRows.map(r => String(r.internal_id));
             const salesById = {};
-            const CH = 60;
             const nowYm = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
             const addRow = (iid, ym, qty, orders) => {
                 let rec = salesById[iid]; if (!rec) { rec = { m: {}, orders: 0 }; salesById[iid] = rec; }
@@ -898,16 +936,18 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 const earliest = needMonths.slice().sort()[0];
                 setSalesHist(h => ({ ...(h || {}), loading: true, note: `${fromCache} month(s) from cache · fetching ${needMonths.length} from NetSuite…` }));
                 const perMonth = {};
-                for (let i = 0; i < allIds.length; i += CH) {
-                    const chunk = allIds.slice(i, i + CH);
-                    const rows = await runSql(`SELECT tl.item AS internal_id, TO_CHAR(t.trandate,'YYYY-MM') AS ym, SUM(ABS(tl.quantity)) AS qty, COUNT(DISTINCT t.id) AS orders FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'SalesOrd' AND tl.item IN (${chunk.join(',')}) AND tl.quantity <> 0 AND t.trandate >= TO_DATE('${earliest}-01','YYYY-MM-DD') GROUP BY tl.item, TO_CHAR(t.trandate,'YYYY-MM')`);
-                    rows.forEach(row => {
+                // One id yields at most one row per month in range, so 900/months keeps the answer
+                // inside the cap by construction. Cache doing its job = ONE month = 900 ids a query;
+                // a full Rebuild falls back to 75 on its own. Same data either way.
+                const salesCH = Math.max(20, Math.floor(900 / needMonths.length));
+                await runChunked(allIds, salesCH,
+                    (chunk) => runSql(`SELECT tl.item AS internal_id, TO_CHAR(t.trandate,'YYYY-MM') AS ym, SUM(ABS(tl.quantity)) AS qty, COUNT(DISTINCT t.id) AS orders FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'SalesOrd' AND tl.item IN (${chunk.join(',')}) AND tl.quantity <> 0 AND t.trandate >= TO_DATE('${earliest}-01','YYYY-MM-DD') GROUP BY tl.item, TO_CHAR(t.trandate,'YYYY-MM')`),
+                    (rows) => rows.forEach(row => {
                         const ym = String(row.ym || '');
                         if (!needMonths.includes(ym)) return;      // already cached — cache wins, no double count
                         addRow(String(row.internal_id), ym, row.qty, row.orders);
                         (perMonth[ym] = perMonth[ym] || {})[String(row.internal_id)] = [parseInt(row.qty) || 0, parseInt(row.orders) || 0];
-                    });
-                }
+                    }));
                 fetchedMonths = needMonths;
                 // Write ONLY closed months. The current month is deliberately never cached — it is
                 // still moving, and a stale "this month" is the one number nobody would question.
@@ -920,11 +960,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // brand's location) — the report used to read the app's nsStock cache, which was empty here.
             const loc = (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17';
             const availById = {};
-            for (let i = 0; i < allIds.length; i += 200) {
-                const chunk = allIds.slice(i, i + 200);
-                const arows = await runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail FROM AggregateItemLocation ail WHERE ail.item IN (${chunk.join(',')}) AND ail.location = ${loc} GROUP BY ail.item`);
-                arows.forEach(row => { availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0); });
-            }
+            // GROUP BY item = exactly one row per id, so 900 ids can never fill the 1000-row cap.
+            await runChunked(allIds, 900,
+                (chunk) => runSql(`SELECT ail.item AS internal_id, SUM(ail.quantityavailable) AS avail FROM AggregateItemLocation ail WHERE ail.item IN (${chunk.join(',')}) AND ail.location = ${loc} GROUP BY ail.item`),
+                (arows) => arows.forEach(row => { availById[String(row.internal_id)] = Math.round(Number(row.avail) || 0); }));
             // 2c) INBOUND SUPPLY per stocked item: open purchase-order lines (on order from a vendor) +
             // open work orders (in production). Best-effort — a failure here only leaves the On Ord
             // column empty, it never breaks the report.
@@ -941,18 +980,24 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     rec.lines.push({ kind, tranid: row.tranid, source: source || '', ordered, done, open, expected: expected || '', status: row.statusname || '' });
                 };
                 const stkIds = stocked.map(x => x.internalId);
-                for (let i = 0; i < stkIds.length; i += 150) {
-                    const chunk = stkIds.slice(i, i + 150);
-                    const poRows = await runSql(`SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate, BUILTIN.DF(t.status) AS statusname, BUILTIN.DF(t.entity) AS vendor, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'PurchOrd' AND tl.item IN (${chunk.join(',')}) AND NVL(tl.isclosed,'F') = 'F' AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Rejected%'`);
-                    poRows.forEach(row => pushInb(row, 'PO', row.vendor, row.duedate));
-                    // WOs: the mainline row carries the assembly being built; quantityshiprecv = qty already
-                    // built. t.enddate (production end) may not be queryable — fall back to duedate-only.
-                    const woSel = (extra) => `SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate${extra}, BUILTIN.DF(t.status) AS statusname, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'WorkOrd' AND tl.item IN (${chunk.join(',')}) AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Built%'`;
-                    let woRows;
-                    try { woRows = await runSql(woSel(', t.enddate AS expected')); }
-                    catch (weErr) { woRows = await runSql(woSel('')); }
-                    woRows.forEach(row => pushInb(row, 'WO', 'Production', row.expected || row.duedate));
-                }
+                // An id can produce SEVERAL rows here (one per open line), so this is the one loop
+                // whose answer size is not bounded by the id count — 400 is a judgement, and the cap
+                // guard in runChunked is what actually makes it safe.
+                await runChunked(stkIds, 400,
+                    (chunk) => runSql(`SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate, BUILTIN.DF(t.status) AS statusname, BUILTIN.DF(t.entity) AS vendor, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id WHERE t.type = 'PurchOrd' AND tl.item IN (${chunk.join(',')}) AND NVL(tl.isclosed,'F') = 'F' AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Rejected%'`),
+                    (poRows) => poRows.forEach(row => pushInb(row, 'PO', row.vendor, row.duedate)));
+                // WOs: the mainline row carries the assembly being built; quantityshiprecv = qty already
+                // built. t.enddate (production end) may not be queryable — fall back to duedate-only.
+                // The fallback is LATCHED: every chunk used to re-try enddate, so in an account where
+                // it is not queryable each real call was preceded by a failed one.
+                const woSel = (extra, chunk) => `SELECT tl.item AS internal_id, t.tranid AS tranid, t.duedate AS duedate${extra}, BUILTIN.DF(t.status) AS statusname, ABS(NVL(tl.quantity,0)) AS ordered, NVL(tl.quantityshiprecv,0) AS done FROM transaction t JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T' WHERE t.type = 'WorkOrd' AND tl.item IN (${chunk.join(',')}) AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Built%'`;
+                let woExtra = ', t.enddate AS expected';
+                await runChunked(stkIds, 400,
+                    async (chunk) => {
+                        try { return await runSql(woSel(woExtra, chunk)); }
+                        catch (weErr) { if (!woExtra) throw weErr; woExtra = ''; return await runSql(woSel('', chunk)); }
+                    },
+                    (woRows) => woRows.forEach(row => pushInb(row, 'WO', 'Production', row.expected || row.duedate)));
             } catch (inbErr) { console.warn('Inbound (PO/WO) fetch failed — On Ord column left empty:', inbErr); }
             // 3) One row per stocked item; pair to the OLD history item: "STD-<SKU>" first (the
             // 2026-07 realignment), then the legacy "<base>-N" → "<base>" scheme for stragglers.
