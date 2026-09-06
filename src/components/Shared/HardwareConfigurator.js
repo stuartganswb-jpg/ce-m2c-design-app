@@ -1666,7 +1666,13 @@ function HardwareConfiguratorInner({
                         {step?.kind === 'SLOT' && (<>
                             {step.slot.suppressedBy && (
                                 <div style={{ ...mono, fontSize: '9px', textTransform: 'none', letterSpacing: 0, color: '#8a6508', borderLeft: '2px solid #8a6508', paddingLeft: '9px' }}>
-                                    Not asked — {step.slot.suppressedReason} ({step.slot.suppressedBy})
+                                    {/* ⚠ THROUGH ourId, LIKE EVERY OTHER NUMBER ON THIS SCREEN. slots() names the
+                                        part that closed the step by its PIN id, because the model has no library
+                                        to resolve against — so a pin tagged with the app's record id printed
+                                        "(CE-ASM-64478)" at the operator, which is the very thing ourId exists to
+                                        stop (Stuart 2026-09-06, H1-2TRV: it read CE-ASM-64478 instead of
+                                        H1-2TRVDRA). Resolved here, where the library IS in hand. */}
+                                    Not asked — {step.slot.suppressedReason} ({ourId(step.slot.suppressedBy)})
                                 </div>
                             )}
                             {!!step.slot.options.length && (() => {
