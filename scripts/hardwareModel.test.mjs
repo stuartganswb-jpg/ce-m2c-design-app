@@ -736,13 +736,35 @@ const threePiece = [
 
     eq('before a rod is chosen every end treatment is on the table', endL([]), ['FIN-L', 'IM-L', 'RET-L']);
     eq('the three-piece pole keeps its return', endL(['P3-C']), ['FIN-L', 'IM-L', 'RET-L']);
-    eq('the single long rod has no return — nothing to replace', endL(['P1']), ['FIN-L', 'IM-L']);
-    ok('and an inside mount survives, because it does NOT shorten the pole',
-        endL(['P1']).includes('IM-L'));
+    // ⚠ REVERSED 2026-09-06 (Stuart, H1-2TRV): "slot 27 acrylic rod for all uses (returns with and
+    // without plates, standard, etc) … a fallback that if there is no left and right just to use
+    // center." A rod pinned as ONE piece was never going to be shortened — it renders whole and the
+    // return sits at its end — so it keeps its returns. This assertion used to read "has no return
+    // — nothing to replace"; that reading now applies only to a pole that HAS end pieces and is
+    // missing one (below).
+    eq('the single long rod keeps its return — the one piece is the centre', endL(['P1']), ['FIN-L', 'IM-L', 'RET-L']);
+    ok('and nothing at that end is rejected for pole construction',
+        !resolve({ choices: mixedPoles, answers: {}, selectedIds: ['P1'] })
+            .slots.find(s => s.kind === 'END' && s.position === 'LEFT').rejected.some(r => r.rule === 'pole construction'));
 
-    // The exclusion explains itself in the same place as every other one.
-    const why = resolve({ choices: mixedPoles, answers: {}, selectedIds: ['P1'] })
-        .slots.find(s => s.kind === 'END' && s.position === 'LEFT').rejected.find(r => r.choice.id === 'RET-L');
+    // The real acrylic shape: one pin, position SHARED — read as CORE, renders whole, keeps returns.
+    const shared = [...mixedPoles, C({ id: 'PS', partId: 'ACR', role: 'ROD', rodKind: 'SOLID', position: 'SHARED', nodes: ['s'] })];
+    eq('a SHARED one-piece rod keeps its return too',
+        resolve({ choices: shared, answers: {}, selectedIds: ['PS'] })
+            .slots.find(s => s.kind === 'END' && s.position === 'LEFT').options.map(o => o.id).sort(), ['FIN-L', 'IM-L', 'RET-L']);
+
+    // The per-position rule still bites where a pole HAS end pieces and is missing one: LEFT pinned,
+    // RIGHT not — a return at RIGHT would leave a gap, so it is still dropped, and still explains why.
+    const halfPinned = [
+        C({ id: 'H-L', partId: 'HALF', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['hl'] }),
+        C({ id: 'H-C', partId: 'HALF', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['hc'] }),
+        C({ id: 'RET-R', partId: 'RT', role: 'RETURN', position: 'RIGHT', nodes: ['rr'] }),
+        C({ id: 'FIN-R', partId: 'F', role: 'FINIAL', position: 'RIGHT', nodes: ['fr'] }),
+    ];
+    const rightEnd = resolve({ choices: halfPinned, answers: {}, selectedIds: ['H-C'] })
+        .slots.find(s => s.kind === 'END' && s.position === 'RIGHT');
+    eq('a pole missing only its RIGHT piece still loses the return there', rightEnd.options.map(o => o.id), ['FIN-R']);
+    const why = rightEnd.rejected.find(r => r.choice.id === 'RET-R');
     ok('and names the pole that caused it', why && /single-piece pole/.test(why.detail), why && why.detail);
 }
 
@@ -1399,13 +1421,19 @@ eq('nonsense is null', measureOf('n/a'), null);
     eq('still offered once the fascia is chosen', endAt(['F']).options.length, 2);
     ok('the miter return survives', endAt(['F']).options.some(o => o.role === 'RETURN'));
 
-    // ⚠ THE SOLID RULE IS UNTOUCHED — this is the H1-138 side, and it must not move.
+    // ⚠ THE SOLID SIDE, REVISED 2026-09-06 (Stuart, H1-2TRV slot 27: "acrylic rod for all uses …
+    // a fallback that if there is no left and right just to use center"). This guard used to read
+    // "a one-piece SOLID pole still cannot take a return" — the H1-138 side must not move. It has
+    // not: H1-138's pole is pinned LEFT/CENTER/RIGHT, so the fallback never fires there (three-piece
+    // case just below, unchanged). What changed is a solid pole pinned as ONE piece with returns
+    // pinned beside it — previously read as a data mistake and hidden, now a real product that
+    // renders whole with the arm at its end.
     const solid = applyFitsDefaults([
         C({ id: 'P', partId: 'H1-138R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['p'] }),
         C({ id: 'R', partId: 'CE-FEE-4594', role: 'RETURN', position: 'LEFT', nodes: ['r'] }),
     ].map(normalizeChoice));
     const oneP = slots(solid, {}, ['P']).find(s => s.kind === 'END' && s.position === 'LEFT');
-    eq('a one-piece SOLID pole still cannot take a return', oneP.options.length, 0);
+    eq('a one-piece SOLID pole now keeps its return — the one piece is the centre', oneP.options.length, 1);
 
     // …and a three-piece solid pole still CAN, which is the H1-138 french return.
     const threeP = applyFitsDefaults([

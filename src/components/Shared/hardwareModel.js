@@ -1053,8 +1053,21 @@ export function slots(choices, answers = {}, selectedIds = []) {
             && chosenPoles.some(r => r.partId && r.partId === c.partId && (r.tier || '') === (c.tier || '')
                 && (!tier || (r.tier || '') === tier))
             && (c.position === pos));
+        // ── NO LEFT AND NO RIGHT → THE ONE PIECE IS THE CENTRE (Stuart 2026-09-06, H1-2TRV) ──
+        // "slot 27 acrylic rod for all uses (returns with and without plates, standard, etc). can
+        //  you add to the pole rule a fallback that if there is no left and right just to use
+        //  center."
+        //
+        // The rule above was written for a pole pinned in pieces that happens to be MISSING one —
+        // a return there would leave a gap. A rod pinned as ONE piece is a different fact: it was
+        // never going to be shortened, it renders whole (segmentOf reads it as CORE), and the
+        // return arm simply sits at its end. So a pole with no end pieces AT ALL keeps every
+        // return; a pole with SOME end pieces is still judged position by position, because there
+        // a missing piece really is a missing piece.
+        const onePiece = (tier) => !segmentsAt('LEFT', tier) && !segmentsAt('RIGHT', tier);
         bucket.forEach(slot => {
             if (slot.kind !== 'END' || !slot.position) return;
+            if (onePiece(slot.tier || '')) return;                     // one piece — it IS the centre; returns stand
             if (segmentsAt(slot.position, slot.tier || '')) return;  // a piece exists here — returns are possible
             const dropped = slot.options.filter(o => o.role === 'RETURN');
             if (!dropped.length) return;
