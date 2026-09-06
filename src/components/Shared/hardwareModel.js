@@ -386,6 +386,9 @@ export function normalizeChoice(input = {}) {
         isBasic: input.isBasic === true,
         // "this end treatment mounts without a backplate" — see the plate pairing in slots().
         noBackplate: input.noBackplate === true,
+        // END RETURN ARM: this part IS the end treatment. Paired with noBackplate it means the
+        // DECORATIVE kind, which supports nothing — see the bracket-replacing rule in slots().
+        isReturnArm: input.isReturnArm === true,
         // ⚠ THE TWO SIDES OF "IN LINE" ARE DIFFERENT FIELDS, and 1.6 says so. On a BRACKET the flag
         // is `usesReturnPlates` — "this tag is how the system knows a bracket is In Line". On a
         // BACKPLATE it is `inlineOnly` — "the INLINE-bracket copy of a shared return-style plate".
@@ -1330,6 +1333,24 @@ export function slots(choices, answers = {}, selectedIds = []) {
         // it the in-line pool. An INSIDE MOUNT is different: it sits in the frame with nothing
         // behind it, so that still clears both.
         if (slot.kind === 'BACKPLATE' && by && by.role === 'RETURN') return;
+        // ── A DECORATIVE END ARM SUPPORTS NOTHING (Stuart 2026-09-06, H1-2TRV) ──────────────
+        // "any end arms and returns (miter, etc) are tagged no plate — not only do we hide the
+        //  choice of backplate, we need to keep open the choice of left and right bracket, since
+        //  these returns with no plate are purely decorative; we need brackets placed at each end
+        //  for support."
+        //
+        // The rule above is RIGHT and stays: an ordinary return DOES carry the rod, and most
+        // returns are ordinary. This is the one collection where the same shape is a facade — it
+        // clamps to the fascia, holds nothing up, and the rod still needs a real bracket under it.
+        //
+        // ⚠ IT TAKES BOTH TAGS, AND BOTH ALREADY EXIST (Stuart, same day): "the end arms that are
+        // tagged without this box checked, they use backplates and do not need brackets — they are
+        // actual brackets." So END-ARM alone is load-bearing and unchanged; END-ARM **with** NO
+        // PLATE is the decorative one. Nothing new to tag, and no flow that has not ticked both can
+        // reach this line — which is what keeps the other four collections byte-for-byte identical.
+        //
+        // The plate is still gone: noBackplate suppressed it earlier, on its own rule.
+        if (slot.kind === 'BRACKET' && by && by.isReturnArm && by.noBackplate) return;
         // ⚠ NAME IT BY OUR PATTERN ID (Stuart 2026-08-17: "step 9 is referring to the id from the
         // node H1138inPOLEMTR6Right1 — never use these, always our pattern id"). A pin's name is
         // sometimes the node it was built from, which is an artefact of the .fbx and means nothing

@@ -1797,6 +1797,68 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('the other end keeps its plate', other.options.length === 1);
 }
 
+// ── A DECORATIVE END ARM SUPPORTS NOTHING, SO ITS BRACKET STAYS ON THE TABLE ──────────────────
+// Stuart 2026-09-06, H1-2TRV: "these returns with no plate are purely decorative — we need brackets
+// placed at each end for support", and "the end arms tagged WITHOUT this box checked use backplates
+// and do not need brackets, they are actual brackets."
+//
+// So it takes BOTH tags: END-ARM says "this part is the end treatment", NO PLATE says "and it holds
+// nothing up". Either alone keeps today's behaviour exactly — which is what stops the other four
+// collections noticing this rule exists at all.
+{
+    const base = (end) => [
+        { id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+        { id: 'BKT-L', partId: 'H1-138BS', role: 'BRACKET', position: 'LEFT', nodes: ['bl'] },
+        { id: 'PLATE-L', partId: 'H1-138BP-R', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl'] },
+        end,
+    ];
+    const slotOf = (end, kind) => resolve({ choices: base(end), answers: {}, selectedIds: ['ROD', 'END'] })
+        .slots.find(s => s.kind === kind && s.position === 'LEFT');
+    const end = (extra) => ({ id: 'END', partId: 'ARM', role: 'RETURN', position: 'LEFT', nodes: ['e'], ...extra });
+
+    // 1. THE RULE THAT MUST NOT MOVE — an ordinary return carries the rod: bracket gone, plate kept.
+    eq('a plain return still takes the bracket away', slotOf(end({}), 'BRACKET').options.length, 0);
+    ok('and says why', /carries the rod at that end/.test(slotOf(end({}), 'BRACKET').suppressedReason || ''));
+    eq('and still keeps its plate', slotOf(end({}), 'BACKPLATE').options.map(o => o.partId), ['H1-138BP-R']);
+
+    // 2. NO PLATE alone — unchanged: still replaces the bracket, and now has no plate either.
+    eq('no-plate alone still replaces the bracket', slotOf(end({ noBackplate: true }), 'BRACKET').options.length, 0);
+    eq('and takes its plate with it', slotOf(end({ noBackplate: true }), 'BACKPLATE').options.length, 0);
+
+    // 3. END-ARM alone — Stuart: these ARE brackets, they take plates and need no separate bracket.
+    eq('end-arm alone still replaces the bracket', slotOf(end({ isReturnArm: true }), 'BRACKET').options.length, 0);
+    eq('and keeps its plate', slotOf(end({ isReturnArm: true }), 'BACKPLATE').options.map(o => o.partId), ['H1-138BP-R']);
+
+    // 4. BOTH — the decorative case, and the only one that changes.
+    const both = end({ isReturnArm: true, noBackplate: true });
+    eq('a decorative end arm KEEPS its bracket', slotOf(both, 'BRACKET').options.map(o => o.partId), ['H1-138BS']);
+    ok('and nothing is marked suppressed there', !slotOf(both, 'BRACKET').suppressedReason);
+    eq('while the plate is still gone', slotOf(both, 'BACKPLATE').options.length, 0);
+
+    // 5. The pool is the ordinary one — Stuart: "limited only by the choices in step one of single
+    //    or double and projection". A bracket the order could not use is still refused, by the
+    //    ordinary gate rather than by anything this rule does.
+    const wrongSetup = resolve({
+        choices: [...base(both), { id: 'BKT-D', partId: 'H1-138BD', role: 'BRACKET', position: 'LEFT', setup: 'DOUBLE', nodes: ['bd'] }],
+        answers: { setup: 'SINGLE' }, selectedIds: ['ROD', 'END'],
+    }).slots.find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
+    eq('and the pool is still filtered by step one', wrongSetup.options.map(o => o.partId), ['H1-138BS']);
+
+    // 6. It does not leak to the other end.
+    const otherEnd = resolve({
+        choices: [...base(both), { id: 'BKT-R', partId: 'H1-138BS', role: 'BRACKET', position: 'RIGHT', nodes: ['br'] },
+            { id: 'END-R', partId: 'ARM', role: 'RETURN', position: 'RIGHT', nodes: ['er'] }],
+        answers: {}, selectedIds: ['ROD', 'END', 'END-R'],
+    }).slots.find(s => s.kind === 'BRACKET' && s.position === 'RIGHT');
+    eq('an ordinary return at the other end is untouched', otherEnd.options.length, 0);
+
+    // 7. And the support count agrees with the picture: a decorative end carries nothing until a
+    //    bracket is actually chosen there — bearingEnds already read NO PLATE this way, so the two
+    //    rules compose rather than each holding an opinion.
+    eq('a decorative end alone carries nothing', bearingEnds(base(both), ['ROD', 'END']), 0);
+    eq('choosing its bracket makes the end carry', bearingEnds(base(both), ['ROD', 'END', 'BKT-L']), 1);
+}
+
 // ── HOW MANY ──────────────────────────────────────────────────────────────────────────────────
 // "rings set a recommended amount at 4 per ft plus 2 per rod, same for carriers on track it is 4
 //  per ft and 1 extra for the ends which is the plus 2."

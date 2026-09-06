@@ -11,7 +11,7 @@
 // mid-quote without the risk of nudging the order.
 
 import React, { useMemo, useState } from 'react';
-import { searchLookup, verdictFor, tagLinesOf } from './partLookup.js';
+import { searchLookup, verdictFor, tagLinesOf, flagLinesOf } from './partLookup.js';
 
 const mono = { fontFamily: 'var(--mono)', letterSpacing: '.04em' };
 
@@ -131,6 +131,21 @@ export default function PartLookupPanel({
                                         }}>{t.label}: {t.value}</span>
                                     ))}
                                 </div>
+
+                                {/* THE BOOLEAN TAGS — only the ones actually set. */}
+                                {!!flagLinesOf(row).length && (
+                                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '5px' }}>
+                                        {flagLinesOf(row).map(f => (
+                                            <span key={f.key} style={{
+                                                ...mono, fontSize: '8.5px', textTransform: 'uppercase',
+                                                padding: '2px 6px',
+                                                border: `1px solid ${f.hot ? 'var(--brass)' : 'var(--ink-soft)'}`,
+                                                color: f.hot ? '#fff' : 'var(--ink)',
+                                                background: f.hot ? 'var(--brass)' : '#fff',
+                                            }}>{f.label}</span>
+                                        ))}
+                                    </div>
+                                )}
 
                                 {/* WHY IT IS NOT ON THE STEP — the same sentence "why not the other N?"
                                     prints, because it is the same admits() call. */}

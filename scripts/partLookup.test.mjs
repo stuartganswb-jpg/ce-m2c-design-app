@@ -15,7 +15,7 @@
 
 import { admits, contextOf } from '../src/components/Shared/hardwareModel.js';
 import {
-    buildLookupIndex, indexForAssembly, searchLookup, verdictFor, tagLinesOf, ourCodeOf,
+    buildLookupIndex, indexForAssembly, searchLookup, verdictFor, tagLinesOf, flagLinesOf, ourCodeOf,
 } from '../src/components/Shared/partLookup.js';
 
 let pass = 0, fail = 0;
@@ -137,6 +137,28 @@ index.forEach(row => {
 // With no flow open there is nothing to judge against — and that must read as "unknown", never
 // as a silent pass.
 ok('no choices → null verdict, not a pass', verdictFor(ile, { choices: [], answers }) === null);
+
+// ── THE BOOLEAN TAGS (Stuart 2026-09-06: auditing these meant opening 1.6 one pin at a time) ──
+{
+    const flagPins = [
+        { id: 'F1', assemblyId: 'ASM-H1-75', clusterId: 'CL-END', partId: 'DECO', partName: 'Decorative End Arm',
+          endTreatment: 'MITER_RETURN', isReturnArm: true, noBackplate: true, targetNode: 'end', sort: 1 },
+        { id: 'F2', assemblyId: 'ASM-H1-75', clusterId: 'CL-END', partId: 'LOADED', partName: 'Load-bearing End Arm',
+          endTreatment: 'MITER_RETURN', isReturnArm: true, targetNode: 'end', sort: 2 },
+        { id: 'F3', assemblyId: 'ASM-H1-75', clusterId: 'CL-BKT', partId: 'PLAIN', partName: 'Plain Bracket',
+          targetNode: 'bkt', sort: 3 },
+    ];
+    const fx = indexForAssembly({ assembly, pins: flagPins, flow, findPart: () => null, aliasCtx: {} });
+    const labels = (code) => flagLinesOf(fx.find(r => r.ours === code)).map(f => f.label);
+
+    eq('the decorative pair is called out by name', labels('DECO'),
+        ['END-ARM', 'NO PLATE', 'DECORATIVE · KEEPS ITS BRACKET']);
+    eq('end-arm alone is NOT called decorative', labels('LOADED'), ['END-ARM']);
+    eq('an untagged part shows no flags at all', labels('PLAIN'), []);
+    ok('the decorative chip is the highlighted one',
+        flagLinesOf(fx.find(r => r.ours === 'DECO')).find(f => f.key === 'decorative').hot === true);
+    ok('flagLinesOf survives a junk row', flagLinesOf(null).length === 0 && flagLinesOf({}).length === 0);
+}
 
 // ── THE CROSS-FLOW INDEX ─────────────────────────────────────────────────────────────────────
 const flows = [flow, { id: 'FLOW-1', name: '1" Round Rod', linkedAssemblyId: 'ASM-MISSING' }];

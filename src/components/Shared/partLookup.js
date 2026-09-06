@@ -79,7 +79,36 @@ function rowOf({ choice, part, flow, aliasCtx }) {
             fitsExplicit: !!choice.fitsExplicit,
         },
         hidden: !!choice.hidden,
+        // The BOOLEAN tags, which decide as much as the measured ones and were invisible here until
+        // Stuart asked for them (2026-09-06) — auditing them meant opening 1.6 one pin at a time.
+        flags: {
+            noBackplate: !!choice.noBackplate,
+            isReturnArm: !!choice.isReturnArm,
+            isBasic: !!choice.isBasic,
+            inlineOnly: !!choice.inlineOnly,
+            returnOnly: !!choice.returnOnly,
+        },
     };
+}
+
+/**
+ * The boolean tags a row carries, as short labels — only the ones that are SET.
+ *
+ * An unset boolean is the normal case and says nothing; printing "no plate: no" on every row would
+ * bury the handful that matter. The measured tags in tagLinesOf() are the opposite — there, absence
+ * IS the news, which is why an untagged projection is spelled out and these are not.
+ */
+export function flagLinesOf(row) {
+    const f = row?.flags || {};
+    const out = [];
+    if (f.isReturnArm) out.push({ key: 'endArm', label: 'END-ARM' });
+    if (f.noBackplate) out.push({ key: 'noPlate', label: 'NO PLATE' });
+    if (f.isBasic) out.push({ key: 'basic', label: 'BASIC' });
+    if (f.inlineOnly) out.push({ key: 'inl', label: 'INL-BKT' });
+    if (f.returnOnly) out.push({ key: 'rtn', label: 'RTN-ONLY' });
+    // The pair that changes what the engine DOES, called out rather than left to be spotted.
+    if (f.isReturnArm && f.noBackplate) out.push({ key: 'decorative', label: 'DECORATIVE · KEEPS ITS BRACKET', hot: true });
+    return out;
 }
 
 /**

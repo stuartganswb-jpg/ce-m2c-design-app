@@ -199,6 +199,10 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
         isBasic: !!(pin.isBasic || cluster?.isBasic),
         // NO PLATE — the traverse returns clamp to the fascia; the solid ones bolt to the wall.
         noBackplate: !!(pin.noBackplate || cluster?.noBackplate),
+        // END RETURN ARM — the 1.6 / 1.5 tag. It has been written for a long time and read only by
+        // the OLD configurator, so on a tag-engine flow it did nothing at all. Carried here so the
+        // one rule that needs it (a decorative end arm keeps its bracket — see slots()) can see it.
+        isReturnArm: !!(pin.isReturnArm || cluster?.isReturnArm),
         usesReturnPlates: !!(pin.usesReturnPlates || cluster?.usesReturnPlates),
         inlineOnly: !!(pin.inlineOnly || cluster?.inlineOnly),
         returnOnly: !!(pin.returnOnly || cluster?.returnOnly),
