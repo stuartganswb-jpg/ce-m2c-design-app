@@ -4971,7 +4971,15 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
                               READ-ONLY: it names a flow, it never launches one. */}
                           <div style={{ marginBottom: '14px' }}>
                               <PartLookupPanel
-                                  index={flowLookupIndex.length ? flowLookupIndex : engineLookup.index}
+                                  /* ⚠ THE OPEN FLOW READS LIVE PINS (2026-09-06). The cross-flow index is a
+                                     one-shot getDocs snapshot taken the first time anyone searches, and it was
+                                     shadowing the engine's live rows for the flow on screen — so a tag ticked in
+                                     1.6 after that first search never showed here while the engine already
+                                     honoured it. A whole round was spent chasing a difference that was only in
+                                     this panel. Live rows for the active flow; the snapshot only for the others. */
+                                  index={engineLookup.index.length
+                                      ? [...engineLookup.index, ...flowLookupIndex.filter(r => r.flowId !== activeFlowId)]
+                                      : flowLookupIndex}
                                   choices={engineLookup.choices}
                                   answers={engineLookup.answers}
                                   activeFlowId={activeFlowId}

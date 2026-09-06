@@ -1833,7 +1833,13 @@ eq('nonsense is null', measureOf('n/a'), null);
     const both = end({ isReturnArm: true, noBackplate: true });
     eq('a decorative end arm KEEPS its bracket', slotOf(both, 'BRACKET').options.map(o => o.partId), ['H1-138BS']);
     ok('and nothing is marked suppressed there', !slotOf(both, 'BRACKET').suppressedReason);
-    eq('while the plate is still gone', slotOf(both, 'BACKPLATE').options.length, 0);
+    // ⚠ CORRECTED 2026-09-06 (same day, first live test). This first read "while the plate is
+    // still gone" — and that was the bug: keyed on the END's tag, it left the bracket the end had
+    // just kept open with no plate to choose. The end takes no plate; the BRACKET still does. So
+    // with no bracket chosen yet the plain plates stand ("a plate with no arm is not a question
+    // yet"), and once one is chosen the plate pairs with it — see the block below.
+    eq('while the plate now waits for the bracket rather than vanishing', slotOf(both, 'BACKPLATE').options.map(o => o.partId), ['H1-138BP-R']);
+    ok('and is not marked suppressed by the end', !slotOf(both, 'BACKPLATE').suppressedReason);
 
     // 5. The pool is the ordinary one — Stuart: "limited only by the choices in step one of single
     //    or double and projection". A bracket the order could not use is still refused, by the
@@ -1857,6 +1863,63 @@ eq('nonsense is null', measureOf('n/a'), null);
     //    rules compose rather than each holding an opinion.
     eq('a decorative end alone carries nothing', bearingEnds(base(both), ['ROD', 'END']), 0);
     eq('choosing its bracket makes the end carry', bearingEnds(base(both), ['ROD', 'END', 'BKT-L']), 1);
+}
+
+// ── AN END ARM ON A BRACKET CLUSTER IS THE END TREATMENT (Stuart 2026-09-06, H1-2TRV 51/52) ──
+// "these choices cause the left and right bracket choice to skip and we need to expose the
+//  backplates for each selection. in the old engine flat iron were end arms with backplates so they
+//  skipped the bracket choice and it worked."
+{
+    const mk = (armExtra = {}) => [
+        { id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+        { id: 'ROD-L', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rl'] },
+        { id: 'BKT-L', partId: 'H1-2RCTECB', role: 'BRACKET', position: 'LEFT', nodes: ['bl'] },
+        { id: 'PLATE-L', partId: 'H1-2RCTBP-H', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl'] },
+        // the RCT return arm exactly as 1.6 saves it: a BRACKET cluster, END-ARM ticked, no plate flag
+        { id: 'ARM-L', partId: 'H1-2RCTERA', role: 'BRACKET', position: 'LEFT', isReturnArm: true, nodes: ['al'], ...armExtra },
+    ];
+    const n = mk().map(normalizeChoice);
+    eq('an END-ARM bracket is read as a RETURN', n.find(c => c.id === 'ARM-L').role, 'RETURN');
+    eq('END-ARM alone leaves a bracket untouched', normalizeChoice(mk()[2]).role, 'BRACKET');
+
+    const idle = resolve({ choices: mk(), answers: {}, selectedIds: ['ROD'] });
+    const endL = idle.slots.find(s => s.kind === 'END' && s.position === 'LEFT');
+    const bktL = idle.slots.find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
+    ok('it is offered in the END step, not the bracket step',
+        endL.options.some(o => o.partId === 'H1-2RCTERA') && !bktL.options.some(o => o.partId === 'H1-2RCTERA'));
+
+    const picked = resolve({ choices: mk(), answers: {}, selectedIds: ['ROD', 'ARM-L'] });
+    const bkt2 = picked.slots.find(s => s.kind === 'BRACKET' && s.position === 'LEFT');
+    const plate2 = picked.slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT');
+    eq('choosing it skips the left bracket', bkt2.options.length, 0);
+    ok('for the return reason', /carries the rod at that end/.test(bkt2.suppressedReason || ''));
+    eq('and exposes the backplates', plate2.options.map(o => o.partId), ['H1-2RCTBP-H']);
+    eq('and it counts as carrying the rod', bearingEnds(mk().map(normalizeChoice), ['ROD', 'ARM-L']), 1);
+    // The segment rule follows RETURN: the end piece hides. Stuart 2026-09-06: "the designer loaded
+    // poles for each end to perform … we may have to test that part" — recorded, not asserted on.
+}
+
+// ── A DECORATIVE END DOES NOT TAKE THE PLATE WITH IT (Stuart 2026-09-06, first-night bug) ──────
+// H1-2RCTECB chosen under H1-2TRVERA read "this end treatment mounts without a backplate": the rule
+// keyed on the END's tag suppressed the plate the newly-open BRACKET needed.
+{
+    const base = [
+        { id: 'ROD', partId: 'R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+        { id: 'BKT-L', partId: 'H1-2RCTECB', role: 'BRACKET', position: 'LEFT', nodes: ['bl'] },
+        { id: 'PLATE-L', partId: 'H1-2RCTBP-H', role: 'BACKPLATE', position: 'LEFT', nodes: ['pl'] },
+        { id: 'DECO', partId: 'H1-2TRVERA', role: 'RETURN', position: 'LEFT', isReturnArm: true, noBackplate: true, nodes: ['e'] },
+    ];
+    const plate = (sel) => resolve({ choices: base, answers: {}, selectedIds: sel })
+        .slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT');
+    ok('decorative end alone: plate waits for a bracket, not suppressed by the end',
+        !plate(['ROD', 'DECO']).suppressedReason);
+    eq('decorative end + bracket chosen: the bracket gets its plate',
+        plate(['ROD', 'DECO', 'BKT-L']).options.map(o => o.partId), ['H1-2RCTBP-H']);
+    // and an ORDINARY no-plate return is untouched: still no plate at all
+    const plain = base.map(c => c.id === 'DECO' ? { ...c, isReturnArm: false } : c);
+    const p2 = resolve({ choices: plain, answers: {}, selectedIds: ['ROD', 'DECO'] })
+        .slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT');
+    ok('an ordinary no-plate return still suppresses its plate', p2.options.length === 0 && /without a backplate/.test(p2.suppressedReason || ''));
 }
 
 // ── HOW MANY ──────────────────────────────────────────────────────────────────────────────────

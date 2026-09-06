@@ -291,6 +291,19 @@ export function normalizeChoice(input = {}) {
     // on a backplate cluster would sit in the plate picker, offering the customer a plate to go with
     // the plate. The tag is watched; the category is not.
     if (input.isBasic === true && (role === 'BACKPLATE' || role === 'BRACKET')) role = 'BRACKET';
+    // ⚠ AN END ARM IS AN END TREATMENT, NOT A BRACKET (Stuart 2026-09-06, H1-2TRV slots 51/52):
+    // "these are for the standard pole … these choices cause the left and right bracket choice to
+    //  skip and we need to expose the backplates for each selection. in the old engine flat iron
+    //  were end arms with backplates so they skipped the bracket choice and it worked."
+    //
+    // The END-ARM tag was born on a BRACKET cluster meaning exactly that — this bracket IS the end
+    // — and the old engine honoured it (returnChosen). Here it was carried onto the choice but the
+    // role stayed BRACKET, so the arm sat in the bracket picker beside the arms it replaces. Read
+    // as a RETURN it gets everything the tag promises for free, because that is what RETURN already
+    // means: pooled into the End step, replaces the bracket at its end, keeps its plate with the
+    // return → in-line → plain fallback, counts as carrying the rod, hides the pole's end segment.
+    // Same shape as the inside-mount rule above: a tag that already exists, read for what it says.
+    if (input.isReturnArm === true && role === 'BRACKET') role = 'RETURN';
     const fitsTag = []
         .concat(input.fits || [])
         .map(U)
@@ -1161,7 +1174,10 @@ export function slots(choices, answers = {}, selectedIds = []) {
             || chosen.find(c => !c.position)
             || (!pos ? chosen[0] : null) || null;
         if (bkt) return bkt;
-        return choices.find(c => want.has(c.id) && c.role === 'RETURN' && (c.position || '') === pos) || null;
+        // A return that takes no plate cannot be the arm a plate pairs with — under a decorative end
+        // the plate waits for the bracket the customer chooses, exactly as an unanswered bracket
+        // step would ("a plate with no arm is not a question yet").
+        return choices.find(c => want.has(c.id) && c.role === 'RETURN' && !c.noBackplate && (c.position || '') === pos) || null;
     };
     bucket.forEach(slot => {
         if (slot.kind !== 'BACKPLATE') return;
@@ -1184,7 +1200,13 @@ export function slots(choices, answers = {}, selectedIds = []) {
         // position, opposite answer — so the part says which, and nothing here guesses. Read the
         // same way BASIC is: whatever is chosen at this position, if it says it takes no plate,
         // there is no plate question.
-        const noPlate = choices.find(c => want.has(c.id) && c.noBackplate
+        // ⚠ …UNLESS THE END IS DECORATIVE (Stuart 2026-09-06). An END-ARM + NO PLATE end keeps its
+        // bracket open (the replace rule below stands aside for it), and that bracket needs a plate
+        // of its own. Suppressing the plate on the END's tag then leaves the operator choosing a
+        // bracket that can never get one — which is what happened the first night this shipped:
+        // H1-2RCTECB chosen under H1-2TRVERA, "this end treatment mounts without a backplate". The
+        // end itself still takes no plate; the question simply belongs to the bracket now.
+        const noPlate = choices.find(c => want.has(c.id) && c.noBackplate && !c.isReturnArm
             && ((c.position || '') === slot.position || !c.position || !slot.position));
         if (noPlate) {
             slot.suppressedBy = noPlate.partId || noPlate.name;
