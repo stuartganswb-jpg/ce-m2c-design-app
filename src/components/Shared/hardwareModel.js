@@ -1285,7 +1285,14 @@ export function slots(choices, answers = {}, selectedIds = []) {
             // the axis gate above (Stuart 2026-08-25): the return carries the projection, the
             // plate merely meets the wall behind it, and its own proj tag records where it was
             // modelled. Ordinary plates still pair strictly by depth.
-            const paired = slot.options.filter(o => o.returnOnly || !o.projs.length || o.projs.some(p => arm.projs.some(q => sameMeasure(p, q))));
+            // ⚠ …BUT AN END ARM PAIRS BY DEPTH LIKE THE BRACKET IT IS (Stuart 2026-09-06, H1-2TRV
+            // #51 at 4-5/8"). The exemption above is for FEE returns — the plate meets the wall
+            // behind whichever bend is chosen. An end arm is a bracket that IS the end, re-roled
+            // RETURN so it replaces its bracket and keeps its plate — and the designer pinned its
+            // return plates per projection (#39 · 3-5/8", #44 · 4-5/8", #49 · 6"). Exempted, every
+            // depth survived and the FIRST copy per part won: a 3-5/8" plate under a 4-5/8" arm.
+            const strict = !!arm.isReturnArm;
+            const paired = slot.options.filter(o => (o.returnOnly && !strict) || !o.projs.length || o.projs.some(p => arm.projs.some(q => sameMeasure(p, q))));
             if (paired.length) slot.options = paired;
             else {
                 slot.suppressedBy = arm.name;

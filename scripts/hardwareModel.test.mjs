@@ -1950,6 +1950,37 @@ eq('nonsense is null', measureOf('n/a'), null);
     ok('an ordinary no-plate return still suppresses its plate', p2.options.length === 0 && /without a backplate/.test(p2.suppressedReason || ''));
 }
 
+// ── AN END ARM'S PLATE MATCHES ITS DEPTH (Stuart 2026-09-06, H1-2TRV #51 / #39 / #44 / #49) ────
+// Return plates are pinned per projection here. A FEE return keeps the 2026-08-25 exemption (the
+// plate meets the wall behind whichever bend); an END ARM is a bracket that IS the end, so it
+// pairs strictly. Before this, the first copy per part won — a 3-5/8" plate under a 4-5/8" arm.
+{
+    const parts = ['H1-138BP-R', 'H1-2RCTBP-H', 'H1-138CP-S'];
+    const plates = [];
+    for (const [slot, proj, rtn] of [[34, '3.625', false], [39, '3.625', true], [41, '4.625', false], [44, '4.625', true], [46, '6', false], [49, '6', true]])
+        parts.forEach(p => plates.push({ id: `#${slot}·${p}`, partId: p, role: 'BACKPLATE', position: 'LEFT', proj, mount: 'WALL', ...(rtn ? { returnOnly: true } : {}), nodes: [`n${slot}${p}`] }));
+    const base = [
+        { id: 'ROD', partId: 'H1-2RCTAR', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+        { id: 'ROD-L', partId: 'H1-2RCTAR', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rl'] },
+        { id: 'ERA', partId: 'H1-2RCTERA', role: 'BRACKET', position: 'LEFT', proj: '4.625', mount: 'WALL', isReturnArm: true, nodes: ['era'] },
+        { id: 'FEE', partId: 'CE-FEE-6294', role: 'RETURN', position: 'LEFT', proj: '4.625', nodes: ['fee'] },
+        { id: 'ECB', partId: 'H1-2RCTECB', role: 'BRACKET', position: 'LEFT', proj: '4.625', mount: 'WALL', nodes: ['ecb'] },
+        ...plates,
+    ];
+    const offered = (sel) => resolve({ choices: base, answers: { proj: '4.625' }, selectedIds: sel })
+        .slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT').options.map(o => o.id).sort();
+    eq('the END ARM at 4-5/8" gets the 4-5/8" RETURN plates (#44), one per part',
+        offered(['ROD', 'ERA']), ['#44·H1-138BP-R', '#44·H1-138CP-S', '#44·H1-2RCTBP-H'].sort());
+    ok('and none of the 3-5/8" copies', !offered(['ROD', 'ERA']).some(id => id.startsWith('#39')));
+    eq('a plain bracket still gets the plain 4-5/8" plates (#41)',
+        offered(['ROD', 'ECB']), ['#41·H1-138BP-R', '#41·H1-138CP-S', '#41·H1-2RCTBP-H'].sort());
+    // The fee return keeps its exemption — every depth's return copy stays eligible, as before.
+    const fee = resolve({ choices: base, answers: { proj: '4.625' }, selectedIds: ['ROD', 'FEE'] })
+        .slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT');
+    ok('a FEE return is unchanged: return copies, exempt from depth pairing',
+        fee.options.length === 3 && fee.options.every(o => o.returnOnly));
+}
+
 // ── HOW MANY ──────────────────────────────────────────────────────────────────────────────────
 // "rings set a recommended amount at 4 per ft plus 2 per rod, same for carriers on track it is 4
 //  per ft and 1 extra for the ends which is the plus 2."
