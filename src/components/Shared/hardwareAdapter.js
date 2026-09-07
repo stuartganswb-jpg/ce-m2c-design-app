@@ -153,6 +153,9 @@ export function choiceFromPin(pin, cluster, { classifyCat } = {}) {
     return {
         id: String(pin.id || pin.choiceNode || pin.partId || ''),
         partId: String(pin.partId || ''),
+        // The cluster the pin was filed under — the one key a generated flow option keeps verbatim
+        // (its optId ends -C<last 6 of the cluster id>), so Vision can find the pin an option stands for.
+        clusterId: String(pin.clusterId || cluster?.id || ''),
         name: String(pin.partName || pin.partId || cluster?.name || ''),
         role,
         rodKind: rodKindTag,

@@ -311,6 +311,7 @@ export function normalizeChoice(input = {}) {
     return {
         id: String(input.id || input.optId || input.partId || ''),
         partId: String(input.partId || ''),
+        clusterId: String(input.clusterId || ''),
         name: String(input.name || input.partName || input.id || ''),
         role,
         nodes: []

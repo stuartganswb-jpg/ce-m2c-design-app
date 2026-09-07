@@ -459,14 +459,25 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const ids = [p.id, p.itemId, p.legacyErpId].filter(realIdOf);
       const byPart = engineChoices.filter(c => ids.includes(c.partId));
       if (byPart.length <= 1) return byPart;
+      // THE CLUSTER NAMES THE PIN. A generated option id ends -C<last 6 of its cluster id>; the pin
+      // carries the cluster. Three plate copies under three bracket clusters share a part, a side and
+      // a node — the cluster is what tells them apart.
+      const cm = String(o.optId || '').match(/-C([A-Za-z0-9]{6})(?:-|$)/);
+      if (cm) {
+          const byCluster = byPart.filter(c => String(c.clusterId || '').replace(/[^A-Za-z0-9]/g, '').slice(-6) === cm[1]);
+          if (byCluster.length) return byCluster.length === 1 ? byCluster : narrowBySideAndDepth(o, byCluster);
+      }
       // THE NODES NAME THE PIN OUTRIGHT. A generated option carries the GLB node names of the pin(s)
       // it was built from (targetNode), and the engine choice carries the same names — the one key
       // that is exact whatever else the option forgot to carry.
       const optNodes = new Set(splitNodesLower(o.targetNode));
       if (optNodes.size) {
           const byNode = byPart.filter(c => (c.nodes || []).some(n => optNodes.has(String(n).toLowerCase())));
-          if (byNode.length) return byNode;
+          if (byNode.length) return byNode.length === 1 ? byNode : narrowBySideAndDepth(o, byNode);
       }
+      return narrowBySideAndDepth(o, byPart);
+  };
+  const narrowBySideAndDepth = (o, byPart) => {
       // ⚠ ONE PART, MANY PINS (Stuart 2026-09-07: "solid pole and projection chosen, miter arms
       // still displaying all projection choices"). H1-2TRVMTR is pinned 24 times — seven depths,
       // both sides, three families — and every flow option shares its part number. Judging "any
