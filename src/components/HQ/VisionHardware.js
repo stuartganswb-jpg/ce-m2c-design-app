@@ -1327,7 +1327,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             </div>
                             <div>
                                 <label style={labelStyle}>* Assign Hardware Collection (CPQ)</label>
-                                <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); }} style={fieldStyle}>
+                                <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); setEngData(prev => (prev.rodKind ? { ...prev, rodKind: '' } : prev)); /* the rod type is this flow's answer, not the last one's */ }} style={fieldStyle}>
                                     <option value="">-- SELECT MATCHING CPQ FLOW --</option>
                                     {(() => {
                                         // 🎯 Single-assembly siblings (H2 pivot): flows stamped sizeGroupLabel
