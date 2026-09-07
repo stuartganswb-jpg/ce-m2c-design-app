@@ -5,6 +5,7 @@ import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isRe
 import { pinProjectionOf, choicesFromAssembly } from '../Shared/hardwareAdapter';
 import { admits, axisValues, AXES, normalizeChoice, applyFitsDefaults, parseProjTiers, measureOf } from '../Shared/hardwareModel';
 import { projLabel } from '../Shared/traverseExplode';
+import { splitNodesLower } from '../Shared/nodeList';
 import { platePoolFrom, plateStillOffered } from '../Shared/platePool';
 import { computeBayMath } from '../Shared/bayMath';
 
@@ -458,6 +459,14 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const ids = [p.id, p.itemId, p.legacyErpId].filter(realIdOf);
       const byPart = engineChoices.filter(c => ids.includes(c.partId));
       if (byPart.length <= 1) return byPart;
+      // THE NODES NAME THE PIN OUTRIGHT. A generated option carries the GLB node names of the pin(s)
+      // it was built from (targetNode), and the engine choice carries the same names — the one key
+      // that is exact whatever else the option forgot to carry.
+      const optNodes = new Set(splitNodesLower(o.targetNode));
+      if (optNodes.size) {
+          const byNode = byPart.filter(c => (c.nodes || []).some(n => optNodes.has(String(n).toLowerCase())));
+          if (byNode.length) return byNode;
+      }
       // ⚠ ONE PART, MANY PINS (Stuart 2026-09-07: "solid pole and projection chosen, miter arms
       // still displaying all projection choices"). H1-2TRVMTR is pinned 24 times — seven depths,
       // both sides, three families — and every flow option shares its part number. Judging "any
