@@ -27,9 +27,13 @@
  */
 export function platePoolFrom(options, { returnChosen = false, inlineBracket = false } = {}, isLive = null) {
     const subs = Array.isArray(options) ? options : [];
-    // A collection that tags none of its plates has one pool, and it is all of them.
-    if (!subs.some(o => o && (o.returnOnly || o.inlineOnly))) return subs;
     const live = typeof isLive === 'function' ? isLive : () => true;
+    // A collection that tags none of its plates has one pool, and it is all of them — but still
+    // only the ones that are LIVE. This used to return the raw list, skipping the size /
+    // projection / engine gate entirely: on H1-2TRV the centre step (no rtn-only copies) offered
+    // all 24 plates at every depth while left and right (which carry rtn-only copies, so they
+    // took this gate) narrowed to 8 (Stuart 2026-09-07, live).
+    if (!subs.some(o => o && (o.returnOnly || o.inlineOnly))) return subs.filter(o => o && live(o));
     const rtn = subs.filter(o => o && o.returnOnly && live(o));
     const inl = subs.filter(o => o && o.inlineOnly && live(o));
     const plain = subs.filter(o => o && !o.returnOnly && !o.inlineOnly && live(o));

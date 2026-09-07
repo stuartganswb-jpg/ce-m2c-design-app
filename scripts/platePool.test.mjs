@@ -58,5 +58,15 @@ const PLAIN = { optId: 'p-plain' };
     ok('nothing is "still offered" when nothing was chosen', !plateStillOffered(pool, null));
 }
 
+// ── AN UNTAGGED POOL IS STILL A GATED POOL (Stuart 2026-09-07, live on H1-2TRV) ──────────────
+// The centre step carries no rtn-only copies, so it took the "one pool, all of them" shortcut —
+// which skipped the size / projection gate and offered every depth's plate at every depth.
+{
+    const plain = [{ optId: 'a', projInches: '3.625' }, { optId: 'b', projInches: '4.625' }, { optId: 'c', projInches: '6.00' }];
+    const at = (o) => o.projInches === '4.625';
+    eq('an untagged pool is filtered by the live gate too', ids(platePoolFrom(plain, {}, at)), ['b']);
+    eq('and the sweep sees the same pool', plateStillOffered(platePoolFrom(plain, {}, at), plain[0]), false);
+}
+
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
 process.exit(fail ? 1 : 0);
