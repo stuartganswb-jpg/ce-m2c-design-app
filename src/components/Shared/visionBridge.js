@@ -93,7 +93,11 @@ export function visionPartIds(draft, flow) {
  * @returns { answers, picks, lengthInches, carried, missed }
  *          `carried` and `missed` are for the operator: what came across, and what did not and why.
  */
-export function seedFromVision({ model, draft, flow = null, sameId, resolveWith = null }) {
+export function seedFromVision({ model, draft, flow = null, sameId, resolveWith = null, nameOf = null }) {
+    // ⚠ NAME IT BY OUR PATTERN ID (Stuart 2026-09-06, reading a live report: "CE-INV-42549 (right)").
+    // A Vision id is a library record id; the walk's own rule is that a record id never reaches the
+    // operator. The caller owns the parts index, so it lends the resolver — the bridge never guesses.
+    const name = (id) => (typeof nameOf === 'function' ? (nameOf(id) || id) : id);
     const answers = {};
     const picks = {};
     const carried = [];
@@ -171,7 +175,7 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
             picks[slot.key] = opt.id;
             taken.add(slot.key);
             placed.push(label);
-            carried.push(`${label}${slot.position ? ` (${slot.position.toLowerCase()})` : ''}`);
+            carried.push(`${name(label)}${slot.position ? ` (${slot.position.toLowerCase()})` : ''}`);
         };
         const tryHinted = (w) => {
             const pool = slots.filter(s => !taken.has(s.key)
@@ -236,7 +240,7 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
             picks[s.key] = s.options[0].id;
             taken.add(s.key);
             placed.push(s.options[0].partId);
-            carried.push(`${s.options[0].partId} — the only rod offered${s.position ? ` (${String(s.position).toLowerCase()})` : ''}`);
+            carried.push(`${name(s.options[0].partId)} — the only rod offered${s.position ? ` (${String(s.position).toLowerCase()})` : ''}`);
         });
 
     // What is STILL unplaced after the passes is genuinely missing — with the same grace the
@@ -247,9 +251,9 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
         if (w.position) {
             const suppressed = (m.slots || []).some(s => s.kind === w.kind && U(s.position) === U(w.position) && s.suppressedBy);
             if (suppressed) return;
-            missed.push({ what: w.partId, why: `no ${String(w.kind || 'slot').toLowerCase()} at ${String(w.position).toLowerCase()} offers it — check the tags in 1.6` });
+            missed.push({ what: name(w.partId), why: `no ${String(w.kind || 'slot').toLowerCase()} at ${String(w.position).toLowerCase()} offers it — check the tags in 1.6` });
         } else {
-            missed.push({ what: w.partId, why: 'nothing in this assembly offers it — it may not be pinned' });
+            missed.push({ what: name(w.partId), why: 'nothing in this assembly offers it — it may not be pinned' });
         }
     });
 

@@ -430,6 +430,8 @@ function HardwareConfiguratorInner({
             // same one the picks will actually produce.
             resolveWith: ({ answers: a2, selectedIds }) =>
                 resolveHardware({ choices, answers: { ...effAnswers, ...a2 }, selectedIds, modelNodes }),
+            // The report prints OUR number, like every other number on this screen.
+            nameOf: ourId,
         });
         if (Object.keys(seed.answers).length) setAnswers(a => ({ ...a, ...seed.answers }));
         if (Object.keys(seed.picks).length) setPicks(p => ({ ...p, ...seed.picks }));

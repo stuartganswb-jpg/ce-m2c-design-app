@@ -255,5 +255,15 @@ console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} pas
     ok('every answer says where it came from', ['parts drawn', 'rod drawn', 'front drawn', 'track ends drawn'].every(s => ts.carried.some(c => c.includes(s))));
 }
 
+// ── THE REPORT NAMES PARTS BY OUR NUMBER (Stuart 2026-09-06, live: "CE-INV-42549 (right)") ──────
+{
+    const ours = { 'H1-138D6': 'D6-ARM', 'H1-138B6': 'B6-ARM', 'H1-999-NOPE': 'NOPE' };
+    const seed = seedFromVision({ model, draft: draft({ spatialData: { bracketIdCenter: 'H1-999-NOPE' } }), flow: FLOW, nameOf: (id) => ours[id] || '' });
+    ok('carried lines use the lent name', seed.carried.some(c => /^D6-ARM \(left\)/.test(c)) && seed.carried.some(c => /^B6-ARM \(right\)/.test(c)));
+    ok('and so does a miss', seed.missed.some(m => m.what === 'NOPE'));
+    const plain = seedFromVision({ model, draft: draft(), flow: FLOW });
+    ok('without a resolver the raw id still prints — nothing is hidden', plain.carried.some(c => /^H1-138D6 \(left\)/.test(c)));
+}
+
 console.log(`\n${fail ? '❌' : '✅'}  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

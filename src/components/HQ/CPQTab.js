@@ -4339,6 +4339,36 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
           </div>
       </div>
 
+      {/* ── LINES AWAITING CONFIGURATION, UNDER EITHER ENGINE (Stuart 2026-09-06) ──────────────
+          This panel lived in the old engine's left column, which is `display: none` whenever the
+          new engine is on — so a line pushed from Vision landed under the quote and was invisible
+          there; it could only be reached through the header RESUME DRAFT modal. Same panel, same
+          filter, same handler; it just sits above the row now, where both engines can show it. */}
+              {/* QUEUED LINES PANEL */}
+      {activeMasterQuoteId && previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).length > 0 && (
+          <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '20px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
+              <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>Lines Awaiting Configuration</h3>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                  {previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).map(draft => (
+                      <div key={draft.id} style={{ border: `1px solid ${draft.status === 'CONFIGURED' ? '#4CAF50' : 'var(--line)'}`, padding: '12px', background: draft.status === 'CONFIGURED' ? '#f0fdf4' : 'var(--paper-2)', flex: 1, minWidth: '140px' }}>
+                          <div style={{ fontWeight: 500, marginBottom: '8px', fontSize: '0.9rem', color: draft.status === 'CONFIGURED' ? '#166534' : 'var(--ink)' }}>
+                              {draft.sidemark || 'Unnamed Line'}
+                          </div>
+                          {draft.status === 'CONFIGURED' ? (
+                              <div style={{ padding: '8px 16px', background: 'transparent', color: '#166534', border: '1px solid #4CAF50', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', textAlign: 'center', width: '100%', boxSizing: 'border-box' }}>
+                                  ✅ Configured
+                              </div>
+                          ) : (
+                              <button onClick={() => handleResumeDraft(draft.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', width: '100%' }}>
+                                  Configure
+                              </button>
+                          )}
+                      </div>
+                  ))}
+              </div>
+          </div>
+      )}
+
       <div style={{ display: 'flex', gap: '24px', alignItems: 'stretch' }}>
           
           {/* Stuart 2026-08-17: "remove the left step 1 select flow, that can happen at the top,
@@ -4346,30 +4376,6 @@ const CPQTab = ({ currentUser, activeBrand, cart, setCart, isSuperAdmin = false 
               the new area Live 3d engine spreads entirely from left to right." */}
           <div style={{ width: '400px', display: engineOn ? 'none' : 'flex', flexDirection: 'column', gap: '24px', flexShrink: 0 }}>
               
-              {/* QUEUED LINES PANEL */}
-              {activeMasterQuoteId && previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).length > 0 && (
-                  <div style={{ background: '#fff', border: '1px solid var(--brass)', padding: '20px', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
-                      <h3 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', color: 'var(--ink)' }}>Lines Awaiting Configuration</h3>
-                      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-                          {previousDrafts.filter(d => d.masterQuoteId === activeMasterQuoteId).map(draft => (
-                              <div key={draft.id} style={{ border: `1px solid ${draft.status === 'CONFIGURED' ? '#4CAF50' : 'var(--line)'}`, padding: '12px', background: draft.status === 'CONFIGURED' ? '#f0fdf4' : 'var(--paper-2)', flex: 1, minWidth: '140px' }}>
-                                  <div style={{ fontWeight: 500, marginBottom: '8px', fontSize: '0.9rem', color: draft.status === 'CONFIGURED' ? '#166534' : 'var(--ink)' }}>
-                                      {draft.sidemark || 'Unnamed Line'}
-                                  </div>
-                                  {draft.status === 'CONFIGURED' ? (
-                                      <div style={{ padding: '8px 16px', background: 'transparent', color: '#166534', border: '1px solid #4CAF50', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', textAlign: 'center', width: '100%', boxSizing: 'border-box' }}>
-                                          ✅ Configured
-                                      </div>
-                                  ) : (
-                                      <button onClick={() => handleResumeDraft(draft.id)} style={{ padding: '8px 16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', width: '100%' }}>
-                                          Configure
-                                      </button>
-                                  )}
-                              </div>
-                          ))}
-                      </div>
-                  </div>
-              )}
 
               <div style={{ background: '#fff', border: '1px solid var(--line)', display: 'flex', flexDirection: 'column', borderRadius: '2px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}>
                  <div style={{ padding: '16px 20px', background: 'var(--paper-2)', color: 'var(--ink)', fontFamily: 'var(--mono)', fontSize: '10px', letterSpacing: '.1em', textTransform: 'uppercase', borderBottom: '1px solid var(--line)' }}>Step 1: Select Flow</div>
