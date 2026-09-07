@@ -3,7 +3,8 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
 import { pinProjectionOf, choicesFromAssembly } from '../Shared/hardwareAdapter';
-import { admits, axisValues, AXES, normalizeChoice, applyFitsDefaults, parseProjTiers } from '../Shared/hardwareModel';
+import { admits, axisValues, AXES, normalizeChoice, applyFitsDefaults, parseProjTiers, measureOf } from '../Shared/hardwareModel';
+import { projLabel } from '../Shared/traverseExplode';
 import { platePoolFrom, plateStillOffered } from '../Shared/platePool';
 import { computeBayMath } from '../Shared/bayMath';
 
@@ -249,11 +250,16 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // prev, not a dep), so it never loops.
   useEffect(() => {
       const isRet = (id) => !!libraryParts.find(p => p.id === id)?.manufacturingSpecs?.customData?.isReturnBracket;
-      const sideStyle = (mount, bktId) => mount === 'INSIDE' ? 'FLUSH' : ((bktId && isRet(bktId)) ? 'RETURN_MITER' : null);
+      // ⚠ THE END-ARM TAG LIVES ON THE PIN (Stuart 2026-09-07: "it correctly blocks the end treatment
+      // choices but does not update the graphic of the end of the poles"). The flow option carries
+      // it as isReturnArm; the part's isReturnBracket is the legacy spelling. Either makes that end
+      // a return — the arm IS the end, so the pole is drawn (and cut) mitering back to the wall.
+      const armPicked = (st) => armOfOpt(optSel(st));
+      const sideStyle = (mount, bktId, st) => mount === 'INSIDE' ? 'FLUSH' : (((bktId && isRet(bktId)) || armPicked(st)) ? 'RETURN_MITER' : null);
       const lMount = engData.shape === 'STRAIGHT' ? engData.mountLeft : engData.mountOuter;
       const rMount = engData.shape === 'STRAIGHT' ? engData.mountRight : engData.mountOuter;
-      const lStyle = sideStyle(lMount, engData.bracketId);
-      const rStyle = sideStyle(rMount, engData.bracketIdRight);
+      const lStyle = sideStyle(lMount, engData.bracketId, stepBrL);
+      const rStyle = sideStyle(rMount, engData.bracketIdRight, stepBrR);
       setEngData(prev => {
           const next = { ...prev };
           let changed = false;
@@ -261,7 +267,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           if (rStyle && (prev.endStyleRight || prev.endStyle) !== rStyle) { next.endStyleRight = rStyle; changed = true; }
           return changed ? next : prev;
       });
-  }, [engData.bracketId, engData.bracketIdRight, engData.mountLeft, engData.mountRight, engData.mountOuter, engData.shape, libraryParts]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engData.bracketId, engData.bracketIdRight, engData.mountLeft, engData.mountRight, engData.mountOuter, engData.shape, libraryParts, dynamicConfigParams]);
 
   // Per-option projection: a Choose/Swap bracket option can carry its own projection
   // (e.g. standard 4.25" vs mini 4.125" backplate — same rendering, different fab).
@@ -449,10 +456,65 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       const p = partOfOpt(o);
       if (!p) return [];
       const ids = [p.id, p.itemId, p.legacyErpId].filter(realIdOf);
-      return engineChoices.filter(c => ids.includes(c.partId));
+      const byPart = engineChoices.filter(c => ids.includes(c.partId));
+      if (byPart.length <= 1) return byPart;
+      // ⚠ ONE PART, MANY PINS (Stuart 2026-09-07: "solid pole and projection chosen, miter arms
+      // still displaying all projection choices"). H1-2TRVMTR is pinned 24 times — seven depths,
+      // both sides, three families — and every flow option shares its part number. Judging "any
+      // pin of that part" let the one admitted copy carry all of them. So an option is matched to
+      // ITS pin: the same side where it names one, the same depth where it carries one; only where
+      // nothing narrower matches does the part-wide set stand (a size-matrix option carries no
+      // depth of its own, and keeps working exactly as before).
+      const pos = upperS(o.position);
+      const tiers = parseProjTiers(o.projInches);
+      const tiered = Object.keys(tiers).length > 0;
+      const depth = tiered ? null : measureOf(o.projInches);
+      const sameDepth = (c) => tiered
+          ? !!c.projTiers && Object.entries(tiers).every(([t, v]) => c.projTiers[t] != null && Math.abs(c.projTiers[t] - v) < 0.01)
+          : (depth == null || (c.projs || []).some(v => Math.abs(v - depth) < 0.01));
+      const narrow = byPart.filter(c => (!pos || !c.position || c.position === pos) && sameDepth(c));
+      return narrow.length ? narrow : byPart;
   };
-  // Offered when ANY pin of that part is admitted — a part pinned at several positions is one part.
+  // Offered when the pin it names is admitted (or any of them, where the option names none).
   const engineOk = (o) => { const cs = choicesOfOpt(o); return !cs.length || cs.some(c => admits(c, engineCtx).ok); };
+  // The pin an option stands for, preferring one the configuration admits.
+  const engineChoiceOf = (o) => { const cs = choicesOfOpt(o); return cs.find(c => admits(c, engineCtx).ok) || cs[0] || null; };
+  // ── A DECORATIVE END ARM KEEPS ITS BRACKET (hardwareModel slots(), Stuart 2026-09-06) ────────
+  // END-ARM + NO PLATE is a return that dresses the end and leaves the bracket carrying the rod —
+  // so it neither greys the bracket nor takes the bracket's plate. Read from the pin, as CPQ does.
+  const decorativeEnd = (o) => { const c = o ? engineChoiceOf(o) : null; return !!(c && c.isReturnArm && c.noBackplate); };
+  // ── THE PLATE FOLLOWS THE ARM ACTUALLY HOLDING THE ROD (hardwareModel slots(), 2026-08-17) ───
+  // Stuart 2026-09-07: "for a particular miter return with backplate each length requires a plate
+  // at a different projection, the cpq can see these vision should too." The engine's own rule,
+  // verbatim: a rtn-only plate follows a FEE return whatever its depth; an end arm pairs strictly;
+  // an untagged plate fits all; otherwise the plate and the arm must share a depth. The arm is the
+  // chosen return / end arm — unless it is decorative, when the bracket still holds the rod.
+  const armHolding = (endOpt, brOpt) => {
+      const end = endOpt ? engineChoiceOf(endOpt) : null;
+      if (end && (end.role === 'RETURN' || end.role === 'INSIDE_MOUNT') && !(end.isReturnArm && end.noBackplate)) return end;
+      return brOpt ? engineChoiceOf(brOpt) : null;
+  };
+  const platePairs = (plateOpt, arm) => {
+      if (!arm || !Array.isArray(arm.projs) || !arm.projs.length) return true;
+      const pc = engineChoiceOf(plateOpt);
+      if (!pc) return true;
+      return (pc.returnOnly && !arm.isReturnArm) || !(pc.projs || []).length || pc.projs.some(p => arm.projs.some(q => Math.abs(p - q) < 0.01));
+  };
+  // Where one part is listed more than once, its depth tells the copies apart (CPQ never lists
+  // them twice — the projection answer picks the copy; a dropdown has to say it).
+  const depthLabel = (o) => {
+      const tiers = parseProjTiers(o?.projInches);
+      if (Object.keys(tiers).length) return Object.entries(tiers).map(([t, v]) => `${t.toLowerCase()} ${projLabel(v)}`).join(' / ');
+      const d = measureOf(o?.projInches);
+      return d == null ? '' : projLabel(d);
+  };
+  const optLabelIn = (o, list) => {
+      const key = (x) => String(x?.partId || x?.partName || '');
+      const base = optLabel(o);
+      if ((list || []).filter(x => key(x) === key(o)).length < 2) return base;
+      const d = depthLabel(o);
+      return d ? `${base} · ${d}` : base;
+  };
   // THE PROJECTIONS THIS ROD WORLD IS BUILT AT (Stuart 2026-09-07, "build the bracket projection
   // dropdown filter"): the same discovery CPQ's projection step runs — mounted parts admitted
   // under the chosen rod type vote their depths — so a Bracket Projection option is offered only
@@ -499,7 +561,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   };
   const partOfOpt = (o) => { if (!o) return null; const find = (k) => k && libraryParts.find(p => p.id === k || p.itemId === k || p.legacyErpId === k); return find(o.partId) || find(o.partName) || null; };
   const optLabel = (o) => { const p = sizeSwapPart(partOfOpt(o)); return p ? `${p.itemName}${p.legacyErpId && p.legacyErpId !== 'PENDING' ? ` - ${p.legacyErpId}` : ''}` : (o.partName || o.optId); };
-  const returnChosenAt = (pos) => pos === 'LEFT' ? optIsReturn(optSel(stepEndL)) : pos === 'RIGHT' ? optIsReturn(optSel(stepEndR)) : false;
+  const returnChosenAt = (pos) => { const o = pos === 'LEFT' ? optSel(stepEndL) : pos === 'RIGHT' ? optSel(stepEndR) : null; return !!o && optIsReturn(o) && !decorativeEnd(o); };
   // ⚠ A RETURN REPLACES THAT END'S BRACKET — FULL STOP (Stuart 2026-08-21: "return selected then
   // left and right bracket choices grey out"). This used to fire only where the bracket step
   // happened to carry `returnOnly` plates, which is a fact about PLATES and says nothing about who
@@ -525,14 +587,15 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // dropdown blanked, and nothing could push back to CPQ because the selection was gone.
   //
   // It lives in Shared/platePool now and BOTH readers call it, in the engine's own order.
-  const subPoolFrom = (subs, flags) => platePoolFrom(subs, flags, (o) => optAllowedAtSize(o) && projTagOk(o) && engineOk(o));
+  const subPoolFrom = (subs, flags, arm = null) => platePoolFrom(subs, flags, (o) => optAllowedAtSize(o) && projTagOk(o) && engineOk(o) && platePairs(o, arm));
   const subPoolAt = (step, pos) => {
       const subs = step?.subOptions || [];
       const sel = optSel(step);
+      const endSt = pos === 'LEFT' ? stepEndL : pos === 'RIGHT' ? stepEndR : null;
       return subPoolFrom(subs, {
           returnChosen: returnChosenAt(pos) || !!sel?.isReturnArm,
           inlineBracket: !!sel?.usesReturnPlates,
-      });
+      }, armHolding(endSt ? optSel(endSt) : null, sel));
   };
   const pickStep = (stepId, optId) => setDynamicConfigParams(prev => {
       const next = { ...prev };
@@ -618,7 +681,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               if (!st) return;
               const endSt = pos === 'LEFT' ? stepEndL : pos === 'RIGHT' ? stepEndR : null;
               const endOpt = endSt ? optOf(endSt, next[endSt.id]) : null;
-              const locked = !!optIsReturn(endOpt);      // the return carries the rod — see brLockedAt
+              const locked = !!optIsReturn(endOpt) && !decorativeEnd(endOpt);      // the return carries the rod — see brLockedAt
               if (locked && next[st.id]) { delete next[st.id]; changed = true; }
               const bo = optOf(st, next[st.id]);
               // A selected END RETURN ARM clears that side's End Treatment (the arm IS the end).
@@ -626,13 +689,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               const basic = !!(bo && (bo.isBasic || /basic/i.test(bo.partName || '')));
               if (basic && next[`${st.id}__sub`]) { delete next[`${st.id}__sub`]; changed = true; }
               const subs = st.subOptions || [];
-              if (subs.some(o => o.returnOnly || o.inlineOnly) && next[`${st.id}__sub`]) {
+              if ((subs.some(o => o.returnOnly || o.inlineOnly) || engineChoices.length) && next[`${st.id}__sub`]) {
                   // THE SAME POOL THE PICKER OFFERED. Re-deriving it here is what let the two
                   // disagree; a plate that is on screen is a plate that stays chosen.
                   const pool = subPoolFrom(subs, {
-                      returnChosen: optIsReturn(endOpt) || !!bo?.isReturnArm,
+                      returnChosen: (optIsReturn(endOpt) && !decorativeEnd(endOpt)) || !!bo?.isReturnArm,
                       inlineBracket: !!bo?.usesReturnPlates,
-                  });
+                  }, armHolding(endOpt, bo));
                   const so = subOf(st, next[`${st.id}__sub`]);
                   if (so && !plateStillOffered(pool, so)) { delete next[`${st.id}__sub`]; changed = true; }
               }
@@ -1365,7 +1428,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepBrL ? (
                                         <select value={dynamicConfigParams[stepBrL.id] || ''} disabled={brLockedAt(stepBrL, 'LEFT')} onChange={e => pickStep(stepBrL.id, e.target.value)} style={{ ...fieldStyle, opacity: brLockedAt(stepBrL, 'LEFT') ? 0.45 : 1 }}>
                                             <option value="">{brLockedAt(stepBrL, 'LEFT') ? '— replaced by the return —' : '-- Select --'}</option>
-                                            {brOptsFor(stepBrL).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {brOptsFor(stepBrL).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, brOptsFor(stepBrL))}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.bracketId || ''} onChange={e => setEngData(prev => ({ ...prev, bracketId: e.target.value }))} style={fieldStyle}>
@@ -1379,7 +1442,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepBrR ? (
                                         <select value={dynamicConfigParams[stepBrR.id] || ''} disabled={brLockedAt(stepBrR, 'RIGHT')} onChange={e => pickStep(stepBrR.id, e.target.value)} style={{ ...fieldStyle, opacity: brLockedAt(stepBrR, 'RIGHT') ? 0.45 : 1 }}>
                                             <option value="">{brLockedAt(stepBrR, 'RIGHT') ? '— replaced by the return —' : '-- Select --'}</option>
-                                            {brOptsFor(stepBrR).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {brOptsFor(stepBrR).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, brOptsFor(stepBrR))}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.bracketIdRight || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdRight: e.target.value }))} style={fieldStyle}>
@@ -1393,7 +1456,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepBrC ? (
                                         <select value={dynamicConfigParams[stepBrC.id] || ''} onChange={e => pickStep(stepBrC.id, e.target.value)} style={fieldStyle}>
                                             <option value="">-- Select Center Style --</option>
-                                            {brOptsFor(stepBrC).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {brOptsFor(stepBrC).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, brOptsFor(stepBrC))}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.bracketIdCenter || ''} onChange={e => setEngData(prev => ({ ...prev, bracketIdCenter: e.target.value }))} style={fieldStyle}>
@@ -1452,7 +1515,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepEndL ? (
                                         <select value={dynamicConfigParams[stepEndL.id] || ''} disabled={armChosenAt('LEFT')} onChange={e => pickStep(stepEndL.id, e.target.value)} style={{ ...fieldStyle, opacity: armChosenAt('LEFT') ? 0.45 : 1 }}>
                                             <option value="">{armChosenAt('LEFT') ? '— end return arm selected —' : '-- Choose End Treatment --'}</option>
-                                            {endOptsFor(stepEndL).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {endOptsFor(stepEndL).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, endOptsFor(stepEndL))}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.endStyle} onChange={e => setEngData({...engData, endStyle: e.target.value})} style={fieldStyle}>
@@ -1468,7 +1531,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                     {stepEndR ? (
                                         <select value={dynamicConfigParams[stepEndR.id] || ''} disabled={armChosenAt('RIGHT')} onChange={e => pickStep(stepEndR.id, e.target.value)} style={{ ...fieldStyle, opacity: armChosenAt('RIGHT') ? 0.45 : 1 }}>
                                             <option value="">{armChosenAt('RIGHT') ? '— end return arm selected —' : '-- Choose End Treatment --'}</option>
-                                            {endOptsFor(stepEndR).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabel(o)}</option>)}
+                                            {endOptsFor(stepEndR).map(o => <option key={o.optId || o.partId} value={o.optId || o.partId}>{optLabelIn(o, endOptsFor(stepEndR))}</option>)}
                                         </select>
                                     ) : (
                                         <select value={engData.endStyleRight || engData.endStyle} onChange={e => setEngData({...engData, endStyleRight: e.target.value})} style={fieldStyle}>
