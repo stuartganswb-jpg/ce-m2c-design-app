@@ -3,7 +3,7 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
 import { pinProjectionOf, choicesFromAssembly } from '../Shared/hardwareAdapter';
-import { admits, axisValues, AXES, normalizeChoice, applyFitsDefaults } from '../Shared/hardwareModel';
+import { admits, axisValues, AXES, normalizeChoice, applyFitsDefaults, parseProjTiers } from '../Shared/hardwareModel';
 import { platePoolFrom, plateStillOffered } from '../Shared/platePool';
 import { computeBayMath } from '../Shared/bayMath';
 
@@ -412,6 +412,11 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   }, [activeFlow, dynamicConfigParams]);
   const projTagOk = (o) => {
       if (flowProjSel == null || !o?.projInches) return true;
+      // A TIERED BRACKET IS THE PROJECTION QUESTION ITSELF (Stuart 2026-09-07). A double bracket
+      // tagged FRONT:6.5,BACK:3.25 is not made at one depth — the engine offers it at every
+      // projection (proj:any), and so does this. Reading its tag as one number gave "6.53" — a
+      // phantom depth that was the only place the double brackets could be reached from here.
+      if (Object.keys(parseProjTiers(o.projInches)).length) return true;
       const f = parseFloat(String(o.projInches).replace(/[^0-9.]/g, ''));
       if (!Number.isFinite(f)) return true;
       const et = String(o.endTreatment || '').toUpperCase();
@@ -448,6 +453,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   };
   // Offered when ANY pin of that part is admitted — a part pinned at several positions is one part.
   const engineOk = (o) => { const cs = choicesOfOpt(o); return !cs.length || cs.some(c => admits(c, engineCtx).ok); };
+  // THE PROJECTIONS THIS ROD WORLD IS BUILT AT (Stuart 2026-09-07, "build the bracket projection
+  // dropdown filter"): the same discovery CPQ's projection step runs — mounted parts admitted
+  // under the chosen rod type vote their depths — so a Bracket Projection option is offered only
+  // where a bracket of THIS world is made at it (a tiered double bracket votes no depth — it is
+  // offered at every one). No pins → every option stays; no rod type yet → both worlds' depths.
+  const engineProjs = useMemo(() => (engineChoices.length
+      ? axisValues(engineChoices, AXES.find(a => a.key === 'proj'), effRodKind ? { rodKind: effRodKind } : {}) : []), [engineChoices, effRodKind]);
+  const projOptOk = (o) => {
+      if (!engineProjs.length) return true;
+      const f = parseFloat(String(o?.projInches ?? '').replace(/[^0-9.]/g, ''));
+      return !Number.isFinite(f) || engineProjs.some(v => Math.abs(v - f) < 0.01);
+  };
+  const projOptsFor = (st) => (st?.type === 'PROJ_SELECT' ? (st.styleOptions || []).filter(projOptOk) : (st?.styleOptions || []));
   const optAllowedAtSize = (o) => {
       if (!sizeSel) return true;
       return partAllowedAtSize(partOfOpt(o), sizeSel, visionSizeIndex);
@@ -584,6 +602,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           // The engine's gate sweeps too: a rod type or projection the pickers stopped offering a
           // part under must not leave it chosen — picker and sweep agree, by the 2026-08-21 rule.
           if (engineChoices.length) {
+              projSelectSteps.forEach(st => {
+                  const o = optOf(st, next[st.id]);
+                  if (o && !projOptOk(o)) { delete next[st.id]; changed = true; }
+              });
               [stepEndL, stepEndR, stepBrL, stepBrR, stepBrC].forEach(st => {
                   if (!st) return;
                   const o = optOf(st, next[st.id]);
@@ -618,7 +640,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           return changed ? next : prev;
       });
       // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dynamicConfigParams, activeFlow, effRodKind, engineProj, engineChoices]);
+  }, [dynamicConfigParams, activeFlow, effRodKind, engineProj, engineChoices, engineProjs]);
 
   // Derive engData (fab math inputs) FROM the step selections: part ids for dims, end styles, and
   // the INSIDE mount flip for inside-mount ends.
@@ -1329,7 +1351,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                                             <label style={labelStyle}>{st.title} · from flow</label>
                                             <select value={dynamicConfigParams[st.id] || ''} onChange={e => pickStep(st.id, e.target.value)} style={fieldStyle}>
                                                 <option value="">{st.type === 'PROJ_SELECT' ? '-- Select Projection --' : `-- Default (${st.sizeAxis === 'DIA' ? '3/4"' : '4-5/8"'}) --`}</option>
-                                                {(st.styleOptions || []).map(o => <option key={o.optId} value={o.optId}>{o.partName}</option>)}
+                                                {projOptsFor(st).map(o => <option key={o.optId} value={o.optId}>{o.partName}</option>)}
                                             </select>
                                         </div>
                                     ))}
