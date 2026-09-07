@@ -23,7 +23,7 @@
 // can disagree. That was the whole point of collapsing the two fields into one.
 
 // The SAME rule the walk uses for which decisions carry a count — never a second copy of it.
-import { takesQty } from './hardwareModel.js';
+import { takesQty, ROD_ROLES } from './hardwareModel.js';
 
 const U = (v) => String(v ?? '').trim().toUpperCase();
 
@@ -181,6 +181,19 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
                 const opt = s.options.find(o => eq(o.partId, w.partId));
                 if (opt) { claim(s, opt, w.partId); return true; }
             }
+            // ── A BRACKET THAT IS THE END LIVES IN THE END SLOT (Stuart 2026-09-06) ──────────
+            // Vision's bracket lists offer the end arms as brackets — that is what they were to
+            // the old engine. Here an END-ARM bracket reads as a RETURN and pools into the End
+            // step, so a drawing that chose H1-2RCTERA "for the left bracket" arrived with the arm
+            // reported missing and the operator sent to check tags that were right. Same part,
+            // same side, one slot over.
+            if (w.kind === 'BRACKET' && w.position) {
+                const ends = slots.filter(s => !taken.has(s.key) && s.kind === 'END' && U(s.position) === U(w.position));
+                for (const s of ends) {
+                    const opt = s.options.find(o => eq(o.partId, w.partId));
+                    if (opt) { claim(s, opt, w.partId); carried[carried.length - 1] += ' — the end arm, placed as the end'; return true; }
+                }
+            }
             return false;
         };
         const leftovers = [];
@@ -200,6 +213,13 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
         m = next;
     }
 
+    const allChoices = () => (m.choices && m.choices.length) ? m.choices
+        : [...new Map((m.slots || []).flatMap(s => s.all || s.options || []).map(c => [c.id, c])).values()];
+    const placedNow = () => Object.values(picks).map(id => allChoices().find(c => c.id === id)).filter(Boolean);
+    // The rod WORLD the drawing itself chose — a fascia or a track is traverse, a pole is solid.
+    // Read before any rod is filled in for it, so nothing below can contradict the drawing.
+    const drawnWorlds = new Set(placedNow().filter(c => ROD_ROLES.includes(c.role)).map(c => c.rodKind).filter(Boolean));
+
     // ── THE ROD IS NOT A QUESTION THE DRAWING CAN ANSWER (Eric 2026-08-25: "Rod selection
     // missing") ──────────────────────────────────────────────────────────────────────────────
     // The old flow's pole lives on a calculator step — a dimension input, not a selection — so
@@ -208,6 +228,11 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
     (m.slots || []).filter(s => s.kind === 'ROD' && Array.isArray(s.options) && s.options.length === 1)
         .forEach(s => {
             if (picks[s.key] || taken.has(s.key)) return;
+            // ⚠ NOT A ROD FROM THE OTHER WORLD (Stuart 2026-09-06). This filled every lone rod slot,
+            // so a drawing that chose the FASCIA also received the solid pole in both tiers — and
+            // then "traverse" and "solid" disagreed about the rod type. A lone option is only an
+            // answer where it agrees with what the drawing drew.
+            if (drawnWorlds.size && !drawnWorlds.has(s.options[0].rodKind)) return;
             picks[s.key] = s.options[0].id;
             taken.add(s.key);
             placed.push(s.options[0].partId);
@@ -239,6 +264,64 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
             ref: a.ref || '',
             note: (a.note && typeof a.note === 'string') ? a.note.trim() : '',
         }));
+
+    // ── THE FRAMING, READ OFF WHAT WAS PLACED (Stuart 2026-09-06) ────────────────────────────
+    // "all the steps of the cpq for the rods, and brackets and returns should align in either
+    //  direction starting in vision and then the selections populating cpq."
+    //
+    // The parts came across; the QUESTIONS did not. Only `mount` was ever answered, so a seeded
+    // configuration opened with Rod Setup and Projection blank — invisible on Brimar, where one
+    // world and one setup are implied, and wrong on a traverse double, where answering step one
+    // differently from what the drawing chose drops the picks it chose.
+    //
+    // The parts already say the answer. A bracket tagged DOUBLE is a double; a track is a traverse
+    // rod; a fascia in front is the stationary front; a drawn end carries its drive; a bracket made
+    // in one depth IS the projection. So each live, unanswered axis is answered when every placed
+    // part that speaks to it agrees on ONE value the assembly offers — and never otherwise. A
+    // disagreement, or silence, is left to the operator and said so. A tiered bracket answers no
+    // projection on purpose: on that assembly the bracket IS the projection question.
+    const axisOffers = (key, value) => {
+        const axis = (m.axes || []).find(a => a.key === key);
+        return !!axis && !axis.implied && (axis.values || []).find(v => String(v).toUpperCase() === String(value).toUpperCase());
+    };
+    const answerFrom = (key, values, source) => {
+        if (answers[key] !== undefined) return false;
+        const distinct = [...new Set(values.filter(v => v !== '' && v !== undefined && v !== null).map(v => String(v).toUpperCase()))];
+        if (distinct.length !== 1) {
+            const what = key === 'proj' ? 'projection' : key;
+            if (distinct.length > 1 && !missed.some(x => x.what === what)) missed.push({ what, why: `the parts drawn disagree (${distinct.map(d => d.toLowerCase()).join(' / ')}) — answer it on the walk` });
+            return false;
+        }
+        const offered = axisOffers(key, distinct[0]);
+        if (!offered) return false;
+        answers[key] = offered;
+        const say = key === 'proj' ? `${offered}" projection` : String(offered).toLowerCase() === 'FASCIA'.toLowerCase() ? 'stationary fascia with rings'
+            : String(offered).toLowerCase() === 'track' && key === 'frontLayer' ? 'track front & rear' : String(offered).toLowerCase();
+        carried.push(`${say} — from the ${source}`);
+        return true;
+    };
+    const deriveRound = () => {
+        const p = placedNow();
+        let any = false;
+        any = answerFrom('rodKind', [...drawnWorlds], 'rod drawn') || any;
+        any = answerFrom('setup', p.map(c => c.setup), 'parts drawn') || any;
+        any = answerFrom('drive', p.map(c => c.drive), 'track ends drawn') || any;
+        // Only a bracket made in ONE depth speaks; a tiered one is the question itself.
+        any = answerFrom('proj', p.filter(c => ['BRACKET', 'BACKPLATE'].includes(c.role) && !c.projTiers && Array.isArray(c.projs) && c.projs.length === 1).map(c => c.projs[0]), 'bracket drawn') || any;
+        const fronts = [
+            ...p.filter(c => c.role === 'FASCIA').map(() => 'FASCIA'),
+            ...p.filter(c => c.role === 'TRACK' && (U(c.tier) || 'FRONT') === 'FRONT').map(() => 'TRACK'),
+            ...p.map(c => c.frontLayer),
+        ];
+        any = answerFrom('frontLayer', fronts, 'front drawn') || any;
+        return any;
+    };
+    if (deriveRound() && typeof resolveWith === 'function') {
+        // A gated axis (the front of a double) only exists once setup is answered — resolve once
+        // more with what was just answered so it can be read, then read it.
+        const next = resolveWith({ answers, selectedIds: Object.values(picks) });
+        if (next && Array.isArray(next.slots)) { m = next; deriveRound(); }
+    }
 
     // ── HOW MANY IS NOT THE DRAWING'S TO SAY (Stuart 2026-08-22) ─────────────────────────────
     // Eric, testing Vision → CPQ: "⚠ CE-INV-10286 — nothing in this assembly offers it… this times

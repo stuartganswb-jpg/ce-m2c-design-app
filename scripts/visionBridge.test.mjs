@@ -5,7 +5,7 @@
 // what it CANNOT fill in comes back as `missed` rather than as silence, because a quietly dropped
 // bracket is how a quote goes out for the wrong hardware.
 
-import { resolve } from '../src/components/Shared/hardwareModel.js';
+import { resolve, reseatPicks } from '../src/components/Shared/hardwareModel.js';
 import { seedFromVision, visionPartIds } from '../src/components/Shared/visionBridge.js';
 
 let pass = 0, fail = 0;
@@ -175,4 +175,85 @@ const draft = (over = {}) => ({
 }
 
 console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} passed, 0 failed`);
+
+// ── AN END ARM DRAWN AS THE BRACKET LANDS AS THE END (Stuart 2026-09-06) ────────────────────
+// Vision's bracket lists offer the end arms as brackets; here an END-ARM bracket is a RETURN in the
+// End slot. Before this the arm was reported "no bracket at left offers it — check the tags in 1.6".
+{
+    const CH = [
+        { id: 'ROD-C', partId: 'H1-2RCTAR', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['rc'] },
+        { id: 'ROD-L', partId: 'H1-2RCTAR', role: 'ROD', rodKind: 'SOLID', position: 'LEFT', nodes: ['rl'] },
+        { id: 'ECB-L', partId: 'H1-2RCTECB', role: 'BRACKET', position: 'LEFT', proj: '4.625', mount: 'WALL', nodes: ['bl'] },
+        { id: 'ECB-R', partId: 'H1-2RCTECB', role: 'BRACKET', position: 'RIGHT', proj: '4.625', mount: 'WALL', nodes: ['br'] },
+        { id: 'ERA-L', partId: 'H1-2RCTERA', role: 'BRACKET', position: 'LEFT', proj: '4.625', mount: 'WALL', isReturnArm: true, nodes: ['el'] },
+        { id: 'AEC-R', partId: 'H1-2RCTAEC', role: 'FINIAL', position: 'RIGHT', nodes: ['fr'] },
+        { id: 'BP41-L', partId: 'H1-2RCTBP-H', role: 'BACKPLATE', position: 'LEFT', proj: '4.625', mount: 'WALL', nodes: ['p41'] },
+        { id: 'BP44-L', partId: 'H1-2RCTBP-H', role: 'BACKPLATE', position: 'LEFT', proj: '4.625', mount: 'WALL', returnOnly: true, nodes: ['p44'] },
+    ];
+    const m0 = resolve({ choices: CH, answers: {}, selectedIds: [] });
+    const flow = { steps: [{ id: 'end-r', title: 'Right End Treatment', styleOptions: [{ optId: 'o-aec', partId: 'H1-2RCTAEC' }] }] };
+    const d = { specs: { engineeringNotes: { poleO2O: 76 }, 'end-r': 'o-aec' },
+        spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN', bracketId: 'H1-2RCTERA', bracketIdRight: 'H1-2RCTECB', backplateIdLeft: 'H1-2RCTBP-H' } };
+    const seed = seedFromVision({ model: m0, draft: d, flow, resolveWith: ({ answers, selectedIds }) => resolve({ choices: CH, answers, selectedIds }) });
+    const endL = m0.slots.find(s => s.kind === 'END' && s.position === 'LEFT');
+    eq('the end arm lands in the End slot on its side', seed.picks[endL.key], 'ERA-L');
+    ok('and says what happened', seed.carried.some(c => /H1-2RCTERA.*placed as the end/.test(c)));
+    ok('nothing is reported missing', seed.missed.length === 0, JSON.stringify(seed.missed));
+    // The plate was picked against the un-armed model (plain copy); once the arm holds the end,
+    // the settle keeps the PART and moves the pick to the return copy — the same reseat the walk does.
+    const settled = resolve({ choices: CH, answers: seed.answers, selectedIds: Object.values(seed.picks) });
+    const re = reseatPicks(settled, seed.picks);
+    eq('the plate follows the arm to the return copy', re[m0.slots.find(s => s.kind === 'BACKPLATE' && s.position === 'LEFT').key], 'BP44-L');
+}
+
+// ── THE FRAMING IS READ OFF WHAT WAS PLACED (Stuart 2026-09-06) ─────────────────────────────
+// "all the steps of the cpq for the rods, and brackets and returns should align in either direction."
+{
+    // Brimar-shaped: one world, one setup (implied, never asked) — but the projection IS asked.
+    const brimar = [
+        { id: 'R', partId: 'BR-R', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['r'] },
+        { id: 'B36-L', partId: 'BR-B36', role: 'BRACKET', position: 'LEFT', proj: '3-5/8', mount: 'WALL', nodes: ['a'] },
+        { id: 'B6-L', partId: 'BR-B6', role: 'BRACKET', position: 'LEFT', proj: '6', mount: 'WALL', nodes: ['b'] },
+        { id: 'B6-R', partId: 'BR-B6', role: 'BRACKET', position: 'RIGHT', proj: '6', mount: 'WALL', nodes: ['c'] },
+        { id: 'B36-R', partId: 'BR-B36', role: 'BRACKET', position: 'RIGHT', proj: '3-5/8', mount: 'WALL', nodes: ['d'] },
+    ];
+    const bm = resolve({ choices: brimar, answers: {}, selectedIds: [] });
+    ok('projection is a live question on this shape', bm.axes.some(a => a.key === 'proj' && !a.implied));
+    const same = seedFromVision({ model: bm, draft: { specs: { engineeringNotes: { poleO2O: 60 } }, spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN', bracketId: 'BR-B6', bracketIdRight: 'BR-B6' } }, flow: { steps: [] },
+        resolveWith: ({ answers, selectedIds }) => resolve({ choices: brimar, answers, selectedIds }) });
+    eq('two 6" brackets answer the projection', String(same.answers.proj), '6');
+    ok('and it is reported as coming from the bracket', same.carried.some(c => /projection — from the bracket drawn/.test(c)));
+    const mixed = seedFromVision({ model: bm, draft: { specs: { engineeringNotes: { poleO2O: 60 } }, spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN', bracketId: 'BR-B6', bracketIdRight: 'BR-B36' } }, flow: { steps: [] },
+        resolveWith: ({ answers, selectedIds }) => resolve({ choices: brimar, answers, selectedIds }) });
+    ok('brackets that disagree answer nothing — and say so', mixed.answers.proj === undefined && mixed.missed.some(x => x.what === 'projection'));
+
+    // Traverse double, fascia in front: the placed parts say double, traverse, fascia-front, motorized.
+    const trv = [
+        { id: 'TRK-F', partId: 'H1-2TRV', role: 'TRACK', rodKind: 'TRAVERSE', tier: 'FRONT', position: 'CENTER', nodes: ['tf'] },
+        { id: 'TRK-B', partId: 'H1-2TRV', role: 'TRACK', rodKind: 'TRAVERSE', tier: 'BACK', setup: 'DOUBLE', position: 'CENTER', nodes: ['tb'] },
+        { id: 'FAS', partId: 'H1-2RCTAR', role: 'FASCIA', rodKind: 'TRAVERSE', tier: 'FRONT', position: 'CENTER', nodes: ['fa'] },
+        { id: 'S-ROD', partId: 'H1-2RCTWR', role: 'ROD', rodKind: 'SOLID', position: 'CENTER', nodes: ['sr'] },
+        { id: 'DRT-L', partId: 'H1-2TRV-DRTWB', role: 'BRACKET', position: 'LEFT', setup: 'DOUBLE', frontLayer: 'FASCIA', proj: 'FRONT:6.5,BACK:3.25', mount: 'WALL', fits: ['TRAVERSE'], nodes: ['dl'] },
+        { id: 'DRT-R', partId: 'H1-2TRV-DRTWB', role: 'BRACKET', position: 'RIGHT', setup: 'DOUBLE', frontLayer: 'FASCIA', proj: 'FRONT:6.5,BACK:3.25', mount: 'WALL', fits: ['TRAVERSE'], nodes: ['dr'] },
+        { id: 'SB-L', partId: 'H1-2TRV-WB', role: 'BRACKET', position: 'LEFT', setup: 'SINGLE', proj: '3.625', mount: 'WALL', fits: ['TRAVERSE'], nodes: ['sl'] },
+        { id: 'END-L', partId: 'HSOM-04', role: 'TRV_END', drive: 'MOTORIZED', position: 'LEFT', tier: 'BACK', setup: 'DOUBLE', nodes: ['e1'] },
+        { id: 'PLUG-L', partId: 'H1-2TRVPLUG', role: 'TRV_END', drive: 'MANUAL', position: 'LEFT', tier: 'BACK', setup: 'DOUBLE', nodes: ['e2'] },
+    ];
+    const tm = resolve({ choices: trv, answers: {}, selectedIds: [] });
+    const tflow = { steps: [
+        { id: 'fas', title: 'Fascia', styleOptions: [{ optId: 'o-fas', partId: 'H1-2RCTAR' }] },
+        { id: 'end-l', title: 'Back Left Trv End', styleOptions: [{ optId: 'o-mot', partId: 'HSOM-04' }] },
+    ] };
+    const td = { specs: { engineeringNotes: { poleO2O: 96 }, fas: 'o-fas', 'end-l': 'o-mot' },
+        spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN', bracketId: 'H1-2TRV-DRTWB', bracketIdRight: 'H1-2TRV-DRTWB' } };
+    const ts = seedFromVision({ model: tm, draft: td, flow: tflow, resolveWith: ({ answers, selectedIds }) => resolve({ choices: trv, answers, selectedIds }) });
+    eq('the double brackets answer single-or-double', ts.answers.setup, 'DOUBLE');
+    eq('the fascia answers the rod type', ts.answers.rodKind, 'TRAVERSE');
+    eq('the fascia answers the front of the double', ts.answers.frontLayer, 'FASCIA');
+    eq('the drawn track end answers the drive', ts.answers.drive, 'MOTORIZED');
+    ok('a tiered bracket answers no projection — it is the question', ts.answers.proj === undefined);
+    ok('every answer says where it came from', ['parts drawn', 'rod drawn', 'front drawn', 'track ends drawn'].every(s => ts.carried.some(c => c.includes(s))));
+}
+
+console.log(`\n${fail ? '❌' : '✅'}  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
