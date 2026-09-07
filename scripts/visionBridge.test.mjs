@@ -253,6 +253,29 @@ console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} pas
     eq('the drawn track end answers the drive', ts.answers.drive, 'MOTORIZED');
     ok('a tiered bracket answers no projection — it is the question', ts.answers.proj === undefined);
     ok('every answer says where it came from', ['parts drawn', 'rod drawn', 'front drawn', 'track ends drawn'].every(s => ts.carried.some(c => c.includes(s))));
+
+// ── A TRAVERSE DRAWING PLACES NO ROD (Stuart 2026-09-07, the live H1-2TRV proof: step 1 unlit) ──
+{
+    const trv2 = trv.filter(c => c.role !== 'FASCIA');       // no fascia in this assembly's front
+    const tm2 = resolve({ choices: trv2, answers: {}, selectedIds: [] });
+    const tflow2 = { steps: [{ id: 'end-l', title: 'Back Left Trv End', styleOptions: [{ optId: 'o-mot', partId: 'HSOM-04' }] }] };
+    const rw = ({ answers, selectedIds }) => resolve({ choices: trv2, answers, selectedIds });
+    // Only brackets and a track end drawn — every one of them fits the track alone.
+    const byFit = seedFromVision({ model: tm2, flow: tflow2, resolveWith: rw, draft: { specs: { engineeringNotes: { poleO2O: 96 }, 'end-l': 'o-mot' },
+        spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN', bracketId: 'H1-2TRV-DRTWB', bracketIdRight: 'H1-2TRV-DRTWB' } } });
+    eq('with no rod drawn, the parts that fit only the track answer traverse', byFit.answers.rodKind, 'TRAVERSE');
+    ok('and say so', byFit.carried.some(c => c === 'traverse — from the parts drawn'));
+    // Vision's own Rod Type answer comes first.
+    const said = seedFromVision({ model: tm2, flow: tflow2, resolveWith: rw, draft: { specs: { engineeringNotes: { poleO2O: 96 }, rodKind: 'TRAVERSE', 'end-l': 'o-mot' },
+        spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN', bracketId: 'H1-2TRV-DRTWB' } } });
+    eq('the rod type chosen on the drawing is the answer', said.answers.rodKind, 'TRAVERSE');
+    ok('and is credited to the drawing', said.carried.some(c => c === 'traverse — from the rod type chosen on the drawing'));
+    // A saved SOLID keeps the lone track from being seeded as "the only rod offered".
+    const solid = seedFromVision({ model: tm2, flow: tflow2, resolveWith: rw, draft: { specs: { engineeringNotes: { poleO2O: 96 }, rodKind: 'SOLID' },
+        spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN' } } });
+    eq('a solid drawing answers solid', solid.answers.rodKind, 'SOLID');
+    ok('and no track rides in as the only rod offered', !solid.carried.some(c => /H1-2TRV — the only rod offered/.test(c)));
+}
 }
 
 // ── THE REPORT NAMES PARTS BY OUR NUMBER (Stuart 2026-09-06, live: "CE-INV-42549 (right)") ──────

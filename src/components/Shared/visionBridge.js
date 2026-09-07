@@ -223,6 +223,12 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
     // The rod WORLD the drawing itself chose — a fascia or a track is traverse, a pole is solid.
     // Read before any rod is filled in for it, so nothing below can contradict the drawing.
     const drawnWorlds = new Set(placedNow().filter(c => ROD_ROLES.includes(c.role)).map(c => c.rodKind).filter(Boolean));
+    // ⚠ THE DRAWING MAY SAY ITS ROD TYPE OUTRIGHT (Stuart 2026-09-07). Vision's Fabrication
+    // Settings ask Solid / Traverse before the projection, and a traverse drawing places no rod at
+    // all — so the saved answer is the first word, the drawn rods the second, and the worlds the
+    // placed parts FIT (a bracket made only for the track) the last.
+    const worldSaid = U(draft?.specs?.rodKind || '');
+    const worldsKnown = drawnWorlds.size ? drawnWorlds : (worldSaid ? new Set([worldSaid]) : drawnWorlds);
 
     // ── THE ROD IS NOT A QUESTION THE DRAWING CAN ANSWER (Eric 2026-08-25: "Rod selection
     // missing") ──────────────────────────────────────────────────────────────────────────────
@@ -236,7 +242,7 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
             // so a drawing that chose the FASCIA also received the solid pole in both tiers — and
             // then "traverse" and "solid" disagreed about the rod type. A lone option is only an
             // answer where it agrees with what the drawing drew.
-            if (drawnWorlds.size && !drawnWorlds.has(s.options[0].rodKind)) return;
+            if (worldsKnown.size && !worldsKnown.has(s.options[0].rodKind)) return;
             picks[s.key] = s.options[0].id;
             taken.add(s.key);
             placed.push(s.options[0].partId);
@@ -307,7 +313,10 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
     const deriveRound = () => {
         const p = placedNow();
         let any = false;
-        any = answerFrom('rodKind', [...drawnWorlds], 'rod drawn') || any;
+        const fitWorlds = p.filter(c => !ROD_ROLES.includes(c.role) && !c.always && Array.isArray(c.fits) && c.fits.length === 1).map(c => c.fits[0]);
+        any = (!!worldSaid && answerFrom('rodKind', [worldSaid], 'rod type chosen on the drawing'))
+            || answerFrom('rodKind', [...drawnWorlds], 'rod drawn')
+            || answerFrom('rodKind', fitWorlds, 'parts drawn') || any;
         any = answerFrom('setup', p.map(c => c.setup), 'parts drawn') || any;
         any = answerFrom('drive', p.map(c => c.drive), 'track ends drawn') || any;
         // Only a bracket made in ONE depth speaks; a tiered one is the question itself.

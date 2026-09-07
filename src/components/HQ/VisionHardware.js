@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
-import { pinProjectionOf } from '../Shared/hardwareAdapter';
+import { pinProjectionOf, choicesFromAssembly } from '../Shared/hardwareAdapter';
+import { admits, axisValues, AXES, normalizeChoice, applyFitsDefaults } from '../Shared/hardwareModel';
 import { platePoolFrom, plateStillOffered } from '../Shared/platePool';
 import { computeBayMath } from '../Shared/bayMath';
 
@@ -72,7 +73,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountCenter: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', endStyleRight: '', proj: "", bracketId: "", bracketIdRight: "", bracketIdCenter: "", backplateIdLeft: "", backplateIdRight: "", backplateIdCenter: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,
+    endStyle: 'FINIAL', endStyleRight: '', proj: "", rodKind: '', bracketId: "", bracketIdRight: "", bracketIdCenter: "", backplateIdLeft: "", backplateIdRight: "", backplateIdCenter: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   };
 
@@ -418,6 +419,35 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           || (o.isFee && /return|miter|mitre|french|bend/i.test(String(o.partName || '')));
       return returnish ? (flowProjSel >= f - 0.01) : (Math.abs(f - flowProjSel) < 0.01);
   };
+  // ── THE ENGINE'S GATE, IN FRONT OF THE DRAWING'S PICKERS (Stuart 2026-09-07) ─────────────
+  // "in fabrication settings we should add step, select pole (solves solid vs. traverse), then
+  //  after selecting projection, with these two choices should filter the bracket and backplate
+  //  options below, it is too easy to choose incompatible parts right now."
+  // The flow's options know nothing of rod worlds; the PINS do. So every picker below is read
+  // through the same admits() the CPQ walk uses — the choice built from the pin, judged against
+  // the rod type chosen here and the projection in force. An option whose part carries no pin is
+  // left alone (a no-pin flow behaves exactly as before); a part the engine refuses is not offered.
+  const linkedAssembly = useMemo(() => (activeFlow?.linkedAssemblyId ? libraryParts.find(p => p.id === activeFlow.linkedAssemblyId) || null : null), [activeFlow, libraryParts]);
+  const engineChoices = useMemo(() => {
+      if (!linkedAssembly || !flowPins.length) return [];
+      return applyFitsDefaults(choicesFromAssembly(linkedAssembly, flowPins).map(c => normalizeChoice(c)).filter(c => c && c.role));
+  }, [linkedAssembly, flowPins]);
+  // The rod worlds this assembly is pinned with. One world is not a question — it is applied.
+  const rodWorlds = useMemo(() => axisValues(engineChoices, AXES.find(a => a.key === 'rodKind')), [engineChoices]);
+  const effRodKind = rodWorlds.length === 1 ? rodWorlds[0] : (rodWorlds.includes(engData.rodKind) ? engData.rodKind : '');
+  // The projection IN FORCE is a selection, never the free-typed field below: the flow's Bracket
+  // Projection pick (or its stamped implied depth), else the size matrix's projection.
+  const engineProj = flowProjSel != null ? flowProjSel : (sizeSel ? projInchesOfSel(sizeSel) : null);
+  const engineCtx = { rodKind: effRodKind || undefined, proj: engineProj != null ? engineProj : undefined };
+  const realIdOf = (v) => v && v !== 'N/A' && v !== 'PENDING';
+  const choicesOfOpt = (o) => {
+      const p = partOfOpt(o);
+      if (!p) return [];
+      const ids = [p.id, p.itemId, p.legacyErpId].filter(realIdOf);
+      return engineChoices.filter(c => ids.includes(c.partId));
+  };
+  // Offered when ANY pin of that part is admitted — a part pinned at several positions is one part.
+  const engineOk = (o) => { const cs = choicesOfOpt(o); return !cs.length || cs.some(c => admits(c, engineCtx).ok); };
   const optAllowedAtSize = (o) => {
       if (!sizeSel) return true;
       return partAllowedAtSize(partOfOpt(o), sizeSel, visionSizeIndex);
@@ -425,9 +455,9 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   const endOptsFor = (st) => {
       let os = st?.styleOptions || [];
       if (sizeSel && !returnsAllowedFor(sizeSel)) os = os.filter(o => !isReturnOption(o));
-      return os.filter(o => optAllowedAtSize(o) && projTagOk(o));
+      return os.filter(o => optAllowedAtSize(o) && projTagOk(o) && engineOk(o));
   };
-  const brOptsFor = (st) => (st?.styleOptions || []).filter(o => optAllowedAtSize(o) && projTagOk(o));
+  const brOptsFor = (st) => (st?.styleOptions || []).filter(o => optAllowedAtSize(o) && projTagOk(o) && engineOk(o));
   const optOf = (step, sel) => step ? ((step.styleOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
   const optSel = (step) => optOf(step, step ? dynamicConfigParams[step.id] : null);
   const subOf = (step, sel) => step ? ((step.subOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
@@ -477,7 +507,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
   // dropdown blanked, and nothing could push back to CPQ because the selection was gone.
   //
   // It lives in Shared/platePool now and BOTH readers call it, in the engine's own order.
-  const subPoolFrom = (subs, flags) => platePoolFrom(subs, flags, (o) => optAllowedAtSize(o) && projTagOk(o));
+  const subPoolFrom = (subs, flags) => platePoolFrom(subs, flags, (o) => optAllowedAtSize(o) && projTagOk(o) && engineOk(o));
   const subPoolAt = (step, pos) => {
       const subs = step?.subOptions || [];
       const sel = optSel(step);
@@ -551,6 +581,17 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                   if (so && !projTagOk(so)) { delete next[`${st.id}__sub`]; changed = true; }
               });
           }
+          // The engine's gate sweeps too: a rod type or projection the pickers stopped offering a
+          // part under must not leave it chosen — picker and sweep agree, by the 2026-08-21 rule.
+          if (engineChoices.length) {
+              [stepEndL, stepEndR, stepBrL, stepBrR, stepBrC].forEach(st => {
+                  if (!st) return;
+                  const o = optOf(st, next[st.id]);
+                  if (o && !engineOk(o)) { delete next[st.id]; changed = true; }
+                  const so = subOf(st, next[`${st.id}__sub`]);
+                  if (so && !engineOk(so)) { delete next[`${st.id}__sub`]; changed = true; }
+              });
+          }
           [['LEFT', stepBrL], ['RIGHT', stepBrR], ['CENTER', stepBrC]].forEach(([pos, st]) => {
               if (!st) return;
               const endSt = pos === 'LEFT' ? stepEndL : pos === 'RIGHT' ? stepEndR : null;
@@ -577,7 +618,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           return changed ? next : prev;
       });
       // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dynamicConfigParams, activeFlow]);
+  }, [dynamicConfigParams, activeFlow, effRodKind, engineProj, engineChoices]);
 
   // Derive engData (fab math inputs) FROM the step selections: part ids for dims, end styles, and
   // the INSIDE mount flip for inside-mount ends.
@@ -1029,7 +1070,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       setSidemark(cfg.sidemark || '');
       const flowId = cfg.flowId || cfg.linkedCpqFlowId || cfg.cpqFlowId;
       if (flowId) setQuoteFlowId(flowId);
-      const { engineeringNotes: _en, collection: savedCollection, bracketId: _bid, ...stepParams } = cfg.specs || {};
+      const { engineeringNotes: _en, collection: savedCollection, bracketId: _bid, rodKind: _rk, ...stepParams } = cfg.specs || {};
       setDynamicConfigParams(stepParams || {});
       setQuoteSelections({ collection: savedCollection || '' });
       setEditingDraftId(cfg.id);
@@ -1106,6 +1147,8 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           masterQuoteId: activeSession.quoteId,      
           specs: {
               collection: quoteSelections.collection,
+              // The rod world this drawing was engineered in — CPQ's step-1 answer (visionBridge).
+              rodKind: effRodKind || '',
               bracketId: engData.bracketId,
               engineeringNotes: {
                   poleFeetQty, qtyBrackets, qtyCenterBrackets, recRings, qtyFinials, qtySplices, qtyMiters,
@@ -1268,8 +1311,19 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             {/* SIZE-MATRIX (Fabricut H1): Rod Diameter + Bracket Projection — the two top-level
                                 flow questions. Every picker below re-labels + every dim re-syncs to the chosen
                                 size; unanswered = the flow's base size (3/4" × 4-5/8"). */}
-                            {(sizeSteps.length > 0 || projSelectSteps.length > 0) && (
+                            {(rodWorlds.length > 1 || sizeSteps.length > 0 || projSelectSteps.length > 0) && (
                                 <div style={{ display: 'flex', gap: '16px' }}>
+                                    {/* ROD TYPE FIRST (Stuart 2026-09-07): asked only where the pins hold both a solid
+                                        pole and a track/fascia; with the projection it gates every picker below. */}
+                                    {rodWorlds.length > 1 && (
+                                        <div style={{ flex: 1 }}>
+                                            <label style={labelStyle}>Rod Type · from the pins</label>
+                                            <select value={engData.rodKind || ''} onChange={e => setEngData(prev => ({ ...prev, rodKind: e.target.value }))} style={fieldStyle}>
+                                                <option value="">-- Select Rod Type --</option>
+                                                {rodWorlds.map(w => <option key={w} value={w}>{w === 'TRAVERSE' ? 'Traverse — track / fascia' : 'Solid — pole'}</option>)}
+                                            </select>
+                                        </div>
+                                    )}
                                     {[...sizeSteps, ...projSelectSteps].map(st => (
                                         <div key={st.id} style={{ flex: 1 }}>
                                             <label style={labelStyle}>{st.title} · from flow</label>
