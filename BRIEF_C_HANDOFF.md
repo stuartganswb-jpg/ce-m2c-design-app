@@ -11,7 +11,7 @@ stale — locate by symbol.*
 | `334c9c3` | **C2** — the milling tracker's finalize stamps the `hq_work_orders` doc behind the spine: last op GOOD → `floorPhase 'Complete'`, `floorCompletedAt/By`, `millGoodQty`, `millScrapQty`, `millCompletedAt/By`; any FAILED op → `floorPhase 'Failed'`, `floorUpdatedAt`, `millFailReason` (QC reason — notes), `millFailedOp`, `millFailedAt/By`. A **zero-good** op takes the Failed stamp and the spine is **no longer marked Completed** (before, a zero-good last op cleared RTG's component gate and released a parent with no components). | live bundle grep `mill record stamp` = 1 (`main.9731bab9.js`) |
 | `42aa3a7` | **§8 Q1 read side** — the Custom card shows a **Shop Instruction** panel when the order has no cut list, read live from `Approved_Designs.manufacturingSpecs.shopInstruction` (doc's own `shopInstruction` first, then exact code, then mill base). **§8 Q2** — the "Custom Fab Started" message to FINISHING is sent only when `finSiblingId` exists (both Start paths). | live bundle grep `Shop Instruction` = 1 |
 
-**How the hq record is found (C2):** `hqWorkOrderIdOf` in `ShopFloor/shopShared.js` — the spine doc id minus `SHOP-`, which is `pushToShop`'s own naming and what RTG's component gate reads back. Not B's `propagateFloorState`: every stock writer sets `hqJobId` = the **library part's** id, `pushToShop` copies that into the spine's `orderKey`/`quoteId`, so `identityKeysOf(spine)` never holds the hq work order id and the resolver returns null for every stock milling job. Named to B (B7 item, accepted); when B's resolver learns the `SHOP-` key, C2 switches to `propagateFloorState` and the direct write retires.
+**How the hq record is found (C2) — SUPERSEDED 2026-09-08 (§8): B7 landed, `stampMillRecord` now calls `propagateFloorState` and `hqWorkOrderIdOf` is gone. History:** `hqWorkOrderIdOf` in `ShopFloor/shopShared.js` — the spine doc id minus `SHOP-`, which is `pushToShop`'s own naming and what RTG's component gate reads back. Not B's `propagateFloorState`: every stock writer sets `hqJobId` = the **library part's** id, `pushToShop` copies that into the spine's `orderKey`/`quoteId`, so `identityKeysOf(spine)` never holds the hq work order id and the resolver returns null for every stock milling job. Named to B (B7 item, accepted); when B's resolver learns the `SHOP-` key, C2 switches to `propagateFloorState` and the direct write retires.
 
 **Note for the brief:** ShopFloor is compiled into `main.*.js`, not a lazy chunk. Marker-grep main.
 
@@ -82,3 +82,13 @@ library item carries `staticShopDrawing` / SOP pages; none of the HBR1-1INPOLE c
 Multi-config cards show the FIRST configuration's cut sheet only (`mergedNotesObj` = first item);
 the other configurations are reachable via their row's 🔍 View Item. Stuart did not ask for that
 to change.
+
+## 8. 2026-09-08 — three hand-offs from B, shipped together (Stuart: "go ahead on all D is done")
+
+| item | what | state |
+|---|---|---|
+| Traverse cut sheet (B, 09-08; E's RTG_TRAVERSE_CUTS_PATCH; b6c5921) | the card shows a **Traverse Cut Sheet** — drive · setup · front layer, rows Fascia / Track / F-clip × qty with `cutInches` as given on `fabNotes.traverseCuts`; the Pole Cut Sheet stands for solid poles | shipped (see commit log for the hash; verify marker `Traverse Cut Sheet` in main) |
+| Shop REOPEN ends its plating demand (B, 09-04; D's `cancelPlatingDemand` 5571d77) | undo on a plated order cancels the demand (ledgered) or **refuses the reopen** when the parts have shipped; `platingDemandCreated/Id` cleared so a second Complete raises a fresh one | shipped, same commit — **not yet exercised live** (needs a plated order completed → undone with Stuart pinned in) |
+| C2 through the one resolver (B7 62ad937) | `stampMillRecord` → `propagateFloorState(ctx, { finWo: spine, phase, extra })`; direct `hq_work_orders` write and `hqWorkOrderIdOf` retired | shipped, same commit; fields on the record unchanged |
+
+**Still open from earlier:** C1 §6 acceptance rows (a `/EP` custom order end-to-end, D watching the receipt); C4 (OE pair live); C5 (Q4 20 ft sticks unanswered); C6 leftovers; Q3 (root-build N).
