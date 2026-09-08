@@ -19,6 +19,8 @@
 
 // Every identity an order might be keyed under. The floor and the board have historically keyed the
 // same order four different ways, which is why linkage has to be by SET rather than by one field.
+import { strandedGatesOf } from './orderStatus.js';
+
 export const identityKeysOf = (o) => {
     const raw = [
         o && o.id, o && o.woId, o && o.soId, o && o.orderKey, o && o.hqJobId, o && o.quoteId,
@@ -220,7 +222,7 @@ export async function propagateFloorState(ctx, { finWo, phase, by, extra }) {
  * extends the reach to the demand documents — the exact class that piled up unfound on the WMS
  * Convert tab. Pure, so the rules can be reasoned about without Firestore in the room.
  */
-export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], convertDemands = [], platingDemands = [], rodCuts = [], salesOrders = [] }) {
+export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], convertDemands = [], platingDemands = [], rodCuts = [], salesOrders = [], openPoNumbers = null }) {
     const byKey = new Map();
     hqOrders.forEach(o => identityKeysOf(o).forEach(k => byKey.set(k, o)));
     const parentOf = (d) => identityKeysOf(d).map(k => byKey.get(k)).find(Boolean) || null;
@@ -267,6 +269,30 @@ export function auditOrphans({ hqOrders = [], finWos = [], shopJobs = [], conver
     rodCuts.forEach(d => {
         const open = !['DONE', 'CANCELLED'].includes(String(d.status || '').toUpperCase());
         if (open && d.finWoId && !liveWoById.has(String(d.finWoId))) out.push({ type: 'RODCUT_ORPHAN', coll: 'rod_cut_orders', floor: d, parent: null });
+    });
+
+    // ── THE OTHER DIRECTION: A LIVE ORDER WAITING ON SOMETHING THAT NO LONGER EXISTS ───────────
+    // Everything above finds a CHILD that outlived its parent. This finds a PARENT still waiting on
+    // a child that was cancelled or deleted — the strand with no symptom until the floor notices
+    // work that never came (Stuart 2026-09-08, from a rod cut that outlived nothing and an order
+    // that outlived its cut).
+    //
+    // Each gate declares its own clearer in Shared/orderStatus; a gate whose pool we were not
+    // handed is skipped, never guessed at. `openPoNumbers` is optional for that reason — pass it
+    // and the material gate is audited too, omit it and it simply is not.
+    const liveWoIds = new Set([...liveWoById.keys()]);
+    hqOrders.forEach(o => {
+        if (isClosedState(o) || o.deleted) return;
+        const pools = {
+            keys: new Set(identityKeysOf(o)),
+            rodCuts, convertDemands, liveWoIds,
+            ...(openPoNumbers ? { openPoNumbers } : {}),
+        };
+        strandedGatesOf(o, pools).forEach(g => out.push({
+            type: 'STRANDED_GATE', coll: null, floor: null, parent: o,
+            gate: g.key, gateLabel: g.label, expected: g.expected,
+            detail: `${o.woDisplayId || o.id} is held at "${g.label}" but ${g.expected} no longer exists — nothing can lift it.`,
+        }));
     });
     return out;
 }

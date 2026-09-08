@@ -20,7 +20,7 @@
 // (Shared/purchaseOrders, A4), or raise a plating demand (Shared/platingDemand, A3). It parks.
 
 import { db } from '../../firebase';
-import { doc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, collection, query, where, getDocs, getDoc } from 'firebase/firestore';
 import { withItemCode, makeFullTasks } from './workOrderContract';
 import { buildParkedWorkOrder, routeForCode, ROUTE_FINISHING, ROUTE_SHOP, REFUSE_PHOSPHATE, REFUSE_OUTSOURCED } from './stockRun.js';
 import { planFinishedRun, erpOf } from './finishedGoodsRun.js';
@@ -348,4 +348,38 @@ export const clearReceiptGate = async ({ itemId, receivedQty, poId = '', operato
     }
     out.used = asked - left;
     return out;
+};
+
+
+// ── LIFTING THE MATERIAL GATE BY HAND ──────────────────────────────────────────────────────────
+// Stuart 2026-09-08: "we need to tighten up any mehcanism that allows a delete and strand".
+//
+// This gate shipped on 2026-09-05 with exactly ONE way out: receiving enough to cover the line.
+// That is right when the material is coming — and a trap when it is not. Cancel the purchase
+// order, close the line short, decide to make the parts instead, and the order waits for a
+// delivery that will never happen, with nothing on any screen able to release it. It was the
+// newest instance of the very pattern being swept up here, and it was mine.
+//
+// So: the same shape the Convert tab settled on (PickPack.deleteConvertDemand, 2026-08-29). The
+// gate is LIFTED and says who lifted it and why — and it deliberately does NOT release the order.
+// A person clearing a dead gate is tidying up, not certifying that material arrived; release
+// stays RTG's call, made by someone looking at the whole order.
+export const cancelReceiptGate = async ({ woId, by = '', reason = '' }) => {
+    const id = String(woId || '');
+    if (!id) return { ok: false, note: 'no work order id' };
+    const snap = await getDoc(doc(db, 'hq_work_orders', id));
+    if (!snap.exists()) return { ok: false, note: `${id} no longer exists` };
+    const wo = { id: snap.id, ...snap.data() };
+    if (!wo.awaitingReceipt) return { ok: false, note: `${id} is not waiting on material` };
+    const was = wo.receiptGateNote || (wo.receiptRefs || []).map(r => `${r.receivedSoFar || 0}/${r.qtyNeeded} × ${r.itemId}`).join(' · ');
+    await updateDoc(doc(db, 'hq_work_orders', id), {
+        awaitingReceipt: false,
+        receiptGateCancelledAt: Date.now(),
+        receiptGateCancelledBy: by || '',
+        receiptGateCancelReason: reason || '',
+        // The refs STAY. What was outstanding when someone stepped in is part of the record, and
+        // the note says the gate was lifted rather than satisfied — the two must never read alike.
+        receiptGateNote: `gate lifted by ${by || 'an operator'}${reason ? ` — ${reason}` : ''} (was: ${was || 'no detail'})`,
+    });
+    return { ok: true, note: `${id}: material gate lifted — release it from RTG when the order is ready.` };
 };

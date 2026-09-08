@@ -247,11 +247,16 @@ export const GATES = [
       open: (wo) => !!wo.awaitingSoAccept,
       label: 'awaiting SO accept', detail: (wo) => wo.soAppId || '',
       clearedBy: 'NetSuite accepting the sales order (outbox writeBack clears awaitingSoAccept)',
+      clearer: null,     // NetSuite's answer, not a document of ours — see nsWo
       help: (wo) => `${wo.id} belongs to sales order ${wo.soAppId || ''}, which NetSuite has not accepted yet.\n\nThe gate clears itself when the SO posts (watch the Transmit Log). If NetSuite REJECTED the order, fix and re-send it rather than releasing this work.` },
     { key: 'nsWo', kind: 'wait', icon: '⏳',
       open: (wo) => !!wo.awaitingNsWo && !wo.nsWoId,
       label: 'awaiting NetSuite WO #', detail: () => '',
       clearedBy: 'the outbox writeBack stamping nsWoId',
+      // NOT AUDITABLE, deliberately: what clears this lives in NetSuite, not in a collection we
+      // can count. Declared null rather than omitted so "we chose not to check" is on the page
+      // instead of looking like something nobody thought about.
+      clearer: null,
       help: (wo) => `${wo.id} is waiting for its NETSUITE WORK ORDER number.\n\nThe WO is queued (11.1 → NetSuite Sync Queue) and its number stamps back automatically — the release then happens on its own. Releasing NOW puts unanchored paper on the floor.` },
     // MATERIAL WE HAD TO BUY (Stuart 2026-09-04: "when an order is placed and we do not have stock
     // it needs to wait for it to arrive and the order sits parked on wms"). Set by A when the
@@ -262,28 +267,85 @@ export const GATES = [
       open: (wo) => !!wo.awaitingReceipt,
       label: 'awaiting material', detail: (wo) => wo.receiptGateNote || '',
       clearedBy: 'the WMS receiving tab recording enough received quantity to cover the line (clearReceiptGate)',
+      // Stranded when every ref names a PO and not one of those POs is still open — a cancelled
+      // or closed PO can never be received against, so nothing is coming to lift this. A ref with
+      // NO poId is not stranded: any receipt of that code clears it.
+      clearer: { needs: 'openPoNumbers', what: 'an open purchase order for the material',
+          alive: (wo, { openPoNumbers }) => {
+              const refs = (wo.receiptRefs || []).filter(r => Number(r.qtyNeeded) > (Number(r.receivedSoFar) || 0));
+              if (!refs.length) return true;                       // nothing outstanding to strand
+              return refs.some(r => !r.poId || openPoNumbers.has(String(r.poId).toUpperCase()));
+          } },
       help: (wo) => `${wo.id} is waiting on material we had to buy.\n\n${wo.receiptGateNote || 'A purchase order was raised for this line and has not arrived yet.'}\n\nThe gate clears itself at the receiving dock the moment enough is received to cover this line — a part delivery keeps it closed and says how much is still owed. Releasing NOW sends the floor a job whose material is not in the building.` },
     { key: 'components', kind: 'wait', icon: '🧩',
       open: (wo) => !!wo.awaitingComponents && !wo.componentsDone,
       label: 'awaiting component milling', detail: (wo) => (wo.componentShopWoIds || []).length ? `${wo.componentShopWoIds.length} shop WO(s)` : '',
       clearedBy: 'every component shop WO completing (RTG\'s live effect stamps componentsDone)',
+      // Stranded when every component shop WO it names is gone or closed without the completion
+      // ever stamping componentsDone — the order waits on milling nobody is doing.
+      clearer: { needs: 'liveWoIds', what: 'a component shop work order still open',
+          alive: (wo, { liveWoIds }) => {
+              const ids = wo.componentShopWoIds || [];
+              return !ids.length || ids.some(id => liveWoIds.has(String(id)));
+          } },
       help: (wo) => `${wo.id} is waiting on ${(wo.componentShopWoIds || []).length} component shop WO(s) still in milling.\n\nThe pulls do not exist yet — the gate clears itself the moment the shop completes them. Releasing NOW sends the floor a job it cannot pick.` },
     { key: 'convert', kind: 'wait', icon: '⇄',
       open: (wo) => !!wo.awaitingConvert,
       label: 'awaiting phosphate convert', detail: (wo) => wo.convertGateNote || '',
       clearedBy: 'the WMS Convert tab posting the convert (clearConvertGate)',
+      // Stranded when no convert to-do points at this order any more. Deleting the LAST demand
+      // already lifts the gate by hand (PickPack deleteConvertDemand); this catches every other
+      // way one can vanish.
+      clearer: { needs: 'convertDemands', what: 'a convert to-do on the WMS Convert tab',
+          alive: (wo, { keys, convertDemands }) => convertDemands.some(d => keys.has(String(d.finWoId || ''))) },
       help: (wo) => `${wo.id} is waiting on a phosphate CONVERT.\n\n${wo.convertGateNote || 'Component /P cores are short — a convert to-do is open on the WMS Convert tab.'}\n\nUntil the convert posts, the ${itemOf(wo)} components do not exist to pick. The gate clears itself when the WMS completes the convert.` },
     { key: 'rodCut', kind: 'wait', icon: '✂',
       open: (wo) => !!wo.awaitingRodCut,
       label: 'awaiting rod cut', detail: (wo) => wo.rodCutNote || '',
       clearedBy: 'WMS → ROD CUTS → Cuts for Finishing completing it (prints this order\'s label)',
+      // Stranded when the cut was CANCELLED or removed while the order still waits on it — the
+      // exact case Stuart hit on 2026-09-08: cancelling a cut in the WMS never lifted this flag,
+      // and RTG's DELETE (unlike its Close) never cancelled the cut either.
+      clearer: { needs: 'rodCuts', what: 'an open rod cut on WMS → Rod Cuts',
+          alive: (wo, { keys, rodCuts }) => rodCuts.some(d =>
+              !['CANCELLED', 'DONE', 'COMPLETE', 'COMPLETED'].includes(String(d.status || '').toUpperCase())
+              && (keys.has(String(d.finWoId || '')) || String(d.id || '') === String(wo.rodCutId || ''))) },
       help: (wo) => `${wo.id} is waiting on a rod cut.\n\n${wo.rodCutNote || 'The 8 ft rods have not been cut yet.'}\n\nUntil WMS → ROD CUTS → "Cuts for Finishing" completes it, the ${itemOf(wo) || 'cut'} poles do not exist to pick or finish — and that cut prints this order's label when it's done.` },
     { key: 'dispatched', kind: 'done', icon: '✓',
       open: (wo) => !!wo.pushedToFinishing,
       label: 'already dispatched to finishing', detail: () => '',
       clearedBy: 'nothing — an order is released once',
+      clearer: null,     // a 'done' marker, not something waiting to be lifted
       help: (wo) => `${wo.woDisplayId || wo.nsWoTran || wo.id} was ALREADY dispatched to finishing.\n\nRelease it AGAIN anyway? Normally NO — this re-copies the floor card.` },
 ];
+// ── A GATE WHOSE CLEARER IS GONE (Stuart 2026-09-08) ───────────────────────────────────────────
+// "we need to tighten up any mehcanism that allows a delete and strand i thought we closed all of
+//  them … we need to loop thru all pages again and make sure we rid these"
+//
+// Every check we had ran ONE WAY: find a child that outlived its parent (an orphan cut, an orphan
+// demand, a floor doc with no board record). Nothing looked the other way — a live order still
+// waiting on a child that has been cancelled or deleted. That direction has no symptom until the
+// floor notices work that never arrives, which is exactly how it was found.
+//
+// So each gate above now declares what would clear it, and this asks whether that thing still
+// exists. `needs` names the pool the caller must supply; a gate whose pool was NOT supplied is
+// SKIPPED rather than reported — an audit that cried "stranded" because it was called without the
+// rod cuts would be worse than no audit at all.
+//
+// pools: { keys:Set, rodCuts:[], convertDemands:[], liveWoIds:Set, openPoNumbers:Set }
+export const strandedGatesOf = (wo, pools = {}) => {
+    if (!wo) return [];
+    return GATES.filter(g => {
+        if (!g.clearer || !g.open(wo)) return false;
+        if (!(g.clearer.needs in pools) || pools[g.clearer.needs] == null) return false;   // not asked
+        try { return !g.clearer.alive(wo, pools); } catch (e) { return false; }
+    }).map(g => ({ key: g.key, label: g.label, icon: g.icon, expected: g.clearer.what, clearedBy: g.clearedBy }));
+};
+
+// What the audit is CAPABLE of checking, and what each check needs handed to it — so a caller can
+// say honestly which gates were examined and which were not.
+export const AUDITABLE_GATES = GATES.filter(g => !!g.clearer).map(g => ({ key: g.key, needs: g.clearer.needs }));
+
 // Every gate, open or not, with its words resolved for this order.
 export const gatesOf = (wo) => !wo ? [] : GATES.map(g => {
     const detail = g.detail(wo);

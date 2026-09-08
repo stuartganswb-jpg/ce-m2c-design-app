@@ -451,3 +451,93 @@ mirror is wanted.
    Stock Build Needs, then A3 `Shared/platingDemand.js` (no PO), then the 11.1 BOM-core report.
 4. A6 sweep (finishOf → finishCodeFromErp; one `tierOfErp`; the four routing sites).
 5. Writer 7 when B1 lands.
+
+---
+
+## §4 — THE DELETE-AND-STRAND SWEEP (Stuart 2026-09-08)
+
+> "we need to tighten up any mehcanism that allows a delete and strand i thought we closed all of
+>  them once this is complete we need to loop thru all pages again and make sure we rid these"
+
+Found while answering "can i delete it on RTG and it clears everywhere?" — for `WO-STK-52919`,
+**no**.
+
+### The shape of the problem
+
+Every check we had ran ONE WAY: find a **child that outlived its parent** (`ORPHAN_FLOOR`,
+`DEMAND_ORPHAN`, `RODCUT_ORPHAN`). Nothing looked for a **parent still waiting on a child that is
+gone**. That direction has no symptom until the floor notices work that never arrives — which is
+exactly how it surfaced. The August hardening was real but one-directional, which is why it felt
+like these were all closed.
+
+### DONE (A, shipped) — the mechanism, so the rest is findable
+
+**`Shared/orderStatus.js`** — every gate now declares its own clearer:
+```js
+clearer: { needs: 'rodCuts', what: 'an open rod cut on WMS → Rod Cuts',
+           alive: (wo, pools) => ... }
+```
+`clearer: null` on `soAccept` / `nsWo` / `dispatched` — NetSuite's answer or a done-marker, not a
+document we can count. Null rather than omitted, so "we chose not to check" is on the page.
+New exports: **`strandedGatesOf(wo, pools)`**, **`AUDITABLE_GATES`**.
+
+A gate whose pool was NOT supplied is **skipped, never guessed at** — an audit that cried
+"stranded" because it was called without the rod cuts would be worse than no audit.
+
+**`Shared/orderLifecycle.js`** — `auditOrphans` gains **`STRANDED_GATE`**, and an optional
+`openPoNumbers` argument (pass it and the material gate is audited too; omit it and it is not).
+
+**`Shared/workOrderCreate.js`** — **`cancelReceiptGate({ woId, by, reason })`**. My gate shipped
+2026-09-05 with exactly one way out (receiving enough to cover the line): right while material is
+coming, a trap when the PO is cancelled. Lifts the gate, keeps the refs, stamps who and why, and
+**does not release** — a person clearing a dead gate is tidying up, not certifying material
+arrived. Same shape PickPack's `deleteConvertDemand` settled on 2026-08-29.
+
+21 assertions pass, incl. `WO-STK-52919`'s exact state.
+
+### ⬜ B — two changes in `RTGDispatchTab.js`
+
+**B-1 · Delete must cancel the rod cut (this is the live defect).**
+`deleteOrder` (:1648) re-implements the closer inline instead of calling it, so it never received
+the rod-cut cancellation `closeOrderEverywhere` got in `f60fc29`. **Close** cancels the cut;
+**Delete** does not. Deleting `WO-STK-52919` today strands `RC-WO-STK-52919-…` open on the saw.
+
+Preferred fix: **call `closeEverywhere` and delete the copy.** The copy is the defect — it will
+drift again. If the cascade must stay inline, port the rod-cut block from
+[orderLifecycle.js:132](src/components/Shared/orderLifecycle.js:132) verbatim.
+
+**B-2 · Surface `STRANDED_GATE` in the orphan audit panel, and wire the lift buttons.**
+`auditOrphans` already returns the new type — each finding carries `gate`, `gateLabel`, `expected`
+and a ready `detail` sentence. Pass `openPoNumbers` (a Set of open PO numbers, `isOpenPo` in
+`Shared/purchaseOrders`) to include the material gate; omit it and that gate is silently not
+checked. For a `receipt` finding, the fix button is `cancelReceiptGate({ woId, by, reason })` —
+already exported, needs a button. That is the operator's route out of my gate; without it the only
+exit is receiving.
+
+### ⬜ D — one change in `PickPackApp.js`
+
+**D-1 · `cancelRodCut` (:2445) must lift `awaitingRodCut`.**
+It sets the cut to `CANCELLED` and stops. The order keeps `awaitingRodCut: true` with nothing alive
+to clear it — only the completion path (:2419) clears the flag. Cancel a cut to "unstick" an order
+and you strand it permanently.
+
+The Convert tab already solved this exactly: `deleteConvertDemand` (:3587) lifts the gate when the
+last demand pointing at a live WO goes, **without** auto-releasing. Mirror it:
+- after `status: 'CANCELLED'`, if `o.finWoId` and no other open cut points at that WO,
+  `updateDoc(hq_work_orders/<finWoId>, { awaitingRodCut: false, rodCutNote: 'cut <id> cancelled by <who> — gate lifted, release from RTG' })`
+- do **not** release. Same reasoning as Convert.
+- the confirm text should say the order stops waiting, so the operator knows what they are doing.
+
+### ⬜ NAMED, NOT ASSIGNED — `ns_outbox` has no delete awareness
+
+`Shared/nsOutbox.js` has no cancel/deleted guard, and neither close nor delete cancels queued
+entries. **A queued NetSuite write for a deleted order still posts** — it does not park work, it
+*creates* a real NetSuite transaction for an order the app no longer has. I rank this above B-1 and
+D-1 in consequence; it needs an owner (D or whoever holds the outbox) and Stuart's call on whether
+a queued write is cancelled or merely flagged on delete.
+
+### Order
+
+A (done) → **D-1** and **B-1** in parallel (independent) → **B-2** (needs A's exports, already in)
+→ outbox once owned. B-2 last on purpose: it is what makes anything still slipping through
+*findable* instead of trusted.
