@@ -99,3 +99,67 @@ export const issuePlatedDemand = async ({
     }
     return { demandId, woNum, shopWoId, coreShort, made };
 };
+
+// ══ THE END OF A DEMAND'S LIFE — one module owns the collection ═══════════════════════════════
+//
+// `plating_demand` was written by three screens and deleted by three more, each reaching into the
+// collection directly. A3 gave the RAISING one home (above); this gives the ENDING one home too,
+// so the successor session has a single place to read for "what can happen to a demand".
+//
+// TWO ENDINGS, and they are genuinely different acts:
+//   FULFILLED  the demand became a plating_shipments line — the pull posted, or a custom part was
+//              scanned in at OB PLATING. The demand did its job.
+//   CANCELLED  the work went away. Brief C's case (2026-09-04 sweep): the shop REOPENS a completed
+//              plated order, so the parts are back on the bench, but the demand it raised stayed
+//              open on the WMS Plating tab — the warehouse kept being told to pull parts that are
+//              no longer going anywhere.
+//
+// ── WHY BOTH DELETE RATHER THAN SET A TERMINAL STATUS ────────────────────────────────────────
+// The obvious shape — `status: 'CANCELLED'` — is WRONG here, and the reason is downstream.
+// `auditOrphans` (Shared/orderLifecycle :327) checks plating demands with NO status filter, unlike
+// rod cuts which test `open` first. A demand left in the collection with a terminal status becomes
+// a permanent DEMAND_ORPHAN on RTG's audit panel the moment its sales order closes — a phantom
+// backlog that nothing can clear, which is the exact failure the audit exists to surface.
+// So the record is preserved where the WMS already preserves such things: the DELETION LEDGER
+// (`hq_deletion_log`), the same route PickPack uses for a cancelled plating_shipments line. The
+// reason survives, the audit stays clean, and no reader needs changing.
+// (If plating demands ever DO want a terminal status, the one-line fix is to mirror the rodCuts
+// guard in auditOrphans first. Named, not done — it is not this change.)
+
+/**
+ * The demand became a shipment line. Ctx needs: db, doc, deleteDoc, setDoc.
+ * @returns {Promise<boolean>} false when there was nothing to end (already gone).
+ */
+export async function fulfilPlatingDemand(ctx, { id, record = null, shipmentRef = '', by = '', from = 'WMS' }) {
+    if (!id) return false;
+    const { hardDeleteWithLedger } = await import('./orderLifecycle');
+    await hardDeleteWithLedger(ctx, {
+        collection: 'plating_demand', docId: id, record: record || { id }, kind: 'plating_demand',
+        by, from, reason: `staged for plating${shipmentRef ? ` — ${shipmentRef}` : ''}`,
+    });
+    return true;
+}
+
+/**
+ * The work went away, so the demand must too (Brief C's shop REOPEN).
+ *
+ * REFUSES when the parts have already SHIPPED to the plater — the caller is expected to refuse its
+ * own action on that answer ("parts are at the plater — receive them first") rather than cancelling
+ * a demand whose pieces are physically out of the building. The caller passes the shipment lines it
+ * can already see, so this stays free of its own Firestore read.
+ *
+ * @returns {Promise<{ok:boolean, reason?:string}>}
+ */
+export async function cancelPlatingDemand(ctx, { id, record = null, reason = '', by = '', from = 'SHOP', shipmentLines = [] }) {
+    if (!id) return { ok: false, reason: 'no demand id' };
+    const woNum = String((record && record.woNum) || '');
+    const shipped = (shipmentLines || []).some(l => l && String(l.woNum || '') && woNum && String(l.woNum) === woNum
+        && !['staged'].includes(String(l.status || '')));
+    if (shipped) return { ok: false, reason: 'those parts are already at the plater — receive them back before reopening' };
+    const { hardDeleteWithLedger } = await import('./orderLifecycle');
+    await hardDeleteWithLedger(ctx, {
+        collection: 'plating_demand', docId: id, record: record || { id }, kind: 'plating_demand',
+        by, from, reason: reason || 'cancelled',
+    });
+    return { ok: true };
+}

@@ -21,6 +21,7 @@ import AssetGalleryTab from '../Shared/AssetGalleryTab';
 import AppImprovementTab from '../Shared/AppImprovementTab';
 import { resolveByExactKey, normalizeKey, stagingScanMatches, woItemCodeOf, woItemNameOf, mirrorCustomStatusToSibling } from '../Shared/workOrderContract';
 import { hardDeleteWithLedger, propagateFloorState, closeOrderEverywhere } from '../Shared/orderLifecycle';
+import { fulfilPlatingDemand } from '../Shared/platingDemand';
 import { clearConvertGate } from '../Shared/finishedRunPrecheck';
 import { printPlatingPackingList } from '../Shared/platingPackingList';
 import { downloadPlatingOrderPdf } from '../Shared/platingOrderPdf';
@@ -1580,7 +1581,9 @@ const PickPackApp = ({ activeBrand: activeBrandProp, setActiveBrand: setActiveBr
                 operator: operator?.name || 'Unknown', createdAt: serverTimestamp()
             });
             printPlatingLabel({ erpId: d.baseErpId || 'CUSTOM', itemName: d.finishName || 'Custom plated part', qty: Number(d.qty) || 1, woNum: d.woNum || '', platingBin: 'OB PLATING', finishCode: d.finishCode || '', finishName: d.finishName || '', targetErpId: d.targetErpId || '' });
-            await deleteDoc(doc(db, 'plating_demand', d.id)).catch(() => {});
+            // The demand became a shipment line — ended through the ONE module that owns the
+            // collection, so the reason lands in the deletion ledger instead of vanishing.
+            await fulfilPlatingDemand({ db, doc, deleteDoc, setDoc }, { id: d.id, record: d, shipmentRef: `OB PLATING · WO ${d.woNum || ''}`.trim(), by: operator?.name || '', from: 'WMS_OB_SCAN' }).catch(() => {});
             writeLog(`OB Plating scan-in: ${d.qty} × ${d.baseErpId} (${d.finishCode}) WO ${d.woNum} → OB PLATING`, 'wms');
             alert(`✅ ${d.woNum || d.baseErpId} staged in OB PLATING — it rides the next weekly plating shipment/PO.`);
         } catch (e) { alert('OB scan-in failed: ' + (e.message || e)); }
@@ -2741,7 +2744,10 @@ ${wo ? `<div class="bc">${code128BSvg(wo)}<div class="bctxt">${esc(wo)}</div></d
             alert(`✅ Pulled ${qty} × ${item.erpId} to plating WIP (${finishCode} → ${targetErpId}) — moved ${fromBin} → ${platingBin}, status WIP-Plating. Removed from Available.\n\n🖨️ 2×4 plating label spooled${(platingWO || '').trim() ? ` (WO ${(platingWO || '').trim()})` : ''}.`);
             writeLog(`Plating pull: ${qty} ${item.erpId} ${fromBin} -> ${platingBin} (WIP-Plating).${platingMemo.trim() ? ` Memo: ${platingMemo.trim()}` : ''}`, 'wms');
             // If this pull fulfilled a "Needs Plating" demand, clear it off the queue.
-            if (platingDemandId) { await deleteDoc(doc(db, "plating_demand", platingDemandId)).catch(() => {}); }
+            if (platingDemandId) {
+                await fulfilPlatingDemand({ db, doc, deleteDoc, setDoc },
+                    { id: platingDemandId, record: platingDemands.find(x => x.id === platingDemandId) || null, shipmentRef: `pulled to ${platingBin}`, by: operator?.name || '', from: 'WMS_PLATING_PULL' }).catch(() => {});
+            }
             setPlatingBase(null); setPlatingSrcScan(""); setPlatingQty(""); setPlatingDestScan(""); setPlatingMemo(""); setPlatingWO(""); setPlatingFinish(""); setPlatingDemandId(null); setPlatingDemandLink(null);
             pullNetSuiteStock();
         } catch (e) {
