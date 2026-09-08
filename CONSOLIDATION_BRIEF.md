@@ -51,6 +51,7 @@ back to RTG. The warehouse picks, packs and puts away. Every NetSuite write goes
 | ONE PO vocabulary | `Shared/purchaseOrders.js` (A) |
 | ONE plated-demand writer | `Shared/platingDemand.js` (A) |
 | the WMS closes its loops | committed bins, arrival alert, plating receipt → pack gate (D) |
+| ONE owner for a demand's END | `Shared/platingDemand.fulfil/cancelPlatingDemand` — `5571d77` (D, for C) |
 
 **Two functions deployed** (they do NOT auto-deploy): `onStockBuildDone` now builds sales-typed
 anchors at pack, and a new `onMillComplete` posts the milled root's build. Deploy verified by the
@@ -150,6 +151,12 @@ These are known, deliberate, and each would be a wrong "fix" if guessed at.
 - **A silent CPQ ordering bug**: choosing the ends before the rod is accepted and priced, then
   picking the rod **deletes both end treatments with no prompt**, and they cannot be re-selected.
   The operator's natural order triggers it. An order entered that way ships without its returns.
+- **`auditOrphans` checks plating demands with NO status filter**, unlike rod cuts which test
+  `open` first (`Shared/orderLifecycle` :327). So a demand left in the collection with a terminal
+  status becomes a permanent `DEMAND_ORPHAN` on RTG's audit panel once its sales order closes — a
+  phantom backlog nothing can clear. This is why ending a demand DELETES to the deletion ledger
+  rather than setting `status:'CANCELLED'` (`5571d77`). If a terminal status is ever wanted there,
+  mirror the rodCuts guard in `auditOrphans` FIRST.
 - **The plating build-back's NetSuite post still has no double-post guard** — the one remaining
   direct write that moves real inventory. Moving it needs the convert RESTlet reachable through the
   outbox. (Receipt already moved; the pull stays immediate by Stuart's instruction.)
@@ -158,6 +165,39 @@ These are known, deliberate, and each would be a wrong "fix" if guessed at.
 - **Two pull adjustments in the WMS carry no writeBack**, so nothing links them to an order in
   either direction. Correct today (pure stock movements), but invisible to any future audit that
   reasons outward from an order.
+
+---
+
+## 5b. Cross-session sweep, 2026-09-08 — what each area is actually waiting on
+
+*Done at Stuart's request after C reported it was blocked. Every brief and handoff read; the
+result is that the sessions are far less entangled than the message traffic suggested.*
+
+**CLEARED THIS SWEEP.** C was blocked on one missing export and is now free: `5571d77` gives a
+plating demand's END one home (`fulfilPlatingDemand` / `cancelPlatingDemand` in
+`Shared/platingDemand.js`), so C's shop-REOPEN fix can ship. The WMS's own two deletes were routed
+through it in the same commit, so raising and ending a demand each have exactly one owner. Cancel
+REFUSES when the parts have already shipped and hands the caller the sentence to show the operator.
+
+**OPEN, AND NOT BLOCKING ANYONE ELSE:**
+
+| area | item | blocked by |
+|---|---|---|
+| WMS | pre-pack confirm calls an Order Entry custom half `<woId>-C` "still in production" forever — nothing stamps `floorPhase` on it, and C declined to stamp it from the shop card. **Needs a spec, then the fix, on the WMS screen** | nobody |
+| WMS | the plating build-back's direct NetSuite post (§5) | nobody — needs the convert RESTlet reachable through the outbox |
+| WMS → A | map the plating PO's `'Sent to Plater'` onto `PO_STATUS` | A extending the vocabulary (§3.2) |
+| WMS → A | call `clearReceiptGate` at receipt | A exporting it (§3.3) |
+| WMS | the Receiving tab for vendor POs | Stuart calling it |
+| A | writer 7 | B1's `buildFinDoc` — **now landed** (`a12c804`), so this is startable |
+| B | the six queued issues in `BRIEF_B_HANDOFF.md` §3 | Stuart's word, one at a time |
+| C | C3 one shape; C4 the OE pair live run; C5 20 ft sticks; C6/C7 | B1 (landed) and Stuart's pin-in |
+| E | E3 the per-brand class + form map | **Eric** |
+| F | the H1-2TRV data pass | the designer |
+
+**ONE STALE ROW TO CORRECT, NOT REDO.** `BRIEF_E_HANDOFF.md` §3 still lists the WMS date-key switch
+as outstanding. It shipped in `829848f`; all four warehouse reads prefer `needBy` and fall back to
+the old keys only for pre-header orders. E's aliases can go once **B's split writes `needBy` on the
+fin doc** — that is the last reader, and it is B's, not the WMS's.
 
 ---
 
