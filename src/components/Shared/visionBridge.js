@@ -317,8 +317,13 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
         any = (!!worldSaid && answerFrom('rodKind', [worldSaid], 'rod type chosen on the drawing'))
             || answerFrom('rodKind', [...drawnWorlds], 'rod drawn')
             || answerFrom('rodKind', fitWorlds, 'parts drawn') || any;
-        any = answerFrom('setup', p.map(c => c.setup), 'parts drawn') || any;
-        any = answerFrom('drive', p.map(c => c.drive), 'track ends drawn') || any;
+        // Vision asks these outright now (Stuart 2026-09-08) — the saved answer is the first word,
+        // the parts drawn the second.
+        const said = (k) => U(draft?.specs?.[k] || '');
+        any = (!!said('setup') && answerFrom('setup', [said('setup')], 'single-or-double chosen on the drawing'))
+            || answerFrom('setup', p.map(c => c.setup), 'parts drawn') || any;
+        any = (!!said('drive') && answerFrom('drive', [said('drive')], 'drive type chosen on the drawing'))
+            || answerFrom('drive', p.map(c => c.drive), 'track ends drawn') || any;
         // Only a bracket made in ONE depth speaks; a tiered one is the question itself.
         any = answerFrom('proj', p.filter(c => ['BRACKET', 'BACKPLATE'].includes(c.role) && !c.projTiers && Array.isArray(c.projs) && c.projs.length === 1).map(c => c.projs[0]), 'bracket drawn') || any;
         const fronts = [
@@ -326,7 +331,8 @@ export function seedFromVision({ model, draft, flow = null, sameId, resolveWith 
             ...p.filter(c => c.role === 'TRACK' && (U(c.tier) || 'FRONT') === 'FRONT').map(() => 'TRACK'),
             ...p.map(c => c.frontLayer),
         ];
-        any = answerFrom('frontLayer', fronts, 'front drawn') || any;
+        any = (!!said('frontLayer') && answerFrom('frontLayer', [said('frontLayer')], 'front chosen on the drawing'))
+            || answerFrom('frontLayer', fronts, 'front drawn') || any;
         return any;
     };
     if (deriveRound() && typeof resolveWith === 'function') {

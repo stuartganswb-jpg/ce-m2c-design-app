@@ -3,7 +3,8 @@ import { db } from '../../firebase';
 import { collection, onSnapshot, query, where, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { SIZE_STEP_TYPE, sizeSelectionsOf, makeSizeSwap, returnsAllowedFor, isReturnOption, buildSizeIndex, partAllowedAtSize, projInchesOfSel } from '../Shared/sizeMatrix';
 import { pinProjectionOf, choicesFromAssembly } from '../Shared/hardwareAdapter';
-import { admits, axisValues, AXES, normalizeChoice, applyFitsDefaults, parseProjTiers, measureOf } from '../Shared/hardwareModel';
+import { admits, axisValues, AXES, activeAxes, contextOf, normalizeChoice, applyFitsDefaults, parseProjTiers, measureOf } from '../Shared/hardwareModel';
+import { traverseCutList } from '../Shared/traverseTags';
 import { projLabel } from '../Shared/traverseExplode';
 import { splitNodesLower } from '../Shared/nodeList';
 import { platePoolFrom, plateStillOffered } from '../Shared/platePool';
@@ -75,7 +76,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
     shape: 'STRAIGHT', inputMode: 'ORDERING',   
     w1: 30, w2: 80, w3: 30, a1: 135, a2: 135, bowDepth: 15,            
     mountLeft: 'OPEN', mountRight: 'OPEN', mountCenter: 'OPEN', mountOuter: 'OPEN',      
-    endStyle: 'FINIAL', endStyleRight: '', proj: "", rodKind: '', bracketId: "", bracketIdRight: "", bracketIdCenter: "", backplateIdLeft: "", backplateIdRight: "", backplateIdCenter: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,
+    endStyle: 'FINIAL', endStyleRight: '', proj: "", rodKind: '', setup: '', frontLayer: '', drive: '', bracketId: "", bracketIdRight: "", bracketIdCenter: "", backplateIdLeft: "", backplateIdRight: "", backplateIdCenter: "", poleDiameter: 1.0, bracketW: 3.0, finialW: 3.5,
     bracketThickness: 0.25, insideMountDeduct: 0.25, returnRadius: 4.0, gripAllowance: 8.5       
   };
 
@@ -445,13 +446,52 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (!linkedAssembly || !flowPins.length) return [];
       return applyFitsDefaults(choicesFromAssembly(linkedAssembly, flowPins).map(c => normalizeChoice(c)).filter(c => c && c.role));
   }, [linkedAssembly, flowPins]);
-  // The rod worlds this assembly is pinned with. One world is not a question — it is applied.
-  const rodWorlds = useMemo(() => axisValues(engineChoices, AXES.find(a => a.key === 'rodKind')), [engineChoices]);
-  const effRodKind = rodWorlds.length === 1 ? rodWorlds[0] : (rodWorlds.includes(engData.rodKind) ? engData.rodKind : '');
+  // ── THE ENGINE'S FRAMING AXES, ASKED HERE (Stuart 2026-09-08: "we should present single or
+  // double as an option. the motorized components should be presented as Drive Type, not in end
+  // style") ────────────────────────────────────────────────────────────────────────────────────
+  // Rod Type → Single or Double → Front of the Double → Drive Type, discovered from the pins by the
+  // same activeAxes() CPQ walks: an axis with two values is asked, one value is applied silently,
+  // and a gated axis (the front of a double) opens only under Double. Mount stays Vision's own
+  // L / C / R pickers. A stale answer (left over from another flow, or a value these pins never
+  // offer) is dropped rather than allowed to filter everything out.
+  const FRAMING_KEYS = ['rodKind', 'setup', 'frontLayer', 'drive'];
+  const framing = useMemo(() => {
+      if (!engineChoices.length) return { axes: [], answers: {}, ctx: {} };
+      let answers = {};
+      FRAMING_KEYS.forEach(k => { if (engData[k]) answers[k] = String(engData[k]).toUpperCase(); });
+      // Two passes: an answer is kept only where its axis is live and offers that value, and
+      // dropping one can close the axis below it.
+      for (let pass = 0; pass < 2; pass++) {
+          const axes = activeAxes(engineChoices, answers);
+          const kept = {};
+          Object.entries(answers).forEach(([k, v]) => {
+              const ax = axes.find(a => a.key === k);
+              if (ax && (ax.values || []).some(x => String(x).toUpperCase() === v)) kept[k] = v;
+          });
+          answers = kept;
+      }
+      const axes = activeAxes(engineChoices, answers).filter(a => FRAMING_KEYS.includes(a.key));
+      return { axes, answers, ctx: contextOf(engineChoices, answers) };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineChoices, engData.rodKind, engData.setup, engData.frontLayer, engData.drive]);
+  const askedAxes = framing.axes.filter(a => !a.implied);
+  const effRodKind = framing.ctx.rodKind || '';
+  const AXIS_TITLE = { rodKind: 'Rod Type', setup: 'Single or Double', frontLayer: 'Front of the Double', drive: 'Drive Type' };
+  const axisValueLabel = (key, v) => {
+      const V = String(v).toUpperCase();
+      if (key === 'rodKind') return V === 'TRAVERSE' ? 'Traverse — track / fascia' : 'Solid — pole';
+      if (key === 'frontLayer') return V === 'FASCIA' ? 'Stationary fascia with rings (one track)' : 'Traverse track front & rear';
+      return V.charAt(0) + V.slice(1).toLowerCase();
+  };
   // The projection IN FORCE is a selection, never the free-typed field below: the flow's Bracket
-  // Projection pick (or its stamped implied depth), else the size matrix's projection.
+  // Projection pick (or its stamped implied depth), else the size matrix's projection — the same
+  // value CPQ feeds its effAnswers.proj.
   const engineProj = flowProjSel != null ? flowProjSel : (sizeSel ? projInchesOfSel(sizeSel) : null);
-  const engineCtx = { rodKind: effRodKind || undefined, proj: engineProj != null ? engineProj : undefined };
+  const engineCtx = {
+      rodKind: framing.ctx.rodKind || undefined, setup: framing.ctx.setup || undefined,
+      frontLayer: framing.ctx.frontLayer || undefined, drive: framing.ctx.drive || undefined,
+      proj: engineProj != null ? engineProj : (framing.ctx.proj != null ? framing.ctx.proj : undefined),
+  };
   const realIdOf = (v) => v && v !== 'N/A' && v !== 'PENDING';
   const choicesOfOpt = (o) => {
       const p = partOfOpt(o);
@@ -552,10 +592,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       if (!sizeSel) return true;
       return partAllowedAtSize(partOfOpt(o), sizeSel, visionSizeIndex);
   };
+  // A DRIVE END IS NOT AN END STYLE (Stuart 2026-09-08). The plug / the motor pulley rides the Drive
+  // Type answer — the engine builds and bills it as a rider — so it is never offered here.
+  const isDriveEnd = (o) => !!o && (String(o.traverseRole || '').toUpperCase() === 'TRV_END' || engineChoiceOf(o)?.role === 'TRV_END');
   const endOptsFor = (st) => {
       let os = st?.styleOptions || [];
       if (sizeSel && !returnsAllowedFor(sizeSel)) os = os.filter(o => !isReturnOption(o));
-      return os.filter(o => optAllowedAtSize(o) && projTagOk(o) && engineOk(o));
+      return os.filter(o => !isDriveEnd(o) && optAllowedAtSize(o) && projTagOk(o) && engineOk(o));
   };
   const brOptsFor = (st) => (st?.styleOptions || []).filter(o => optAllowedAtSize(o) && projTagOk(o) && engineOk(o));
   const optOf = (step, sel) => step ? ((step.styleOptions || []).find(o => (o.optId || o.partId) === sel) || null) : null;
@@ -692,7 +735,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
               [stepEndL, stepEndR, stepBrL, stepBrR, stepBrC].forEach(st => {
                   if (!st) return;
                   const o = optOf(st, next[st.id]);
-                  if (o && !engineOk(o)) { delete next[st.id]; changed = true; }
+                  if (o && (!engineOk(o) || isDriveEnd(o))) { delete next[st.id]; changed = true; }
                   const so = subOf(st, next[`${st.id}__sub`]);
                   if (so && !engineOk(so)) { delete next[`${st.id}__sub`]; changed = true; }
               });
@@ -777,6 +820,20 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       rawLeft, rawCenter, rawRight, poleO2O, endAddL, endAddR, totalSystemO2O,
       poleFeetQty, qtyMiters, qtyBends, qtyMiterReturns, qtyFinials, recRings, bowR, bowHW_R,
   } = computeBayMath({ engData, safeProj, libraryParts });
+  // ── THE TRAVERSE CUT LIST (Shared/traverseTags: fascia as ordered · track −0.5" manual / −2"
+  // motorized · F-clip −1" / −3") — Stuart's numbers, tested there, wired here. The fascia IS the
+  // ordering length of the straight run; a double with a track front & rear cuts two tracks and no
+  // fascia; a stationary fascia cuts the fascia and one track. Null until the drive is chosen —
+  // a track cut from a guessed drive is scrap.
+  const traverseCuts = (() => {
+      if (effRodKind !== 'TRAVERSE' || engData.shape !== 'STRAIGHT') return null;
+      const drive = framing.ctx.drive || '';
+      if (!drive) return [];
+      const doubleTrack = framing.ctx.setup === 'DOUBLE' && framing.ctx.frontLayer === 'TRACK';
+      return traverseCutList({ fasciaInches: pole2, drive })
+          .filter(r => !(doubleTrack && r.role === 'FASCIA'))
+          .map(r => ({ ...r, qty: r.role === 'TRACK' && doubleTrack ? 2 : 1 }));
+  })();
 
   const qtyBrackets = attachments.filter(a => a.type === 'bracket').length;
   const qtyCenterBrackets = attachments.filter(a => a.type === 'bracket' && /center/i.test(a.note || '')).length;
@@ -1175,7 +1232,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
       setSidemark(cfg.sidemark || '');
       const flowId = cfg.flowId || cfg.linkedCpqFlowId || cfg.cpqFlowId;
       if (flowId) setQuoteFlowId(flowId);
-      const { engineeringNotes: _en, collection: savedCollection, bracketId: _bid, rodKind: _rk, ...stepParams } = cfg.specs || {};
+      const { engineeringNotes: _en, collection: savedCollection, bracketId: _bid, rodKind: _rk, setup: _su, frontLayer: _fl, drive: _dr, ...stepParams } = cfg.specs || {};
       setDynamicConfigParams(stepParams || {});
       setQuoteSelections({ collection: savedCollection || '' });
       setEditingDraftId(cfg.id);
@@ -1252,8 +1309,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
           masterQuoteId: activeSession.quoteId,      
           specs: {
               collection: quoteSelections.collection,
-              // The rod world this drawing was engineered in — CPQ's step-1 answer (visionBridge).
-              rodKind: effRodKind || '',
+              // The framing this drawing was engineered in — CPQ's step-1 answers (visionBridge).
+              // Implied answers ride too: a one-way assembly still says which way.
+              rodKind: framing.ctx.rodKind || '', setup: framing.ctx.setup || '',
+              frontLayer: framing.ctx.frontLayer || '', drive: framing.ctx.drive || '',
               bracketId: engData.bracketId,
               engineeringNotes: {
                   poleFeetQty, qtyBrackets, qtyCenterBrackets, recRings, qtyFinials, qtySplices, qtyMiters,
@@ -1263,7 +1322,10 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                   // saw angles + wall angles, bend radius + pole diameter — so the floor cuts/bends from
                   // the engineered numbers without re-deriving them.
                   sawAngle1, sawAngle2, wallAngleL: engData.a1, wallAngleR: engData.a2,
-                  rawLeft, rawCenter, rawRight, returnRadius: engData.returnRadius, poleDiameter: engData.poleDiameter
+                  rawLeft, rawCenter, rawRight, returnRadius: engData.returnRadius, poleDiameter: engData.poleDiameter,
+                  // A traverse is cut from the fascia by the drive (Stuart 2026-09-08: "these
+                  // measurements must be added to the shop floor bom and raw cuts").
+                  ...(traverseCuts ? { traverseCuts, rodKind: framing.ctx.rodKind || '', setup: framing.ctx.setup || '', frontLayer: framing.ctx.frontLayer || '', drive: framing.ctx.drive || '' } : {})
               },
               ...dynamicConfigParams
           }, 
@@ -1327,7 +1389,7 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             </div>
                             <div>
                                 <label style={labelStyle}>* Assign Hardware Collection (CPQ)</label>
-                                <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); setEngData(prev => (prev.rodKind ? { ...prev, rodKind: '' } : prev)); /* the rod type is this flow's answer, not the last one's */ }} style={fieldStyle}>
+                                <select value={quoteFlowId} onChange={e => { setQuoteFlowId(e.target.value); setDynamicConfigParams({}); setEngData(prev => ((prev.rodKind || prev.setup || prev.frontLayer || prev.drive) ? { ...prev, rodKind: '', setup: '', frontLayer: '', drive: '' } : prev)); /* the framing answers are this flow's, not the last one's */ }} style={fieldStyle}>
                                     <option value="">-- SELECT MATCHING CPQ FLOW --</option>
                                     {(() => {
                                         // 🎯 Single-assembly siblings (H2 pivot): flows stamped sizeGroupLabel
@@ -1416,19 +1478,20 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                             {/* SIZE-MATRIX (Fabricut H1): Rod Diameter + Bracket Projection — the two top-level
                                 flow questions. Every picker below re-labels + every dim re-syncs to the chosen
                                 size; unanswered = the flow's base size (3/4" × 4-5/8"). */}
-                            {(rodWorlds.length > 1 || sizeSteps.length > 0 || projSelectSteps.length > 0) && (
-                                <div style={{ display: 'flex', gap: '16px' }}>
-                                    {/* ROD TYPE FIRST (Stuart 2026-09-07): asked only where the pins hold both a solid
-                                        pole and a track/fascia; with the projection it gates every picker below. */}
-                                    {rodWorlds.length > 1 && (
-                                        <div style={{ flex: 1 }}>
-                                            <label style={labelStyle}>Rod Type · from the pins</label>
-                                            <select value={engData.rodKind || ''} onChange={e => setEngData(prev => ({ ...prev, rodKind: e.target.value }))} style={fieldStyle}>
-                                                <option value="">-- Select Rod Type --</option>
-                                                {rodWorlds.map(w => <option key={w} value={w}>{w === 'TRAVERSE' ? 'Traverse — track / fascia' : 'Solid — pole'}</option>)}
+                            {(askedAxes.length > 0 || sizeSteps.length > 0 || projSelectSteps.length > 0) && (
+                                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                                    {/* THE FRAMING AXES FIRST (Stuart 2026-09-07/08): Rod Type, Single or Double, Front
+                                        of the Double, Drive Type — each asked only where the pins hold both answers;
+                                        with the projection they gate every picker below, exactly as CPQ's step 1. */}
+                                    {askedAxes.map(axis => (
+                                        <div key={axis.key} style={{ flex: 1, minWidth: '160px' }}>
+                                            <label style={labelStyle}>{AXIS_TITLE[axis.key] || axis.label} · from the pins</label>
+                                            <select value={framing.answers[axis.key] || ''} onChange={e => setEngData(prev => ({ ...prev, [axis.key]: e.target.value }))} style={fieldStyle}>
+                                                <option value="">-- Select {AXIS_TITLE[axis.key] || axis.label} --</option>
+                                                {axis.values.map(v => <option key={String(v)} value={String(v).toUpperCase()}>{axisValueLabel(axis.key, v)}</option>)}
                                             </select>
                                         </div>
-                                    )}
+                                    ))}
                                     {[...sizeSteps, ...projSelectSteps].map(st => (
                                         <div key={st.id} style={{ flex: 1 }}>
                                             <label style={labelStyle}>{st.title} · from flow</label>
@@ -1909,7 +1972,13 @@ const VisionHardware = ({ currentUser, activeBrand, visionConfigs, activeSession
                           <h4 style={{ margin: '0 0 16px 0', fontFamily: 'var(--serif)', fontSize: '1.2rem', fontWeight: 500, color: 'var(--ink)' }}>Shop Floor BOM & Raw Cuts</h4>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '0.9rem', fontFamily: 'var(--sans)' }}>
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Tube A Raw Cut:</span><strong style={{ fontWeight: 500 }}>{rawLeft.toFixed(2)}"</strong></div>}
-                              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{engData.shape === 'STRAIGHT' ? 'Main Tube Raw Cut:' : 'Tube B Raw Cut:'}</span><strong style={{ fontWeight: 500 }}>{rawCenter.toFixed(2)}"</strong></div>
+                              {traverseCuts ? (
+                                  traverseCuts.length ? traverseCuts.map(r => (
+                                      <div key={r.role} style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{r.role === 'FASCIA' ? 'Fascia Cut' : r.role === 'TRACK' ? 'Track Cut' : 'F-Clip Cut'}{r.qty > 1 ? ` × ${r.qty}` : ''} · {String(framing.ctx.drive).toLowerCase()}:</span><strong style={{ fontWeight: 500 }}>{r.cutInches.toFixed(2)}"</strong></div>
+                                  )) : <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Track / F-clip cuts:</span><strong style={{ fontWeight: 500, color: 'var(--brass)' }}>choose the Drive Type</strong></div>
+                              ) : (
+                                  <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>{engData.shape === 'STRAIGHT' ? 'Main Tube Raw Cut:' : 'Tube B Raw Cut:'}</span><strong style={{ fontWeight: 500 }}>{rawCenter.toFixed(2)}"</strong></div>
+                              )}
                               {engData.shape === 'MITERED' && <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--ink-soft)' }}>Tube C Raw Cut:</span><strong style={{ fontWeight: 500 }}>{rawRight.toFixed(2)}"</strong></div>}
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)', marginTop: '8px' }}><span style={{ color: 'var(--ink-soft)' }}>Total Splices Req:</span><strong style={{ fontWeight: 500 }}>{qtySplices}</strong></div>
                               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--ink)' }}><span style={{ color: 'var(--ink-soft)' }}>Total Brackets Req:</span><strong style={{ fontWeight: 500 }}>{qtyBrackets}</strong></div>

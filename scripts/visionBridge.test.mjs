@@ -275,6 +275,13 @@ console.log(fail ? `\n❌  ${pass} passed, ${fail} failed` : `\n✅  ${pass} pas
         spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN' } } });
     eq('a solid drawing answers solid', solid.answers.rodKind, 'SOLID');
     ok('and no track rides in as the only rod offered', !solid.carried.some(c => /H1-2TRV — the only rod offered/.test(c)));
+    // Vision asks single-or-double, the front and the drive outright (2026-09-08) — no drive end
+    // is placed any more, the saved answers carry it.
+    const framed = seedFromVision({ model: tm2, flow: tflow2, resolveWith: rw, draft: { specs: { engineeringNotes: { poleO2O: 96 }, rodKind: 'TRAVERSE', setup: 'DOUBLE', frontLayer: 'FASCIA', drive: 'MOTORIZED' },
+        spatialData: { shape: 'STRAIGHT', mountLeft: 'OPEN' } } });
+    eq('single-or-double chosen on the drawing', framed.answers.setup, 'DOUBLE');
+    eq('the drive chosen on the drawing', framed.answers.drive, 'MOTORIZED');
+    ok('each credited to the drawing', ['single-or-double chosen on the drawing', 'drive type chosen on the drawing'].every(t => framed.carried.some(c => c.includes(t))));
 }
 }
 
