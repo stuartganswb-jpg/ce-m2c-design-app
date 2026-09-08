@@ -81,11 +81,21 @@ export const parkWorkOrder = async ({
     // MATERIAL WE HAD TO BUY (Stuart 2026-09-04): [{ itemId, qtyNeeded, poId? }]. The order parks
     // AWAITING RECEIPT and sits on the WMS until enough arrives to cover it — see receiptGateFields.
     receiptRefs = null,
-    // A POLE IS CUT OR WAITED FOR, NEVER MILLED (Q5 — Stuart 2026-09-02). On a sales line the
-    // OPERATOR decides in the review: `poleCut` is the plan they chose (Shared/poleCut
-    // .cutPlanFromSource — which stick, how many rods), or `backOrder` is the reason they chose to
-    // wait for the length instead. A stock order still derives its own cut from the 8 ft rule.
-    poleCut = null, backOrder = '',
+    // A POLE IS CUT OR WAITED FOR, NEVER MILLED (Q5 — Stuart 2026-09-02). The OPERATOR decides in
+    // the review: `poleCut` is the plan they chose (Shared/poleCut.cutPlanFromSource — which stick,
+    // how many rods), or `backOrder` is the reason they chose to wait for the length instead.
+    //
+    // A DECISION AND A SILENCE ARE DIFFERENT THINGS (Stuart 2026-09-08). This used to default to
+    // null and be consulted only on a SALES line; every other door fell through to the automatic
+    // 8 ft rule, which reads the code grammar and never looks at stock. So the Sales Snapshot
+    // raised a cut for 20 × 6 ft with 6 ft rods sitting on the shelf — poleCutPlan cannot see a
+    // shelf, and nothing above it was asking.
+    //
+    // Now: pass `poleCut` (an object, or null meaning "I checked, no cut") and it is used verbatim.
+    // Leave it OFF entirely and the door has expressed no opinion, so the 8 ft rule still answers —
+    // which is what the Library and Raw Cores doors still rely on. The difference between deciding
+    // nothing and deciding "no cut" is the whole bug, so the two cannot share a value.
+    poleCut, backOrder = '',
 }) => {
     const erp = String(code || erpOf(part) || '').toUpperCase();
     if (!erp || erp === 'PENDING') throw new ParkRefusal(REFUSAL.NO_PART, 'No item code on the part — sync or save it with an ERP id first.');
@@ -137,7 +147,7 @@ export const parkWorkOrder = async ({
     let rodCut = null;
     if (wantFinishing) {
         const ptype = String((part.manufacturingSpecs && part.manufacturingSpecs.productType) || part.productType || '');
-        const cut = isSales ? poleCut : poleCutPlan(erp, n, { productType: ptype });
+        const cut = poleCut !== undefined ? poleCut : poleCutPlan(erp, n, { productType: ptype });
         if (cut) {
             const idOf = nsIdOf || ((code) => {
                 const hit = inventory.find(p => String(p.legacyErpId || p.itemId || '').toUpperCase() === String(code).toUpperCase());

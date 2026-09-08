@@ -84,6 +84,25 @@ export const sourcesForLength = (targetFt) => {
     return out.sort((a, b) => a.sourceFt - b.sourceFt);
 };
 
+// ── THE OPTIONS, WITH LIVE STOCK AGAINST EACH ──────────────────────────────────────────────────
+// Both doors that can offer a cut — Order Entry and the Sales Snapshot — need the same list: which
+// sticks yield this length, how many rods it would take, whether the shelf can cover it. It was
+// written inline on the Order Entry side; a second copy on the Snapshot side is exactly how the
+// two would drift into disagreeing about what the saw can do.
+//
+// `availOf` is passed in rather than read here, because the two doors get their stock from
+// different places (Order Entry from its review pull, the Snapshot from its pre-check) and neither
+// should have to care which.
+export const poleOptionsWithStock = ({ pullErp, pullFt, short, availOf }) =>
+    sourcesForLength(pullFt)
+        .map(o => ({ ...o, sourceErp: targetCodeFor(pullErp, o.sourceFt) }))
+        .filter(o => o.sourceErp)
+        .map(o => {
+            const avail = Math.max(0, Number(availOf(o.sourceErp)) || 0);
+            const rodsNeeded = Math.ceil(Math.max(0, Number(short) || 0) / o.per);
+            return { ...o, avail, rodsNeeded, enough: avail >= rodsNeeded && rodsNeeded > 0 };
+        });
+
 /**
  * The cut plan for a source the OPERATOR chose (Q5), rather than the automatic 8 ft rule.
  *

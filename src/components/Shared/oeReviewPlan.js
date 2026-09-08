@@ -32,7 +32,8 @@
 import { planFinishedRun, isAssemblyPart } from './finishedGoodsRun.js';
 import { millBaseOf } from './finishRouting.js';
 import { SOURCING, sourcingOf } from './sourcing.js';
-import { isPoleCategory, poleLengthOf, sourcesForLength, targetCodeFor } from './poleCut.js';
+import { isPoleCategory, poleLengthOf, sourcesForLength, targetCodeFor, poleOptionsWithStock } from './poleCut.js';
+import { fetchOpenPoLines } from './purchaseOrders.js';
 
 // ── AVAILABILITY WITH UNITS ────────────────────────────────────────────────────────────────────
 // One SuiteQL read: per-item available qty AND the item's stock unit label. BUILTIN.DF on the
@@ -274,7 +275,7 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
         // sourcing router raised for this same pull is withdrawn here and said so out loud.
         let poleChoice = null;
         if (p.poleInfo) {
-            const { pullErp, pullFt, options } = p.poleInfo;
+            const { pullErp, pullFt } = p.poleInfo;   // options rebuilt below, with live stock
             const comp = components.find(c => c.code === pullErp);
             let need = p.qty, have = 0, short = 0;
             if (comp) { need = comp.need; have = comp.have; short = comp.short; }
@@ -284,10 +285,11 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
                 remaining[pullErp] = Math.max(0, (Number(remaining[pullErp]) || 0) - need);
             }
             if (short > 0) {
-                const withStock = options.map(o => {
-                    const srcHave = Math.max(0, Number(remaining[String(o.sourceErp).toUpperCase()]) || 0);
-                    const rodsNeeded = Math.ceil(short / o.per);
-                    return { ...o, avail: srcHave, rodsNeeded, enough: srcHave >= rodsNeeded };
+                // The saw's options and the shelf against each — the one builder both doors use,
+                // so Order Entry and the Sales Snapshot can never disagree about what can be cut.
+                const withStock = poleOptionsWithStock({
+                    pullErp, pullFt, short,
+                    availOf: (code) => remaining[String(code).toUpperCase()],
                 });
                 // Default is the operator's safest answer: wait. A cut is a deliberate choice.
                 poleChoice = { pullErp, pullFt, need, have, short, options: withStock, chosen: 'BACKORDER' };
@@ -330,6 +332,32 @@ export const buildOeReviewPlan = async ({ jobs = [], inventory = [], locationId 
 
         return { ...p, components, holds, nsPlan, poleChoice };
     });
+
+    // ── WHAT IS ALREADY COMING (Stuart 2026-09-08) ─────────────────────────────────────────────
+    // "if no stock prompt with information of any on order, and state no stock on hand of 6ft but
+    //  500pcs on order on po### due to arrive __/__/__ wait or go ahead and cut 8ft stock."
+    //
+    // Waiting is only a real choice if the operator can see what they would be waiting FOR. A
+    // quantity on order does not tell them; a PO number and a due date does. Read once for every
+    // short pole in the batch, and only when there is one — an order with no short pole pays
+    // nothing for this.
+    //
+    // Best-effort by design: if the read fails the panel still offers both answers, it just says
+    // the inbound position is unknown rather than implying there is none. Silence that looks like
+    // "nothing on order" would push every operator toward cutting.
+    const shortPoleCodes = out.filter(p => p.poleChoice).map(p => p.poleChoice.pullErp);
+    if (shortPoleCodes.length) {
+        try {
+            const byCode = await fetchOpenPoLines(shortPoleCodes);
+            out.forEach(p => {
+                if (!p.poleChoice) return;
+                p.poleChoice.onOrder = byCode[p.poleChoice.pullErp] || [];
+                p.poleChoice.onOrderKnown = true;
+            });
+        } catch (e) {
+            out.forEach(p => { if (p.poleChoice) { p.poleChoice.onOrder = []; p.poleChoice.onOrderKnown = false; } });
+        }
+    }
 
     return { jobs: out, nsError: null, unitsKnown };
 };

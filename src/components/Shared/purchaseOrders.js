@@ -418,3 +418,61 @@ export const recordPoReceipt = async ({ poId, receipts = [], by = '', nsReceiptI
     await updateDoc(ref, patch);
     return { po: { ...po, ...patch }, applied, fullyReceived: done };
 };
+
+// ── WHAT IS ALREADY ON ORDER FOR THESE CODES ───────────────────────────────────────────────────
+// "if no stock prompt with information of any on order, and state no stock on hand of 6ft but
+//  500pcs on order on po### due to arrive __/__/__ wait or go ahead and cut 8ft stock(###pcs
+//  available)" — Stuart 2026-09-08.
+//
+// An availability read already returns an ON ORDER QUANTITY, and a quantity alone cannot answer
+// the question being asked. "500 on order" does not tell an operator whether to wait; "500 on
+// PO2296, due the 18th" does. So this returns the LINES — number, due date, vendor, what is still
+// open on each — for the one decision that turns on them.
+//
+// Open means the line still owes something: quantity <> quantityshiprecv, and the order is neither
+// closed nor rejected. Same shape and same predicates as the Stock View On Ord drill-down, so the
+// two can never disagree about what "on order" means; the due date is the addition, because it is
+// the number the wait-or-cut decision actually rests on.
+export const fetchOpenPoLines = async (codes) => {
+    const list = [...new Set((codes || []).map(c => String(c || '').trim().toUpperCase()).filter(Boolean))];
+    if (!list.length) return {};
+    const { nsProxyFetch } = await import('./nsProxy');
+    const idList = list.map(c => `'${c.replace(/'/g, "''")}'`).join(',');
+    const q = `SELECT UPPER(i.itemid) AS itemid, t.tranid AS po_number, t.id AS po_id, ` +
+        `TO_CHAR(t.duedate,'YYYY-MM-DD') AS duedate, TO_CHAR(t.trandate,'YYYY-MM-DD') AS trandate, ` +
+        `BUILTIN.DF(t.entity) AS vendor, BUILTIN.DF(t.status) AS statusname, ` +
+        `ABS(NVL(tl.quantity,0)) AS qty, NVL(tl.quantityshiprecv,0) AS received ` +
+        `FROM transaction t JOIN transactionline tl ON tl.transaction = t.id ` +
+        `JOIN item i ON i.id = tl.item ` +
+        `WHERE t.type = 'PurchOrd' AND UPPER(i.itemid) IN (${idList}) ` +
+        `AND NVL(tl.quantity,0) <> NVL(tl.quantityshiprecv,0) ` +
+        `AND NVL(tl.isclosed,'F') = 'F' ` +
+        `AND BUILTIN.DF(t.status) NOT LIKE '%Closed%' AND BUILTIN.DF(t.status) NOT LIKE '%Rejected%' ` +
+        `ORDER BY t.duedate ASC`;
+    const resp = await nsProxyFetch({
+        targetUrl: 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql',
+        method: 'POST', payload: { q },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 300));
+    const out = {};
+    (data.items || []).forEach(r => {
+        const code = String(r.itemid || '').toUpperCase();
+        const open = Math.max(0, (Number(r.qty) || 0) - (Number(r.received) || 0));
+        if (!code || open <= 0) return;
+        (out[code] = out[code] || []).push({
+            poNumber: String(r.po_number || ''), poId: String(r.po_id || ''),
+            due: String(r.duedate || ''), ordered: String(r.trandate || ''),
+            vendor: String(r.vendor || ''), status: String(r.statusname || ''),
+            qty: Number(r.qty) || 0, received: Number(r.received) || 0, open,
+        });
+    });
+    return out;
+};
+
+/** Total still owed on open POs for a code, and the soonest date any of it is due. */
+export const onOrderSummary = (lines = []) => {
+    const open = lines.reduce((a, l) => a + (Number(l.open) || 0), 0);
+    const due = lines.map(l => l.due).filter(Boolean).sort()[0] || '';
+    return { open, due, count: lines.length };
+};

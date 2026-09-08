@@ -11,12 +11,12 @@ import { closeOrderEverywhere, hardDeleteWithLedger } from '../Shared/orderLifec
 import { matchesCustomerCode, customerCodesOf } from '../Shared/aliasSearch';
 import { realPartOf, isAliasDoc } from '../Shared/aliasIdentity';
 import { woRefOf } from '../Shared/woRef';
-import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutPlanFromSource } from '../Shared/poleCut';
+import { poleLengthOf, isPoleCategory, cutOptionsFor, targetCodeFor, planManualCut, cutPlanFromSource, sourcesForLength, poleOptionsWithStock } from '../Shared/poleCut';
 import { reserveShortNo } from '../Shared/shortId';
 import { nsProxyFetch } from "../Shared/nsProxy";
 import { isAssemblyPart, fetchAvailability } from '../Shared/finishedGoodsRun';
 import { issuePlatedDemand } from '../Shared/platingDemand';
-import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf } from '../Shared/purchaseOrders';
+import { createDraftPurchaseOrders, approvePurchaseOrder, loadNsVendors, resolveVendorRec, PO_STATUS, poRef, vendorMinimumOf, fetchOpenPoLines } from '../Shared/purchaseOrders';
 import { runBatchPrecheck, releaseFinWoToFloor } from '../Shared/finishedRunPrecheck';
 import { isOutsourcedFinishCode, handlingForErp, millBaseOf, finishSuffixOf, tierOfErp, TIER } from '../Shared/finishRouting';
 import { parkWorkOrder, INTENT, ANCHOR, ParkRefusal, stampReceiptPo } from '../Shared/workOrderCreate';
@@ -48,6 +48,85 @@ const last12Months = (now) => {
 
 // Finish code = the assembly suffix (base/CODE); some finish docs hold it in `name` (matches PickPack/Library).
 const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
+
+// ── THE POLE SHORT PANEL — ONE PANEL, BOTH DOORS ───────────────────────────────────────────────
+// Stuart 2026-09-08: "if no stock prompt with information of any on order, and state no stock on
+// hand of 6ft but 500pcs on order on po### due to arrive __/__/__ wait or go ahead and cut 8ft
+// stock(###pcs available)" — and, asked whether Order Entry should show the same: "make order
+// entry prompt the same panel".
+//
+// So it is one component rather than two that look alike. The choice being made is identical at
+// both doors — wait for the length, or cut a longer stick down — and the operator should not have
+// to learn it twice or find that one door tells them less than the other.
+//
+// The ONE thing the doors do not share is what waiting MEANS, so each passes its own sentence in
+// `waitMeans`. At the Sales Snapshot waiting parks the order on the receipt gate and the WMS
+// releases it when the material lands; at Order Entry the job still goes to the floor and its pick
+// waits at the WMS. Saying the same words at both would make the panel lie at one of them.
+const PoleShortPanel = ({ choice, name, onChoose, waitMeans }) => {
+    if (!choice) return null;
+    const mono9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
+    const onOrder = choice.onOrder || [];
+    const onOrderQty = onOrder.reduce((a, l) => a + (Number(l.open) || 0), 0);
+    const chosen = choice.chosen || 'BACKORDER';
+    const anyEnough = (choice.options || []).some(o => o.enough);
+    return (
+        <div style={{ margin: '0 16px 12px', padding: '10px 12px', border: '1px dashed var(--brass)', background: 'var(--paper)' }}>
+            <div style={{ ...mono9, color: 'var(--brass)', marginBottom: '6px' }}>
+                ✂ {choice.pullFt} FT POLE SHORT — {choice.pullErp}{name ? ` · ${name}` : ''}
+            </div>
+            <div style={{ fontSize: '0.84rem', color: 'var(--ink)', marginBottom: '6px' }}>
+                <b>{choice.have} on hand</b> of {choice.need} needed · <b style={{ color: 'var(--brass)' }}>short {choice.short}</b>
+            </div>
+            {/* WHAT IS ALREADY COMING. A quantity alone cannot answer "should I wait?" — the PO and
+                the date can, which is why the lines are shown rather than a total. */}
+            <div style={{ margin: '0 0 8px', padding: '6px 8px', background: 'var(--paper-2)', border: '1px solid var(--line)' }}>
+                <div style={{ ...mono9, color: 'var(--ink-soft)', marginBottom: onOrder.length ? '4px' : 0 }}>On order</div>
+                {choice.onOrderKnown === false ? (
+                    <div style={{ fontSize: '0.8rem', color: '#d9534f' }}>
+                        Could not read NetSuite — the inbound position is UNKNOWN, not empty. Check before choosing to cut.
+                    </div>
+                ) : onOrder.length ? (
+                    <>
+                        {onOrder.map((l, i) => (
+                            <div key={`${l.poNumber}-${i}`} style={{ fontSize: '0.82rem', color: 'var(--ink)' }}>
+                                <b>{l.open} pcs</b> on <b>{l.poNumber || 'PO —'}</b>
+                                {l.due ? ` · due to arrive ${l.due}` : ' · no due date on the PO'}
+                                {l.vendor ? ` · ${l.vendor}` : ''}
+                                {l.received ? ` · ${l.received} of ${l.qty} already received` : ''}
+                            </div>
+                        ))}
+                        {onOrderQty < choice.short && (
+                            <div style={{ ...mono9, color: '#d9534f', marginTop: '4px' }}>
+                                Inbound covers {onOrderQty} of {choice.short} short — waiting alone will not cover this order
+                            </div>
+                        )}
+                    </>
+                ) : (
+                    <div style={{ fontSize: '0.82rem', color: 'var(--ink-soft)' }}>
+                        Nothing on order for {choice.pullErp} — waiting has no arrival date behind it.
+                    </div>
+                )}
+            </div>
+            <label style={{ display: 'block', fontSize: '0.84rem', color: 'var(--ink)', marginBottom: '4px', cursor: 'pointer' }}>
+                <input type="radio" checked={chosen === 'BACKORDER'} onChange={() => onChoose('BACKORDER')} />
+                {' '}<b>Wait for {choice.pullErp}</b> — {waitMeans}
+            </label>
+            {(choice.options || []).map(o => (
+                <label key={o.sourceErp} style={{ display: 'block', fontSize: '0.84rem', color: o.enough ? 'var(--ink)' : 'var(--ink-soft)', marginBottom: '4px', cursor: o.enough ? 'pointer' : 'not-allowed' }}>
+                    <input type="radio" disabled={!o.enough} checked={chosen === o.sourceErp} onChange={() => onChoose(o.sourceErp)} />
+                    {' '}<b>Cut {o.rodsNeeded} × {o.sourceErp}</b> ({o.sourceFt} ft → {o.label}) — {o.avail} pcs available
+                    {o.enough ? '' : ` · not enough (${o.rodsNeeded} needed)`}
+                    {o.scrapFt ? ` · ${o.scrapFt} ft scrap per rod` : ''}
+                    {(o.alsoYields || []).length ? ` · also yields ${o.alsoYields.map(y => `${y.per} × ${y.ft} ft`).join(', ')} to stock` : ''}
+                </label>
+            ))}
+            {!anyEnough && (
+                <div style={{ ...mono9, color: 'var(--ink-soft)', marginTop: '4px' }}>No longer length has the stock to cut from — waiting is the only answer.</div>
+            )}
+        </div>
+    );
+};
 
 const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     const [hqParts, setHqParts] = useState([]);
@@ -92,7 +171,8 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
     // STOCK REVIEW (Stuart 2026-08-31: the visual gate for the stock paths too). Pre-flight of
     // createStockFinWOs: the SAME pre-check that will execute renders its per-row plan first;
     // rows untick out; Approve re-enters with {approved:true} and writes.
-    const [stockReview, setStockReview] = useState(null); // { rows: [{r, info, qty, actionsText[], blocked, include}], toMake }
+    const [stockReview, setStockReview] = useState(null); // { rows: [{r, info, qty, actionsText[], blocked, include}], toMake, poles }
+    const [gridPoles, setGridPoles] = useState(null);     // { poles } — the grid's cut-or-wait prompt (no review gate on that door)
     const [onOrdModal, setOnOrdModal] = useState(null); // snapshot row → open PO/WO inbound detail popup
     const [cutModal, setCutModal] = useState(null);     // rod-cut order builder — see openCutModal
     // ── THE CUT TOOL OPENS ON ANY POLE (Stuart 2026-08-25) ──────────────────────────────────────
@@ -611,7 +691,91 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
         }
     };
 
-    const pushWOsToDispatch = async () => {
+    // ── IS THIS POLE ON THE SHELF, COMING, OR TO BE CUT? (Stuart 2026-09-08) ───────────────────
+    // Asked once, for every door that raises a pole work order. Both Stock View doors used to fall
+    // through to Shared/poleCut.poleCutPlan, which derives a cut from the LENGTH IN THE CODE and
+    // has no way to see stock — so a 6 ft order raised a cut with 6 ft rods on the rack.
+    //
+    // Returns a Map keyed by the caller's own key: { pullErp, pullFt, need, have, short, options,
+    // onOrder, chosen }. `short: 0` is a real answer meaning "no cut" and MUST be passed to the
+    // writer as such; a key that is absent means the question could not be answered, and the
+    // caller should stay silent so the old rule still applies rather than assert something false.
+    //
+    // rows: [{ key, erp, qty, part, pullErp }]
+    const computePoleDecisions = async (rows) => {
+        const out = new Map();
+        const poles = (rows || [])
+            .filter(x => isPoleCategory(String(x.part?.manufacturingSpecs?.productType || x.part?.productType || '')))
+            .map(x => ({ ...x, pullErp: String(x.pullErp || millBaseOf(x.erp) || '').toUpperCase() }))
+            .map(x => ({ ...x, pullFt: poleLengthOf(x.pullErp) }))
+            .filter(x => x.pullErp && x.pullFt);
+        if (!poles.length) return out;
+        const codes = new Set();
+        poles.forEach(x => {
+            codes.add(x.pullErp);
+            sourcesForLength(x.pullFt).forEach(o => { const c = targetCodeFor(x.pullErp, o.sourceFt); if (c) codes.add(String(c).toUpperCase()); });
+        });
+        let avail;
+        try {
+            avail = await fetchAvailability([...codes], (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17');
+        } catch (e) {
+            addLog(`⚠ Pole stock read failed (${e.message || e}) — the 8 ft cut rule decides these rows, as it did before. Verify against stock before releasing.`, 'warn');
+            return out;                       // no entries = no assertions
+        }
+        // A running remainder, so two rows shorting the same rack do not both claim it.
+        const remaining = { ...avail };
+        poles.forEach(x => {
+            const need = Math.max(0, Number(x.qty) || 0);
+            const have = Math.max(0, Number(remaining[x.pullErp]) || 0);
+            const short = Math.max(0, need - have);
+            remaining[x.pullErp] = Math.max(0, have - need);
+            out.set(x.key, {
+                pullErp: x.pullErp, pullFt: x.pullFt, need, have, short,
+                name: x.part?.itemName || '',
+                options: short > 0
+                    ? poleOptionsWithStock({ pullErp: x.pullErp, pullFt: x.pullFt, short, availOf: (c) => remaining[String(c).toUpperCase()] })
+                    : [],
+                chosen: 'BACKORDER', onOrder: [], onOrderKnown: true,
+            });
+        });
+        // What is already coming — only for the rows that actually have to decide.
+        const shortCodes = [...out.values()].filter(v => v.short > 0).map(v => v.pullErp);
+        if (shortCodes.length) {
+            try {
+                const byCode = await fetchOpenPoLines(shortCodes);
+                out.forEach(v => { if (v.short > 0) v.onOrder = byCode[v.pullErp] || []; });
+            } catch (e) {
+                out.forEach(v => { if (v.short > 0) { v.onOrder = []; v.onOrderKnown = false; } });
+                addLog(`⚠ Could not read open POs for the short poles (${e.message || e}) — the panel shows the inbound position as unknown.`, 'warn');
+            }
+        }
+        return out;
+    };
+
+    // ── THE CUT / WAIT / PICK ANSWER, AS THE WRITER'S ARGUMENTS ────────────────────────────────
+    // Passing NOTHING and passing `poleCut: null` mean different things to Shared/workOrderCreate:
+    // silence defers to the automatic 8 ft rule, null says "asked and answered, no cut". Keeping
+    // that translation in one place is what stops a door from accidentally saying the wrong one.
+    const poleWriterArgs = (pole, label) => {
+        if (!pole) return {};
+        const opt = pole.short > 0 && pole.chosen && pole.chosen !== 'BACKORDER'
+            ? (pole.options || []).find(o => o.sourceErp === pole.chosen) : null;
+        if (opt) {
+            // Only the SHORTFALL is cut — whatever is already on the shelf is picked.
+            const cut = cutPlanFromSource({ targetErp: pole.pullErp, targetFt: pole.pullFt, sourceFt: opt.sourceFt, per: opt.per, scrapFt: opt.scrapFt, want: pole.short });
+            if (!cut) addLog(`⚠ ${label}: could not build the cut from ${opt.sourceErp} — the order is created without it; raise the cut from WMS → Rod Cuts.`, 'warn');
+            return { poleCut: cut || null };
+        }
+        if (pole.short > 0) {
+            // WAITING. Not a stamp nobody reads — the receipt gate, so the WMS opens it when the
+            // material actually lands and the job releases itself.
+            const po = (pole.onOrder || [])[0] || null;
+            return { poleCut: null, receiptRefs: [{ itemId: pole.pullErp, qtyNeeded: pole.short, ...(po && po.poNumber ? { poId: po.poNumber } : {}) }] };
+        }
+        return { poleCut: null };              // on the shelf — straight to the pick
+    };
+
+    const pushWOsToDispatch = async (opts = {}) => {
         const lineItems = Object.entries(orderDrafts).map(([partId, qty]) => {
             if (!qty || qty <= 0) return null;
             return { partId, qty };
@@ -665,12 +829,29 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             // and a Snapshot order for the same item are the same document (only `source` and the
             // ids differ). What changes for this screen, named:
             //   · it pre-builds the finishing payload instead of being enriched at release
-            //   · a 4/6 ft stocked pole gets its rod cut + awaitingRodCut here too (it never did)
+            //   · a 4/6 ft pole SHORT of the length raises the cut-or-wait panel; one already on
+            //     the shelf goes straight to the pick (2026-09-08 — it used to cut regardless)
             //   · a /P row becomes a Convert to-do (phosphating is a bulk WMS convert), not a
             //     route-open work order carrying an invented recipe
             //   · an outsourced-finish row (…/EP1) is refused — never a finishing job; until A3
             //     wires the plating demand here, use the PO builder's plating split
             //   · a component shop WO still milling gates the order (awaitingComponents)
+            // ── THE SAME POLE QUESTION AS THE SNAPSHOT (Stuart 2026-09-08) ────────────────────
+            // This door has no review gate, so it interrupts ONLY when there is a decision to make:
+            // "if no stock prompt". A pole already on the shelf passes straight through carrying an
+            // explicit "no cut"; only a SHORT pole raises the panel.
+            const poleByKey = opts.poles
+                ? new Map(Object.entries(opts.poles))
+                : await computePoleDecisions(prepped.map((x, key) => ({
+                    key: String(x.erpId).toUpperCase(),
+                    erp: x.erpId, qty: Number(x.qty), part: x.part,
+                    pullErp: (preByKey.get(key)?.plan?.lines?.[0]?.legacyErpId) || '',
+                })));
+            if (!opts.poles && [...poleByKey.values()].some(v => v.short > 0)) {
+                setGridPoles({ poles: Object.fromEntries(poleByKey) });
+                return;                        // nothing is written until the operator answers
+            }
+
             const madeUp = [];
             const reqDate = woNeedBy || new Date(Date.now() + 12096e5).toISOString().split('T')[0];
             let n = 0;
@@ -692,6 +873,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 }
                 try {
                     const res = await parkWorkOrder({
+                        ...poleWriterArgs(poleByKey.get(erp), erp),
                         intent: finishCodeFromErp(erp) ? INTENT.STOCK_FINISH : INTENT.STOCK_MILL,
                         part, qty: Number(qty), brand: activeBrand, createdBy: currentUser || '',
                         reqDate, needBy: woNeedBy || '', urgent: !!woUrgent,
@@ -1289,6 +1471,28 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 else pre.results.forEach(res => preByKey.set(res.key, res));
             } catch (e) { addLog(`⚠ Component pre-check failed: ${e.message || e}`, 'warn'); }
         }
+        // ── PHASE 2b: A POLE IS CUT, WAITED FOR, OR ALREADY ON THE SHELF (Stuart 2026-09-08) ──
+        // The defect this closes: this door raised a rod cut for 20 × 6 ft while 6 ft rods sat in
+        // stock. It never asked — the writer's automatic rule reads the LENGTH OUT OF THE CODE and
+        // cannot see a shelf, and Q5's stock check had only been wired into the Order Entry door.
+        //
+        // KEYED BY ITEM CODE, NOT ROW INDEX. Approve re-enters this function with only the rows the
+        // operator kept, so every index shifts. And the decisions come BACK IN on that second pass
+        // (opts.poles) rather than being recomputed, because recomputing would discard the answer
+        // the operator just gave. Rows that are NOT short travel too, carrying short: 0 — that is
+        // the "asked and answered, no cut" the writer needs; dropping them would hand those rows
+        // back to the 8 ft rule and reinstate the very bug this closes.
+        const poleByKey = opts.poles
+            ? new Map(Object.entries(opts.poles))
+            : await computePoleDecisions(prepped.map((x, key) => ({
+                key: String(x.r.itemid).toUpperCase(),
+                erp: x.r.itemid,
+                qty: x.qty,
+                part: x.info?.part,
+                // The pre-check's own pull line when it has one — the same code its stock read used.
+                pullErp: (preByKey.get(key)?.plan?.lines?.[0]?.legacyErpId) || '',
+            })));
+
         // ── THE VISUAL GATE (Stuart 2026-08-31): before anything writes, show the exact plan
         // this run computed — the same pre-check results execution will use. Approve re-enters
         // with the rows the operator kept; Cancel writes nothing.
@@ -1300,6 +1504,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 : '';
             setStockReview({
                 toMake,
+                // The pole decisions ride WITH the review, so the operator answers them in the same
+                // place they approve the run — and nothing writes until they have.
+                poles: Object.fromEntries(poleByKey),
                 rows: prepped.map((x, key) => {
                     const pre = preByKey.get(key) || null;
                     const blocked = !!(pre && pre.rawUnknown);
@@ -1366,8 +1573,10 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             const sug = convSugMap[r.itemid];
             const sugBase = millBaseOf(r.itemid);
             const bomText = pre && pre.plan && pre.plan.exploded ? ` · BOM pull: ${pre.plan.lines.map(l => `${l.quantity}×${l.legacyErpId}`).join(', ')}` : '';
+            const poleArg = poleWriterArgs(poleByKey.get(String(r.itemid).toUpperCase()), r.itemid);
             try {
                 const res = await parkWorkOrder({
+                    ...poleArg,
                     intent: finishCodeFromErp(r.itemid) ? INTENT.STOCK_FINISH : INTENT.STOCK_MILL,
                     part: info.part || { legacyErpId: r.itemid, netSuiteInternalId: r.internalId },
                     qty, brand: activeBrand, createdBy: currentUser || '',
@@ -3862,7 +4071,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 ↧ Fill All With Suggested
                             </button>
                             <button
-                                onClick={activeBuilder === 'PO' ? pushPOsToDispatch : pushWOsToDispatch}
+                                onClick={activeBuilder === 'PO' ? pushPOsToDispatch : () => pushWOsToDispatch()}
                                 style={{ width: '100%', padding: '16px', background: 'var(--ink)', color: '#fff', border: 'none', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em', transition: 'background 0.2s' }}
                             >
                                 {activeBuilder === 'PO' ? 'Push PO to RTG Dispatch' : 'Push Work Order to RTG Dispatch'}
@@ -3897,6 +4106,47 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
 
             </div>
 
+            {/* ── THE GRID'S POLE PROMPT (Stuart 2026-09-08) — "if no stock prompt with information
+                of any on order". The grid has no review gate, so this is the only thing that stops
+                it, and it stops it ONLY when a pole is actually short. */}
+            {gridPoles && (() => {
+                const entries = Object.entries(gridPoles.poles).filter(([, v]) => v.short > 0);
+                const mono9s = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
+                const go = async () => {
+                    const poles = gridPoles.poles;
+                    setGridPoles(null);
+                    setGenBusy(true);
+                    try { await pushWOsToDispatch({ poles }); }
+                    catch (e) { alert('Work order generation failed: ' + (e.message || e)); }
+                    setGenBusy(false);
+                };
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(28,26,22,.78)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <div style={{ background: '#fff', width: '760px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 16px 60px rgba(0,0,0,.3)' }}>
+                            <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+                                <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>Poles short — cut, or wait?</div>
+                                <div style={{ ...mono9s, color: 'var(--ink-soft)', marginTop: '4px' }}>Nothing is written until you answer · every other row is unaffected</div>
+                            </div>
+                            <div style={{ padding: '14px 10px', overflowY: 'auto', flex: 1 }}>
+                                {entries.map(([code, pole]) => (
+                                    <PoleShortPanel
+                                        key={code}
+                                        choice={pole}
+                                        name={pole.name || code}
+                                        onChoose={(chosen) => setGridPoles(prev => ({ ...prev, poles: { ...prev.poles, [code]: { ...prev.poles[code], chosen } } }))}
+                                        waitMeans="the order parks on the receipt gate. When the material is received on WMS → RECEIVING (PO) it clears itself and the job releases to the floor."
+                                    />
+                                ))}
+                            </div>
+                            <div style={{ padding: '14px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button onClick={() => setGridPoles(null)} style={{ ...mono9s, padding: '12px 18px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Cancel — write nothing</button>
+                                <button onClick={go} style={{ ...mono9s, padding: '12px 22px', background: '#3a7d44', color: '#fff', border: 'none', cursor: 'pointer' }}>✓ Create work orders</button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
+
             {/* ── STOCK REVIEW GATE (Stuart 2026-08-31) — the same visual gate for the stock
                 paths: the run's OWN pre-check plan, row by row, before one WO exists. */}
             {stockReview && (() => {
@@ -3910,7 +4160,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                     if (!toMake.length) return;
                     setGenBusy(true);
                     try {
-                        const res = await createStockFinWOs(toMake, { approved: true });
+                        const res = await createStockFinWOs(toMake, { approved: true, poles: stockReview.poles || {} });
                         alert(`✅ ${res.n} stock work order(s) created → RTG Dispatch.${res.made.length ? `\n\nPre-check raised:\n${res.made.map(m => `• ${m}`).join('\n')}` : ''}`);
                     } catch (e) { alert('Stock WO generation failed: ' + (e.message || e)); }
                     setGenBusy(false);
@@ -3927,8 +4177,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 <button onClick={() => setStockReview(null)} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: '1.7rem', cursor: 'pointer', lineHeight: 1 }}>×</button>
                             </div>
                             <div style={{ padding: '14px 26px', overflowY: 'auto', flex: 1 }}>
-                                {rows.map(r => (
-                                    <div key={r.key} style={{ display: 'flex', gap: '12px', padding: '10px 0', borderBottom: '1px solid var(--paper-2)', alignItems: 'flex-start', opacity: r.blocked ? 0.7 : 1 }}>
+                                {rows.map(r => {
+                                    const pole = (stockReview.poles || {})[String(r.erpId).toUpperCase()];
+                                    return (
+                                    <div key={r.key} style={{ borderBottom: '1px solid var(--paper-2)', opacity: r.blocked ? 0.7 : 1 }}>
+                                      <div style={{ display: 'flex', gap: '12px', padding: '10px 0', alignItems: 'flex-start' }}>
                                         <input type="checkbox" checked={r.include && !r.blocked} disabled={r.blocked} onChange={() => toggle(r.key)} style={{ marginTop: '3px' }} />
                                         <div style={{ minWidth: '200px' }}>
                                             <span style={{ fontFamily: 'var(--mono)', fontWeight: 600 }}>{r.erpId}</span>
@@ -3938,9 +4191,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                         </div>
                                         <div style={{ flex: 1, fontSize: '0.82rem', color: 'var(--ink)' }}>
                                             {r.actions.length ? r.actions.map((a, i) => <div key={i} style={{ marginBottom: '3px' }}>{a}</div>) : <span style={{ ...mono9s, color: '#3a7d44' }}>components in stock — the pick pulls them</span>}
+                                            {pole && pole.short === 0 && (
+                                                <div style={{ ...mono9s, color: '#3a7d44', marginTop: '3px' }}>✓ {pole.have} × {pole.pullErp} on the shelf — no cut, straight to the pick</div>
+                                            )}
                                         </div>
+                                      </div>
+                                      {pole && pole.short > 0 && (
+                                        <PoleShortPanel
+                                            choice={pole}
+                                            name={pole.name || r.name || ''}
+                                            onChoose={(chosen) => setStockReview(prev => ({ ...prev, poles: { ...prev.poles, [String(r.erpId).toUpperCase()]: { ...prev.poles[String(r.erpId).toUpperCase()], chosen } } }))}
+                                            waitMeans="the order parks on the receipt gate. When the material is received on WMS → RECEIVING (PO) it clears itself and the job releases to the floor."
+                                        />
+                                      )}
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                             <div style={{ padding: '14px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <span style={{ ...mono9s, color: 'var(--ink-soft)' }}>{included.length} of {rows.length} row(s) will execute</span>
@@ -4080,31 +4346,12 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                                 either put order on back order and wait for 6ft stock to arrive, or go
                                                 ahead and cut 8ft down." A pole is never milled, so those are the two
                                                 answers — and waiting is the default. */}
-                                            {j.poleChoice && (
-                                                <div style={{ margin: '0 16px 12px', padding: '10px 12px', border: '1px dashed var(--brass)', background: 'var(--paper)' }}>
-                                                    <div style={{ ...mono9, color: 'var(--brass)', marginBottom: '6px' }}>
-                                                        ✂ {j.poleChoice.pullFt} FT POLE SHORT — {j.poleChoice.have} of {j.poleChoice.need} on hand · short {j.poleChoice.short}
-                                                    </div>
-                                                    <label style={{ display: 'block', fontSize: '0.84rem', color: 'var(--ink)', marginBottom: '4px', cursor: 'pointer' }}>
-                                                        <input type="radio" name={`pole-${j.key}`} checked={(j.poleChoice.chosen || 'BACKORDER') === 'BACKORDER'}
-                                                            onChange={() => patchJob(j.key, { poleChoice: { ...j.poleChoice, chosen: 'BACKORDER' } })} />
-                                                        {' '}<b>Back order</b> — wait for {j.poleChoice.pullErp} to arrive. The job is created and goes to the floor; its pick waits at the WMS.
-                                                    </label>
-                                                    {(j.poleChoice.options || []).map(o => (
-                                                        <label key={o.sourceErp} style={{ display: 'block', fontSize: '0.84rem', color: o.enough ? 'var(--ink)' : 'var(--ink-soft)', marginBottom: '4px', cursor: o.enough ? 'pointer' : 'not-allowed' }}>
-                                                            <input type="radio" name={`pole-${j.key}`} disabled={!o.enough} checked={j.poleChoice.chosen === o.sourceErp}
-                                                                onChange={() => patchJob(j.key, { poleChoice: { ...j.poleChoice, chosen: o.sourceErp } })} />
-                                                            {' '}<b>Cut {o.rodsNeeded} × {o.sourceErp}</b> ({o.sourceFt} ft → {o.label}) — {o.avail} on hand
-                                                            {o.enough ? '' : ` · not enough (${o.rodsNeeded} needed)`}
-                                                            {o.scrapFt ? ` · ${o.scrapFt} ft scrap per rod` : ''}
-                                                            {(o.alsoYields || []).length ? ` · also yields ${o.alsoYields.map(y => `${y.per} × ${y.ft} ft`).join(', ')} to stock` : ''}
-                                                        </label>
-                                                    ))}
-                                                    {!(j.poleChoice.options || []).some(o => o.enough) && (
-                                                        <div style={{ ...mono9, color: 'var(--ink-soft)', marginTop: '4px' }}>No longer length has the stock to cut from — back order is the only answer.</div>
-                                                    )}
-                                                </div>
-                                            )}
+                                            <PoleShortPanel
+                                                choice={j.poleChoice}
+                                                name={j.part?.itemName || ''}
+                                                onChoose={(chosen) => patchJob(j.key, { poleChoice: { ...j.poleChoice, chosen } })}
+                                                waitMeans="the job is created and goes to the floor; its pick waits at the WMS until the stock arrives."
+                                            />
                                         </div>
                                     );
                                 })}
