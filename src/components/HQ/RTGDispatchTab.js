@@ -1154,7 +1154,14 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                 returnRadius: eng.returnRadius ?? null, poleDiameter: eng.poleDiameter ?? null,
                 // Hidden-hanger mount positions captured in Vision: FIPBH per bracket, FIPBHS per
                 // splice. The shop floor reads these to set the concealed hangers at the right spots.
-                hangerLocations: Array.isArray(eng.hangerLocations) ? eng.hangerLocations : []
+                hangerLocations: Array.isArray(eng.hangerLocations) ? eng.hangerLocations : [],
+                // Traverse (E, RTG_TRAVERSE_CUTS_PATCH 2026-09-08 — Stuart: "the drive type selection will
+                // drive the overall cut length sizes of the traverse tracks … these measurements must be
+                // added to the shop floor bom and raw cuts"): fascia / track / F-clip cuts by drive, from
+                // Vision via Shared/traverseTags. Absent on every solid-pole job. The shop cut sheet lists
+                // these rows instead of "Main Tube Raw Cut" (C).
+                traverseCuts: Array.isArray(eng.traverseCuts) ? eng.traverseCuts : null,
+                drive: eng.drive || null, setup: eng.setup || null, frontLayer: eng.frontLayer || null, rodKind: eng.rodKind || null
             };
             const fabMethod = eng.qtyBends > 0 ? 'BEND' : (eng.qtySplices > 0 ? 'SPLICE' : (eng.qtyMiters > 0 ? 'MITER' : null));
 

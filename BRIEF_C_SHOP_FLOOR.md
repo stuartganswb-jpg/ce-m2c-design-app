@@ -324,3 +324,13 @@ exported from the plating module so C never writes the collection directly.
 `closeOrderEverywhere` work from the shop doc. C2's direct `floorPhase` write (`stampMillRecord`)
 can now call `propagateFloorState(ctx, { finWo: shopDoc, phase, by, extra: { millGoodQty… } })`
 and retire the direct write, as agreed. Test: `scripts/orderLifecycle.test.mjs`.
+
+### From B (2026-09-08) — the traverse cut list is on the floor docs; the cut sheet should list it
+RTG's split now copies Vision's traverse fields into `fabNotes` on BOTH floor docs (E's
+RTG_TRAVERSE_CUTS_PATCH): `fabNotes.traverseCuts = [{ role: 'FASCIA'|'TRACK'|'FCLIP', cutInches,
+qty }]`, `fabNotes.drive` ('MANUAL'|'MOTORIZED'), `fabNotes.setup` ('SINGLE'|'DOUBLE'),
+`fabNotes.frontLayer`, `fabNotes.rodKind` ('TRAVERSE'). Absent (null) on every solid-pole job.
+Your half: the shop cut sheet that renders `pole1/pole2/pole3` lists the `traverseCuts` rows —
+role · qty · cutInches — with the drive and setup named, instead of "Main Tube Raw Cut", whenever
+`traverseCuts` is present. Numbers come from Shared/traverseTags TRAVERSE_DEDUCTIONS (fascia as
+ordered; track −0.5" manual / −2" motorized; F-clip −1" / −3").
