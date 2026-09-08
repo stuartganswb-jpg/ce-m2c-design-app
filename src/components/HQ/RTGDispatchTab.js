@@ -94,6 +94,16 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
             () => { /* collection may not exist yet */ });
         return () => unsub();
     }, []);
+    // EVERY flagged outbox entry, not the tail (A, 2026-09-08: "NS_POSTED_AFTER_CLOSE is a best-effort
+    // finding, not a complete one — it should say so on screen rather than in a comment"). The audit
+    // reads the flag itself, so a write that posted after its order closed is found however old it is.
+    const [flaggedOutbox, setFlaggedOutbox] = useState([]);
+    useEffect(() => {
+        const unsub = onSnapshot(query(collection(db, 'ns_outbox'), where('postedForClosedOrder', '==', true)),
+            snap => setFlaggedOutbox(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+            () => { /* collection may not exist yet */ });
+        return () => unsub();
+    }, []);
     // ── ⚡ AUTO-RELEASE (Stuart 2026-08-26: "auto send all the orders to the floors … queue them
     // to push in and avoid concurrency issues … remove the step to have to push, now that it is
     // keeping them all as a log") ────────────────────────────────────────────────────────────────
@@ -1994,11 +2004,11 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         () => auditOrphans({
             hqOrders: [...liveWO, ...liveSO], finWos: liveFin, shopJobs: liveShop, convertDemands: liveConvD, platingDemands: livePlatD, rodCuts: liveRodCuts, salesOrders: liveSO,
             // The material gate is audited against the OPEN POs this board already holds (A's isOpenPo);
-            // the outbox tail is the 12 most recent entries — a flagged write older than that is in 11.1.
+            // the outbox pool is EVERY flagged entry (its own live read), so the finding is complete.
             openPoNumbers: new Set(purchaseOrders.flatMap(p => [p.poId, p.nsPoTran, p.id]).filter(Boolean).map(x => String(x).toUpperCase())),
-            outbox: nsOutboxTail,
+            outbox: flaggedOutbox,
         }),
-        [liveWO, liveSO, liveFin, liveShop, liveConvD, livePlatD, liveRodCuts, purchaseOrders, nsOutboxTail]
+        [liveWO, liveSO, liveFin, liveShop, liveConvD, livePlatD, liveRodCuts, purchaseOrders, flaggedOutbox]
     );
     const ORPHAN_COPY = {
         ORPHAN_FLOOR:   { label: 'On the floor, not on this board', why: 'A live floor job with no RTG record — nothing here can dispatch, close or report it.' },
@@ -2009,7 +2019,7 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
         DEMAND_ORPHAN:  { label: 'Demand for an order that no longer lives', why: 'A convert/plating to-do whose work order or sales order is gone or closed — it gates nothing and sits on a WMS tab forever. Delete it.' },
         RODCUT_ORPHAN:  { label: 'Open rod cut for a dead order', why: 'An open cut whose work order is gone or closed — cutting it would make pieces nothing is waiting for. Cancel it.' },
         STRANDED_GATE:  { label: 'Held at a gate nothing can lift', why: 'A live order waiting on a cut, a convert, a component order or a purchase order that has been cancelled or deleted — nothing is coming to clear it. Lift the gate (the order stays parked; release it from its detail view) or close the order.' },
-        NS_POSTED_AFTER_CLOSE: { label: 'NetSuite transaction for a closed order', why: 'This write was already in flight when its order was closed or deleted, so it posted. Close the transaction in NetSuite, then tick it here.' },
+        NS_POSTED_AFTER_CLOSE: { label: 'NetSuite transaction for a closed order', why: 'This write was already in flight when its order was closed or deleted, so it posted. Close the transaction in NetSuite, then tick it here. Every flagged entry is listed, however old.' },
     };
     // LIFT A STRANDED GATE by hand — the flag drops with who/why; the order stays parked and is NOT
     // released (a person tidying a dead gate is not certifying that material arrived). The receipt
