@@ -3,6 +3,7 @@ import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage,
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
 import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { buildStockFinPayload } from '../Shared/stockRun';
+import { buildFinDoc } from '../Shared/floorRelease';
 import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
 import { issuePlatedDemand } from '../Shared/platingDemand';
 import { planFinishedRun, fetchAvailability, stockCheckReport } from '../Shared/finishedGoodsRun';
@@ -1084,10 +1085,20 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // `recipe` is the MACHINE code the floor groups and matches on (fin_recipes / finish code, e.g.
   // 'RF1'); `finishLabel` is the human string ('RF1 - Satin Nickel'). They were one field before,
   // and the label never matched a recipe — every library run grouped as an unknown recipe.
+  // ── WRITER 7 (Brief A, converted 2026-09-08 once B1 landed) ─────────────────────────────────
+  // The Library run was the last writer assembling its own fin_workorders document. Four paths
+  // hand-copied that field list and each carried something the others lacked — urgent, nsWoId,
+  // holds, needBy — which is exactly the divergence Shared/floorRelease.buildFinDoc exists to end.
+  //
+  // The PAYLOAD still comes from buildStockFinPayload (the Snapshot model, nothing re-derived at
+  // dispatch); what changes is that the DOCUMENT is now built by the one builder, so this path
+  // gains what it never had: the board's later urgent statement, a hold placed while parked, the
+  // NetSuite anchor when one exists, the dispatched stamps — and the pole/sled assertion that
+  // caught Sandra's WO11535, which a hand-written write could never have made.
   const releaseRunToFloor = async ({ woId, part, qty, finishLabel, recipe, note, hqExtra = {}, finExtra = {} }) => {
       const now = Date.now();
       const reqDate = new Date(now + 6048e5).toISOString().split('T')[0];
-      await setDoc(doc(db, "hq_work_orders", woId), withItemCode({
+      const hqOrder = withItemCode({
           id: woId, woId, woDisplayId: woId,
           partErpId: String(part.legacyErpId || part.itemId || '').toUpperCase(),
           rootItem: String(part.legacyErpId || part.itemId || '').toUpperCase(),
@@ -1103,12 +1114,16 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
           // the poles) — the floor's recipe resolution reads it off the WO doc.
           ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}),
           ...hqExtra,
-      }));
+      });
+      await setDoc(doc(db, "hq_work_orders", woId), hqOrder);
       try {
-          await setDoc(doc(db, "fin_workorders", woId), buildStockFinPayload({
+          const finPayload = buildStockFinPayload({
               woId, part, qty, finishLabel: recipe || finishLabel, brand: activeBrand,
               createdBy: (currentUser && (currentUser.name || currentUser.email)) || '', reqDate, note,
               tasks: makeFullTasks(), extra: { finishLabel: finishLabel || '', ...(part.manufacturingSpecs?.finishStream ? { finishStream: String(part.manufacturingSpecs.finishStream).toUpperCase() } : {}), ...finExtra }, now,
+          });
+          await setDoc(doc(db, "fin_workorders", woId), buildFinDoc({
+              hqOrder, finPayload, by: (currentUser && (currentUser.name || currentUser.email)) || '', now,
           }));
       } catch (err) {
           try { await deleteDoc(doc(db, "hq_work_orders", woId)); } catch (e) { /* leave the ledger entry; it is visible in RTG */ }
