@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { buildGalleryIndex, galleryImageForPart, photoMayOverwrite, isAutoImage, isInheritedFromBase, splitCode, imageUpdate, IMG_GALLERY } from '../Shared/partImage';
 import { isPaintOnlyPart, validatePaintOnlyRun, paintOnlyDescription, normalizeItemCode, PAINT_ONLY_BADGE } from '../Shared/paintOnly';
+import { splitFinish, siblingsQuery, oneItemQuery, shapeSources, validateRepaint, repaintDescription } from '../Shared/repaintSource';
 import { buildStockFinPayload } from '../Shared/stockRun';
 import { parkWorkOrder, INTENT } from '../Shared/workOrderCreate';
 import { issuePlatedDemand } from '../Shared/platingDemand';
@@ -37,6 +38,7 @@ const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase(
 const BRAND_NS_LOCATION = { m2c: "19", uniquity: "22", ce: "17", leyla: "18" };
 // Canonical brand → NetSuite subsidiary/location map (same values as PickPackApp / NetSuiteSync /
 // ERPPushPull / AdminTab — keep every copy in sync). Used to queue the parent-assembly work order.
+const NS_SUITEQL = 'https://3728153.suitetalk.api.netsuite.com/services/rest/query/v1/suiteql';
 const BRAND_NETSUITE_MAP = {
     'm2c': { subsidiary: "3", location: "19" },
     'uniquity': { subsidiary: "6", location: "20" },
@@ -108,6 +110,8 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
   // taught. The item # is typed, not picked, because there is no library record behind it.
   const [inHouseFinishes, setInHouseFinishes] = useState([]);
   const [jfp, setJfp] = useState({ itemCode: '', finishId: '', note: '', pullFrom: '', busy: false });
+  // ♻ REPAINT — pull another colour of THIS item, paint it, adjust one down and the other up.
+  const [repaint, setRepaint] = useState(null);   // null = closed; else { loading, sources, error, sourceCode, freeCode, freeItem, freeBusy, qty, finishId, busy }
   // Same idea for an ORDINARY part: choose a finish and push it to the floor from here.
   const [runFinishId, setRunFinishId] = useState('');
   const [runBusy, setRunBusy] = useState(false);
@@ -1294,6 +1298,147 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       setRunBusy(false);
   };
 
+  // ── ♻ REPAINT — WHICH OF THIS ITEM'S OWN COLOURS COULD BECOME THIS ONE ───────────────────────
+  // Stuart 2026-09-08: "look up like items in netsuite (like JFP does) and select one for refinish
+  // and sends it to the wms pick then we paint and at the end it adjusts down the chosen color and
+  // adjusts up the work ordered color."
+  //
+  // Two reads, both live, both at the moment the operator is standing here: the siblings from
+  // NetSuite (the catalogue is the authority on what colours exist — the app's library may never
+  // have been taught them, which is the whole reason this tool exists) and their available
+  // quantities. A colour with nothing on the shelf is still LISTED, greyed, because "that colour
+  // exists but is empty" is a different and more useful answer than a shorter list.
+  const openRepaint = async () => {
+      const target = String(activePart?.legacyErpId || activePart?.itemId || '').toUpperCase();
+      const { base } = splitFinish(target);
+      const qty = Math.max(1, Math.floor(Number(woTargetQty) || 1));
+      setRepaint({ loading: true, sources: [], error: '', sourceCode: '', freeCode: '', freeItem: null, freeBusy: false, qty: String(qty), finishId: runFinishId || '', busy: false });
+      try {
+          const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL, method: 'POST', payload: { q: siblingsQuery(base) } });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+          const rows = data.items || [];
+          let availByCode = {};
+          try { availByCode = await fetchAvailability(rows.map(r => String(r.itemid).toUpperCase()), (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); }
+          catch (e) { /* the list still stands; every row simply reads 0 and says so */ }
+          setRepaint(r => r && ({ ...r, loading: false, sources: shapeSources({ rows, targetCode: target, availByCode, need: qty }) }));
+      } catch (e) {
+          setRepaint(r => r && ({ ...r, loading: false, error: `Couldn't reach NetSuite to list the other colours of ${base} — ${e.message || e}` }));
+      }
+  };
+
+  // The free-entry box: any NetSuite item, checked when it is typed rather than at the pick.
+  // Stuart: "allows the user the ability to enter a differrent item# in the search and if it
+  // returns back as valid netsuite part (with sufficient stock) then allow it."
+  const checkFreeSource = async () => {
+      const code = normalizeItemCode(repaint?.freeCode || '');
+      if (!code) return;
+      setRepaint(r => r && ({ ...r, freeBusy: true, freeItem: null, error: '' }));
+      try {
+          const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL, method: 'POST', payload: { q: oneItemQuery(code) } });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+          const row = (data.items || [])[0] || null;
+          if (!row) return setRepaint(r => r && ({ ...r, freeBusy: false, error: `NetSuite has no item called "${code}".` }));
+          let avail = 0;
+          try { const a = await fetchAvailability([code], (BRAND_NETSUITE_MAP[activeBrand] || {}).location || '17'); avail = Math.max(0, Number(a[code]) || 0); } catch (e) { /* reads as 0 — refused below, which is the safe direction */ }
+          setRepaint(r => r && ({
+              ...r, freeBusy: false, sourceCode: code,
+              freeItem: { code, nsId: String(row.id), name: String(row.displayname || ''), available: avail, inactive: String(row.inactive || '') === 'T' },
+          }));
+      } catch (e) {
+          setRepaint(r => r && ({ ...r, freeBusy: false, error: `Couldn't check ${code} — ${e.message || e}` }));
+      }
+  };
+
+  const createRepaintWO = async () => {
+      const st = repaint; if (!st) return;
+      const target = String(activePart?.legacyErpId || activePart?.itemId || '').toUpperCase();
+      const chosen = st.freeItem && st.freeItem.code === st.sourceCode
+          ? st.freeItem
+          : (st.sources || []).find(x => x.code === st.sourceCode) || null;
+      const qty = Number(st.qty);
+      const v = validateRepaint({
+          sourceCode: st.sourceCode, targetCode: target, qty,
+          available: chosen ? chosen.available : 0, sourceKnown: !!chosen,
+      });
+      if (!v.ok) return alert(v.error);
+      if (!st.finishId) return alert('Choose the in-house finish — it sets the recipe the floor will run.');
+      const fin = inHouseFinishes.find(f => String(f.id) === String(st.finishId));
+      const finishLabel = fin ? (fin.code ? `${fin.code} - ${fin.name}` : fin.name) : '';
+      const desc = repaintDescription({ sourceCode: chosen.code, targetCode: target, finishLabel, qty });
+
+      setRepaint(r => r && ({ ...r, busy: true }));
+      // The TARGET is resolved against NetSuite now, for the same reason JFP resolves its own: the
+      // painted pieces are adjusted INTO this code at put-away, and finding out there that it does
+      // not exist would be the worst possible moment.
+      let nsItem = null;
+      try {
+          const resp = await nsProxyFetch({ targetUrl: NS_SUITEQL, method: 'POST', payload: { q: oneItemQuery(target) } });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(JSON.stringify(data).slice(0, 200));
+          nsItem = (data.items || [])[0] || null;
+      } catch (e) {
+          setRepaint(r => r && ({ ...r, busy: false }));
+          return alert(`Couldn't reach NetSuite to check ${target} — nothing was created. Try again.\n\n${e.message || e}`);
+      }
+      if (!nsItem) {
+          setRepaint(r => r && ({ ...r, busy: false }));
+          return alert(`NetSuite has no item called "${target}".\n\nThe painted pieces are adjusted into this code at packing, so it has to exist before the paint is run.`);
+      }
+      if (!window.confirm(`Send a REPAINT run to the finishing floor?\n\n${desc}\n\nPull ${qty} × ${chosen.code}${chosen.name ? ` (${chosen.name})` : ''} — ${chosen.available} available.\n\nAt the WMS pick, ${qty} × ${chosen.code} is adjusted OUT. At put-away, ${qty} × ${target} is adjusted IN to the bin that gets scanned.\n\nNo assembly, no NetSuite work order.`)) {
+          setRepaint(r => r && ({ ...r, busy: false }));
+          return;
+      }
+      try {
+          const stamp = Date.now().toString().slice(-6);
+          const newWoId = `WO-RPT-${String(target).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}`;
+          await raisePaintRun({
+              woId: newWoId, part: activePart, targetCode: target, nsItem,
+              pullCode: chosen.code, nsPull: { id: chosen.nsId, displayname: chosen.name },
+              finishId: st.finishId, finishLabel, fin, qty, desc,
+              runType: 'Repaint',
+              // Declared on the order so a repaint is never mistaken for a JFP on the floor or in
+              // RTG — same machinery, different reason, and the reason is worth keeping.
+              extra: { repaint: true, repaintFrom: chosen.code, repaintAvailAtIssue: chosen.available },
+          });
+          alert(`✅ ${newWoId} is on the finishing floor.\n\n${desc}\n\nIt is in the Setup Queue now and recorded in RTG. The pick pulls ${chosen.code}; packing adjusts ${target} into the scanned bin.`);
+          setRepaint(null);
+      } catch (err) {
+          console.error('Repaint WO error:', err);
+          setRepaint(r => r && ({ ...r, busy: false }));
+          alert('Failed to create the repaint run. Check console.');
+      }
+  };
+
+  // ── THE ONE PAINT-RUN WRITER ────────────────────────────────────────────────────────────────
+  // Two doors raise this shape now — "Just For Paint" (an item the app was never taught) and
+  // "Repaint" (an item it knows, pulled in another colour). They are the SAME order: no assembly,
+  // no NetSuite work order, a pull line for the source and an adjustment at each end.
+  //
+  // Written once on purpose. The delete-vs-close divergence on 2026-09-08 was exactly this shape —
+  // a second copy that stopped receiving what the first one learned — and the fields below are the
+  // ones the WMS pick and the put-away read to decide whether to adjust anything at all. A copy
+  // that drifted by one field name would silently stop moving stock.
+  const raisePaintRun = async ({ woId, part, targetCode, nsItem, pullCode, nsPull, finishId, finishLabel, fin, qty, desc, runType, extra = {} }) => {
+      // What makes it a paint run rides on BOTH documents — the order declares it, because by
+      // packing time the library record is not in the room.
+      const jfpFields = {
+          paintOnly: true, jfpItemCode: targetCode, jfpItemId: String(nsItem.id),
+          jfpItemName: nsItem.displayname || '', jfpFinishId: finishId, jfpFinishLabel: finishLabel,
+          ...(nsPull && pullCode && pullCode !== targetCode
+              ? { jfpPullFrom: pullCode, jfpPullFromNsId: String(nsPull.id), jfpPullFromName: nsPull.displayname || '' }
+              : {}),
+          ...extra,
+      };
+      await releaseRunToFloor({
+          woId, part: { ...part, legacyErpId: targetCode, itemName: nsItem.displayname || targetCode },
+          qty, finishLabel, recipe: (fin && fin.code) || finishLabel, note: desc,
+          hqExtra: { ...jfpFields, type: runType },
+          finExtra: { ...jfpFields, type: nsItem.displayname || targetCode },
+      });
+  };
+
   // JFP RUN → FINISHING (Stuart 2026-08-03). No library assembly, no NetSuite work order — the item
   // rides as typed text and only meets NetSuite again at packing, as an adjustment.
   //
@@ -1344,18 +1489,10 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       try {
           const stamp = Date.now().toString().slice(-6);
           const newWoId = `WO-JFP-${String(code).replace(/[^A-Za-z0-9]+/g, '-')}-${stamp}`;
-          // What makes it a paint run rides on BOTH documents — the order declares it, because by
-          // packing time the library record is not in the room.
-          const jfpFields = {
-              paintOnly: true, jfpItemCode: code, jfpItemId: String(nsItem.id),
-              jfpItemName: nsItem.displayname || '', jfpFinishId: jfp.finishId, jfpFinishLabel: finishLabel,
-              ...(nsPull && pullCode !== code ? { jfpPullFrom: pullCode, jfpPullFromNsId: String(nsPull.id), jfpPullFromName: nsPull.displayname || '' } : {}),
-          };
-          await releaseRunToFloor({
-              woId: newWoId, part: { ...activePart, legacyErpId: code, itemName: nsItem.displayname || code },
-              qty, finishLabel, recipe: (fin && fin.code) || finishLabel, note: desc,
-              hqExtra: { ...jfpFields, type: 'Just For Paint' },
-              finExtra: { ...jfpFields, type: nsItem.displayname || code },
+          await raisePaintRun({
+              woId: newWoId, part: activePart, targetCode: code, nsItem,
+              pullCode, nsPull, finishId: jfp.finishId, finishLabel, fin, qty, desc,
+              runType: 'Just For Paint',
           });
           alert(`✅ ${newWoId} is on the finishing floor.\n\n${desc}\n\nIt is in the Setup Queue now, and recorded in RTG. Packing does a bin count and adjusts ${code} into that bin.`);
           setJfp({ itemCode: '', finishId: '', note: '', pullFrom: '', busy: false });
@@ -2616,6 +2753,109 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                               ? 'Lands in the finishing floor Setup Queue immediately. RTG still records it — you just do not have to go there to release it.'
                               : 'This generates an "Approved" Stock Build WO and sends it to Tab 13 (RTG Dispatch), where outsourced finishes are routed to plating.'}
                       </span>
+
+                      {/* ── ♻ REPAINT (Stuart 2026-09-08) ────────────────────────────────────────
+                          "it is easier, faster, cleaner to just pull another color reduce stock and
+                          when completed increase stock of the painted color."
+
+                          Offered on any item carrying a finish suffix, and deliberately NOT gated on
+                          the sourcing tag: the two items that prompted this disagree — one is tagged
+                          in-house (and waits forever on milling we do not do), the other outsourced
+                          (correctly, but we can still paint it here). Reading the tag would refuse
+                          the exact cases the tool exists for. */}
+                      {!!splitFinish(activePart.legacyErpId || activePart.itemId || '').finish && (
+                          <div style={{ marginTop: '18px', paddingTop: '18px', borderTop: '1px dashed var(--line)' }}>
+                              {!repaint ? (
+                                  <>
+                                      <button onClick={openRepaint}
+                                          style={{ width: '100%', padding: '12px 20px', background: 'transparent', color: 'var(--ink)', border: '1px solid var(--brass)', cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                          ♻ Repaint from another finish
+                                      </button>
+                                      <span style={{ display: 'block', marginTop: '10px', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
+                                          No BOM needed. Pull another colour of this item from stock, paint it, and NetSuite adjusts the pulled colour <b>down</b> and this one <b>up</b>.
+                                      </span>
+                                  </>
+                              ) : (() => {
+                                  const target = String(activePart.legacyErpId || activePart.itemId || '').toUpperCase();
+                                  const chosen = repaint.freeItem && repaint.freeItem.code === repaint.sourceCode
+                                      ? repaint.freeItem
+                                      : (repaint.sources || []).find(x => x.code === repaint.sourceCode) || null;
+                                  const need = Math.max(0, Math.floor(Number(repaint.qty) || 0));
+                                  const short = !!chosen && chosen.available < need;
+                                  return (
+                                      <div style={{ border: '1px solid var(--brass)', padding: '16px', background: 'var(--paper)' }}>
+                                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                                              <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.1em', color: 'var(--brass)' }}>♻ Repaint → {target}</span>
+                                              <button onClick={() => setRepaint(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--ink-soft)', lineHeight: 1 }}>×</button>
+                                          </div>
+                                          {repaint.loading && <div style={{ fontSize: '0.9rem', color: 'var(--ink-soft)' }}>Reading the other colours of {splitFinish(target).base} from NetSuite…</div>}
+                                          {!!repaint.error && <div style={{ fontSize: '0.85rem', color: '#d9534f', marginBottom: '10px' }}>{repaint.error}</div>}
+                                          {!repaint.loading && (
+                                              <>
+                                                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr', gap: '16px', marginBottom: '12px' }}>
+                                                      <div>
+                                                          <label style={labelStyle}>Pull from — this item's other colours</label>
+                                                          <select value={repaint.sourceCode} onChange={e => setRepaint(r => ({ ...r, sourceCode: e.target.value, freeItem: null }))} style={fieldStyle}>
+                                                              <option value="">— choose a colour —</option>
+                                                              {(repaint.sources || []).map(o => (
+                                                                  <option key={o.code} value={o.code}>
+                                                                      {o.code}{o.finish ? ` · ${o.finish}` : ''} — {o.available} available{o.available < need ? ' (not enough)' : ''}
+                                                                  </option>
+                                                              ))}
+                                                          </select>
+                                                      </div>
+                                                      <div>
+                                                          <label style={labelStyle}>Qty</label>
+                                                          <input type="number" min="1" value={repaint.qty} onChange={e => setRepaint(r => ({ ...r, qty: e.target.value }))} style={fieldStyle} />
+                                                      </div>
+                                                  </div>
+                                                  {!(repaint.sources || []).length && !repaint.error && (
+                                                      <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginBottom: '10px' }}>
+                                                          NetSuite lists no other colours of {splitFinish(target).base}. Type any item # below instead.
+                                                      </div>
+                                                  )}
+                                                  {/* FREE ENTRY — any NetSuite item, checked when it is typed rather than at the pick. */}
+                                                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 0.8fr', gap: '16px', marginBottom: '12px', alignItems: 'end' }}>
+                                                      <div>
+                                                          <label style={labelStyle}>…or pull from any other NetSuite item #</label>
+                                                          <input value={repaint.freeCode} placeholder="e.g. HHRMBF75/M1"
+                                                              onChange={e => setRepaint(r => ({ ...r, freeCode: e.target.value }))}
+                                                              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); checkFreeSource(); } }}
+                                                              style={fieldStyle} />
+                                                      </div>
+                                                      <button onClick={checkFreeSource} disabled={repaint.freeBusy || !repaint.freeCode.trim()}
+                                                          style={{ padding: '12px', background: 'transparent', border: '1px solid var(--line)', cursor: repaint.freeBusy ? 'wait' : 'pointer', fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                                                          {repaint.freeBusy ? 'Checking…' : 'Check'}
+                                                      </button>
+                                                  </div>
+                                                  <div style={{ marginBottom: '12px' }}>
+                                                      <label style={labelStyle}>In-House Finish (the recipe the floor runs)</label>
+                                                      <select value={repaint.finishId} onChange={e => setRepaint(r => ({ ...r, finishId: e.target.value }))} style={fieldStyle}>
+                                                          <option value="">— choose the finish —</option>
+                                                          {inHouseFinishes.map(f => <option key={f.id} value={f.id}>{f.code ? `${f.code} - ${f.name}` : f.name}</option>)}
+                                                      </select>
+                                                  </div>
+                                                  {chosen && (
+                                                      <div style={{ padding: '10px 12px', background: short ? '#fdf3f3' : 'var(--paper-2)', border: `1px solid ${short ? '#d9534f' : 'var(--line)'}`, marginBottom: '12px', fontSize: '0.88rem', color: 'var(--ink)' }}>
+                                                          <b>{need} × {chosen.code}</b>{chosen.name ? ` (${chosen.name})` : ''} → <b>{need} × {target}</b>
+                                                          <div style={{ marginTop: '4px', color: short ? '#d9534f' : 'var(--ink-soft)', fontSize: '0.82rem' }}>
+                                                              {short
+                                                                  ? `Only ${chosen.available} available — not enough for ${need}. Pick another colour or lower the quantity.`
+                                                                  : `${chosen.available} available · −${need} at the WMS pick, +${need} into the bin scanned at put-away.`}
+                                                          </div>
+                                                      </div>
+                                                  )}
+                                                  <button onClick={createRepaintWO} disabled={repaint.busy || !chosen || short || !repaint.finishId}
+                                                      style={{ width: '100%', padding: '14px 24px', background: (repaint.busy || !chosen || short || !repaint.finishId) ? 'var(--paper-2)' : 'var(--brass)', color: (repaint.busy || !chosen || short || !repaint.finishId) ? 'var(--ink-soft)' : '#fff', border: (repaint.busy || !chosen || short || !repaint.finishId) ? '1px solid var(--line)' : 'none', cursor: repaint.busy ? 'wait' : ((!chosen || short || !repaint.finishId) ? 'not-allowed' : 'pointer'), fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+                                                      {repaint.busy ? 'Releasing…' : '♻ Create Repaint Run → Finishing Floor'}
+                                                  </button>
+                                              </>
+                                          )}
+                                      </div>
+                                  );
+                              })()}
+                          </div>
+                      )}
                   </div>
               )}
 

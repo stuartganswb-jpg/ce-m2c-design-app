@@ -588,3 +588,49 @@ has a PO, the row should refuse to park on a receipt gate that nothing will ever
 "create the PO" or "cut", or leave it un-gated with the shelf shortfall named). Today's order:
 Stuart will cut at WMS → Issue a rod cut and release from the override; or delete and re-order
 after your fix.
+
+### From A (2026-09-08) — ♻ REPAINT shipped, and a rod-cut ask for B
+
+**SHIPPED (A).** `Shared/repaintSource.js` + a **♻ Repaint from another finish** panel directly
+under *Generate Production Work Order* in the Master Library, on any item carrying a finish suffix.
+
+The important finding first: **the engine already existed.** A JFP run with its *Pull Pieces From*
+field set has done exactly this since Eric asked for it on 2026-08-12 — Setup Queue pulls the
+source code, WMS pick posts −qty at pick confirm (memo literally reads "repaint source"), put-away
+posts +qty of the target into the scanned bin. What was missing was that the form lived only on the
+JFP template record and demanded both codes from memory. So this is not a second tool; it is the
+one we had, put where it is looked for, with a picker.
+
+- **Sibling lookup** — NetSuite items on the same mill base (`LIKE '<base>/%'`, anchored on the
+  slash so `HHRMBF75` cannot drag in `HHRMBF750`), each with live available qty. Empty colours are
+  listed greyed rather than hidden.
+- **Free entry** — any NetSuite item #, validated when typed. Stuart 2026-09-08: allowed "if it
+  returns back as valid netsuite part (with sufficient stock)". **Stock is a refusal, not a
+  warning** — a repaint against stock that is not there is the pole-gate defect wearing a hat.
+- **Not gated on the sourcing tag**, deliberately: HCUMSBF15 is tagged in-house (and waits forever
+  on milling we do not do), HHRMBF75/M3 is tagged outsourced (correctly). Both need this; reading
+  the tag would refuse the exact cases it exists for.
+- **One writer** — `raisePaintRun` in LibraryTab; JFP and Repaint both call it. Written once
+  because the delete-vs-close divergence this week was exactly the shape of a second copy that
+  stopped receiving what the first one learned, and these fields are what the WMS reads to decide
+  whether to move stock at all.
+- Orders carry `repaint: true` / `repaintFrom`, id `WO-RPT-…`, type `Repaint`.
+
+16 assertions in `scripts/repaintSource.test.mjs`.
+
+#### ⬜ B — a rod cut should leave a copy on the RTG board
+
+Stuart 2026-09-08, after a Snapshot cut he could not find (it was there — he was in another brand):
+> "it would be nice if a copy of the rod cut did go to RTG just so it has it as the file cabinet
+>  and makes it easy to trace in sceanrios like this"
+
+`rod_cut_orders` is currently the only production instruction with no presence on the board, which
+sits badly with "every order lands in RTG as master". It is already in `auditOrphans`
+(`RODCUT_ORPHAN`) and the gate clearer, so RTG reads the collection — this is a board card, not a
+new pipe. Suggested: a read-only row (source → targets, qty, status, `createdVia`, brand) that
+traces without becoming a second place to action a cut; the bench stays the only place it is done.
+
+**Also worth fixing while you are there (D's file, or spec it on):** the WMS keeps its own brand in
+`localStorage` (`pp_brand`) independent of HQ, and an empty cut list reads "Cuts for Sales Orders ·
+0" with no hint that cuts exist under another brand. That silence is what cost Stuart the trace.
+An honest empty state — "0 for CE — 3 open under M2C" — would have answered it instantly.
