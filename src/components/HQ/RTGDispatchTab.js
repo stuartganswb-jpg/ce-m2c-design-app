@@ -1198,7 +1198,13 @@ const RTGDispatchTab = ({ currentUser, activeBrand, userRole }) => {
                     // legitimately un-coded ("Mixed").
                     ...(partsList.length === 1 && partsList[0].legacyErpId ? { itemCode: String(partsList[0].legacyErpId).toUpperCase() } : {}),
                     type: job.cpqData?.cartItems?.[0]?.assemblyName || "Mixed",
-                    recipe: finishRecipe !== "PENDING-RECIPE" ? finishRecipe : (so.recipe || "PENDING-RECIPE"),
+                    // THE STAMPED RECIPE FIRST (B4, Stuart Q10 "recipe stamped at save — 100%"): E's header
+                    // stamps `recipe` as a CODE with `recipeSource` naming which of the five sources hit
+                    // (c73263e). The job scan is the fallback for orders saved before that, and the doc
+                    // says which one answered — so a PENDING-RECIPE card explains itself (B8).
+                    recipe: so.recipe || (finishRecipe !== "PENDING-RECIPE" ? finishRecipe : "PENDING-RECIPE"),
+                    recipeLabel: so.recipeLabel || null,
+                    recipeSource: so.recipe ? (so.recipeSource || 'sales order') : (finishRecipe !== "PENDING-RECIPE" ? 'job scan (order saved before the stamp)' : 'none'),
                     totalParts,
                     paintSize, paintSizes: hasSize ? paintSizes : null,
                     dimensions: { length: Number(so.length) || 0, width: Number(so.width) || 0, height: Number(so.height) || 0 },
