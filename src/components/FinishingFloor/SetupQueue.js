@@ -164,7 +164,8 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
               note: ` — pull ${qty} × ${base}${wo.paintOnly === true ? ' (JFP repaint)' : ' (raw base)'} released to the WMS pick queue`
           };
       }
-      return { patch: {}, note: ' — no small parts to pick (not sent to WMS)' };
+      // B8: say WHY, and where to fix it — a card that only says "not sent" sends the floor hunting.
+      return { patch: {}, note: ` — not sent to WMS: this order carries no pull lines and no stock code, so there is nothing to pick. Fix the order on RTG (${woRefOf(wo)}) and re-release.` };
   };
 
   // Tell the RTG record what the floor just did (2026-08-29 audit: only final-coat completion
@@ -695,7 +696,13 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
           {/* One section per FINISH — run it as a batch, then move to the next finish. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 16px', background: 'var(--ink)', color: '#fff', borderRadius: '2px', marginBottom: '14px', flexWrap: 'wrap' }}>
             <span style={{ fontFamily: 'var(--mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '.12em', fontWeight: 600 }}>{g.recipe}</span>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.85 }}>{g.orders.length} order{g.orders.length === 1 ? '' : 's'} · {g.pieces} pcs — batch this finish together</span>
+            {/* B8 (Brief B): the PENDING group explains itself instead of listing ids — each card below
+                names where the recipe was looked for and the sales order it came from. */}
+            {/^(PENDING[-\s]?RECIPE|— NO RECIPE —)$/i.test(String(g.recipe)) ? (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: '#f5b7b1' }}>{g.orders.length} order{g.orders.length === 1 ? '' : 's'} · {g.pieces} pcs — NO RECIPE RESOLVED: nothing to batch. Each card says where it looked; fix the finish on the sales order or the item, then re-release from RTG.</span>
+            ) : (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', opacity: 0.85 }}>{g.orders.length} order{g.orders.length === 1 ? '' : 's'} · {g.pieces} pcs — batch this finish together</span>
+            )}
             {g.orders.some(w => w.urgent) && <span style={{ fontFamily: 'var(--mono)', fontSize: '9px', letterSpacing: '.08em', background: '#d9534f', color: '#fff', padding: '3px 8px' }}>⚡ {g.orders.filter(w => w.urgent).length} URGENT</span>}
             {/* 📅 Planned run day — tap a day to tell the rest of the team when this colour runs, so
                 parts for it get ordered in time. Shared doc: everyone sees the same plan. */}
@@ -803,6 +810,13 @@ const SetupQueue = ({ workOrders = [], recipes = {}, writeLog, sysConfig = {}, c
                     )}
                 </div>
 
+                {/^(PENDING[-\s]?RECIPE|)$/i.test(String(wo.recipe || wo.color || '').trim()) && (
+                    <div style={{ marginTop: '8px', padding: '8px 12px', background: '#fdf3f3', border: '1px solid #d9534f', borderRadius: '2px', fontFamily: 'var(--mono)', fontSize: '10px', color: '#d9534f', lineHeight: 1.6 }}>
+                        ⚠ RECIPE PENDING · looked in: <b>{wo.recipeSource || 'not recorded — released before the stamp (8 Sep)'}</b>
+                        {(wo.salesOrderId || wo.soNum || wo.soId) ? <> · sales order <b>{wo.salesOrderId || wo.soNum || wo.soId}</b></> : ' · no sales order on this doc'}
+                        {' · RTG '}<b>{woRefOf(wo)}</b> — set the finish there or on the item, then re-release.
+                    </div>
+                )}
                 {wo.hasCustomSibling && (() => {
                     // 'Sent to Plating' (Brief B5): the custom half is OUT at the plater. Seen here only
                     // on a MIXED order — in-house small parts on this floor, the custom pole away.
