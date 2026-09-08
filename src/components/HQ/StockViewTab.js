@@ -49,6 +49,33 @@ const last12Months = (now) => {
 // Finish code = the assembly suffix (base/CODE); some finish docs hold it in `name` (matches PickPack/Library).
 const finishCodeOf = (f) => String((f && (f.code || f.name)) || '').toUpperCase();
 
+// ── THE STOCK REVIEW'S ROWS — EXTRACTED SO THE KEY CAN BE TESTED ───────────────────────────────
+// This mapping is where the 2026-09-08 defect lived, and it was invisible for eight days.
+//
+// `prepped` rows are { r, info, qty, pins }. The review built each row as `erpId: x.erpId` and
+// `name: x.part?.itemName` — neither field exists on that shape, so BOTH were undefined from the
+// day the gate shipped (b2f0ea6). Nobody noticed: the action text carries the codes, so the modal
+// read fine. Then the pole panel keyed its lookup on that same `erpId`, asked for
+// `poles["UNDEFINED"]`, and silently rendered nothing — while HCUMP410/SG x20 parked on a material
+// gate with 474 x HCUMP810 sitting on the shelf and a valid cut already computed.
+//
+// A latent blank became a live defect the moment something depended on it. So the mapping is a
+// pure function now: `code` is derived ONCE, the panel looks up by the same field the decision was
+// filed under, and scripts/stockReviewRows.test.mjs asserts every row resolves. A string key that
+// misses is silent by nature — the only defence is a test on the seam itself.
+export const stockReviewRows = (prepped = [], preByKey = new Map(), actionText = () => '') =>
+    prepped.map((x, key) => {
+        const pre = (preByKey.get ? preByKey.get(key) : null) || null;
+        const blocked = !!(pre && pre.rawUnknown);
+        const code = String((x.r && x.r.itemid) || x.erpId || '').toUpperCase();
+        return {
+            key, erpId: code, name: (x.info && x.info.part && x.info.part.itemName) || (x.part && x.part.itemName) || '',
+            qty: x.qty,
+            actions: pre ? pre.actions.map(actionText).filter(Boolean) : ['(pre-check unavailable — WO would be created un-gated)'],
+            blocked, include: !blocked,
+        };
+    });
+
 // ── THE POLE SHORT PANEL — ONE PANEL, BOTH DOORS ───────────────────────────────────────────────
 // Stuart 2026-09-08: "if no stock prompt with information of any on order, and state no stock on
 // hand of 6ft but 500pcs on order on po### due to arrive __/__/__ wait or go ahead and cut 8ft
@@ -68,8 +95,14 @@ const PoleShortPanel = ({ choice, name, onChoose, waitMeans }) => {
     const mono9 = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
     const onOrder = choice.onOrder || [];
     const onOrderQty = onOrder.reduce((a, l) => a + (Number(l.open) || 0), 0);
-    const chosen = choice.chosen || 'BACKORDER';
+    // UNANSWERED IS A STATE, not a default. chosen === null means nobody has decided yet, and the
+    // caller refuses to write until they have.
+    const chosen = choice.chosen;
     const anyEnough = (choice.options || []).some(o => o.enough);
+    // Waiting means something only when there is a purchase order behind it. With nothing on order
+    // the same radio is the honest "leave it short" — the order is created un-gated and says so,
+    // rather than parking on a receipt gate nothing will ever open.
+    const po = (onOrder || []).find(l => l && l.poNumber) || null;
     return (
         <div style={{ margin: '0 16px 12px', padding: '10px 12px', border: '1px dashed var(--brass)', background: 'var(--paper)' }}>
             <div style={{ ...mono9, color: 'var(--brass)', marginBottom: '6px' }}>
@@ -108,9 +141,14 @@ const PoleShortPanel = ({ choice, name, onChoose, waitMeans }) => {
                     </div>
                 )}
             </div>
+            {chosen == null && (
+                <div style={{ ...mono9, color: '#d9534f', margin: '0 0 6px' }}>⚠ Not answered — choose one; nothing is written until you do</div>
+            )}
             <label style={{ display: 'block', fontSize: '0.84rem', color: 'var(--ink)', marginBottom: '4px', cursor: 'pointer' }}>
                 <input type="radio" checked={chosen === 'BACKORDER'} onChange={() => onChoose('BACKORDER')} />
-                {' '}<b>Wait for {choice.pullErp}</b> — {waitMeans}
+                {po
+                    ? <span> <b>Wait for {po.poNumber}</b>{po.due ? ` (due ${po.due})` : ''} — {waitMeans}</span>
+                    : <span> <b>Leave it short</b> — no cut, and nothing is on order for {choice.pullErp}. The work order is created <b>un-gated</b>, with the {choice.short} short named on it; it will not release itself.</span>}
             </label>
             {(choice.options || []).map(o => (
                 <label key={o.sourceErp} style={{ display: 'block', fontSize: '0.84rem', color: o.enough ? 'var(--ink)' : 'var(--ink-soft)', marginBottom: '4px', cursor: o.enough ? 'pointer' : 'not-allowed' }}>
@@ -735,7 +773,11 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 options: short > 0
                     ? poleOptionsWithStock({ pullErp: x.pullErp, pullFt: x.pullFt, short, availOf: (c) => remaining[String(c).toUpperCase()] })
                     : [],
-                chosen: 'BACKORDER', onOrder: [], onOrderKnown: true,
+                // NO DEFAULT (2026-09-08). This used to arrive pre-answered as 'BACKORDER', so a
+                // panel that never rendered still produced a decision — HCUMP410/SG x20 parked on
+                // the material gate with 474 x HCUMP810 on the shelf and nobody was ever asked.
+                // The rule is "short means the operator decides"; a default decides for them.
+                chosen: null, onOrder: [], onOrderKnown: true,
             });
         });
         // What is already coming — only for the rows that actually have to decide.
@@ -767,10 +809,22 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             return { poleCut: cut || null };
         }
         if (pole.short > 0) {
-            // WAITING. Not a stamp nobody reads — the receipt gate, so the WMS opens it when the
-            // material actually lands and the job releases itself.
-            const po = (pole.onOrder || [])[0] || null;
-            return { poleCut: null, receiptRefs: [{ itemId: pole.pullErp, qtyNeeded: pole.short, ...(po && po.poNumber ? { poId: po.poNumber } : {}) }] };
+            // A GATE IS ONLY HONEST IF SOMETHING CAN OPEN IT (Stuart, via B, 2026-09-08: "a short
+            // pole can never park on a receipt gate that nothing will clear").
+            //
+            // Waiting parks on the receipt gate — but ONLY when there is a purchase order to point
+            // at. A ref with no poId is not merely weak, it is invisible: it reads to the
+            // stranded-gate audit as "any receipt of this code clears it", which is true in
+            // principle and useless in fact, so the one check that should have caught this order
+            // could not see it. No PO means the honest answer is a SHORT ORDER, not a wait: the
+            // work order is created un-gated with the shortfall named, where RTG and the floor can
+            // both see it, rather than parked somewhere nothing is coming.
+            const po = (pole.onOrder || []).find(l => l && l.poNumber) || null;
+            if (po) {
+                return { poleCut: null, receiptRefs: [{ itemId: pole.pullErp, qtyNeeded: pole.short, poId: po.poNumber }] };
+            }
+            addLog(`⚠ ${label}: ${pole.short} × ${pole.pullErp} short with nothing on order — the work order is created UN-GATED and says so. Raise a PO or cut a longer stick; it will not release itself.`, 'warn');
+            return { poleCut: null, poleShortNote: `${pole.short} × ${pole.pullErp} short — no cut chosen and nothing on order` };
         }
         return { poleCut: null };              // on the shelf — straight to the pick
     };
@@ -1507,15 +1561,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 // The pole decisions ride WITH the review, so the operator answers them in the same
                 // place they approve the run — and nothing writes until they have.
                 poles: Object.fromEntries(poleByKey),
-                rows: prepped.map((x, key) => {
-                    const pre = preByKey.get(key) || null;
-                    const blocked = !!(pre && pre.rawUnknown);
-                    return {
-                        key, erpId: x.erpId, name: x.part?.itemName || '', qty: x.qty,
-                        actions: pre ? pre.actions.map(actionText).filter(Boolean) : ['(pre-check unavailable — WO would be created un-gated)'],
-                        blocked, include: !blocked,
-                    };
-                }),
+                rows: stockReviewRows(prepped, preByKey, actionText),
             });
             return { n: 0, made: [], deferred: true };
         }
@@ -4111,6 +4157,7 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                 it, and it stops it ONLY when a pole is actually short. */}
             {gridPoles && (() => {
                 const entries = Object.entries(gridPoles.poles).filter(([, v]) => v.short > 0);
+                const unanswered = entries.filter(([, v]) => v.chosen == null);
                 const mono9s = { fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.08em' };
                 const go = async () => {
                     const poles = gridPoles.poles;
@@ -4125,7 +4172,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                         <div style={{ background: '#fff', width: '760px', maxWidth: '96vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', border: '1px solid var(--line)', boxShadow: '0 16px 60px rgba(0,0,0,.3)' }}>
                             <div style={{ padding: '18px 26px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
                                 <div style={{ fontFamily: 'var(--serif)', fontSize: '1.5rem', color: 'var(--ink)' }}>Poles short — cut, or wait?</div>
-                                <div style={{ ...mono9s, color: 'var(--ink-soft)', marginTop: '4px' }}>Nothing is written until you answer · every other row is unaffected</div>
+                                <div style={{ ...mono9s, color: unanswered.length ? '#d9534f' : 'var(--ink-soft)', marginTop: '4px' }}>
+                                    {unanswered.length ? `${unanswered.length} of ${entries.length} unanswered` : 'All answered'} · nothing is written until you answer · every other row is unaffected
+                                </div>
                             </div>
                             <div style={{ padding: '14px 10px', overflowY: 'auto', flex: 1 }}>
                                 {entries.map(([code, pole]) => (
@@ -4140,7 +4189,9 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                             </div>
                             <div style={{ padding: '14px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                                 <button onClick={() => setGridPoles(null)} style={{ ...mono9s, padding: '12px 18px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Cancel — write nothing</button>
-                                <button onClick={go} style={{ ...mono9s, padding: '12px 22px', background: '#3a7d44', color: '#fff', border: 'none', cursor: 'pointer' }}>✓ Create work orders</button>
+                                <button onClick={go} disabled={!!unanswered.length}
+                                    title={unanswered.length ? 'Answer the pole question(s) first' : ''}
+                                    style={{ ...mono9s, padding: '12px 22px', background: unanswered.length ? 'var(--paper)' : '#3a7d44', color: unanswered.length ? 'var(--ink-soft)' : '#fff', border: unanswered.length ? '1px solid var(--line)' : 'none', cursor: unanswered.length ? 'not-allowed' : 'pointer' }}>✓ Create work orders</button>
                             </div>
                         </div>
                     </div>
@@ -4152,6 +4203,14 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
             {stockReview && (() => {
                 const rows = stockReview.rows;
                 const included = rows.filter(r => r.include && !r.blocked);
+                // A short pole with no answer blocks the run. The whole defect on 2026-09-08 was a
+                // decision made by a default nobody saw; refusing to write is what makes "the
+                // operator decides" true rather than aspirational. Only rows still IN the run count
+                // — untick the row and its question goes with it.
+                const unanswered = included.filter(r => {
+                    const pl = (stockReview.poles || {})[String(r.erpId).toUpperCase()];
+                    return pl && pl.short > 0 && pl.chosen == null;
+                });
                 const toggle = (key) => setStockReview(prev => ({ ...prev, rows: prev.rows.map(r => r.key === key ? { ...r, include: !r.include } : r) }));
                 const approve = async () => {
                     const keep = new Set(included.map(r => r.key));
@@ -4209,10 +4268,16 @@ const StockViewTab = ({ currentUser, activeBrand, onNavigateToLibrary }) => {
                                 })}
                             </div>
                             <div style={{ padding: '14px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ ...mono9s, color: 'var(--ink-soft)' }}>{included.length} of {rows.length} row(s) will execute</span>
+                                <span style={{ ...mono9s, color: unanswered.length ? '#d9534f' : 'var(--ink-soft)' }}>
+                                    {unanswered.length
+                                        ? `${unanswered.length} pole row(s) unanswered — ${unanswered.map(r => r.erpId).join(', ')}`
+                                        : `${included.length} of ${rows.length} row(s) will execute`}
+                                </span>
                                 <span style={{ display: 'flex', gap: '10px' }}>
                                     <button onClick={() => setStockReview(null)} style={{ ...mono9s, padding: '12px 18px', background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink)', cursor: 'pointer' }}>Cancel — write nothing</button>
-                                    <button onClick={approve} disabled={!included.length} style={{ ...mono9s, padding: '12px 22px', background: included.length ? '#3a7d44' : 'var(--paper)', color: included.length ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: included.length ? 'pointer' : 'not-allowed' }}>✓ Approve &amp; Create ({included.length})</button>
+                                    <button onClick={approve} disabled={!included.length || !!unanswered.length}
+                                        title={unanswered.length ? 'Answer the pole question(s) first' : ''}
+                                        style={{ ...mono9s, padding: '12px 22px', background: (included.length && !unanswered.length) ? '#3a7d44' : 'var(--paper)', color: (included.length && !unanswered.length) ? '#fff' : 'var(--ink-soft)', border: 'none', cursor: (included.length && !unanswered.length) ? 'pointer' : 'not-allowed' }}>✓ Approve &amp; Create ({included.length})</button>
                                 </span>
                             </div>
                         </div>

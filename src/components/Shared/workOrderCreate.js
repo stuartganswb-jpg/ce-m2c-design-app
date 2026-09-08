@@ -96,6 +96,10 @@ export const parkWorkOrder = async ({
     // which is what the Library and Raw Cores doors still rely on. The difference between deciding
     // nothing and deciding "no cut" is the whole bug, so the two cannot share a value.
     poleCut, backOrder = '',
+    // A SHORTFALL WITH NO ANSWER IS STILL SAID OUT LOUD (Stuart, via B, 2026-09-08). When a pole is
+    // short, no cut was chosen and nothing is on order, the honest outcome is an UN-GATED order
+    // carrying the shortfall on its face — not a receipt gate nothing can open. This is that face.
+    poleShortNote = '',
 }) => {
     const erp = String(code || erpOf(part) || '').toUpperCase();
     if (!erp || erp === 'PENDING') throw new ParkRefusal(REFUSAL.NO_PART, 'No item code on the part — sync or save it with an ERP id first.');
@@ -176,11 +180,13 @@ export const parkWorkOrder = async ({
     // at the WMS until the stock lands — the same way a bought line waits for its PO. No new gate.
     const backOrderStamp = backOrder ? { backOrdered: true, backOrderReason: String(backOrder), backOrderedAt: Date.now() } : {};
     if (backOrder) made.push(`⏳ BACK ORDER — ${backOrder}. The job goes to the floor; its pick waits at the WMS until the stock arrives.`);
+    const shortStamp = poleShortNote ? { materialShort: true, materialShortNote: String(poleShortNote), materialShortAt: Date.now() } : {};
+    if (poleShortNote) made.push(`⚠ SHORT, UN-GATED — ${poleShortNote}. Nothing is on order and no cut was chosen, so nothing would ever release this on its own: raise the PO or cut a longer stick, then release from RTG.`);
 
     const built = buildParkedWorkOrder({
         intent, woId: id, part, qty: n, brand, createdBy, reqDate, needBy, urgent, note,
         source, routeTo: route.routeTo, finish: route.finish,
-        partsList, bomExploded: !!(plan && plan.exploded), gate: { ...gate, ...backOrderStamp }, replaces, forPlating, convertSuggestion,
+        partsList, bomExploded: !!(plan && plan.exploded), gate: { ...gate, ...backOrderStamp, ...shortStamp }, replaces, forPlating, convertSuggestion,
         tasks: wantFinishing ? makeFullTasks() : null, now: Date.now(),
         code: erp, sales,
     });
