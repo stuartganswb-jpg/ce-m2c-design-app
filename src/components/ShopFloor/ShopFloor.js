@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, auth, functions, storage, getOuterIdToken } from '../../firebase';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, orderBy, onSnapshot, writeBatch, serverTimestamp, increment, arrayUnion } from "firebase/firestore";
-import { hardDeleteWithLedger, recordDeletion } from '../Shared/orderLifecycle';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, where, orderBy, onSnapshot, writeBatch, serverTimestamp, increment, arrayUnion } from "firebase/firestore";
+import { hardDeleteWithLedger, recordDeletion, propagateFloorState } from '../Shared/orderLifecycle';
+import { cancelPlatingDemand } from '../Shared/platingDemand';
 import { signInWithCustomToken, signOut } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
@@ -23,7 +24,7 @@ import WhereIsIt from '../Shared/WhereIsIt';
 import { qtyText, multiplierNote } from '../Shared/configQty';
 import { subscribeProgramPrints, resolvePrintUrl } from '../Shared/programPrints';
 import RodPieceInventory, { RodCutPanel } from '../Shared/RodPieceInventory';
-import { shopDb, cleanId, SHOP_TABS, hqWorkOrderIdOf } from './shopShared';
+import { shopDb, cleanId, SHOP_TABS } from './shopShared';
 import { millBaseOf, finishRouteOf, finishSuffixOf } from '../Shared/finishRouting';
 
 // Reader-side identity fallbacks (2026-08-26): RTG's autoSplit docs historically carried
@@ -406,19 +407,18 @@ const ShopFloor = () => {
     // THE MILLING PIPELINE TELLS THE RECORD WHAT IT MADE (Brief C · C2, 2026-09-02). RTG is the
     // single source of truth, and until now the only thing a finished milling run told it was
     // the spine's status — enough to clear the component gate, nothing about counts or failures.
-    // The stamp goes on the hq_work_orders doc behind the spine (hqWorkOrderIdOf — the writer's
-    // own id convention). D's root-build automation reads millGoodQty + nsWoId from that record;
-    // the shop never posts the NetSuite build itself. Never throws: a stamp that fails must not
-    // stop the run from finalizing on the floor.
-    const stampMillRecord = async (row, patch) => {
-        const hqId = hqWorkOrderIdOf(spineOf(row));
-        if (!hqId) return null;
+    // The stamp goes on the RTG record behind the spine through B's ONE resolver
+    // (Shared/orderLifecycle.propagateFloorState — since B7 it derives the hq id from the spine's
+    // SHOP-<id> key; the shop's own direct write retired 2026-09-08). `phase` sets floorPhase;
+    // `extra` carries the mill facts beside it. D's root-build automation reads millGoodQty +
+    // nsWoId from that record; the shop never posts the NetSuite build itself. Never throws: a
+    // stamp that fails must not stop the run from finalizing on the floor.
+    const stampMillRecord = async (row, phase, extra) => {
+        const spine = spineOf(row);
+        if (!spine) return null;
         try {
-            const snap = await getDoc(doc(db, 'hq_work_orders', hqId));
-            if (!snap.exists()) { console.warn('mill record stamp: no hq_work_orders doc for', hqId); return null; }
-            await updateDoc(doc(db, 'hq_work_orders', hqId), patch);
-            return hqId;
-        } catch (e) { console.warn('mill record stamp failed:', hqId, e); return null; }
+            return await propagateFloorState({ db, doc, getDoc, getDocs, query, collection, where, updateDoc }, { finWo: spine, phase, by: user?.name || '', extra });
+        } catch (e) { console.warn('mill record stamp failed:', spine.id, e); return null; }
     };
     const heldGuard = (row) => {
         const spine = spineOf(row);
@@ -634,7 +634,7 @@ const ShopFloor = () => {
                 // Completed — RTG's component gate would clear and release a parent whose
                 // components do not exist (it did exactly that on a zero-good last op before).
                 // The record says why the order stopped instead.
-                await stampMillRecord(task, { floorPhase: 'Failed', floorUpdatedAt: Date.now(), millFailReason: `No good pieces on OP ${task.currentOpIndex + 1}`, millFailedOp: task.currentOpIndex + 1, millFailedAt: Date.now(), millFailedBy: user.name });
+                await stampMillRecord(task, 'Failed', { millFailReason: `No good pieces on OP ${task.currentOpIndex + 1}`, millFailedOp: task.currentOpIndex + 1, millFailedAt: Date.now(), millFailedBy: user.name });
             } else if (!hasNextOp && task.sourceCustomOrderId) {
                 // Last op done → the order's spine doc (shop_custom_orders) completes. Before the
                 // intake stamped instead of deleting, there was no spine left to tell.
@@ -643,13 +643,13 @@ const ShopFloor = () => {
                 }).catch(e => console.warn('spine completion stamp failed:', e));
                 // C2: RTG's board shows "built 18 / 20", not only "gate clear"; millScrapQty is
                 // this finalize's scrap (earlier shifts log good counts only).
-                await stampMillRecord(task, { floorPhase: 'Complete', floorCompletedAt: Date.now(), floorCompletedBy: user.name, millGoodQty: grandTotalGood, millScrapQty: sQty, millCompletedAt: Date.now(), millCompletedBy: user.name });
+                await stampMillRecord(task, 'Complete', { millGoodQty: grandTotalGood, millScrapQty: sQty, millCompletedAt: Date.now(), millCompletedBy: user.name });
             }
         } else {
             // A failed op leaves the order stuck in the shop — the record says why, so RTG and
             // Where-is-it can explain it. The spine is untouched: the operator re-runs the op or
             // management re-issues from RTG.
-            await stampMillRecord(task, { floorPhase: 'Failed', floorUpdatedAt: Date.now(), millFailReason: [qcForm.failReason, qcForm.failNotes].filter(Boolean).join(' — '), millFailedOp: task.currentOpIndex + 1, millFailedAt: Date.now(), millFailedBy: user.name });
+            await stampMillRecord(task, 'Failed', { millFailReason: [qcForm.failReason, qcForm.failNotes].filter(Boolean).join(' — '), millFailedOp: task.currentOpIndex + 1, millFailedAt: Date.now(), millFailedBy: user.name });
         }
         writeLog(`Run finalized: OP ${task.currentOpIndex + 1} of ${task.routingId}`, 'production'); setActiveModal(null);
     };
@@ -1254,9 +1254,23 @@ const ShopFloor = () => {
             .sort((a, b) => (b.completedAt?.toMillis ? b.completedAt.toMillis() : b.completedAt || 0) - (a.completedAt?.toMillis ? a.completedAt.toMillis() : a.completedAt || 0))
             .slice(0, 10);
         const undoComplete = async (order) => {
-            if (!window.confirm(`↩ Put ${order.woNum} BACK INTO PRODUCTION?\n\n• Shop status returns to "In Process"\n• Finishing/staging is told the custom parts are NOT complete (the staging handshake blocks again until re-completed)\n\nUse this when Complete was hit by mistake.`)) return;
+            if (!window.confirm(`↩ Put ${order.woNum} BACK INTO PRODUCTION?\n\n• Shop status returns to "In Process"\n• Finishing/staging is told the custom parts are NOT complete (the staging handshake blocks again until re-completed)${order.platingDemandId ? '\n• Its OB PLATING demand is cancelled — a second Complete raises a fresh one' : ''}\n\nUse this when Complete was hit by mistake.`)) return;
             try {
-                await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process', completedAt: null, completedBy: null, reopenedAt: serverTimestamp(), reopenedBy: user.name }));
+                // A PLATED order's reopen ends the demand it raised (B's sweep 2026-09-04, D's
+                // cancelPlatingDemand 2026-09-08): the parts are back on the bench, so the WMS
+                // Plating tab must stop asking for them. D's helper refuses when the parts have
+                // already SHIPPED — then the reopen itself is refused: receive them back first.
+                if (order.platingDemandId) {
+                    const shipSnap = await getDocs(query(collection(db, 'plating_shipments'), where('woNum', '==', order.woNum || order.id)));
+                    const res = await cancelPlatingDemand({ db, doc, setDoc, deleteDoc: (ref) => deleteDoc(ref) }, {
+                        id: order.platingDemandId, record: { id: order.platingDemandId, woNum: order.woNum || order.id },
+                        reason: `shop reopened ${order.woNum}`, by: user.name, from: 'SHOP',
+                        shipmentLines: shipSnap.docs.map(d => d.data()),
+                    });
+                    if (!res.ok) return alert(`⛔ ${order.woNum} cannot be reopened — ${res.reason}.`);
+                    writeLog(`Plating demand ${order.platingDemandId} cancelled — ${order.woNum} reopened`, 'shop');
+                }
+                await updateDoc(doc(db, "shop_custom_orders", order.id), touched({ status: 'In Process', completedAt: null, completedBy: null, reopenedAt: serverTimestamp(), reopenedBy: user.name, ...(order.platingDemandId ? { platingDemandCreated: false, platingDemandId: null } : {}) }));
                 await mirrorCustomStatusToSibling(order, CUSTOM_FAB_STATUS.IN_PROCESS);
                 await addDoc(collection(db, "global_messages"), { sender: 'System', sourceApp: 'SHOP', target: 'ALL', msg: `↩ UNDO: custom order ${order.woNum} returned to production by ${user.name} — custom parts are NOT complete.`, t: serverTimestamp(), isSystem: true });
                 writeLog(`Custom order ${order.woNum} completion UNDONE → back to In Process`, 'shop');
@@ -1553,7 +1567,34 @@ const ShopFloor = () => {
                         </div>
                     )}
 
-                    {order.fabNotes && (Number(order.fabNotes.pole1) > 0 || Number(order.fabNotes.pole2) > 0 || Number(order.fabNotes.pole3) > 0 || Number(order.fabNotes.rawCenter) > 0) && (
+                    {/* TRAVERSE CUT SHEET (Stuart via E → B → C, 2026-09-08: "the drive type selection
+                        will drive the overall cut length sizes of the traverse tracks … these
+                        measurements must be added to the shop floor bom and raw cuts"). Vision cuts
+                        fascia / track / F-clip by drive (Shared/traverseTags); RTG's split carries
+                        the rows on fabNotes.traverseCuts. The floor reads the numbers as given —
+                        never recomputes them. Null on every solid-pole job, where the Pole Cut
+                        Sheet below stands. */}
+                    {Array.isArray(order.fabNotes?.traverseCuts) && order.fabNotes.traverseCuts.length > 0 && (
+                        <div style={{ marginBottom: '20px', border: '1px solid var(--line)' }}>
+                            <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: 'var(--ink-soft)', padding: '6px 12px', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                                <span>Traverse Cut Sheet</span>
+                                <span>{[order.fabNotes.drive, order.fabNotes.setup, order.fabNotes.frontLayer ? `${order.fabNotes.frontLayer} front` : ''].filter(Boolean).join(' · ')}</span>
+                            </div>
+                            {order.fabNotes.traverseCuts.map((c, i) => {
+                                const role = { FASCIA: 'Fascia', TRACK: 'Track', FCLIP: 'F-clip' }[String(c?.role || '').toUpperCase()] || String(c?.role || '—');
+                                const cut = Number(c?.cutInches);
+                                return (
+                                    <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '8px 12px', borderTop: i ? '1px solid var(--line)' : 'none', fontFamily: 'var(--sans)', fontSize: '0.9rem' }}>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '10px', textTransform: 'uppercase', color: 'var(--ink-soft)', minWidth: '54px' }}>{role}</span>
+                                        <span style={{ color: 'var(--ink)' }}>{Number.isFinite(cut) && cut > 0 ? `Cut ${cut.toFixed(2)}"` : 'no cut length — ask HQ'}</span>
+                                        <span style={{ fontFamily: 'var(--mono)', fontSize: '0.8rem', color: 'var(--brass)', textAlign: 'right', minWidth: '70px' }}>× {Number(c?.qty) > 0 ? Number(c.qty) : 1}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {!(Array.isArray(order.fabNotes?.traverseCuts) && order.fabNotes.traverseCuts.length > 0) && order.fabNotes && (Number(order.fabNotes.pole1) > 0 || Number(order.fabNotes.pole2) > 0 || Number(order.fabNotes.pole3) > 0 || Number(order.fabNotes.rawCenter) > 0) && (
                         <div style={{ marginBottom: '20px', border: '1px solid var(--line)' }}>
                             <div style={{ fontFamily: 'var(--mono)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '.1em', color: '#fff', background: 'var(--ink-soft)', padding: '6px 12px' }}>Pole Cut Sheet</div>
                             {[
