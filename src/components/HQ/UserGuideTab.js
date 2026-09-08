@@ -518,6 +518,12 @@ const AuthoringGuide = () => (
             <Path name="Ungrouped" goes="shown, never guessed">Sections no 1.6 slot claims — made by hand here, from Auto-Group, or 2D regions — sit under <em>Ungrouped</em> at the bottom. They are never hidden and never sorted into a slot by guesswork.</Path>
         </Screen>
 
+        <h2 style={S.h2}>1 · Review CAD (.stp) <span style={S.tabno}>(tab 1 — look at a STEP file, save it as a design)</span></h2>
+        <Screen title="Review CAD" tag="new 8 Sep">
+            <Path name="Open" goes="nothing is written">On tab 1, <b>Open .stp / .step</b> reads a vendor or designer STEP file in the browser (the first one takes a moment while the reader loads) and shows it in a 3D canvas with its code, its size in inches, the unit the file itself declares, and its triangle count. Orbit and look. The code and description are taken from the file name, so name files <em>CODE, description.stp</em>.</Path>
+            <Path name="Save as new design" goes="an Inception record of its own">Makes a new design named after the file with this model as its initial 3D revision — the same record the New Design form makes. It never replaces an existing product's model; nothing downstream reads it until you build on it.</Path>
+        </Screen>
+
         <h2 style={S.h2}>Edges to know</h2>
         <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
             <li style={S.edge}>• <b>A wrong option on a flow is almost always a wrong tag here.</b> Check the pin on Load Choices (or the section in 1.5) before asking for a flow change.</li>
