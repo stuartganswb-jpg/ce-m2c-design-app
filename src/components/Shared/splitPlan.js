@@ -15,7 +15,7 @@
 // Pure. The three-way answer is the contract; a data fault (no inventory row, units unknown for
 // the pull) is its own bucket — the Backorder window must never fill with data problems wearing
 // the costume of demand (D, 2026-09-03).
-import { finishSuffixOf, isOutsourcedFinishCode } from './finishRouting';
+import { finishSuffixOf, isOutsourcedFinishCode } from './finishRouting.js';
 
 const U = (v) => String(v || '').trim().toUpperCase();
 const codeOf = (l) => U(l && (l.legacyErpId || l.partId));
