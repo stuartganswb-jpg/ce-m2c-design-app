@@ -76,7 +76,7 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
       uom: [], prodTypes: [], watchLists: [], vendors: [], outsourceActions: [],
       pillowSizes: [], fillTypes: [], flangeStyles: [], stitchTypes: [], seamCounts: [], assemblyTypes: [],
       cpqRoutingTypes: [], customers: [], partHandling: [], inventoryTypes: [], projections: [],
-      bracketMounts: [], feeTypes: []
+      bracketMounts: [], feeTypes: [], materials: []
   });
   
   const [windowConfig, setWindowConfig] = useState(mergeWindowConfig(null));
@@ -156,7 +156,11 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
               stitchTypes: data.stitchTypes || [], seamCounts: data.seamCounts || [], assemblyTypes: data.assemblyTypes || [],
               cpqRoutingTypes: data.cpqRoutingTypes || [], customers: data.customers || [], partHandling: data.partHandling || [], 
               inventoryTypes: data.inventoryTypes || [], projections: data.projections || [], bins: data.bins || [],
-              bracketMounts: data.bracketMounts || [], feeTypes: data.feeTypes || []
+              bracketMounts: data.bracketMounts || [], feeTypes: data.feeTypes || [],
+              // MATERIALS — the same 4.5 dictionary tab 1.6 tags its slots from. One vocabulary,
+              // two homes: 1.6 says what a SLOT is made of (which finishes it may be offered),
+              // this says what the ITEM is made of (which floor cuts it).
+              materials: data.materials || []
           });
       }
     });
@@ -2608,7 +2612,35 @@ const LibraryTab = ({ currentUser, activeBrand, focusItemId, clearFocus }) => {
                   {sourcingOf(editSpecs) !== SOURCING.OUT && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
                         <div><label style={labelStyle}>Program #</label><input name="programNum" value={editSpecs.programNum || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
-                        <div><label style={labelStyle}>Raw Mat</label><input name="material" value={editSpecs.material || ""} onChange={handleSpecChange} style={fieldStyle} /></div>
+                        {/* ── RAW MAT — now a ROUTING FACT, not just a note (Stuart 2026-09-08) ──
+                            A wood rod and a metal rod of the same length take different floors, and
+                            the difference was invisible: the wood rods are tagged Custom at item
+                            level, so straight ones went to the shop with the mitered ones. Straight-
+                            vs-mitered is a fact about the LINE; WOOD-vs-METAL is a fact about the
+                            ITEM, and this is where it belongs.
+                            The field already existed as free text and nothing read it, so no value
+                            is lost — but free text cannot be a routing key ("Wood", "White Oak", a
+                            typo all read differently), so it is now picked from the 4.5 MATERIALS
+                            dictionary. Anything already typed is kept and shown as its own option
+                            rather than silently dropped. Blank reads as METAL everywhere, which is
+                            why only the wood items need tagging. */}
+                        <div>
+                            <label style={labelStyle}>Raw Mat</label>
+                            {(() => {
+                                const cur = String(editSpecs.material || '');
+                                const dict = (globalLists.materials || []).length ? globalLists.materials : ['METAL', 'WOOD', 'CLEAR (NO FINISH)'];
+                                const known = dict.map(m => String(m).toUpperCase());
+                                const extra = cur && !known.includes(cur.toUpperCase()) ? [cur] : [];
+                                return (
+                                    <select name="material" value={cur} onChange={handleSpecChange} style={fieldStyle}
+                                        title="What the item is MADE of. Blank reads as METAL. WOOD on a rod routes a straight line to finishing and a mitered one to the shop — the cut decides, not the tag.">
+                                        <option value="">— blank (reads as METAL) —</option>
+                                        {dict.map(m => <option key={m} value={m}>{m}</option>)}
+                                        {extra.map(m => <option key={m} value={m}>{m} (existing)</option>)}
+                                    </select>
+                                );
+                            })()}
+                        </div>
                         {/* SHOP INSTRUCTION (Stuart C7 ruling, 2026-09-02 — S1, the tag lives on the item): one plain
                             sentence the Shop Floor's Custom card shows whenever an order has no cut list, e.g.
                             "Pull from stock, phosphate, hand to finishing". No routing meaning, no vocabulary —

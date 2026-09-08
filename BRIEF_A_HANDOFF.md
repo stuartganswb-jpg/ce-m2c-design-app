@@ -685,3 +685,46 @@ is written there.
 **Order of work:** B first (the pure definition + the painted classification at the split + the RTG
 chip), then A (the board, reading the record + live cover documents), then E (Order Entry lines
 through the same function), then D (arrival stamps).
+
+### ⬜ B — pass the job's cut facts into `classifyLine` (the wood-rod escalation's last half)
+
+Stuart 2026-09-08: wood is enough as a tag, **just the rods**, he tags them himself.
+
+**A has shipped both of its halves.**
+- `manufacturingSpecs.material` in the Master Library is now picked from the 4.5 **MATERIALS**
+  dictionary instead of being free text (the field already existed as "Raw Mat" and nothing read it
+  for logic, so no value is lost — an existing typed value survives as its own option). Blank reads
+  as METAL, so only the wood rods need tagging, and `LibraryMassUpdateTab` can already bulk-set it.
+- `Shared/lineClassification.classifyLine(line, part, fab)` takes an optional third argument and
+  demotes a **wood pole with no fab work** to `small` (finishing), keeping a mitered/bent/spliced
+  one `custom` (shop). Placed BEFORE the item-tag rule, because the item tag is what it overrides.
+
+**Why it was broken:** `classifyLine` let `manufacturingSpecs.partHandling` win unconditionally and
+treated the per-line flag only as a FALLBACK — so the wood rods, correctly tagged Custom because
+they *can* be mitered, sent every straight line to the shop too. The comment at
+`finishRouting.js:87` claiming the per-line flag overrides the item is **wrong**; I left it for B
+to correct alongside this, since B owns the split that reads it.
+
+**⬜ B's half — `RTGDispatchTab.js`:** `classifyLine` has exactly two callers, both yours (`:1154`,
+`:1421`), and the cut facts you need are already in scope as `job.engineeringNotes` — but `eng` is
+declared at `:1160`, AFTER the split at `:1154`. Hoist it and pass it:
+
+```js
+const eng = job.engineeringNotes || {};                       // move ABOVE the split
+classifyLine(line, part, eng)                                 // :1154 and :1421
+```
+
+`fab` is read for `qtyMiters` / `qtyBends` / `qtySplices` / `qtyMiterReturns` only.
+
+**SILENCE IS NOT "STRAIGHT" — the rule is dormant until you pass it.** With no third argument
+nothing changes: the item tag still decides, exactly as today. That is deliberate, and it is why
+this could ship before your half. A caller that cannot see the cut facts must never be able to
+route a mitered pole to the finishing floor by omission — the same decision-versus-silence
+distinction the pole gate needed on 2026-09-08.
+
+**Do not "fix" this by retagging `H1-138WHTOAK-*` to Small Parts** — that breaks the miter half,
+which is why Stuart accepted the four live orders as they were rather than let it happen.
+
+14 assertions in `scripts/woodRouting.test.mjs`, including metal untouched, non-rod wood untouched,
+the fee and operator-override precedence preserved, and `WOODGRAIN LAMINATE STEEL` correctly NOT
+reading as wood (a steel rod that looks like wood is cut and finished as metal).

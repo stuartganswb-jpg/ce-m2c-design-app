@@ -1,4 +1,5 @@
 import { findClientPriceRow } from './clientPricing.js';
+import { isPoleCategory } from './poleCut.js';
 
 // Single source of truth for splitting a CPQ order line into the two
 // production divisions: 'small' (-> Finishing Floor) vs 'custom' (-> Shop Floor).
@@ -154,7 +155,33 @@ function normalizeHandling(value) {
  *                        no explicit flag.
  * @returns {'small'|'custom'}
  */
-export function classifyLine(line, part) {
+// ── A WOOD ROD IS ROUTED BY ITS CUT, NOT BY ITS TAG (Stuart 2026-09-08) ───────────────────────
+// "wood + miter → Custom, wood + straight → finishing" — settled 2026-09-03, and still not true in
+// the app. The reason is directly below: the ITEM's Part Handling wins unconditionally, and the
+// per-line flag is only a FALLBACK for items that carry no tag. The wood rods are correctly tagged
+// Custom (they can be mitered), so every straight wood line went to the shop with them. D found it
+// live; Stuart accepted it for four orders rather than let a retag break the miter half — which it
+// would have, because straight-vs-mitered is a fact about the LINE and the tag is on the ITEM.
+//
+// So the demotion is keyed on the CUT. `fab` carries the job's engineering notes (miters, bends,
+// splices); a wood rod with none of them is straight work and belongs on the finishing floor.
+//
+// SILENCE IS NOT "STRAIGHT". With no `fab` supplied the rule does not fire at all and the item tag
+// still decides — today's behaviour, unchanged. A caller that cannot see the cut facts must not be
+// able to route a mitered pole to finishing by omission; that is the same distinction between a
+// decision and a silence that the pole gate needed on 2026-09-08, and it is worth as much here.
+const isWoodPole = (part) => {
+    const specs = (part && part.manufacturingSpecs) || {};
+    if (!/\bWOOD\b/i.test(String(specs.material || ''))) return false;
+    return isPoleCategory(String(specs.productType || part.productType || ''));
+};
+const hasFabWork = (fab) => !!fab && ((Number(fab.qtyMiters) || 0) > 0 || (Number(fab.qtyBends) || 0) > 0 || (Number(fab.qtySplices) || 0) > 0 || (Number(fab.qtyMiterReturns) || 0) > 0);
+
+/**
+ * @param {object} [fab] the job's engineeringNotes cut facts — { qtyMiters, qtyBends, qtySplices,
+ *                       qtyMiterReturns }. OMIT IT and the wood rule stays dormant.
+ */
+export function classifyLine(line, part, fab) {
   // -1. OPERATOR OVERRIDE (CPQ "custom work on this step"): the chosen fee item's Part Handling
   //     wins over every other signal, including the fee rule below — a Custom FINISH fee is
   //     meant to reach the finishing floor, and a Custom LABOR fee the shop.
@@ -182,6 +209,10 @@ export function classifyLine(line, part) {
   //    authoritative, and the flow generator stamps every bracket step 'Custom' — so brackets and
   //    their backplates went to the shop floor no matter how the library had them tagged, and the
   //    finishing pick list starved.
+  // 0b. THE WOOD ROD, decided by its cut — BEFORE the item tag, because the tag is what it
+  //     overrides. Only fires when the cut facts were actually supplied (see the note above).
+  if (fab && isWoodPole(part)) return hasFabWork(fab) ? DIVISION_CUSTOM : DIVISION_SMALL;
+
   const specs = part && part.manufacturingSpecs;
   const partLevel = normalizeHandling(specs && specs.partHandling);
   if (partLevel) return partLevel;
